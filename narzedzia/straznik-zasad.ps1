@@ -417,9 +417,43 @@ try {
     Write-Host "MegaRuchacz: $ile $slowo na Twoja decyzje - powiedz 'pokaz fakty', zeby je przejrzec."
   }
 
+  # Jedna linia o dziennym cyklu pamieci (cykl-dzienny.ps1) - i tylko wtedy, gdy cos
+  # wymaga uwagi: cykl sie nie udal albo zostala zaleglosc. Przy czystym stanie cisza,
+  # tak jak reszta straznika. Koszt pamieci doliczamy dopiero, gdy linia i tak idzie
+  # na ekran: liczy go osobny skrypt i nie ma za co placic przy kazdym otwarciu okna.
+  function Zglos-Cykl {
+    $plik = Join-Path $KatalogDomowy ".claude\wiedza\cykl-ostatni.txt"
+    if (-not (Test-Path $plik)) { return }        # cyklu na tej maszynie nie ma
+    $c = Czytaj-Klucze $plik
+    if (-not $c["status"]) { return }
+    $zaleglosc = 0
+    if ($c["zaleglosc"] -match '^\d+$') { $zaleglosc = [int]$c["zaleglosc"] }
+
+    # podsumowanie sprzed kilku dni znaczy, ze cykl w ogole nie chodzi
+    $stare = $false
+    $data = [datetime]::MinValue
+    if ([datetime]::TryParse($c["data"], [ref]$data)) {
+      $stare = (([datetime]::Now - $data).TotalDays -gt 2)
+    }
+    if ($c["status"] -eq "ok" -and $zaleglosc -le 0 -and -not $stare) { return }
+
+    $stan = $c["opis"]
+    if (-not $stan) { $stan = "stan cyklu: $($c['status'])" }
+    if ($stare) { $stan = "cykl nie chodzil od $([int]([datetime]::Now - $data).TotalDays) dni - $stan" }
+
+    $koszt = ""
+    $skrypt = Join-Path $Zrodlo "narzedzia\koszt-pamieci.ps1"
+    if (Test-Path $skrypt) {
+      try { $koszt = (& $skrypt -KatalogDomowy $KatalogDomowy -Zwiezle | Select-Object -First 1) } catch { $koszt = "" }
+    }
+    if ($koszt) { Write-Host "MegaRuchacz: $stan. $koszt" }
+    else        { Write-Host "MegaRuchacz: $stan." }
+  }
+
   # Osobne try, zeby potkniecie sie na jednym nie zabralo drugiego.
   try { Pilnuj-Zasad }     catch { }
   try { Pilnuj-Wersji }    catch { }
   try { Zglos-Kandydatow } catch { }
+  try { Zglos-Cykl }       catch { }
 } catch { }
 exit 0
