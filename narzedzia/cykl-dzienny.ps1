@@ -11,6 +11,11 @@
 #   - zaleglosc liczona jest w dniach i nadrabiana po $MaxNadrabiania dni na przebieg,
 #     zeby po urlopie nie przepalic calego limitu w piec minut.
 #
+# Cykl NIE jest przywiazany do jednego narzedzia AI. Czytanie transkryptow, indeksowanie
+# i weryfikacja to robota na plikach - modelu potrzebuje wylacznie wylawianie faktow.
+# Dlatego narzedzia (Claude Code, Codex) wykrywane sa na zywo, brak jednego z nich to
+# normalna maszyna, a brak obu zatrzymuje SAMO wylawianie - weryfikacja idzie dalej.
+#
 # Uzycie:
 #   powershell -ExecutionPolicy Bypass -File narzedzia\cykl-dzienny.ps1
 #   ... -Zrodlo <sciezka>         katalog glowny repozytorium (domyslnie: katalog nad narzedzia\)
@@ -41,6 +46,7 @@ $script:Znacznik  = $null
 $script:Wyciagnij = $null
 $script:Aktualizuj = $null
 $script:Zostalo   = $null   # ile przebiegow zaleglosci zostalo wg samego wylawiania
+$script:Pominiete = $null   # powod, dla ktorego wylawianie nie poszlo ($null = poszlo)
 
 # ---------------------------------------------------------------- wypisywanie
 
@@ -163,18 +169,29 @@ function Zapisz-Podsumowanie($status, $powod, $nadrobione, $zaleglosc) {
   Zapisz-Klucze $script:Ostatni $podsumowanie
 }
 
-# ---------------------------------------------------------------- warunki przed praca
+# ---------------------------------------------------------------- narzedzia AI i warunki przed praca
 
-function Jest-Claude {
-  return [bool](Get-Command claude -CommandType Application -ErrorAction SilentlyContinue)
+# Ktore narzedzie AI stoi na maszynie, sprawdzamy na zywo - zaden krok nie zaklada
+# z gory Claude Code. Brak jednego z nich to normalna maszyna, nie blad.
+function Znajdz-Narzedzia {
+  $lista = @()
+  foreach ($n in @(
+    @{ Nazwa = "Claude Code"; Polecenie = "claude"; Adres = "api.anthropic.com" },
+    @{ Nazwa = "Codex";       Polecenie = "codex";  Adres = "chatgpt.com" }
+  )) {
+    if (Get-Command $n.Polecenie -CommandType Application -ErrorAction SilentlyContinue) { $lista += $n }
+  }
+  return ,$lista   # przecinek: jedno narzedzie tez ma wrocic jako lista, nie goly wpis
 }
 
-function Jest-Siec {
-  # samo polaczenie TCP, zadnego odpytywania modelu - ma byc tanio i szybko
+function Jest-Siec($adres) {
+  # samo polaczenie TCP, zadnego odpytywania modelu - ma byc tanio i szybko.
+  # Adres bierze sie z wykrytego narzedzia: na maszynie bez Claude Code
+  # niedostepny api.anthropic.com nie jest zadna przeszkoda.
   if (-not [System.Net.NetworkInformation.NetworkInterface]::GetIsNetworkAvailable()) { return $false }
   try {
     $klient = New-Object System.Net.Sockets.TcpClient
-    $operacja = $klient.BeginConnect("api.anthropic.com", 443, $null, $null)
+    $operacja = $klient.BeginConnect($adres, 443, $null, $null)
     $ok = $operacja.AsyncWaitHandle.WaitOne(3000, $false)
     if ($ok) {
       try { $klient.EndConnect($operacja) } catch { $ok = $false }
@@ -186,28 +203,52 @@ function Jest-Siec {
   }
 }
 
-function Jest-Zalogowany {
-  # `claude auth status --json` czyta wylacznie lokalne poswiadczenia: nie wola modelu
-  # i nie zuzywa limitu. Wyczerpanego limitu stad nie widac - to poznajemy po tresci
-  # bledu z samego przebiegu (patrz Rozpoznaj-Powod).
-  $wyjscie = ""
-  try { $wyjscie = (& claude auth status --json 2>&1 | Out-String) } catch { return $false }
-  $i = $wyjscie.IndexOf("{")
-  $j = $wyjscie.LastIndexOf("}")
-  if ($i -lt 0 -or $j -le $i) { return $false }
-  try {
-    $stan = $wyjscie.Substring($i, $j - $i + 1) | ConvertFrom-Json
-    return ($stan.loggedIn -eq $true)
-  } catch {
-    return $false
+# $true / $false / $null, gdzie $null znaczy "nie wiadomo" - a to NIE jest powod,
+# zeby cokolwiek zatrzymywac. Wolimy sprobowac i rozpoznac blad z tresci przebiegu,
+# niz odlozyc material przez sprawdzenie, ktorego nie umiemy zrobic uczciwie.
+function Jest-Zalogowany($narzedzie) {
+  if ($narzedzie.Polecenie -eq "claude") {
+    # `claude auth status --json` czyta wylacznie lokalne poswiadczenia: nie wola modelu
+    # i nie zuzywa limitu. Wyczerpanego limitu stad nie widac - to poznajemy po tresci
+    # bledu z samego przebiegu (patrz Rozpoznaj-Powod).
+    $wyjscie = ""
+    try { $wyjscie = (& claude auth status --json 2>&1 | Out-String) } catch { return $false }
+    $i = $wyjscie.IndexOf("{")
+    $j = $wyjscie.LastIndexOf("}")
+    if ($i -lt 0 -or $j -le $i) { return $false }
+    try {
+      $stan = $wyjscie.Substring($i, $j - $i + 1) | ConvertFrom-Json
+      return ($stan.loggedIn -eq $true)
+    } catch {
+      return $false
+    }
   }
+  if ($narzedzie.Polecenie -eq "codex") {
+    # Codeksa nie odpytujemy: nie ma tu sprawdzonego polecenia, ktore czyta same
+    # poswiadczenia, nie wolajac modelu. Widoczny plik z poswiadczeniami albo klucz
+    # w srodowisku to "zalogowany", wszystko inne to "nie wiadomo".
+    if (Test-Path (Join-Path $KatalogDomowy ".codex\auth.json")) { return $true }
+    if ($env:OPENAI_API_KEY) { return $true }
+    return $null
+  }
+  return $null
 }
 
-# Zwraca powod odlozenia albo $null, gdy nic nie stoi na przeszkodzie.
-function Znajdz-Przeszkode {
-  if (-not (Jest-Claude))      { return "nie ma claude w PATH" }
-  if (-not (Jest-Siec))        { return "brak sieci" }
-  if (-not (Jest-Zalogowany))  { return "uzytkownik wylogowany" }
+# Zwraca powod, dla ktorego nie da sie teraz WYLAWIAC faktow, albo $null.
+# Weryfikacji to nie dotyczy - ona nie wola zadnego modelu i idzie tak czy owak.
+function Znajdz-Przeszkode($narzedzia) {
+  if ($narzedzia.Count -eq 0) {
+    return "nie ma na tej maszynie narzedzia AI - ani claude, ani codex w PATH (Claude Code: npm install -g @anthropic-ai/claude-code)"
+  }
+  $zSiecia = @($narzedzia | Where-Object { Jest-Siec $_.Adres })
+  if ($zSiecia.Count -eq 0) {
+    return "brak sieci do: " + (($narzedzia | ForEach-Object { $_.Adres }) -join ", ")
+  }
+  # dosc jednego narzedzia, w ktorym nie widac wylogowania
+  $gotowe = @($zSiecia | Where-Object { (Jest-Zalogowany $_) -ne $false })
+  if ($gotowe.Count -eq 0) {
+    return "uzytkownik wylogowany w: " + (($zSiecia | ForEach-Object { $_.Nazwa }) -join ", ")
+  }
   return $null
 }
 
@@ -215,6 +256,14 @@ function Znajdz-Przeszkode {
 # odlozenie (material czeka), reszta to zwykly blad - ale tez wraca za $OdstepMin min.
 function Rozpoznaj-Powod($tekst, $kod) {
   if ($tekst) {
+    # lore wola do wylawiania konkretne polecenie; gdy go tu nie ma, komunikat ma
+    # mowic wprost, KTOREGO narzedzia brakuje, a nie "wylawianie nie powiodlo sie"
+    if ($tekst -match '(?i)no .?(claude|codex).? in PATH|install Claude Code') {
+      $czym = "modelu"
+      if ($tekst -match '(?i)claude') { $czym = "polecenia claude (Claude Code)" }
+      elseif ($tekst -match '(?i)codex') { $czym = "polecenia codex" }
+      return "wylawianie wymaga ${czym}, a nie ma go w PATH"
+    }
     if ($tekst -match '(?i)usage limit|rate.?limit|limit reached|quota|out of credit|too many requests|\b429\b') {
       return "wyczerpany limit"
     }
@@ -407,12 +456,20 @@ function Wylacz-Ponawianie {
 # ---------------------------------------------------------------- kroki cyklu
 
 # Odlozenie, nie porazka: kod 0, znacznik nietkniety, material czeka na nastepna probe.
-function Odloz($stan, $powod) {
+# $ponawiaj = $false dla powodow, ktore same z siebie nie przejda (brak narzedzia AI) -
+# wracanie co $OdstepMin min przepalaloby tylko proby.
+function Odloz($stan, $powod, $ponawiaj = $true) {
   $stan["status"] = "odlozony"
   $stan["powod"]  = $powod
   $stan["czas"]   = (Get-Date -Format "yyyy-MM-dd HH:mm")
   Zapisz-Stan $stan
   $proby = [int]$stan["proby"]
+  if (-not $ponawiaj) {
+    Wylacz-Ponawianie
+    Zapisz-Podsumowanie "odlozony" $powod 0 (Zaleglosc-Dni)
+    Ostrzezenie "$powod - material czeka nietkniety, cykl wroci przy nastepnym zalogowaniu"
+    exit 0
+  }
   if ($proby -ge $MaxProb) {
     Wylacz-Ponawianie
     Zapisz-Podsumowanie "wyczerpane" $powod 0 (Zaleglosc-Dni)
@@ -425,12 +482,21 @@ function Odloz($stan, $powod) {
   exit 0
 }
 
-function Wylow-Fakty($stan, $nadrabiaj) {
+function Wylow-Fakty($stan, $nadrabiaj, $przeszkoda) {
   Naglowek "1/2  Wylawianie faktow z zaleglych dni"
   if ($stan["wylowione"] -eq "ok") {
     # krok 2 juz sie dzis udal - powtorka jest tylko po to, zeby dokonczyc krok 3.
     # Modelu drugi raz nie wolamy: potkniecie na weryfikacji nie ma kosztowac limitu.
     Krok "dzis juz przeszlo - w tej probie tylko weryfikacja"
+    return
+  }
+  # To jedyny krok, ktory potrzebuje modelu. Przeszkoda zatrzymuje wiec jego, a nie
+  # caly przebieg: weryfikacja czyta pliki i idzie dalej niezaleznie od dostawcy.
+  if ($przeszkoda) {
+    $script:Pominiete = $przeszkoda
+    if ($Proba) { Plan "wylawianie pominiete: $przeszkoda" }
+    else        { Krok "pominiete (wymaga modelu): $przeszkoda" }
+    Krok "weryfikacja idzie dalej - ona modelu nie wola"
     return
   }
   if ($Proba) {
@@ -442,7 +508,13 @@ function Wylow-Fakty($stan, $nadrabiaj) {
   $wyjscie = (& $script:Wyciagnij @argumenty *>&1 | Out-String)
   $kod = $LASTEXITCODE
   Write-Host $wyjscie
-  if ($kod -ne 0) { Odloz $stan (Rozpoznaj-Powod $wyjscie $kod) }
+  if ($kod -ne 0) {
+    # znacznik sie nie przesunal, wiec material czeka - odlozenie ustawiamy dopiero
+    # po weryfikacji, zeby jej nie zabrac przez potkniecie na samym modelu
+    $script:Pominiete = Rozpoznaj-Powod $wyjscie $kod
+    Ostrzezenie "wylawianie stanelo: $($script:Pominiete) - weryfikacja idzie dalej"
+    return
+  }
   $script:Zostalo = Zostalo-Przebiegow $wyjscie
   $stan["wylowione"] = "ok"
   Zapisz-Stan $stan
@@ -494,8 +566,14 @@ function Uruchom-Cykl {
   Zapisz-Stan $stan
 
   Naglowek "Cykl dzienny pamieci ($dzis, proba $proby z $MaxProb)"
-  $przeszkoda = Znajdz-Przeszkode
-  if ($przeszkoda) { Odloz $stan $przeszkoda }
+  $narzedzia = Znajdz-Narzedzia
+  if ($narzedzia.Count -gt 0) {
+    Krok ("narzedzia AI na tej maszynie: " + (($narzedzia | ForEach-Object { $_.Nazwa }) -join ", "))
+  } else {
+    Krok "narzedzi AI nie widac - ida tylko kroki, ktore czytaja pliki"
+  }
+  # przeszkoda dotyczy WYLAWIANIA, nie calego przebiegu - dlatego nie ma tu Odloz
+  $przeszkoda = Znajdz-Przeszkode $narzedzia
 
   $zaleglosc = Zaleglosc-Dni
   $nadrabiaj = [math]::Max(1, [math]::Min($zaleglosc, $MaxNadrabiania))
@@ -505,7 +583,7 @@ function Uruchom-Cykl {
     Krok "zaleglosc: $zaleglosc dni - biore $nadrabiaj"
   }
 
-  Wylow-Fakty $stan $nadrabiaj
+  Wylow-Fakty $stan $nadrabiaj $przeszkoda
   $kodWeryfikacji = Sprawdz-Wiedze
 
   # nadrobione = o ile przesunal sie znacznik; zostalo = co wylawianie samo zglosilo
@@ -519,6 +597,12 @@ function Uruchom-Cykl {
   if ($kodWeryfikacji -ne 0) {
     # fakty sa juz wylowione i leza w poczekalni - tego zadna powtorka nie cofnie
     Odloz $stan "weryfikacja nie powiodla sie (kod $kodWeryfikacji)"
+  }
+
+  # weryfikacja przeszla, ale wylawianie nie poszlo - dzien nie jest zamkniety.
+  # Brak narzedzia AI sam sie nie naprawi, wiec wtedy bez ponawiania co $OdstepMin min.
+  if ($script:Pominiete) {
+    Odloz $stan $script:Pominiete ($narzedzia.Count -gt 0)
   }
 
   $stan["status"] = "ok"
