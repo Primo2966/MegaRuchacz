@@ -267,8 +267,11 @@ function Sprawdz-Indeksowanie {
 
 function Sprawdz-Baze {
   # liczby prosto z bazy - connect() zaklada schemat i jest idempotentne
-  $kodPy = 'from lore.db import connect; c = connect(); ' +
-           'print(c.execute("SELECT count(*) FROM files").fetchone()[0], c.execute("SELECT count(*) FROM chunks").fetchone()[0])'
+  # UWAGA: cudzyslowy podwojne wewnatrz argumentu gina przy przekazywaniu do
+  # zewnetrznego programu w PowerShell 5.1 - Python dostaje SQL bez cudzyslowow
+  # i wywala sie na skladni. Dlatego w kodzie Pythona sa pojedyncze.
+  $kodPy = "from lore.db import connect; c = connect(); " +
+           "print(c.execute('SELECT count(*) FROM files').fetchone()[0], c.execute('SELECT count(*) FROM chunks').fetchone()[0])"
   $w = Uruchom-Uv @("python", "-c", $kodPy)
   $m = [regex]::Match($w.Tekst, '(?m)^\s*(\d+)\s+(\d+)\s*$')
   if ($w.Kod -eq 0 -and $m.Success) {
