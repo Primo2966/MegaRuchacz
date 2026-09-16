@@ -19,15 +19,38 @@ for _stream in (sys.stderr,):
     except Exception:
         pass
 
-# LORE_HOME is the current name; CLAUDE_HISTORIA_HOME stays supported for older setups
-CLAUDE_HOME = Path(os.environ.get("LORE_HOME") or os.environ.get("CLAUDE_HISTORIA_HOME") or Path.home() / ".claude")
-PROJECTS_DIR = CLAUDE_HOME / "projects"
-DB_PATH = CLAUDE_HOME / "lore.db"
-MODELS_DIR = CLAUDE_HOME / "lore_models"
+DB_NAME = "lore.db"
+MODELS_NAME = "lore_models"
 
 # names used before the rename — taken over on startup instead of rebuilt from scratch
 LEGACY_DB_NAME = "historia.db"
 LEGACY_MODELS_NAME = "historia_modele"
+
+
+def _data_home() -> Path:
+    """Where Lore keeps its own data — deliberately not tied to any AI tool's directory.
+
+    Order: the environment variable wins, then ~/.claude when a database already sits
+    there (an existing install must not lose its history), and only a fresh install
+    goes to ~/.lore. Nothing is ever moved between the two.
+    """
+    # LORE_HOME is the current name; CLAUDE_HISTORIA_HOME stays supported for older setups
+    chosen = os.environ.get("LORE_HOME") or os.environ.get("CLAUDE_HISTORIA_HOME")
+    if chosen:
+        return Path(chosen)
+    previous = Path.home() / ".claude"
+    if any((previous / name).exists() for name in (DB_NAME, LEGACY_DB_NAME)):
+        return previous
+    return Path.home() / ".lore"
+
+
+# source of the transcripts to index — that one belongs next to Claude Code and stays there
+CLAUDE_HOME = Path(os.environ.get("LORE_HOME") or os.environ.get("CLAUDE_HISTORIA_HOME") or Path.home() / ".claude")
+PROJECTS_DIR = CLAUDE_HOME / "projects"
+
+DATA_HOME = _data_home()
+DB_PATH = DATA_HOME / DB_NAME
+MODELS_DIR = DATA_HOME / MODELS_NAME
 
 EMBED_MODEL = "intfloat/multilingual-e5-small"
 EMBED_DIM = 384

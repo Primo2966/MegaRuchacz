@@ -12,7 +12,7 @@ Wszystko działa lokalnie, bez zewnętrznych API. Nic nie wychodzi z komputera.
 ~/.claude/projects/<projekt>/*.jsonl          (transkrypty Claude Code)
         │  lore/index.py  — przyrostowo, tylko nowe linie
         ▼
-~/.claude/lore.db                              (SQLite)
+~/.lore/lore.db                                (SQLite)
    ├─ chunks      id, project, session, file, line, part, ts, role, text
    ├─ chunks_fts  FTS5 (unicode61 remove_diacritics 2: „zolty" znajdzie „żółty")
    ├─ vectors     embeddingi float32[384] (intfloat/multilingual-e5-small, ONNX przez fastembed)
@@ -37,11 +37,25 @@ api_key/refresh_token = …`, klucze `sk-…`, `AKIA…`, `ghp_…`, `ctx7sk-…
 (numpy, brute force) → Reciprocal Rank Fusion. Zapytanie po niemiecku znajdzie rozmowę po
 polsku (wspólna przestrzeń wielojęzyczna). Prefiksy `query:`/`passage:` zgodnie z wymogiem e5.
 
+## Gdzie leżą dane
+
+Baza i katalog modelu to **własne dane Lore** i nie mieszkają w katalogu żadnego
+narzędzia AI — na maszynie z samym Codexem katalog `~/.claude` mógłby w ogóle nie istnieć.
+Katalog danych ustala się w tej kolejności:
+
+1. zmienna `LORE_HOME` (albo starsza `CLAUDE_HISTORIA_HOME`) — ma pierwszeństwo,
+2. `~/.claude`, jeśli leży tam już baza (`lore.db` albo `historia.db`) — dotychczasowe
+   instalacje działają dalej w miejscu, nic nie jest przenoszone ani kopiowane,
+3. `~/.lore` — świeża instalacja.
+
+Transkrypty to co innego: czyta się je tam, gdzie zapisują je same narzędzia
+(`~/.claude/projects`, `~/.codex/sessions`), i to się nie zmienia.
+
 ## Uruchamianie
 
 Wymagania: `uv` (winget `astral-sh.uv`), Python 3.12 (`uv python install 3.12`).
 Zależności instalują się same przy pierwszym `uv run`. Model embeddingów (~470 MB)
-pobiera się raz do `~/.claude/lore_models/`.
+pobiera się raz do `<katalog danych>/lore_models/` (domyślnie `~/.lore/lore_models/`).
 
 ```powershell
 # ręczne przeindeksowanie (przyrostowe — dokłada tylko nowe linie)
@@ -71,13 +85,14 @@ Przy pierwszym starcie moduł sam przejmuje dotychczasowe dane, nic nie licząc 
 - stare tabele `fragmenty` / `pliki` / `wektory` dostają nowe nazwy (`chunks` / `files` /
   `vectors`) wraz z kolumnami, a indeks pełnotekstowy jest przebudowywany,
 - katalog modelu `~/.claude/historia_modele` jest przenoszony na `~/.claude/lore_models`,
-- zmienna `CLAUDE_HISTORIA_HOME` nadal działa, jeśli nie ustawiono `LORE_HOME`.
+- zmienna `CLAUDE_HISTORIA_HOME` nadal działa, jeśli nie ustawiono `LORE_HOME`,
+- wszystko zostaje w `~/.claude` — do `~/.lore` idą tylko instalacje od zera.
 
 Migracja jest idempotentna — kolejne uruchomienia nic już nie ruszają.
 
 ## Pełne przeindeksowanie od zera
 
-Zamknij okna Claude Code (żeby serwer nie trzymał bazy), usuń `~/.claude/lore.db`
+Zamknij okna Claude Code (żeby serwer nie trzymał bazy), usuń `lore.db` z katalogu danych
 (oraz `lore.db-wal`, `lore.db-shm`) i uruchom indekser. Model nie jest pobierany ponownie.
 
 ## Narzędzia MCP
@@ -95,4 +110,5 @@ Zamknij okna Claude Code (żeby serwer nie trzymał bazy), usuń `~/.claude/lore
   z transkryptów (różnica maks. 2 h na granicy dnia).
 - Kilka procesów (okna + harmonogram) może indeksować naraz: plik `lore.lock` + transakcje
   `BEGIN IMMEDIATE` z ponownym sprawdzeniem offsetu chronią przed duplikatami.
-- Zmienna `LORE_HOME` nadpisuje katalog `~/.claude` (do testów).
+- Zmienna `LORE_HOME` nadpisuje i katalog danych, i katalog transkryptów Claude Code
+  (do testów: cała robota idzie wtedy na katalogu tymczasowym) — patrz „Gdzie leżą dane".

@@ -22,9 +22,14 @@ $InterwalMin   = 10
 $RozmiarModelu = "~465 MB"
 $MinModelMB    = 200   # model wazy ~465 MB; kilka bajtow to przerwane pobranie, nie model
 
-# Katalog domowy Lore - liczony tak samo jak w lore\db.py, zeby test dalo sie
-# puscic na katalogu tymczasowym (LORE_HOME), a nie na prawdziwej bazie.
-$script:Dom = Join-Path $env:USERPROFILE ".claude"
+# Katalog danych Lore - liczony tak samo jak w lore\db.py: zmienna srodowiskowa ma
+# pierwszenstwo (dzieki temu test idzie na katalogu tymczasowym, a nie na prawdziwej
+# bazie), potem stary ~\.claude, jesli baza juz tam jest, a swieza instalacja -> ~\.lore.
+$Poprzedni  = Join-Path $env:USERPROFILE ".claude"
+$script:Dom = Join-Path $env:USERPROFILE ".lore"
+if ((Test-Path (Join-Path $Poprzedni "lore.db")) -or (Test-Path (Join-Path $Poprzedni "historia.db"))) {
+  $script:Dom = $Poprzedni
+}
 if ($env:CLAUDE_HISTORIA_HOME) { $script:Dom = $env:CLAUDE_HISTORIA_HOME }
 if ($env:LORE_HOME)            { $script:Dom = $env:LORE_HOME }
 
