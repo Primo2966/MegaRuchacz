@@ -199,3 +199,19 @@ w obowiązującej wiedzy** — automat proponuje, człowiek zatwierdza.
 
 Wiedza użytkownika zostaje na jego dysku, poza repozytorium. Kto instaluje
 narzędzie, dostaje pusty mechanizm, nie cudzą wiedzę.
+
+## 0.6.1 — 2026-09-16
+
+- **Codzienny raport kosztu pamięci** (`narzedzia\koszt-pamieci.ps1`, zadanie
+  `LoreKoszt` o 08:15). Pokazuje, ile znaków i tokenów dokleja się do **każdej**
+  rozmowy, ile to daje przez dobę przy rzeczywistej liczbie sesji, ile wpisów
+  bieżących jest przeterminowanych i ile faktów czeka w poczekalni. Ostrzega, gdy
+  warstwa stała zbliża się do sufitu.
+  Nie wywołuje żadnego modelu — to czyste liczenie znaków, więc sam raport nie
+  kosztuje nic.
+- **Twardy sufit 8 000 znaków na warstwę stałą** wpisany w zasady, nie tylko
+  w ostrzeżenie raportu. Po przekroczeniu zestawienia przenoszą się do warstwy
+  referencyjnej, która nie jest doklejana do rozmów.
+
+Pierwszy pomiar na maszynie autora: **522 tokeny na rozmowę, ~3 650 tokenów przez
+dobę** przy 7 sesjach. Dla porównania sufit warstwy stałej to ~2 700 tokenów.
