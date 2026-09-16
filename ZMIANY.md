@@ -447,3 +447,58 @@ faktycznie chodzi)
 **Sprawdzone na maszynie**, nie tylko w testach: 8/8 punktów zielonych, 669 z 669
 transkryptów w bazie, 53 549 kawałków, model 464 MB, serwer MCP odpowiada.
 Próba negatywna (wyłączone zadanie w harmonogramie) → BŁĄD i kod wyjścia 1.
+
+## 0.12.0 — 2026-09-16
+
+Domknięcie audytu z maszyny bez Claude Code. Narzędzie przestaje zakładać, że
+Claude Code w ogóle na maszynie jest.
+
+**Aktualizacja sama się dociąga**
+- Strażnik (`narzedzia\straznik-zasad.ps1`) przy starcie okna odświeża katalog
+  narzędzia z gita, zanim porówna numery wersji. Wcześniej porównywał wdrożenie
+  ze starą, lokalną kopią `ZMIANY.md` i zawsze widział „wszystko aktualne" —
+  wdrożenie na drugiej maszynie nie miało jak dowiedzieć się o nowej wersji.
+- Pobranie jest tchórzliwe z założenia: wyłącznie `merge --ff-only`, nigdy
+  `reset --hard`, `checkout -f`, `clean` ani autostash. Niezapisane zmiany,
+  rozjechana historia, brak zdalnej, brak sieci — każde z nich zatrzymuje
+  pobranie. Do sieci zagląda raz na godzinę, z krótkim limitem czasu, żeby nie
+  opóźniać startu okna.
+- **Poprawka, bez której całość nie działała wcale:** `Start-Process -PassThru`
+  w PowerShellu zostawia `ExitCode` jako `$null`, dopóki nie sięgnie się po
+  uchwyt procesu. Każde wywołanie gita wyglądało więc na nieudane i pobieranie
+  po cichu odpuszczało. Kod wyglądał poprawnie i przeszedł kontrolę statyczną —
+  wyszło dopiero przy uruchomieniu na prawdziwym klonie.
+
+**Serwer MCP rejestruje się w każdym narzędziu obecnym na maszynie**
+- Claude Code przez `claude mcp add`, Codex przez `codex mcp add`, a gdy Codex
+  nie zna tego polecenia — idempotentny wpis `[mcp_servers.lore]` w jego
+  `config.toml`, z kopią zapasową obok. Brak jednego z narzędzi to normalna
+  sytuacja; instalacja przerywa się dopiero przy braku obu.
+- Nieobecne narzędzie jest w samosprawdzeniu **pomijane jawnie**, nie zaliczane
+  na zielono.
+
+**Dane Lore mają własny katalog**
+- Baza i model idą do `~\.lore`, a nie do katalogu Claude Code. Zgodność wstecz:
+  istniejąca baza w `~\.claude` (także pod starą nazwą `historia.db`) jest
+  wykrywana i używana dalej — nic się nie przenosi ani nie kasuje.
+- Zmienne `LORE_HOME` i `CLAUDE_HISTORIA_HOME` zachowują pierwszeństwo.
+- Katalogi ŹRÓDEŁ (`~\.claude\projects`, `~\.codex\sessions`) zostają przy
+  swoich narzędziach — to co innego niż dane Lore.
+
+**Model bierze się z tego, co stoi na maszynie**
+- Wybór narzędzia wyprowadzony do jednego miejsca w `lore\lore\facts.py`
+  (`find_model_cli`), używany też przez `mining.py`. Kolejność: `claude`, potem
+  `codex`; da się wymusić zmienną `LORE_MODEL_CLI`.
+- `cykl-dzienny.ps1` wykrywa narzędzia na żywo zamiast odpytywać Anthropica na
+  sztywno. Krok weryfikacji nie potrzebuje modelu i idzie zawsze, także gdy
+  żadnego modelu nie ma.
+
+**Sprawdzone uruchomieniem**, nie przeczytaniem kodu: 126 testów; klon cofnięty
+o dwie wersje sam przewinął się do najnowszej; próby negatywne (brudne drzewo,
+katalog niebędący repozytorium) kończą się komunikatem i kodem 0, bez wywalenia
+sesji; rejestr modułów, instalator w trybie próbnym i cykl dzienny w trybie
+próbnym przechodzą.
+
+**Niezweryfikowane:** składnia wywołania Codeksa (`codex exec`) przyjęta
+z dokumentacji — na tej maszynie Codeksa nie ma. Oznaczone w kodzie jako
+`UNVERIFIED`. Do sprawdzenia na maszynie domowej.
