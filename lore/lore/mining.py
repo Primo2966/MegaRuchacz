@@ -40,6 +40,12 @@ MIN_SESSIONS = 3  # the heart of it: the same thing in 3 different windows, not 
 # "ok", "tak", "dalej" repeat across hundreds of sessions and would win every ranking; a thing the
 # user had to explain over and over is never four words long
 MIN_CHARS = 80
+# Only what the USER said. The first run on a real archive put the assistant's own
+# report boilerplate at the top of the ranking — "task set up, now I'm checking it",
+# "yes, safe to push, the run came out clean" — repeated across 34 sessions because
+# the assistant writes status the same way every time. That is a repeated FORM, not
+# repeated knowledge. What the user had to explain over and over is what we are after.
+MINED_ROLES = ("user",)
 DEFAULT_CLUSTERS = 60  # how many representatives the model gets to read
 PREVIEW = 10  # clusters listed in the dry run, so the quality can be judged before paying anything
 BATCH = 256  # rows of the similarity matrix at once — 256 x 52 000 float32 is ~50 MB
@@ -77,7 +83,7 @@ def load(conn: sqlite3.Connection) -> tuple[list[Chunk], np.ndarray]:
     ).fetchall()
     chunks, vectors = [], []
     for cid, session, ts, role, text, emb in rows:
-        if role.split(":")[-1] in facts.SKIPPED_ROLES or len(text.strip()) < MIN_CHARS:
+        if role.split(":")[-1] not in MINED_ROLES or len(text.strip()) < MIN_CHARS:
             continue
         vec = np.frombuffer(emb, dtype=np.float32)
         if vec.shape[0] != EMBED_DIM:  # a truncated blob is a reason to skip a row, not to crash
