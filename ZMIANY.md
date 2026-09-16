@@ -100,3 +100,21 @@ zostają pocięte po staremu — przebudowy bazy nie robimy.
 - **5 nowych testów migracji** — razem 18.
 - Przerejestrowany serwer MCP (`historia` → `lore`) i zadanie harmonogramu
   (`ClaudeHistoriaIndeks` → `LoreIndex`).
+
+## 0.4.0 — 2026-09-16
+
+- **Mapa projektu ma żyć.** Dopisywanie znalezisk do `.claude/mapa.md` jest teraz
+  obowiązkiem scouta, nie kierownika — scout czyta mapę przed szukaniem i dopisuje
+  do niej przed oddaniem raportu. Wcześniej zasada mówiła, że mapę uzupełnia
+  kierownik „raportami scouta", więc w praktyce nie uzupełniał jej nikt i każdy
+  worker startował na zimno.
+- **Pierwszy kontakt z nieznanym projektem** = jeden scout na szkielet mapy,
+  zanim ruszy jakiekolwiek zadanie.
+- **Twierdzenia o mechanice narzędzi dostają datę sprawdzenia**, plus regułę:
+  jeśli coś zachowuje się inaczej, niż mówią zasady — powiedzieć to głośno,
+  zamiast po cichu się dostosować.
+- **Lore używane odważniej** (globalne ustalenia): jedno wyszukanie na starcie
+  każdego niebanalnego zadania, zamiast tylko trzech wąskich wyzwalaczy.
+- **Nowa reguła zapisywania wiedzy**: gdy użytkownik wyjaśnia coś trwałego, czego
+  nie ma w plikach, agent sam proponuje zapisanie — krótkie fakty do globalnego
+  pliku, długie zestawienia do `~/.claude/wiedza/`.

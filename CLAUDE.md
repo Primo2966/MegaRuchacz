@@ -33,9 +33,27 @@ linii. To sekundy, nie minuty.
   `[ID] STATUS | pliki objęte blokadą | worker | cel`
   Statusy: `QUEUED`, `RUNNING`, `REVIEW`, `DONE`, `BLOCKED`.
   Aktualizujesz **przed** rozdaniem i **po** każdym raporcie workera.
-- `.claude/mapa.md` — mapa projektu: co gdzie leży. Uzupełniasz ją raportami
-  scouta. **Zanim wyślesz scouta, sprawdź mapę** — jeśli odpowiedź tam jest,
-  scout jest zbędny.
+- `.claude/mapa.md` — mapa projektu: co gdzie leży. **Zanim wyślesz scouta,
+  sprawdź mapę** — jeśli odpowiedź tam jest, scout jest zbędny.
+
+### Mapa musi żyć, inaczej każdy worker startuje na zimno
+
+Pusta mapa to najdroższa rzecz w całym tym trybie. Bez niej każdy worker zaczyna
+od rozglądania się: trzy minuty szukania na trzydzieści sekund roboty, i tak przy
+każdym zadaniu od nowa. Dlatego:
+
+- **Dopisywanie do mapy to obowiązek scouta, nie Twój.** Jego zlecenie zawsze
+  zawiera polecenie dopisania znalezisk do `.claude/mapa.md` przed oddaniem
+  raportu. Nie zbieraj tego ręcznie po raportach — zginie.
+- **Pierwszy kontakt z nieznanym projektem = jeden scout na szkielet mapy.**
+  Nie czekaj, aż konkretne zadanie zmusi Cię do rozpoznania. Zanim cokolwiek
+  ruszysz w projekcie, w którym mapa jest pusta, puść jednego scouta z zadaniem
+  „opisz, z czego składa się ten projekt i gdzie co leży" i oddaj klawiaturę.
+  To jedna inwestycja, która zwraca się przy każdym kolejnym zadaniu.
+- **W zleceniu dla implementera podawaj ścieżki z mapy.** Worker, który dostaje
+  gotowe „to leży tu i tu", startuje ciepły. O to w tym wszystkim chodzi.
+- Mapa opisuje rzeczy **trwałe** — gdzie co leży, jak się nazywa, gdzie biegną
+  granice modułów. Nie bieżący stan zadań; od tego jest rejestr.
 
 Po kilku zadaniach nie polegaj na pamięci rozmowy — te dwa pliki są prawdą.
 
@@ -75,10 +93,19 @@ Nie dotyczy to problemów na głębokość (patrz niżej) — tam dzielenie szko
 
 ## Kolizje — worktree domyślnie, rejestr pomocniczo
 
-Claude Code **twardo** izoluje worktree: blokuje `Edit`/`Write` w głównym
-checkoutcie, blokuje komendy bash o cwd w głównym checkoutcie i przekierowania
-`git -C` / `GIT_DIR`. To gwarancja mechanizmu, nie konwencja, której model może
-nie dotrzymać. Dlatego:
+> **Twierdzenie o mechanice narzędzia — sprawdzone 2026-09-16.**
+> Claude Code **twardo** izoluje worktree: blokuje `Edit`/`Write` w głównym
+> checkoutcie, blokuje komendy bash o cwd w głównym checkoutcie i przekierowania
+> `git -C` / `GIT_DIR`. To gwarancja mechanizmu, nie konwencja, której model może
+> nie dotrzymać.
+>
+> Narzędzia się zmieniają, a zasady zapisane raz zostają na zawsze. Jeśli
+> **kiedykolwiek zaobserwujesz, że coś działa inaczej, niż mówi to twierdzenie** —
+> powiedz o tym użytkownikowi wprost, jednym zdaniem, zamiast po cichu dostosować
+> sposób pracy. Ciche dostosowanie oznacza, że przez kolejne miesiące wszyscy
+> będą działać według nieprawdy zapisanej w pliku.
+
+Dlatego:
 
 - **Każdy `implementer` idzie z `isolation: "worktree"` — domyślnie, nie awaryjnie.**
   Dwa zadania w tych samych plikach mogą wtedy lecieć naprawdę równolegle.
