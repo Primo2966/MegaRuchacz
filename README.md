@@ -73,9 +73,23 @@ zasad nadal siedzi w plikach instrukcji. Jeśli ktoś go skasował, nadpisał pl
 albo zmienił konfigurację — wpisuje się z powrotem i dostajesz o tym jedną linię.
 Gdy wszystko się zgadza, nie widzisz nic.
 
-**Poprawki nakładają się same.** Gdy ściągniesz nowszą wersję narzędzia
-(`git pull`), wszystkie projekty, w których je wdrożyłeś, podciągną się przy
-najbliższym otwarciu okna. Zasada jest taka:
+**Nowsza wersja narzędzia przychodzi sama.** Przy starcie sesji — ale nie częściej
+niż **raz na godzinę** — strażnik robi `git fetch` w katalogu, z którego wdrażałeś
+narzędzie, i przewija go do nowszej wersji. Dopiero potem porównuje, czy wdrożenie
+w projekcie nie zostało w tyle. Dzięki temu poprawka wypchnięta na jednej maszynie
+dociera na drugą bez Twojego udziału. Gdy coś się podciągnie, dostajesz **jedną
+linię: z której wersji na którą**.
+
+Pobranie jest celowo tchórzliwe — nigdy nie rusza Twojej pracy:
+
+- **masz w katalogu narzędzia niezapisane zmiany** → nie pobiera nic, mówi o tym
+  jednym zdaniem i pracuje na tym, co jest;
+- **historia się rozjechała** (masz własne commity, których nie ma na zdalnej) →
+  melduje i zostawia; przewija wyłącznie „do przodu", nigdy na siłę;
+- **nie ma sieci, gita, zdalnej albo sieć nie odpowiada w kilka sekund** → cisza,
+  sesja rusza normalnie na tym, co leży na dysku.
+
+Dalej poprawki wchodzą do projektu według wersji:
 
 | Zmiana wersji | Co się dzieje |
 |---|---|
@@ -83,9 +97,15 @@ najbliższym otwarciu okna. Zasada jest taka:
 | druga cyfra (0.5 → 0.6) | poprawki wchodzą, **nowa funkcja jest proponowana** z opisem kosztu |
 | pierwsza cyfra (0.x → 1.0) | nic automatycznie, trzeba wdrożyć ręcznie |
 
+**Czego strażnik nie zrobi za Ciebie:** nie włączy nowej funkcji (drugiej cyfry)
+ani przebudowy (pierwszej) — od tego jest `wdroz.ps1`, a strażnik podaje gotową
+komendę. Nie zaktualizuje też modułu `pamiec` (Lore): ten aktualizuje się
+wyłącznie własnym instalatorem, bo potrafi kosztować pobieranie i zadanie
+w harmonogramie.
+
 Odmowa nowej funkcji jest zapamiętywana — nie będzie o nią pytać przy każdym
 oknie. **Twoje pliki robocze** (rejestr zadań, mapa projektu) nigdy nie są
-nadpisywane. Nic nie sięga do sieci przy starcie sesji.
+nadpisywane.
 
 ## Dwa moduły — bierzesz jeden albo oba
 
