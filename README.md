@@ -64,14 +64,27 @@ Po instalacji **zamknij i otwórz Claude Code na nowo**, żeby zasady się zała
 
 | Narzędzie | Zasady pracy | Rozdawanie roboty workerom | Historia rozmów |
 |---|---|---|---|
-| Claude Code | tak | tak | tak |
-| Orca | tak | tak (własny mechanizm) | tak |
-| Codex | tak | **nie** — brak mechanizmu | w przygotowaniu |
+| Claude Code | tak | tak — własnym narzędziem | tak |
+| Claude Code w Orce | tak | tak | tak |
+| Codex w Orce | tak | tak — workerów odpala Orka | w przygotowaniu |
+| Codex sam z siebie | tak | **nie** | w przygotowaniu |
 | Zwykły GPT i reszta | tak | nie | nie |
 
-Tam, gdzie w tabeli jest „nie", nie ma czego adaptować — te narzędzia nie mają
-pojęcia workera. Zasady nadal działają jako sposób pracy, ale agent wykonuje
-wszystko sam.
+Różnica między dwoma ostatnimi wierszami jest istotna i sprowadza się do tego,
+**skąd biorą się workerzy**:
+
+- W Claude Code worker to narzędzie, które ma sam model — odpala go, kiedy uzna
+  za stosowne.
+- W Orce worker to osobna sesja, którą odpala **Orca**, a nie model. Orce jest
+  w zasadzie obojętne, co siedzi w tej sesji: `--agent claude` i `--agent codex`
+  są równorzędne.
+
+Dlatego Codex podpięty do Orki dostaje rozdawanie roboty „z zewnątrz" — nie dlatego,
+że nabył nową umiejętność, tylko dlatego, że steruje nim coś, co ją ma. Codex
+uruchomiony samodzielnie, poza Orką, workerów nie ma i mieć nie będzie.
+
+Tam, gdzie w tabeli jest „nie", zasady nadal działają jako sposób pracy — agent
+po prostu wykonuje wszystko sam, zamiast rozdawać.
 
 ## Historia rozmów
 

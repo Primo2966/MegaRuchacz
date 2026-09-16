@@ -4,6 +4,20 @@ Każda zmiana wypychana na gita dostaje tu wpis. Numer rośnie wg zasady:
 pierwsza cyfra — przebudowa łamiąca zgodność, druga — nowa funkcja,
 trzecia — poprawka.
 
+## 0.1.1 — 2026-09-16
+
+- **Sprostowanie w README.** Poprzednia wersja twierdziła, że Codex nie ma
+  workerów. To było mylące: Orca obsługuje Codeksa jako pełnoprawny silnik
+  workera (`orca worktree create --agent codex`, `orca orchestration
+  worker-start --agent codex`), z osobnym środowiskiem i wpiętymi hookami.
+  Bez workerów jest wyłącznie Codex uruchomiony samodzielnie, poza Orką.
+- Ustalona ścieżka sesji Codeksa na potrzeby przyszłego czytnika historii:
+  `~/.codex/sessions` (Orca sama wskazuje ten katalog). Na maszynie biurowej
+  katalog nie istnieje — brak odbytych sesji.
+- Dopisany dług: cięcie tekstu na kawałki leci po liczbie znaków, w pół słowa,
+  a limit 1500 znaków nie jest powiązany z limitem modelu — przy gęstym tekście
+  końcówka może być po cichu obcinana.
+
 ## 0.1.0 — 2026-09-16
 
 Pierwsza wersja w repozytorium. Do tej pory całość żyła w dwóch osobnych
