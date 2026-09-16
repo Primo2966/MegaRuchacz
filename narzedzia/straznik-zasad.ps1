@@ -1,10 +1,13 @@
-# Straznik - pilnuje dwoch rzeczy przy kazdym otwarciu okna:
+# Straznik - pilnuje trzech rzeczy przy kazdym otwarciu okna:
+#   0. czy sam katalog zrodlowy narzedzia nie zostal w tyle za zdalnym repo,
 #   1. czy blok zasad globalnych MegaRuchacza nadal siedzi w ~/.claude/CLAUDE.md,
 #   2. czy wdrozenie w projekcie nie zostalo w tyle za katalogiem zrodlowym.
 #
 # Wolany przez hook SessionStart, wiec zasada nadrzedna brzmi: gdy wszystko sie
 # zgadza, NIC nie wypisuje i nie robi nic drogiego. Porownania ida po skrocie
-# tresci i po numerze wersji, zadnej sieci, zadnego gita przy zgodnym stanie.
+# tresci i po numerze wersji. Jedyne siegniecie do sieci to krotki "git fetch"
+# w katalogu zrodlowym, najwyzej raz na godzine i z limitem czasu - bez niego
+# punkt 2. porownywalby wdrozenie ze staroscia i zawsze wychodzilo mu, ze gra.
 #
 # Uzycie:
 #   powershell -NoProfile -File narzedzia\straznik-zasad.ps1 [-Zrodlo <repo>] [-Projekt <katalog>]
@@ -64,9 +67,14 @@ if ($Moduly) {
 $POCZATEK = "<!-- MegaRuchacz:start -->"
 $KONIEC   = "<!-- MegaRuchacz:koniec -->"
 
-$plikDomowy = Join-Path $KatalogDomowy ".claude\CLAUDE.md"
-$plikStanu  = Join-Path $KatalogDomowy ".claude\.megaruchacz-straznik.txt"
-$plikWersji = Join-Path $Projekt ".claude\megaruchacz-wersja.txt"
+$plikDomowy   = Join-Path $KatalogDomowy ".claude\CLAUDE.md"
+$plikStanu    = Join-Path $KatalogDomowy ".claude\.megaruchacz-straznik.txt"
+$plikWersji   = Join-Path $Projekt ".claude\megaruchacz-wersja.txt"
+# Znacznik ostatniego zagladania do sieci. Lezy w katalogu domowym, a nie przy
+# pliku wersji projektu, bo katalog zrodlowy jest jeden na maszyne: dziesiec
+# otwartych okien ma go odpytac raz, nie dziesiec razy.
+$plikPobrania = Join-Path $KatalogDomowy ".claude\.megaruchacz-pobranie.txt"
+$MINUT_MIEDZY_POBRANIAMI = 60
 
 function Bez-Bom { return (New-Object System.Text.UTF8Encoding($false)) }
 
@@ -245,6 +253,111 @@ function Nanies-Poprawki($zrodlo, $projekt) {
   [void](Odswiez (Join-Path $zrodlo ".claude\orchestrator-reminder.json") (Join-Path $cel "orchestrator-reminder.json") $stempel)
   if ($zasadyZmienione -or -not (Test-Path (Join-Path $cel "megaruchacz-sesja.json"))) { Zbuduj-Sesje $cel }
   [void](Napraw-Hooki $cel $zrodlo $stempel)
+}
+
+# ------------------------------------------------- 0. swiezosc kopii narzedzia
+# Wola gita w osobnym procesie, zeby dalo sie nalozyc limit czasu - straznik
+# chodzi przy KAZDYM otwarciu okna i nie ma prawa czekac na gluche polaczenie.
+# Zwraca .ok (kod wyjscia 0 i zdazyl) oraz .tekst (wyjscie bez bialych znakow).
+function Wolaj-Gita([string]$argumenty, [int]$sekundy) {
+  $wynik = [ordered]@{ ok = $false; tekst = "" }
+  $wy = [System.IO.Path]::GetTempFileName()
+  $bl = [System.IO.Path]::GetTempFileName()
+  try {
+    $p = Start-Process -FilePath "git" -ArgumentList $argumenty -NoNewWindow -PassThru `
+           -RedirectStandardOutput $wy -RedirectStandardError $bl
+    if (-not $p.WaitForExit($sekundy * 1000)) {
+      try { $p.Kill() } catch { }
+      return $wynik
+    }
+    $p.WaitForExit()
+    if ($p.ExitCode -eq 0) {
+      $wynik.ok = $true
+      $t = [System.IO.File]::ReadAllText($wy)
+      if ($t) { $wynik.tekst = $t.Trim() }
+    }
+  } catch { }
+  finally { Remove-Item $wy, $bl -Force -ErrorAction SilentlyContinue }
+  return $wynik
+}
+
+# Przewija katalog zrodlowy narzedzia do nowszej wersji, zanim ktokolwiek
+# zacznie porownywac numery. To jest katalog roboczy uzytkownika, wiec pobranie
+# jest tchorzliwe z zalozenia: przy niezapisanych zmianach albo rozjechanej
+# historii NIE robi nic poza powiedzeniem o tym. Zadnego reset --hard, checkout
+# -f, clean ani autostash - cudza praca jest wazniejsza niz swiezosc narzedzia.
+# Brak gita, brak zdalnej i brak sieci to normalne sytuacje: cisza i jedziemy
+# dalej z tym, co lezy na dysku.
+function Odswiez-Zrodlo {
+  # Do sieci zagladamy nie czesciej niz raz na $MINUT_MIEDZY_POBRANIAMI, osobno
+  # dla kazdego katalogu zrodlowego - stad skrot sciezki w kluczu.
+  $klucz = "z" + (Skrot $Zrodlo.ToLower())
+  $stanP = Czytaj-Klucze $plikPobrania
+  $kiedy = [datetime]::MinValue
+  if ($stanP[$klucz] -and [datetime]::TryParse($stanP[$klucz], [ref]$kiedy)) {
+    if (([datetime]::Now - $kiedy).TotalMinutes -lt $MINUT_MIEDZY_POBRANIAMI) { return }
+  }
+  if (-not (Get-Command git -ErrorAction SilentlyContinue)) { return }
+
+  $cyt = '"' + $Zrodlo.TrimEnd('\') + '"'
+  $repo = Wolaj-Gita "-C $cyt rev-parse --is-inside-work-tree" 5
+  if (-not $repo.ok -or $repo.tekst -ne "true") { return }   # to nie repozytorium
+
+  # Od tej chwili proba byla prawdziwa - znacznik idzie na dysk niezaleznie od
+  # wyniku, zeby nieudane pobranie nie powtarzalo sie przy kazdym oknie.
+  $stanP[$klucz] = (Get-Date -Format 'yyyy-MM-dd HH:mm:ss')
+  Zapisz-Klucze $plikPobrania $stanP
+
+  $brudne = Wolaj-Gita "-C $cyt status --porcelain" 5
+  if (-not $brudne.ok) { return }
+  if ($brudne.tekst) {
+    Write-Host "MegaRuchacz: w $Zrodlo sa niezapisane zmiany - nie pobieram nowszej wersji narzedzia, pracuje na tej, ktora jest."
+    return
+  }
+
+  # Galaz bez zdalnej (albo odpiety HEAD) - nie ma czego i skad pobierac.
+  $zdalna = Wolaj-Gita "-C $cyt rev-parse --abbrev-ref --symbolic-full-name @{u}" 5
+  if (-not $zdalna.ok -or -not $zdalna.tekst) { return }
+
+  $plikZmian = Join-Path $Zrodlo "ZMIANY.md"
+  $przedWersja = Wersja-Narzedzia $plikZmian
+
+  # Zadnych pytan o haslo - okno sesji nie ma gdzie na nie odpowiedziec.
+  # Limity czasu sa krotkie z premedytacja: caly hook ma 15 sekund, a start
+  # okna nie moze na nas czekac. Gdy sie nie wyrobimy, wracamy po godzinie.
+  $env:GIT_TERMINAL_PROMPT = "0"
+  $pobrane = Wolaj-Gita "-C $cyt -c credential.interactive=never fetch --quiet" 6
+  if (-not $pobrane.ok) { return }   # brak sieci to nie jest blad
+
+  $licznik = Wolaj-Gita "-C $cyt rev-list --left-right --count HEAD...@{u}" 5
+  if (-not $licznik.ok) { return }
+  $czesci = $licznik.tekst -split '\s+'
+  if ($czesci.Count -lt 2) { return }
+  $nasze = [int]$czesci[0]   # commity lokalne, ktorych nie ma na zdalnej
+  $zdalne = [int]$czesci[1]  # commity zdalne, ktorych nie mamy u siebie
+  if ($zdalne -le 0) { return }   # nic nowego - cisza, tak jak reszta straznika
+
+  if ($nasze -gt 0) {
+    Write-Host "MegaRuchacz: historia w $Zrodlo rozjechala sie ze zdalna ($nasze lokalnych, $zdalne zdalnych) - nie scalam sam, zrob to recznie."
+    return
+  }
+
+  # Tylko proste przewiniecie do przodu. Gdy git odmowi, zostajemy przy starym.
+  $scalone = Wolaj-Gita "-C $cyt merge --ff-only @{u}" 6
+  if (-not $scalone.ok) {
+    Write-Host "MegaRuchacz: nie udalo sie przewinac $Zrodlo do nowszej wersji - pracuje na tej, ktora jest."
+    return
+  }
+
+  # Cicha aktualizacja jest gorsza niz jej brak - zawsze jedna linia o tym,
+  # co sie wlasnie zmienilo pod reka uzytkownika.
+  $poWersja = Wersja-Narzedzia $plikZmian
+  if ($przedWersja -and $poWersja -and $przedWersja -ne $poWersja) {
+    Write-Host "MegaRuchacz: narzedzie podciagniete z gita - wersja ${przedWersja} -> ${poWersja} (co doszlo: $plikZmian)"
+  } else {
+    $slowo = if ($zdalne -eq 1) { "nowa zmiana" } else { "nowych zmian" }
+    Write-Host "MegaRuchacz: narzedzie podciagniete z gita - $zdalne $slowo, numer wersji bez zmian (co doszlo: $plikZmian)"
+  }
 }
 
 # --------------------------------------------------------- 1. zasady globalne
@@ -451,6 +564,9 @@ try {
   }
 
   # Osobne try, zeby potkniecie sie na jednym nie zabralo drugiego.
+  # Pobranie idzie pierwsze - reszta porownuje sie z katalogiem zrodlowym,
+  # wiec ma sens dopiero wtedy, gdy ten katalog jest swiezy.
+  try { Odswiez-Zrodlo }   catch { }
   try { Pilnuj-Zasad }     catch { }
   try { Pilnuj-Wersji }    catch { }
   try { Zglos-Kandydatow } catch { }
