@@ -25,6 +25,11 @@ MAX_INPUT_NARZEDZIA = 200
 MAX_WYNIK_NARZEDZIA = 400
 MIN_DLUGOSC = 3
 
+SEPARATOR_WYPOWIEDZI = "\n\n"
+ROLA_MIESZANA = "rozmowa"
+# ostatniej grupy nie zapisujemy — sesja może ją jeszcze dopisać; ale nie czekamy w nieskończoność
+WIEK_ZAMYKAJACY_OGON_S = 24 * 60 * 60
+
 PLIK_BLOKADY = SCIEZKA_BAZY.with_suffix(".lock")
 BLOKADA_PRZETERMINOWANA_S = 15 * 60
 
@@ -49,6 +54,16 @@ _SZUM_PREFIKSY = (
     "Caveat: The messages below",
 )
 _SYSTEM_REMINDER = re.compile(r"<system-reminder>.*?</system-reminder>", re.DOTALL)
+
+
+@dataclass
+class Wypowiedz:
+    """Jedna wypowiedź z transkryptu — materiał wejściowy do grupowania."""
+
+    linia: int
+    ts: str
+    rola: str
+    tekst: str
 
 
 @dataclass
@@ -168,6 +183,60 @@ def potnij(tekst: str) -> list[str]:
     return kawalki
 
 
+# ---------------------------------------------------------------- grupowanie wypowiedzi
+
+def _za_dluga(w: Wypowiedz) -> bool:
+    return len(w.tekst) > DLUGOSC_KAWALKA
+
+
+def pogrupuj(wypowiedzi: list[Wypowiedz]) -> list[list[Wypowiedz]]:
+    """Skleja kolejne wypowiedzi w grupy mieszczące się w jednym kawałku.
+
+    Samotne „tak, rób to" ma pusty wektor — pytanie, którego dotyczy, siedzi w innym wpisie.
+    Dlatego krótkie wypowiedzi trafiają do bazy razem z sąsiadami. Wypowiedź dłuższa niż
+    kawałek stanowi własną grupę (i jest cięta jak dotąd).
+    """
+    grupy: list[list[Wypowiedz]] = []
+    biezaca: list[Wypowiedz] = []
+    dlugosc = 0
+    for w in wypowiedzi:
+        if _za_dluga(w):
+            if biezaca:
+                grupy.append(biezaca)
+                biezaca, dlugosc = [], 0
+            grupy.append([w])
+            continue
+        koszt = len(w.rola) + 2 + len(w.tekst)  # "rola: tekst"
+        razem = dlugosc + len(SEPARATOR_WYPOWIEDZI) + koszt if biezaca else koszt
+        if biezaca and razem > DLUGOSC_KAWALKA:
+            grupy.append(biezaca)
+            biezaca, dlugosc, razem = [], 0, koszt
+        biezaca.append(w)
+        dlugosc = razem
+    if biezaca:
+        grupy.append(biezaca)
+    return grupy
+
+
+def _fragmenty_z_grupy(grupa: list[Wypowiedz], prefiks_roli: str) -> list[Fragment]:
+    """Grupa -> kawałki gotowe do zapisu. Sklejone wypowiedzi dostają prefiks roli w treści."""
+    role = {w.rola for w in grupa}
+    rola = role.pop() if len(role) == 1 else prefiks_roli + ROLA_MIESZANA
+    if len(grupa) == 1:
+        tekst = grupa[0].tekst  # pojedyncza wypowiedź zostaje taka, jaka była
+    else:
+        tekst = SEPARATOR_WYPOWIEDZI.join(f"{w.rola}: {w.tekst}" for w in grupa)
+    pierwsza = grupa[0]
+    return [Fragment(pierwsza.linia, cz, pierwsza.ts, rola, k) for cz, k in enumerate(potnij(tekst))]
+
+
+def _ogon_otwarty(grupa: list[Wypowiedz], mtime: float) -> bool:
+    """Czy ostatnia grupa może jeszcze urosnąć o wypowiedź, której nikt jeszcze nie dopisał."""
+    if len(grupa) == 1 and _za_dluga(grupa[0]):
+        return False  # długiej wypowiedzi i tak nie sklejamy z sąsiadami
+    return time.time() - mtime <= WIEK_ZAMYKAJACY_OGON_S
+
+
 # ---------------------------------------------------------------- pliki
 
 def _pliki_domowe() -> list[Path]:
@@ -241,9 +310,9 @@ def _czytaj_nowe_linie(p: Path, offset: int) -> tuple[list[tuple[int, str]], int
     return linie, poz
 
 
-def _fragmenty_z_linii(linie: list[tuple[int, str]], start_linia: int, prefiks_roli: str, ts_domyslny: str) -> tuple[list[Fragment], str, str | None]:
-    """Parsuje linie -> fragmenty. Zwraca (fragmenty, ostatni_ts, sessionId z rekordów)."""
-    fr: list[Fragment] = []
+def _wypowiedzi_z_linii(linie: list[tuple[int, str]], start_linia: int, prefiks_roli: str, ts_domyslny: str) -> tuple[list[Wypowiedz], str, str | None]:
+    """Parsuje linie -> wypowiedzi. Zwraca (wypowiedzi, ostatni_ts, sessionId z rekordów)."""
+    fr: list[Wypowiedz] = []
     ts = ts_domyslny
     sesja_z_rekordu = None
     nr = start_linia
@@ -266,9 +335,15 @@ def _fragmenty_z_linii(linie: list[tuple[int, str]], start_linia: int, prefiks_r
             tekst = maskuj(tekst).encode("utf-8", errors="replace").decode("utf-8").strip()
             if len(tekst) < MIN_DLUGOSC:
                 continue
-            for cz, kawalek in enumerate(potnij(tekst)):
-                fr.append(Fragment(nr, cz, ts, rola, kawalek))
+            fr.append(Wypowiedz(nr, ts, rola, tekst))
     return fr, ts, sesja_z_rekordu
+
+
+def _granica_grupy(grupa: list[Wypowiedz], linie: list[tuple[int, str]], start_linia: int, koniec_offset: int) -> tuple[int, int]:
+    """(offset, numer linii) tuż za ostatnią linią grupy — punkt wznowienia po jej domknięciu."""
+    ostatnia = max(w.linia for w in grupa)
+    nastepna = ostatnia - start_linia  # indeks kolejnej linii w `linie`
+    return (linie[nastepna][0] if nastepna < len(linie) else koniec_offset), ostatnia
 
 
 # ---------------------------------------------------------------- blokada między procesami
@@ -312,12 +387,24 @@ def _zwolnij_blokade() -> None:
 
 # ---------------------------------------------------------------- główna pętla
 
-def _usun_fragmenty_pliku(conn: sqlite3.Connection, sciezka: str) -> None:
-    ids = [r[0] for r in conn.execute("SELECT id FROM fragmenty WHERE plik=?", (sciezka,))]
+def _usun_fragmenty_pliku(conn: sqlite3.Connection, sciezka: str, od_linii: int | None = None) -> None:
+    """Kasuje fragmenty pliku — całe albo tylko te powyżej punktu wznowienia (zabezpieczenie przed duplikatami)."""
+    if od_linii is None:
+        warunek, argi = "plik=?", (sciezka,)
+    else:
+        warunek, argi = "plik=? AND linia>?", (sciezka, od_linii)
+    ids = [r[0] for r in conn.execute(f"SELECT id FROM fragmenty WHERE {warunek}", argi)]
+    if not ids:
+        return
     for i in ids:
         conn.execute("INSERT INTO fragmenty_fts(fragmenty_fts, rowid, tekst) SELECT 'delete', id, tekst FROM fragmenty WHERE id=?", (i,))
-    conn.execute("DELETE FROM wektory WHERE fragment_id IN (SELECT id FROM fragmenty WHERE plik=?)", (sciezka,))
-    conn.execute("DELETE FROM fragmenty WHERE plik=?", (sciezka,))
+    conn.execute(f"DELETE FROM wektory WHERE fragment_id IN (SELECT id FROM fragmenty WHERE {warunek})", argi)
+    conn.execute(f"DELETE FROM fragmenty WHERE {warunek}", argi)
+
+
+def _ogon_do_domkniecia(offset: int, st: os.stat_result) -> bool:
+    """Plik bez zmian, ale wisi na nim niezapisana grupa, której już nic nie dopisze."""
+    return offset < st.st_size and time.time() - st.st_mtime > WIEK_ZAMYKAJACY_OGON_S
 
 
 def przetworz_plik(conn: sqlite3.Connection, p: Path) -> int:
@@ -325,7 +412,7 @@ def przetworz_plik(conn: sqlite3.Connection, p: Path) -> int:
     sciezka = str(p)
     st = p.stat()
     row = conn.execute("SELECT mtime, rozmiar, offset, linia FROM pliki WHERE sciezka=?", (sciezka,)).fetchone()
-    if row and row[0] == st.st_mtime and row[1] == st.st_size:
+    if row and row[0] == st.st_mtime and row[1] == st.st_size and not _ogon_do_domkniecia(row[2], st):
         return 0
     offset, start_linia = (row[2], row[3]) if row else (0, 0)
     od_nowa = False
@@ -341,10 +428,22 @@ def przetworz_plik(conn: sqlite3.Connection, p: Path) -> int:
     if not ostatni_ts:
         ostatni_ts = datetime.fromtimestamp(st.st_mtime, tz=timezone.utc).isoformat().replace("+00:00", "Z")
 
-    linie, nowy_offset = _czytaj_nowe_linie(p, offset)
-    fragmenty, _, sesja_rec = _fragmenty_z_linii(linie, start_linia, prefiks_roli, ostatni_ts)
+    linie, koniec_offset = _czytaj_nowe_linie(p, offset)
+    wypowiedzi, _, sesja_rec = _wypowiedzi_z_linii(linie, start_linia, prefiks_roli, ostatni_ts)
     if not prefiks_roli and sesja_rec:
         sesja = sesja_rec
+
+    grupy = pogrupuj(wypowiedzi)
+    if grupy and _ogon_otwarty(grupy[-1], st.st_mtime):
+        grupy.pop()  # ostatnia grupa może jeszcze urosnąć — zapiszemy ją, gdy się domknie
+    if grupy:
+        # offset zatrzymujemy na końcu ostatniej ZAMKNIĘTEJ grupy: resztę przeczytamy ponownie
+        nowy_offset, nowa_linia = _granica_grupy(grupy[-1], linie, start_linia, koniec_offset)
+    elif wypowiedzi:
+        nowy_offset, nowa_linia = offset, start_linia
+    else:
+        nowy_offset, nowa_linia = koniec_offset, start_linia + len(linie)
+    fragmenty = [f for g in grupy for f in _fragmenty_z_grupy(g, prefiks_roli)]
 
     # embeddingi liczymy poza transakcją (nie trzymamy blokady zapisu przez minuty)
     emb = embedduj_passages([f.tekst for f in fragmenty]) if fragmenty else None
@@ -358,6 +457,8 @@ def przetworz_plik(conn: sqlite3.Connection, p: Path) -> int:
             return 0
         if od_nowa:
             _usun_fragmenty_pliku(conn, sciezka)
+        else:
+            _usun_fragmenty_pliku(conn, sciezka, od_linii=start_linia)
         for i, f in enumerate(fragmenty):
             cur = conn.execute(
                 "INSERT INTO fragmenty(projekt, sesja, plik, linia, czesc, ts, rola, tekst) VALUES (?,?,?,?,?,?,?,?)",
@@ -370,7 +471,7 @@ def przetworz_plik(conn: sqlite3.Connection, p: Path) -> int:
             "INSERT INTO pliki(sciezka, mtime, rozmiar, offset, linia, projekt, sesja) VALUES (?,?,?,?,?,?,?) "
             "ON CONFLICT(sciezka) DO UPDATE SET mtime=excluded.mtime, rozmiar=excluded.rozmiar, "
             "offset=excluded.offset, linia=excluded.linia, projekt=excluded.projekt, sesja=excluded.sesja",
-            (sciezka, st.st_mtime, st.st_size, nowy_offset, start_linia + len(linie), projekt, sesja),
+            (sciezka, st.st_mtime, st.st_size, nowy_offset, nowa_linia, projekt, sesja),
         )
         conn.execute("COMMIT")
     except Exception:
