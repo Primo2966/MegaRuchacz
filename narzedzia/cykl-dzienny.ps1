@@ -119,12 +119,34 @@ function Zapisz-Stan($stan) {
 }
 
 # Podsumowanie czyta straznik przy starcie sesji - stad i klucze, i gotowy opis po ludzku.
+# Zaleglosc przejsciowa i zaleglosc trwala wygladaja identycznie: "czeka X dni".
+# Ta druga znaczy, ze limit na jeden przebieg jest za maly i system NIGDY nie
+# nadgoni - a przez miesiace wyglada normalnie. Jedyne, co je odroznia, to
+# kierunek: czy zaleglosc maleje, czy rosnie. Dlatego porownujemy z poprzednim
+# przebiegiem i mowimy wprost, gdy nie nadazamy.
+function Kierunek-Zaleglosci($zaleglosc) {
+  $poprzednia = $null
+  if (Test-Path $script:Ostatni) {
+    try {
+      $stare = Get-Content $script:Ostatni -Raw | ConvertFrom-Json
+      if ($stare.zaleglosc -match '^\d+$') { $poprzednia = [int]$stare.zaleglosc }
+    } catch { }
+  }
+  if ($null -eq $poprzednia -or $zaleglosc -le 0) { return "" }
+  if ($zaleglosc -gt $poprzednia) {
+    return " UWAGA: zaleglosc ROSNIE ($poprzednia -> $zaleglosc) - limit na jeden przebieg jest za maly, system nie nadazy sam. Zwieksz MAX_INPUT_CHARS w lore\lore\facts.py albo uruchom z -Nadrabiaj."
+  }
+  if ($zaleglosc -lt $poprzednia) { return " (maleje: $poprzednia -> $zaleglosc, nadrabia sie)" }
+  return " (stoi w miejscu od poprzedniego przebiegu - sprawdz, czy cos nie blokuje)"
+}
+
 function Zapisz-Podsumowanie($status, $powod, $nadrobione, $zaleglosc) {
+  $kierunek = Kierunek-Zaleglosci $zaleglosc
   $opis = switch ($status) {
-    "ok"         { "cykl przeszedl - nadrobione dni: $nadrobione, czeka jeszcze: $zaleglosc" }
-    "odlozony"   { "cykl odlozony ($powod) - czeka jeszcze dni: $zaleglosc" }
-    "wyczerpane" { "cykl odpuszczony po $MaxProb probach ($powod) - czeka jeszcze dni: $zaleglosc" }
-    default      { "cykl zakonczony stanem '$status' - czeka jeszcze dni: $zaleglosc" }
+    "ok"         { "cykl przeszedl - nadrobione dni: $nadrobione, czeka jeszcze: $zaleglosc$kierunek" }
+    "odlozony"   { "cykl odlozony ($powod) - czeka jeszcze dni: $zaleglosc$kierunek" }
+    "wyczerpane" { "cykl odpuszczony po $MaxProb probach ($powod) - czeka jeszcze dni: $zaleglosc$kierunek" }
+    default      { "cykl zakonczony stanem '$status' - czeka jeszcze dni: $zaleglosc$kierunek" }
   }
   $podsumowanie = [ordered]@{
     data       = (Get-Date -Format "yyyy-MM-dd HH:mm")
