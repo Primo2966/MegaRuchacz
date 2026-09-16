@@ -1,0 +1,29 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 128 128" width="128" height="128" role="img" aria-label="MegaRuchacz">
+  <defs>
+    <linearGradient id="tlo" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#1e2430"/>
+      <stop offset="1" stop-color="#11151d"/>
+    </linearGradient>
+  </defs>
+
+  <rect width="128" height="128" rx="28" fill="url(#tlo)"/>
+
+  <!-- rozdzielone zadania: kierownik w srodku, workerzy dookola -->
+  <g stroke="#f0a04b" stroke-width="6" stroke-linecap="round" fill="none" opacity="0.9">
+    <path d="M64 64 L34 38"/>
+    <path d="M64 64 L96 42"/>
+    <path d="M64 64 L36 94"/>
+    <path d="M64 64 L94 92"/>
+  </g>
+
+  <!-- workerzy -->
+  <circle cx="34" cy="38" r="11" fill="#f0a04b"/>
+  <circle cx="96" cy="42" r="11" fill="#f0a04b"/>
+  <circle cx="36" cy="94" r="11" fill="#f0a04b"/>
+  <!-- jeden jeszcze w kolejce -->
+  <circle cx="94" cy="92" r="10" fill="none" stroke="#f0a04b" stroke-width="5" opacity="0.55"/>
+
+  <!-- kierownik -->
+  <circle cx="64" cy="64" r="18" fill="#11151d"/>
+  <circle cx="64" cy="64" r="18" fill="none" stroke="#ffd7a0" stroke-width="7"/>
+</svg>

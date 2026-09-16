@@ -1,0 +1,25 @@
+# Srodowiska i zaleznosci - odtwarzalne, nie wersjonujemy
+node_modules/
+.venv/
+__pycache__/
+*.pyc
+
+# Baza historii i model embeddingow - duze i prywatne, nigdy na gita
+*.db
+*.sqlite
+*.sqlite3
+historia_modele/
+
+# Artefakty budowania - powstaja z zrodel
+*.vsix
+
+# Kopie zapasowe robione przez instalator
+*.bak
+*.bak-*
+
+# Rejestr okien zadaniowych - stan lokalnej maszyny
+.mr-okna/
+
+# Smieci systemowe
+Thumbs.db
+.DS_Store

@@ -1,0 +1,44 @@
+{
+  "hooks": {
+    "UserPromptSubmit": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "shell": "bash",
+            "timeout": 5,
+            "command": "cat \"$CLAUDE_PROJECT_DIR/.claude/orchestrator-reminder.json\" 2>/dev/null || cat .claude/orchestrator-reminder.json"
+          }
+        ]
+      }
+    ],
+    "SubagentStart": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "shell": "bash",
+            "timeout": 5,
+            "command": "node \"$CLAUDE_PROJECT_DIR/.claude/mr-log.js\""
+          }
+        ]
+      }
+    ],
+    "SubagentStop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "shell": "bash",
+            "timeout": 5,
+            "command": "node \"$CLAUDE_PROJECT_DIR/.claude/mr-log.js\" stop"
+          }
+        ]
+      }
+    ]
+  },
+  "worktree": {
+    "baseRef": "fresh",
+    "bgIsolation": "worktree"
+  }
+}
