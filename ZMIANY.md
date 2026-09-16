@@ -419,3 +419,31 @@ sprawdził i zgłosił wprost: katalogu `.codex` tu nie ma, a 57 plików sesji l
 maszynie domowej użytkownika. Napisanie parsera z samego opisu formatu oznaczałoby
 zgadywanie, gdzie siedzi rola, treść i znacznik czasu — czyli kod wyglądający na
 gotowy. Ten kawałek musi powstać tam, gdzie są prawdziwe pliki.
+
+## 0.11.0 — 2026-09-16
+
+**Czytnik transkryptów Codeksa** (napisany na maszynie domowej, gdzie Codex
+faktycznie chodzi)
+- `lore/index.py` czyta teraz oba formaty: `~/.claude/projects/**/*.jsonl`
+  i `~/.codex/sessions/**/*.jsonl`. Format Codeksa jest inny — zdarzenia
+  `session_meta` / `event_msg` / `response_item`, treść w blokach
+  `input_text` / `output_text` — więc odczyt rozdzielony na dwie funkcje
+  za wspólnym szwem `ParsedRecord`.
+- Dzięki temu pamięć działa też tam, gdzie nie ma Claude Code.
+
+**Samosprawdzenie sprawdza działanie, nie obecność wpisów**
+- Reguła, którą przeszło każde sprawdzenie: *gdyby ta rzecz była całkowicie
+  zepsuta, czy to sprawdzenie by to wykryło?* Wcześniej połowa punktów
+  odpowiadała „OK", bo plik istniał albo wpis był w konfiguracji.
+- `instaluj-lore.ps1 -TylkoSprawdz` robi teraz: przebieg indeksowania, policzenie
+  wektora modelem, porównanie liczby plików w bazie z liczbą widocznych
+  transkryptów, handshake JSON-RPC z serwerem MCP (`initialize` + `tools/list`
+  + `lore_stats`). Wyłączone zadanie w harmonogramie to błąd, nie „istnieje".
+- `wdroz.ps1` odpala hooki tak, jak zrobiłby to Claude Code — przez `bash`,
+  z `CLAUDE_PROJECT_DIR` — zamiast sprawdzać, czy wpis jest w `settings.json`.
+- Czego sprawdzenie NIE obejmuje, wraca w podsumowaniu wprost, żeby nikt nie
+  wziął „zapisane" za „działa".
+
+**Sprawdzone na maszynie**, nie tylko w testach: 8/8 punktów zielonych, 669 z 669
+transkryptów w bazie, 53 549 kawałków, model 464 MB, serwer MCP odpowiada.
+Próba negatywna (wyłączone zadanie w harmonogramie) → BŁĄD i kod wyjścia 1.

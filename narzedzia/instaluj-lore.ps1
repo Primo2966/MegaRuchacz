@@ -540,7 +540,7 @@ function Sprawdz-Instalacje {
     Plan "policzenie wektora modelem i rozmiar katalogu $($script:Modele) (min. $MinModelMB MB)"
     Plan "odczyt z bazy: ile plikow i kawalkow wobec liczby widocznych transkryptow ($($script:Baza))"
     Plan "claude mcp list - czy wpis $NazwaMcp jest w konfiguracji"
-    Plan "handshake JSON-RPC z serwerem $NazwaMcp: initialize + tools/list + lore_stats"
+    Plan "handshake JSON-RPC z serwerem ${NazwaMcp}: initialize + tools/list + lore_stats"
     return
   }
   Sprawdz-Testy
