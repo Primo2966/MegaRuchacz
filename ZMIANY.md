@@ -238,3 +238,18 @@ dobę** przy 7 sesjach. Dla porównania sufit warstwy stałej to ~2 700 tokenów
 Pierwszy prawdziwy przebieg wyłowił m.in. gdzie leżą zdjęcia produktów, ograniczenie
 stronicowania w API Amazona i zasadę „tylko odczyt do czasu akceptacji" — czyli
 dokładnie te rzeczy, które trzeba było tłumaczyć w każdym nowym oknie.
+
+## 0.7.1 — 2026-09-16
+
+- **Zasady globalne odchudzone o połowę** — z 6 076 do 3 032 znaków. Koszt
+  doklejany do każdej rozmowy spadł z ~2 548 do ~1 533 tokenów, czyli o 40%.
+  Nie ubyła żadna reguła: wycięte zostały uzasadnienia „dlaczego tak", powtórzenia
+  i przykłady powtarzające samą regułę. Model potrzebuje reguły i jej warunków,
+  nie perswazji — pełne wyjaśnienia zostają w README, który czytają ludzie.
+- **Ostrzeżenie dla przyszłych edytorów** na górze `zasady-globalne.md`: ten tekst
+  jedzie z każdym zapytaniem, więc każde zbędne zdanie mnoży się przez liczbę
+  wszystkich rozmów użytkownika.
+
+Pomiar pokazał rzecz nieoczywistą: **najdroższym elementem stale wczytywanej
+pamięci nie była wiedza o użytkowniku (475 tokenów), tylko tekst samych zasad
+(2 026 tokenów)** — czterokrotnie więcej. Warto mierzyć, zanim się optymalizuje.
