@@ -19,11 +19,8 @@ Run: uv --directory C:\\dev\\claude-worker\\lore run python -m lore.mining
 
 from __future__ import annotations
 
-import shutil
 import sqlite3
-import subprocess
 import sys
-import tempfile
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -229,25 +226,12 @@ dowód wagi, a nie jako treść faktu. Samych liczb do faktów nie przepisuj."""
 
 
 def ask_model(text: str) -> str:
-    """The same call as the daily harvest: same switches, same schema, same envelope.
+    """The daily harvest's call with the mining instruction — same tool, same switches, same envelope.
 
-    Repeated instead of reused because facts.ask_model keeps its instruction in a module constant
-    and here the instruction is a different one; facts.py stays untouched.
+    Which agent CLI the machine has is decided there, once, so a Codex-only machine digs through the
+    archive as well; the only thing this job changes is the instruction.
     """
-    exe = shutil.which("claude")
-    if not exe:
-        raise facts.ModelMissing("no `claude` in PATH")
-    empty = tempfile.mkdtemp(prefix="lore-mining-")
-    try:
-        r = subprocess.run(
-            [exe, *facts.MODEL_ARGS, PROMPT], input=text, capture_output=True, cwd=empty,
-            text=True, encoding="utf-8", errors="replace", timeout=facts.MODEL_TIMEOUT_S,
-        )
-    finally:
-        shutil.rmtree(empty, ignore_errors=True)
-    if r.returncode != 0:
-        raise RuntimeError(f"claude -p returned {r.returncode}: {(r.stderr or '').strip()[:200]}")
-    return r.stdout or ""
+    return facts.ask_model(text, instruction=PROMPT)
 
 
 # ---------------------------------------------------------------- the whole run
@@ -286,7 +270,9 @@ def run(limit: int = DEFAULT_CLUSTERS, dry_run: bool = False, move_marker: bool 
         return out
     if dry_run:
         out["status"] = "dry-run"
-        out["model_available"] = shutil.which("claude") is not None
+        cli = facts.available_model_cli()
+        out["model_available"] = cli is not None
+        out["model_cli"] = cli.name if cli else ""
         return out
     out["facts"] = facts.parse_facts(ask(material(taken, chunks)))
     out["added"] = facts.append_facts(out["facts"])
@@ -304,7 +290,7 @@ def _report(r: dict, move_marker: bool) -> None:
         f" {r['clusters']} of them from at least {MIN_SESSIONS} different sessions")
     if r["status"] == "dry-run":
         log("dry run — nothing written, no model called;"
-            f" claude in PATH: {'yes' if r['model_available'] else 'NO'}")
+            f" model tool: {r['model_cli'] or 'NONE in PATH'}")
         log(f"{len(r['taken'])} clusters would go to the model, the strongest {len(r['preview'])} of them:")
         for sessions, months, text in r["preview"]:
             log(f"  [{sessions} sesji / {months} mies.] {text}")
@@ -343,7 +329,7 @@ def main(argv: list[str] | None = None) -> int:
     try:
         r = run(limit=limit, dry_run=dry_run, move_marker=move_marker)
     except facts.ModelMissing as e:
-        log(f"{e} — install Claude Code: npm install -g @anthropic-ai/claude-code")
+        log(f"{e} — install Claude Code (npm install -g @anthropic-ai/claude-code) or Codex")
         return 1
     except Exception as e:  # a one-off job still ends with a readable line, not a traceback
         log(f"digging through the archive failed: {e!r}")
