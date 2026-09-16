@@ -82,6 +82,7 @@ def environment(tmp_path, monkeypatch):
     monkeypatch.setattr(index, "LOCK_PATH", tmp_path / "lore.lock")
     monkeypatch.setattr(index, "PROJECTS_DIR", projects)
     monkeypatch.setattr(index, "HOME_DIR", home)
+    monkeypatch.setattr(index, "CODEX_SESSIONS_DIR", home / ".codex" / "sessions")
     monkeypatch.setattr(index, "embed_passages", _zero_vectors)
     conn = db.connect()
     try:
