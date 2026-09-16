@@ -92,6 +92,28 @@ w całości. → osobny plik w katalogu `wiedza/` obok tego pliku. W sekcji „C
 zostaje jedna linia: że taki plik istnieje i co w nim jest. Czytasz go dopiero
 wtedy, gdy rozmowa go dotyczy — nie przy każdym zadaniu.
 
+### Warstwa STAŁA ma twardy sufit — 8 000 znaków
+
+Ta warstwa jedzie z każdym zapytaniem, więc jej rozmiar mnoży się przez liczbę
+wszystkich rozmów, jakie użytkownik kiedykolwiek odbędzie. To jedyne miejsce
+w całym mechanizmie, gdzie niefrasobliwość naprawdę kosztuje.
+
+**Gdy sekcja „Co wiem" zbliża się do 8 000 znaków, nie dopisuj do niej dalej.**
+Zamiast tego:
+
+1. Znajdź najdłuższy fragment, który jest **zestawieniem, a nie regułą** — listę,
+   tabelę, wyliczenie wariantów.
+2. Przenieś go do osobnego pliku w katalogu `wiedza/`.
+3. W sekcji „Co wiem" zostaw **jedną linię**: że taki plik istnieje i co w nim jest.
+4. Powiedz użytkownikowi jednym zdaniem, co przeniosłeś i dlaczego.
+
+To jest cała tajemnica utrzymania kosztu w ryzach: wiedza może rosnąć bez końca,
+byle rosła w warstwie, która **nie jest doklejana do rozmów**. Tysiąc pozycji
+w pliku referencyjnym kosztuje w warstwie stałej dokładnie jedną linię.
+
+Nie „optymalizuj" przez skracanie faktów do niezrozumiałych skrótów — lepszy jest
+pełnym zdaniem opisany fakt w warstwie 3 niż zagadka w warstwie 1.
+
 ### Wpisy bieżące wygasają
 
 Wpis z warstwy BIEŻĄCEJ **starszy niż 14 dni traktujesz jako podejrzany**. Nie
