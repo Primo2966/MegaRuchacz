@@ -354,3 +354,43 @@ Stan zadań na maszynie: `LoreIndex` (co 10 min), `LoreCykl` (przy zalogowaniu),
   co pominął**. Przy wgrywaniu scala klucz po kluczu zamiast podmieniać całą sekcję,
   żeby nie skasować tego, co na maszynie docelowej ma zostać. Kopia zapasowa
   przed każdą zmianą.
+
+## Audyt zewnętrzny — 2026-09-16, maszyna bez Claude Code
+
+Codex przeprowadził niezależny audyt na maszynie, dla której to narzędzie nie było
+budowane. **Wynik obala wcześniejszą ocenę: przywiązań do Claude Code jest
+dziewięć, nie dwa.**
+
+**Trzy znaleziska, których nie przewidzieliśmy:**
+
+1. **Zatwierdzone fakty nigdy nie trafiłyby do Codeksa.** `verify.py` zapisuje
+   wiedzę wyłącznie do `~/.claude/CLAUDE.md`. Nawet po naprawieniu indeksowania,
+   rejestracji i modelu pamięć rosłaby w pliku, którego Codex nie czyta — cała
+   reszta naprawy byłaby bezużyteczna.
+2. **Instalator zgłosił sukces mimo dwóch realnych awarii.** Zadanie `LoreIndex`
+   nie powstało, a model 465 MB nigdy się nie pobrał. Sprawdzenie przeszło, bo
+   indeksowanie nie miało czego indeksować, a bazę z zerem plików uznało za OK.
+   **Samosprawdzenie weryfikuje obecność wpisów, nie działanie** — dokładnie ten
+   rodzaj cichej awarii, przed którym miało chronić.
+3. **Format sesji Codeksa jest strukturalnie inny**: `session_meta`, `event_msg`,
+   `response_item` z zagnieżdżonym `payload.type`, zamiast `user`/`assistant`.
+   Dodanie katalogu do przeszukiwania nic nie da — potrzebny jest osobny czytnik.
+
+**Pozostałe sprzężenia:** wymóg `claude.exe` w instalatorze, rejestracja MCP przez
+`claude mcp`, odkrywanie transkryptów w `~/.claude/projects`, dwa wywołania modelu
+przez `claude -p` (`facts.py` i `mining.py`), kontrola `claude auth` i
+`api.anthropic.com` w cyklu dziennym, magazyn danych w `~/.claude`, hooki i
+workery oparte na kontrakcie Claude Code.
+
+**Co jest naprawdę przenośne:** baza SQLite, wyszukiwanie pełnotekstowe
+i semantyczne, embeddingi, protokół MCP, narzędzia wyszukiwania. Rdzeń jest
+neutralny — przywiązane są wszystkie krawędzie.
+
+**Kierunek naprawy** (nie łatanie pojedynczych miejsc): wydzielić sześć styków —
+źródło transkryptów, parser, backend modelowy, rejestracja MCP, docelowy plik
+wiedzy, integracja z hostem — i dołożyć adapter Codeksa obok istniejącego adaptera
+Claude Code. Instalować tylko adapter hosta wykrytego na maszynie.
+
+**Osobny dług:** hooki i workery to kontrakt Claude Code, którego nie da się
+odpiąć podmianą ścieżek. Dla Codeksa trzeba je przeprojektować albo świadomie
+zrezygnować.
