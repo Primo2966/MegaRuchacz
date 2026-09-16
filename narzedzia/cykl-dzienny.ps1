@@ -324,11 +324,11 @@ function Zaloz-Zadanie {
     $sid = ([Security.Principal.WindowsIdentity]::GetCurrent()).User.Value
     # opoznienia: przy starcie siec wstaje pozniej niz zadania, a brak sieci
     # kosztowalby jedna z pieciu prob za nic
+    # UWAGA - sprawdzone 2026-09-16: <BootTrigger> odpala zadanie PRZED
+    # zalogowaniem uzytkownika, wiec Windows zada do jego zalozenia uprawnien
+    # administratora i konczy "Odmowa dostepu" u zwyklego uzytkownika. Samo
+    # logowanie wystarcza: przed zalogowaniem i tak nie ma czego analizowac.
     $wyzwalacze = @"
-    <BootTrigger>
-      <Enabled>true</Enabled>
-      <Delay>PT3M</Delay>
-    </BootTrigger>
     <LogonTrigger>
       <Enabled>true</Enabled>
       <UserId>$sid</UserId>

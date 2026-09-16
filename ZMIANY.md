@@ -329,3 +329,16 @@ monitorowanie załączników (18), kolejność audytu przed wypchnięciem (15).
   Cykl porównuje teraz zaległość z poprzednim przebiegiem i mówi wprost, czy
   maleje, stoi w miejscu, czy rośnie. Przy rosnącej wypisuje ostrzeżenie razem
   z konkretną radą, co zmienić.
+
+## 0.9.3 — 2026-09-16
+
+- **Cykl dzienny startuje przy zalogowaniu, nie przy starcie systemu.**
+  `<BootTrigger>` odpala zadanie przed zalogowaniem użytkownika, więc Windows żąda
+  do jego założenia uprawnień administratora i kończy „Odmowa dostępu" u zwykłego
+  użytkownika. Samo logowanie wystarcza — przed zalogowaniem i tak nie ma czego
+  analizować. Wyszło przy zakładaniu zadania na żywej maszynie.
+- Zadanie `LoreFacts` usunięte: cykl dzienny sam wywołuje wyławianie, więc osobne
+  zadanie robiło tę samą pracę drugi raz.
+
+Stan zadań na maszynie: `LoreIndex` (co 10 min), `LoreCykl` (przy zalogowaniu),
+`LoreKoszt` (codziennie 08:15), `LoreWiedza` (poniedziałki 08:25).
