@@ -35,6 +35,7 @@ LOCK_STALE_S = 15 * 60
 
 # sessions started by Orca drop their transcripts loose in the home directory
 HOME_DIR = Path.home()
+CODEX_SESSIONS_DIR = HOME_DIR / ".codex" / "sessions"
 HOME_PROJECT = "orca"
 _UUID = re.compile(r"[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}", re.I)
 
@@ -75,6 +76,15 @@ class Chunk:
     text: str
 
 
+@dataclass
+class ParsedRecord:
+    """One transcript record normalized at the format seam."""
+
+    turns: list[tuple[str, str]]
+    project: str | None = None
+    session: str | None = None
+
+
 # ---------------------------------------------------------------- record parsing
 
 def _text_from_content(content) -> str:
@@ -105,8 +115,8 @@ def _clean_user_text(t: str) -> str:
     return t
 
 
-def turns_from_record(rec: dict, role_prefix: str = "") -> list[tuple[str, str]]:
-    """Returns a list of (role, text) from one JSONL row. Empty list = skip."""
+def _claude_turns(rec: dict, role_prefix: str = "") -> list[tuple[str, str]]:
+    """Returns normalized turns from one Claude Code JSONL row."""
     typ = rec.get("type")
     if typ not in ("user", "assistant"):
         return []
@@ -168,6 +178,69 @@ def turns_from_record(rec: dict, role_prefix: str = "") -> list[tuple[str, str]]
         if texts:
             out.insert(0, (role_prefix + "assistant", "\n".join(texts)))
     return out
+
+
+_RECORD_READERS = []
+
+
+def _record_reader(reader):
+    """Registers a transcript adapter; a new format only adds one decorated reader."""
+    _RECORD_READERS.append(reader)
+    return reader
+
+
+@_record_reader
+def _read_claude_record(rec: dict, role_prefix: str) -> ParsedRecord | None:
+    if rec.get("type") not in ("user", "assistant"):
+        return None
+    return ParsedRecord(_claude_turns(rec, role_prefix), session=rec.get("sessionId"))
+
+
+@_record_reader
+def _read_codex_record(rec: dict, role_prefix: str) -> ParsedRecord | None:
+    """Normalizes the record shapes found in ~/.codex/sessions."""
+    typ = rec.get("type")
+    payload = rec.get("payload")
+    if not isinstance(payload, dict):
+        return None
+
+    if typ == "session_meta":
+        cwd = payload.get("cwd")
+        project = Path(cwd).name if isinstance(cwd, str) and cwd else None
+        session = payload.get("session_id") or payload.get("id")
+        return ParsedRecord([], project=project, session=session)
+
+    if typ != "response_item":
+        return None
+    if payload.get("type") != "message" or payload.get("role") not in ("user", "assistant"):
+        return ParsedRecord([])
+
+    role = payload["role"]
+    block_type = "input_text" if role == "user" else "output_text"
+    texts = [
+        block.get("text", "").strip()
+        for block in payload.get("content", [])
+        if isinstance(block, dict) and block.get("type") == block_type
+        and isinstance(block.get("text"), str) and block.get("text", "").strip()
+    ]
+    if role == "user":
+        texts = [text for text in (_clean_user_text(text) for text in texts) if text]
+    turns = [(role_prefix + role, "\n".join(texts))] if texts else []
+    return ParsedRecord(turns)
+
+
+def read_record(rec: dict, role_prefix: str = "") -> ParsedRecord:
+    """Recognizes a transcript format and returns its normalized record."""
+    for reader in _RECORD_READERS:
+        parsed = reader(rec, role_prefix)
+        if parsed is not None:
+            return parsed
+    return ParsedRecord([])
+
+
+def turns_from_record(rec: dict, role_prefix: str = "") -> list[tuple[str, str]]:
+    """Compatibility interface: normalized (role, text) turns from one JSONL row."""
+    return read_record(rec, role_prefix).turns
 
 
 def chunk(text: str) -> list[str]:
@@ -264,12 +337,19 @@ def find_files() -> list[Path]:
     files: list[Path] = []
     if PROJECTS_DIR.is_dir():
         files.extend(p for p in PROJECTS_DIR.rglob("*.jsonl") if p.is_file())
+    if CODEX_SESSIONS_DIR.is_dir():
+        files.extend(p for p in CODEX_SESSIONS_DIR.rglob("*.jsonl") if p.is_file())
     files.extend(_home_files())
     return sorted(files)
 
 
 def describe_file(p: Path) -> tuple[str, str, str]:
     """(project, session, role prefix) based on where the file lies."""
+    try:
+        p.relative_to(CODEX_SESSIONS_DIR)
+        return "codex", p.stem, ""
+    except ValueError:
+        pass
     try:
         rel = p.relative_to(PROJECTS_DIR).parts
     except ValueError:
@@ -310,11 +390,13 @@ def _read_new_lines(p: Path, offset: int) -> tuple[list[tuple[int, str]], int]:
     return lines, pos
 
 
-def _turns_from_lines(lines: list[tuple[int, str]], start_line: int, role_prefix: str, default_ts: str) -> tuple[list[Turn], str, str | None]:
-    """Parses lines -> turns. Returns (turns, last_ts, sessionId taken from the records)."""
+def _turns_from_lines(lines: list[tuple[int, str]], start_line: int, role_prefix: str,
+                      default_ts: str) -> tuple[list[Turn], str, str | None, str | None]:
+    """Parses lines -> turns plus session/project metadata found in the records."""
     turns: list[Turn] = []
     ts = default_ts
     session_from_record = None
+    project_from_record = None
     nr = start_line
     for _, l in lines:
         nr += 1
@@ -328,15 +410,18 @@ def _turns_from_lines(lines: list[tuple[int, str]], start_line: int, role_prefix
         if not isinstance(rec, dict):
             continue
         ts = rec.get("timestamp") or ts
-        if session_from_record is None and rec.get("sessionId"):
-            session_from_record = rec["sessionId"]
-        for role, text in turns_from_record(rec, role_prefix):
+        parsed = read_record(rec, role_prefix)
+        if session_from_record is None and parsed.session:
+            session_from_record = parsed.session
+        if project_from_record is None and parsed.project:
+            project_from_record = parsed.project
+        for role, text in parsed.turns:
             # lone UTF-16 surrogates (broken emoji in JSON) blow up the tokenizer and SQLite
             text = mask(text).encode("utf-8", errors="replace").decode("utf-8").strip()
             if len(text) < MIN_LENGTH:
                 continue
             turns.append(Turn(nr, ts, role, text))
-    return turns, ts, session_from_record
+    return turns, ts, session_from_record, project_from_record
 
 
 def _group_boundary(group_: list[Turn], lines: list[tuple[int, str]], start_line: int, end_offset: int) -> tuple[int, int]:
@@ -411,7 +496,9 @@ def process_file(conn: sqlite3.Connection, p: Path) -> int:
     """Adds the new lines of one file. Returns the number of new chunks."""
     path = str(p)
     st = p.stat()
-    row = conn.execute("SELECT mtime, size, offset, line FROM files WHERE path=?", (path,)).fetchone()
+    row = conn.execute(
+        "SELECT mtime, size, offset, line, project, session FROM files WHERE path=?", (path,)
+    ).fetchone()
     if row and row[0] == st.st_mtime and row[1] == st.st_size and not _tail_to_close(row[2], st):
         return 0
     offset, start_line = (row[2], row[3]) if row else (0, 0)
@@ -421,6 +508,9 @@ def process_file(conn: sqlite3.Connection, p: Path) -> int:
         offset, start_line = 0, 0
 
     project, session, role_prefix = describe_file(p)
+    if row and not from_scratch:
+        project = row[4] or project
+        session = row[5] or session
     last_ts = ""
     if row and not from_scratch:
         r = conn.execute("SELECT ts FROM chunks WHERE file=? ORDER BY line DESC, part DESC LIMIT 1", (path,)).fetchone()
@@ -429,9 +519,11 @@ def process_file(conn: sqlite3.Connection, p: Path) -> int:
         last_ts = datetime.fromtimestamp(st.st_mtime, tz=timezone.utc).isoformat().replace("+00:00", "Z")
 
     lines, end_offset = _read_new_lines(p, offset)
-    turns, _, session_rec = _turns_from_lines(lines, start_line, role_prefix, last_ts)
+    turns, _, session_rec, project_rec = _turns_from_lines(lines, start_line, role_prefix, last_ts)
     if not role_prefix and session_rec:
         session = session_rec
+    if not role_prefix and project_rec:
+        project = project_rec
 
     groups = group(turns)
     if groups and _tail_open(groups[-1], st.st_mtime):
