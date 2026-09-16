@@ -1,7 +1,7 @@
 [project]
-name = "claude-historia"
+name = "lore"
 version = "0.1.0"
-description = "Lokalny serwer MCP: przeszukiwalna pamięć rozmów Claude Code (FTS5 + wektory)"
+description = "Local MCP server: searchable memory of Claude Code conversations (FTS5 + vectors)"
 requires-python = ">=3.12"
 dependencies = [
     "mcp[cli]>=2.0",
@@ -18,5 +18,5 @@ dev = [
 ]
 
 [tool.pytest.ini_options]
-testpaths = ["testy"]
+testpaths = ["tests"]
 pythonpath = ["."]
