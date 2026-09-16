@@ -34,6 +34,13 @@ MAX_INPUT_CHARS = 60_000
 DEFAULT_WINDOW_H = 24
 # tool calls and their output are noise, not knowledge about the user ("agent:" prefix included)
 SKIPPED_ROLES = frozenset({"tool", "result"})
+# Only what the USER said. Measured on a real archive: a median day is 328 000
+# characters of both sides but 41 000 of the user alone — eight times less. The
+# assistant's half is mostly its own reports and summaries, which is why mining
+# the archive first surfaced the assistant's report boilerplate instead of
+# knowledge. The trade: a fact stated for the first time in a summary is lost,
+# which is a small price for fitting a whole day under the cost cap.
+HARVESTED_ROLES = frozenset({"user"})
 MIN_FACT_CHARS = 10  # a single word is not a fact
 MODEL_TIMEOUT_S = 300
 
@@ -177,7 +184,7 @@ def collect(conn: sqlite3.Connection, since: str) -> Material:
     kept = [
         (ts, f"[{ts_to_local(ts)}] {role}: {text}")
         for ts, role, text in rows
-        if role.split(":")[-1] not in SKIPPED_ROLES
+        if role.split(":")[-1] in HARVESTED_ROLES
     ]
     material = Material()
     taken = 0
