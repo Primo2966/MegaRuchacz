@@ -10,7 +10,7 @@ import pytest
 
 from lore import facts
 
-ENTRY = re.compile(r"^- \[ \] \[\d{4}-\d{2}-\d{2}\] (.+)$")
+ENTRY = re.compile(r"^- \[ \] \[(\d{4}-\d{2}-\d{2})\] \(([^)]+)\) (.+)$")
 NOW = datetime.now(timezone.utc)  # one fixed point, so the same `ago` gives the very same string
 
 
@@ -42,6 +42,12 @@ def answers(*lines: str):
     return lambda material: "\n".join(lines)
 
 
+def sorted_answer(*items: dict):
+    """Stand-in returning what the model really returns now: facts with a layer assigned."""
+    envelope = json.dumps({"type": "result", "structured_output": {"fakty": list(items)}})
+    return lambda material: envelope
+
+
 def recorder(seen: list[str]):
     """Stand-in that only writes down what it was given — for checking that nothing is skipped."""
     return lambda material: seen.append(material) or ""
@@ -59,8 +65,22 @@ def backlog(environment, count: int, size: int = 2000) -> None:
     facts.write_marker(ago(count + 1))
 
 
+def written(waiting_room_path) -> list[str]:
+    return waiting_room_path.read_text(encoding="utf-8").splitlines()
+
+
+def matched(waiting_room_path) -> list[re.Match]:
+    return [m for m in (ENTRY.match(x) for x in written(waiting_room_path)) if m]
+
+
 def entries(waiting_room_path) -> list[str]:
-    return [m.group(1) for m in (ENTRY.match(x) for x in waiting_room_path.read_text(encoding="utf-8").splitlines()) if m]
+    """The texts alone — what the entry says, without the date and the layer."""
+    return [m.group(3) for m in matched(waiting_room_path)]
+
+
+def labels(waiting_room_path) -> list[str]:
+    """The bracket of every entry: 'stala/firma', 'biezaca', 'referencyjna:plik.md'."""
+    return [m.group(2) for m in matched(waiting_room_path)]
 
 
 # ---------------------------------------------------------------- picking the material
@@ -124,6 +144,91 @@ def test_tool_noise_is_filtered_out(waiting_room):
     assert [t.split(": ", 1)[1] for t in material.texts] == ["pracuje na Windowsie", "zapamietam to"]
 
 
+# ---------------------------------------------------------------- the layers
+
+MIXED = (
+    {"tresc": "analyzeAll zakolejkowane ponownie, czeka na przebieg.", "warstwa": "biezaca"},
+    {"tresc": "Sprzedaż idzie przez Amazon i eBay, rynek niemiecki.", "warstwa": "stala",
+     "podsekcja": "firma"},
+    {"tresc": "Pełna struktura SKU olejków: OL-100, OL-200, OL-300.", "warstwa": "referencyjna",
+     "plik": "Struktura SKU.md", "odsylacz": "Struktura SKU olejków — ~/.claude/wiedza/struktura-sku.md"},
+    {"tresc": "Woli krótkie meldunki bez żargonu.", "warstwa": "stala", "podsekcja": "praca"},
+)
+
+
+@pytest.fixture
+def one_chunk(waiting_room):
+    """The smallest possible material — these tests are about the answer, not about picking it."""
+    add(waiting_room, ago(1), "user", "cokolwiek")
+    facts.write_marker(ago(2))
+    return waiting_room
+
+
+def test_a_durable_fact_lands_with_its_subsection(one_chunk):
+    facts.run(ask=sorted_answer(MIXED[1]), conn=one_chunk.conn)
+
+    assert labels(facts.CANDIDATES_PATH) == ["stala/firma"]
+    assert entries(facts.CANDIDATES_PATH) == ["Sprzedaż idzie przez Amazon i eBay, rynek niemiecki."]
+
+
+def test_a_current_fact_carries_a_date(one_chunk):
+    facts.run(ask=sorted_answer(MIXED[0]), conn=one_chunk.conn)
+
+    entry = matched(facts.CANDIDATES_PATH)[0]
+    assert entry.group(1) == datetime.now().strftime("%Y-%m-%d")  # without a date it cannot age out
+    assert entry.group(2) == "biezaca"
+
+
+def test_a_reference_fact_gets_a_file_name_and_a_pointer_line(one_chunk):
+    facts.run(ask=sorted_answer(MIXED[2]), conn=one_chunk.conn)
+
+    assert labels(facts.CANDIDATES_PATH) == ["referencyjna:struktura-sku.md"]  # the name is tidied up
+    assert "      odsyłacz: Struktura SKU olejków — ~/.claude/wiedza/struktura-sku.md" in written(facts.CANDIDATES_PATH)
+    assert [f.file for f in facts.waiting_facts()] == ["struktura-sku.md"]  # and it survives a re-read
+
+
+def test_a_reference_fact_without_a_name_still_gets_one(one_chunk):
+    facts.run(ask=sorted_answer({"tresc": "Warianty pojemności: 10, 30, 50, 100 ml.",
+                                 "warstwa": "referencyjna"}), conn=one_chunk.conn)
+
+    assert labels(facts.CANDIDATES_PATH) == [f"referencyjna:{facts.UNNAMED_FILE}"]
+    assert f"      odsyłacz: Szczegóły w ~/.claude/wiedza/{facts.UNNAMED_FILE}" in written(facts.CANDIDATES_PATH)
+
+
+def test_a_missing_or_made_up_layer_falls_back_to_the_safest_shelf(one_chunk):
+    facts.run(ask=sorted_answer({"tresc": "Fakt, którego nikt nie przypisał do warstwy."},
+                                {"tresc": "Fakt z wymyśloną warstwą, też ma gdzieś trafić.",
+                                 "warstwa": "kosmiczna"},
+                                {"tresc": "Fakt z wymyśloną podsekcją, ta sama historia.",
+                                 "warstwa": "stala", "podsekcja": "kuchnia"}), conn=one_chunk.conn)
+
+    assert labels(facts.CANDIDATES_PATH) == ["stala/projekty"] * 3  # nothing is ever dropped
+    assert len(entries(facts.CANDIDATES_PATH)) == 3
+
+
+def test_the_entries_are_grouped_by_layer(one_chunk):
+    facts.run(ask=sorted_answer(*MIXED), conn=one_chunk.conn)
+
+    # a human approves a whole shelf at once, so the order of the answer must not survive
+    assert labels(facts.CANDIDATES_PATH) == [
+        "stala/firma", "stala/praca", "biezaca", "referencyjna:struktura-sku.md"]
+    text = facts.CANDIDATES_PATH.read_text(encoding="utf-8")
+    assert text.index("## Trwałe") < text.index("## Bieżące") < text.index("## Do osobnych plików")
+
+
+def test_an_entry_in_the_old_format_is_still_read(one_chunk):
+    # 54 entries written before the layers existed lie in the real waiting room — they must not stop working
+    facts.KNOWLEDGE_DIR.mkdir(parents=True, exist_ok=True)
+    facts.CANDIDATES_PATH.write_text(
+        facts.CANDIDATES_HEADER + "- [ ] [2026-09-01] Użytkownik pracuje na Windowsie.\n", encoding="utf-8")
+
+    old = facts.waiting_facts()
+    assert [(f.layer, f.section, f.text) for f in old] == [("stala", "projekty", "Użytkownik pracuje na Windowsie.")]
+
+    r = facts.run(ask=answers("użytkownik pracuje na windowsie"), conn=one_chunk.conn)
+    assert r["added"] == []  # the old entry still blocks the duplicate
+
+
 # ---------------------------------------------------------------- the waiting room
 
 def test_facts_land_in_the_waiting_room_in_the_agreed_format(waiting_room):
@@ -138,20 +243,27 @@ def test_facts_land_in_the_waiting_room_in_the_agreed_format(waiting_room):
         "Firma użytkownika sprzedaje oleje na eBay.",
         "Użytkownik pracuje na Windowsie.",
     ]
+    # a plain text answer says nothing about layers — everything lands on the safest shelf
+    assert labels(facts.CANDIDATES_PATH) == ["stala/projekty", "stala/projekty"]
     assert facts.CANDIDATES_PATH.read_text(encoding="utf-8").startswith("# Kandydaci")
 
 
 def test_a_structured_answer_is_taken_out_of_the_envelope(waiting_room):
     # what `claude -p --output-format json --json-schema` really returns
     envelope = json.dumps({"type": "result", "is_error": False, "result": "{\"fakty\": [\"ignorowane\"]}",
-                           "structured_output": {"fakty": ["Firma użytkownika to Primo Oils.", "urywek"]}})
+                           "structured_output": {"fakty": [
+                               {"tresc": "Firma użytkownika to Primo Oils.", "warstwa": "stala",
+                                "podsekcja": "firma"},
+                               {"tresc": "urywek", "warstwa": "stala"}]}})
     add(waiting_room, ago(1), "user", "cokolwiek")
     facts.write_marker(ago(2))
 
     r = facts.run(ask=lambda material: envelope, conn=waiting_room.conn)
 
-    assert r["facts"] == ["Firma użytkownika to Primo Oils."]  # the envelope wins, the scrap is dropped
+    # the envelope wins, the scrap is dropped
+    assert [f.text for f in r["facts"]] == ["Firma użytkownika to Primo Oils."]
     assert entries(facts.CANDIDATES_PATH) == ["Firma użytkownika to Primo Oils."]
+    assert labels(facts.CANDIDATES_PATH) == ["stala/firma"]
 
 
 def test_an_empty_list_of_facts_does_not_fall_back_to_the_envelope_text(waiting_room):
