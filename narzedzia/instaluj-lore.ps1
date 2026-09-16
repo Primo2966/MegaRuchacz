@@ -99,12 +99,45 @@ function Sprawdz-Warunki {
     }
   }
 
+  # Serwer MCP rejestrujemy w KAZDYM narzedziu, ktore zastaniemy na tej maszynie.
+  # Brak jednego z nich to normalna sytuacja - dopiero brak obu konczy instalacje.
   $cl = Get-Command claude -CommandType Application -ErrorAction SilentlyContinue | Select-Object -First 1
   if ($cl) {
     $script:Claude = $cl.Source
     Krok "claude  : $($script:Claude)"
   } else {
-    $braki += "claude (Claude Code w PATH - bez niego nie da sie zarejestrowac serwera MCP). Zainstaluj:  npm install -g @anthropic-ai/claude-code"
+    Krok "claude  : nie widze Claude Code na tej maszynie - pomijam"
+  }
+
+  # Codex rozpoznajemy tak samo jak narzedzia\wpisz-zasady.ps1: binarka w PATH
+  # albo katalog domowy, ktory Codex po sobie zostawia.
+  $script:Codex     = $null
+  $script:CodexDom  = Join-Path $env:USERPROFILE ".codex"
+  if ($env:CODEX_HOME) { $script:CodexDom = $env:CODEX_HOME }
+  $script:CodexCfg  = Join-Path $script:CodexDom "config.toml"
+  $script:CodexMa   = $false   # czy ten Codex zna wlasne polecenie "codex mcp add"
+  $cx = Get-Command codex -CommandType Application -ErrorAction SilentlyContinue | Select-Object -First 1
+  if ($cx) { $script:Codex = $cx.Source }
+  $script:CodexJest = [bool]$script:Codex -or (Test-Path $script:CodexDom)
+
+  if ($script:Codex) {
+    # pytamy sam Codex, czy zna "codex mcp" - to jedyny pewny sposob; grzebanie
+    # w config.toml zostawiamy na wypadek, gdy polecenia nie ma (samo --help nic nie zmienia)
+    $pomoc = & $script:Codex mcp --help 2>&1 | Out-String
+    if ($LASTEXITCODE -eq 0 -and $pomoc -match '\badd\b') { $script:CodexMa = $true }
+    if ($script:CodexMa) {
+      Krok "codex   : $($script:Codex) (rejestracja przez 'codex mcp add')"
+    } else {
+      Krok "codex   : $($script:Codex) (nie zna 'codex mcp add' - wpis pojdzie do $($script:CodexCfg))"
+    }
+  } elseif ($script:CodexJest) {
+    Krok "codex   : nie ma binarki w PATH, ale jest $($script:CodexDom) - wpis pojdzie do $($script:CodexCfg)"
+  } else {
+    Krok "codex   : nie widze Codeksa na tej maszynie - pomijam"
+  }
+
+  if (-not $script:Claude -and -not $script:CodexJest) {
+    $braki += "narzedzie, w ktorym dalo by sie zarejestrowac serwer MCP - nie ma ani Claude Code, ani Codeksa. Zainstaluj jedno z nich:  npm install -g @anthropic-ai/claude-code   albo   npm install -g @openai/codex"
   }
 
   if (Test-Path (Join-Path $script:Lore "pyproject.toml")) {
@@ -126,6 +159,16 @@ function Sprawdz-Warunki {
 # ---------------------------------------------------------------- zgoda uzytkownika
 
 function Ekran-Zgody {
+  # Punkt 3 ma mowic prawde o TEJ maszynie - wymieniamy tylko te narzedzia,
+  # ktore Sprawdz-Warunki naprawde na niej znalazlo.
+  $gdzie = @()
+  if ($script:Claude) { $gdzie += "Claude Code - przez 'claude mcp add', w zasiegu Twojego uzytkownika" }
+  if ($script:CodexJest) {
+    if ($script:CodexMa) { $gdzie += "Codex CLI - przez 'codex mcp add'" }
+    else                 { $gdzie += "Codex CLI - wpisem w $($script:CodexCfg) (stary plik zostanie skopiowany obok)" }
+  }
+  $lista = ($gdzie | ForEach-Object { "        - $_" }) -join "`n"
+
   Naglowek "Co zaraz stanie sie na tym komputerze"
   Write-Host @"
   Lore to lokalna, przeszukiwalna pamiec Twoich rozmow z Claude Code.
@@ -135,9 +178,11 @@ function Ekran-Zgody {
         baza  : $($script:Baza)
   2. Przy pierwszym uruchomieniu pobierze sie z internetu model jezykowy, $RozmiarModelu.
         model : $($script:Modele)
-  3. Zostanie zarejestrowany serwer MCP o nazwie "$NazwaMcp" dla Twojego uzytkownika.
+  3. Serwer MCP o nazwie "$NazwaMcp" zostanie zarejestrowany wszedzie tam, gdzie
+     widze narzedzie, ktore go przyjmie:
+$lista
      UWAGA: od tej chwili agent AI ma dostep do TRESCI wszystkich Twoich rozmow
-     z Claude Code na tej maszynie - ze wszystkich projektow i wszystkich okien.
+     zebranych na tej maszynie - ze wszystkich projektow i wszystkich okien.
   4. Powstanie zadanie w Harmonogramie zadan Windows ("$NazwaZadania"), ktore odswieza
      indeks co $InterwalMin minut i startuje razem z Twoim zalogowaniem.
 
@@ -185,25 +230,98 @@ function Zainstaluj-Srodowisko {
 
 function Zarejestruj-Mcp {
   Naglowek "Serwer MCP ($NazwaMcp)"
-  $argumenty = @("mcp", "add", "--scope", "user", $NazwaMcp, "--",
-                 $script:Uv, "--directory", $script:Lore, "run", "python", "-m", "lore.server")
-  if ($Proba) {
-    Plan "claude mcp remove $NazwaMcp -s user   (tylko jesli wpis juz istnieje)"
-    Plan "claude $($argumenty -join ' ')"
+  # jedno polecenie serwera dla wszystkich narzedzi - rozjazd miedzy nimi byloby
+  # najgorszym mozliwym bledem: jedno okno widzi Lore, drugie sie wywala
+  $polecenie = @($script:Uv, "--directory", $script:Lore, "run", "python", "-m", "lore.server")
+
+  # ---- Claude Code
+  if ($script:Claude) {
+    $argumenty = @("mcp", "add", "--scope", "user", $NazwaMcp, "--") + $polecenie
+    if ($Proba) {
+      Plan "claude mcp remove $NazwaMcp -s user   (tylko jesli wpis juz istnieje)"
+      Plan "claude $($argumenty -join ' ')"
+    } else {
+      # idempotentnie: stary wpis najpierw kasujemy, zeby ponowna instalacja nie zrobila duplikatu
+      & $script:Claude mcp get $NazwaMcp > $null 2>&1
+      if ($LASTEXITCODE -eq 0) {
+        Krok "Claude Code : wpis o tej nazwie juz jest - usuwam stary"
+        & $script:Claude mcp remove $NazwaMcp -s user > $null 2>&1
+      }
+      & $script:Claude @argumenty
+      if ($LASTEXITCODE -ne 0) {
+        Blad "rejestracja w Claude Code nie powiodla sie (kod $LASTEXITCODE)."
+        exit 1
+      }
+      Krok "Claude Code : zarejestrowany dla uzytkownika - widoczny we wszystkich projektach"
+    }
+  } else {
+    if ($Proba) { Plan "Claude Code : nie ma go na tej maszynie - pomijam" }
+    else        { Krok "Claude Code : nie ma go na tej maszynie - pomijam" }
+  }
+
+  # ---- Codex CLI
+  if (-not $script:CodexJest) {
+    if ($Proba) { Plan "Codex       : nie ma go na tej maszynie - pomijam" }
+    else        { Krok "Codex       : nie ma go na tej maszynie - pomijam" }
     return
   }
-  # idempotentnie: stary wpis najpierw kasujemy, zeby ponowna instalacja nie zrobila duplikatu
-  & $script:Claude mcp get $NazwaMcp > $null 2>&1
-  if ($LASTEXITCODE -eq 0) {
-    Krok "wpis o tej nazwie juz jest - usuwam stary"
-    & $script:Claude mcp remove $NazwaMcp -s user > $null 2>&1
+
+  if ($script:CodexMa) {
+    $argCodex = @("mcp", "add", $NazwaMcp, "--") + $polecenie
+    if ($Proba) {
+      Plan "codex mcp remove $NazwaMcp   (tylko jesli wpis juz istnieje)"
+      Plan "codex $($argCodex -join ' ')"
+      return
+    }
+    & $script:Codex mcp get $NazwaMcp > $null 2>&1
+    if ($LASTEXITCODE -eq 0) {
+      Krok "Codex       : wpis o tej nazwie juz jest - usuwam stary"
+      & $script:Codex mcp remove $NazwaMcp > $null 2>&1
+    }
+    & $script:Codex @argCodex
+    if ($LASTEXITCODE -ne 0) {
+      Blad "rejestracja w Codeksie nie powiodla sie (kod $LASTEXITCODE)."
+      exit 1
+    }
+    Krok "Codex       : zarejestrowany poleceniem 'codex mcp add'"
+    return
   }
-  & $script:Claude @argumenty
-  if ($LASTEXITCODE -ne 0) {
-    Blad "rejestracja serwera MCP nie powiodla sie (kod $LASTEXITCODE)."
-    exit 1
+
+  # Codex bez wlasnego polecenia - zostaje dopisanie tabeli do config.toml.
+  # Idempotentnie: stara tabela [mcp_servers.<nazwa>] leci w calosci, dopiero
+  # potem doklejamy swieza, a caly plik laduje wczesniej do kopii z data.
+  if ($Proba) {
+    Plan "kopia zapasowa $($script:CodexCfg) obok, z data w nazwie"
+    Plan "usuniecie starej tabeli [mcp_servers.$NazwaMcp] z $($script:CodexCfg), jesli tam jest"
+    Plan "dopisanie [mcp_servers.$NazwaMcp] z command/args: $($polecenie -join ' ')"
+    return
   }
-  Krok "zarejestrowany dla uzytkownika - widoczny we wszystkich projektach"
+  $cytuj = { param($s) '"' + ((($s -replace '\\', '\\') -replace '"', '\"')) + '"' }
+  if (-not (Test-Path $script:CodexDom)) { New-Item -ItemType Directory -Force -Path $script:CodexDom | Out-Null }
+  $linie = @()
+  if (Test-Path $script:CodexCfg) {
+    $kopia = "$($script:CodexCfg).bak-" + (Get-Date -Format "yyyyMMdd-HHmmss")
+    Copy-Item $script:CodexCfg $kopia -Force
+    Krok "Codex       : kopia zapasowa starej konfiguracji: $kopia"
+    $pomijam = $false
+    foreach ($l in (Get-Content $script:CodexCfg)) {
+      # lapiemy tez podtabele w rodzaju [mcp_servers.lore.env] - inaczej zostalaby sierota
+      if ($l -match "^\s*\[+\s*mcp_servers\.$NazwaMcp\s*(\.|\])") { $pomijam = $true; continue }
+      if ($pomijam -and $l -match '^\s*\[') { $pomijam = $false }
+      if (-not $pomijam) { $linie += $l }
+    }
+    # puste linie z konca ucinamy, zeby nie rosly przy kazdej kolejnej instalacji
+    $ile = $linie.Count
+    while ($ile -gt 0 -and -not $linie[$ile - 1].Trim()) { $ile-- }
+    $linie = @($linie | Select-Object -First $ile)
+    if ($linie.Count -gt 0) { $linie += "" }
+  }
+  $linie += "[mcp_servers.$NazwaMcp]"
+  $linie += "command = " + (& $cytuj $polecenie[0])
+  $linie += "args = [" + (($polecenie | Select-Object -Skip 1 | ForEach-Object { & $cytuj $_ }) -join ", ") + "]"
+  # bez BOM - to plik TOML, a nie kazdy czytnik BOM wybacza
+  [System.IO.File]::WriteAllLines($script:CodexCfg, [string[]]$linie, (New-Object System.Text.UTF8Encoding($false)))
+  Krok "Codex       : wpis [mcp_servers.$NazwaMcp] jest w $($script:CodexCfg)"
 }
 
 # Jedno zrodlo prawdy o zadaniu: pytamy harmonogram, nie wlasna pamiec o tym,
@@ -407,16 +525,43 @@ function Sprawdz-Baze {
 }
 
 function Sprawdz-Mcp-Wpis {
-  # To jest sprawdzenie REJESTRACJI, nie dzialania - "claude mcp list" moze
-  # pokazac wpis i na maszynie, na ktorej serwer nie wstaje.
-  $lista = & $script:Claude mcp list 2>&1 | Out-String
-  $linia = ($lista -split "`r?`n" | Where-Object { $_ -match "^\s*$NazwaMcp\s*:" } | Select-Object -First 1)
-  if (-not $linia) {
-    Zapisz-Wynik "serwer MCP zarejestrowany" $false "claude mcp list nie pokazuje wpisu $NazwaMcp"
+  # To jest sprawdzenie REJESTRACJI, nie dzialania - lista wpisow pokaze serwer
+  # takze na maszynie, na ktorej on nie wstaje. Od dzialania jest handshake nizej.
+  # Narzedzia, ktorego tu nie ma, NIE zaliczamy na zielono - mowimy, ze pominiete.
+  if ($script:Claude) {
+    $lista = & $script:Claude mcp list 2>&1 | Out-String
+    $linia = ($lista -split "`r?`n" | Where-Object { $_ -match "^\s*$NazwaMcp\s*:" } | Select-Object -First 1)
+    if (-not $linia) {
+      Zapisz-Wynik "serwer MCP w Claude Code" $false "claude mcp list nie pokazuje wpisu $NazwaMcp"
+    } else {
+      Zapisz-Wynik "serwer MCP w Claude Code" $true "wpis $NazwaMcp jest w konfiguracji uzytkownika"
+    }
+    Nie-Sprawdzono "czy Twoj klient Claude Code podepnie serwer $NazwaMcp przy starcie - to widac dopiero w nowym oknie"
   } else {
-    Zapisz-Wynik "serwer MCP zarejestrowany" $true "wpis $NazwaMcp jest w konfiguracji uzytkownika"
+    Write-Host "  --    serwer MCP w Claude Code - pominiete, nie ma Claude Code na tej maszynie" -ForegroundColor DarkGray
   }
-  Nie-Sprawdzono "czy Twoj klient Claude Code podepnie serwer $NazwaMcp przy starcie - to widac dopiero w nowym oknie"
+
+  if (-not $script:CodexJest) {
+    Write-Host "  --    serwer MCP w Codeksie - pominiete, nie ma Codeksa na tej maszynie" -ForegroundColor DarkGray
+    return
+  }
+  if ($script:CodexMa) {
+    $opis = & $script:Codex mcp get $NazwaMcp 2>&1 | Out-String
+    if ($LASTEXITCODE -eq 0) {
+      Zapisz-Wynik "serwer MCP w Codeksie" $true "codex mcp get $NazwaMcp znajduje wpis"
+    } else {
+      Zapisz-Wynik "serwer MCP w Codeksie" $false "codex mcp get $NazwaMcp nic nie znajduje: $(Ostatnia-Linia $opis)"
+    }
+  } else {
+    $tresc = ""
+    if (Test-Path $script:CodexCfg) { $tresc = Get-Content $script:CodexCfg -Raw }
+    if ($tresc -match "(?m)^\s*\[\s*mcp_servers\.$NazwaMcp\s*\]") {
+      Zapisz-Wynik "serwer MCP w Codeksie" $true "tabela [mcp_servers.$NazwaMcp] jest w $($script:CodexCfg)"
+    } else {
+      Zapisz-Wynik "serwer MCP w Codeksie" $false "nie ma tabeli [mcp_servers.$NazwaMcp] w $($script:CodexCfg)"
+    }
+  }
+  Nie-Sprawdzono "czy Codex wstanie z serwerem $NazwaMcp - wpis jest, ale podpiecie widac dopiero w nowej sesji Codeksa"
 }
 
 # Proba serwera MCP - leci do pliku tymczasowego i odpala sie pod Pythonem z uv.
@@ -539,7 +684,11 @@ function Sprawdz-Instalacje {
     Plan "uv --directory $($script:Lore) run python -m lore.index   (jeden przebieg indeksowania)"
     Plan "policzenie wektora modelem i rozmiar katalogu $($script:Modele) (min. $MinModelMB MB)"
     Plan "odczyt z bazy: ile plikow i kawalkow wobec liczby widocznych transkryptow ($($script:Baza))"
-    Plan "claude mcp list - czy wpis $NazwaMcp jest w konfiguracji"
+    if ($script:Claude) { Plan "claude mcp list - czy wpis $NazwaMcp jest w konfiguracji Claude Code" }
+    else                { Plan "Claude Code - pominiete, nie ma go na tej maszynie" }
+    if (-not $script:CodexJest) { Plan "Codex - pominiete, nie ma go na tej maszynie" }
+    elseif ($script:CodexMa)    { Plan "codex mcp get $NazwaMcp - czy Codex zna ten wpis" }
+    else                        { Plan "czy w $($script:CodexCfg) jest tabela [mcp_servers.$NazwaMcp]" }
     Plan "handshake JSON-RPC z serwerem ${NazwaMcp}: initialize + tools/list + lore_stats"
     return
   }
