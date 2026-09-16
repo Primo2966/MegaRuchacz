@@ -319,3 +319,13 @@ monitorowanie załączników (18), kolejność audytu przed wypchnięciem (15).
 - Koszt po zmianie: **~13 700 tokenów wejścia na dzień** zamiast ~109 000.
 - Świadomy kompromis: fakt wypowiedziany po raz pierwszy dopiero w podsumowaniu
   asystenta przepadnie. Niewielki procent za ośmiokrotną oszczędność.
+
+## 0.9.2 — 2026-09-16
+
+- **Rozróżnienie zaległości przejściowej od trwałej.** Obie wyglądały identycznie
+  („czeka X dni"), a znaczą coś zupełnie innego: pierwsza się nadrobi, druga
+  oznacza, że limit na jeden przebieg jest za mały i **system nigdy nie nadgoni** —
+  przez miesiące wyglądając normalnie.
+  Cykl porównuje teraz zaległość z poprzednim przebiegiem i mówi wprost, czy
+  maleje, stoi w miejscu, czy rośnie. Przy rosnącej wypisuje ostrzeżenie razem
+  z konkretną radą, co zmienić.
