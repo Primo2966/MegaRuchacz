@@ -3,11 +3,15 @@
 The waiting room (~/.claude/wiedza/kandydaci.md) fills up faster than anybody reads it, so a fact
 carrying a claim that can be verified without a human does not wait for one: an existing path
 confirms it, a missing one makes it suspect. The same check runs over the facts already standing
-in the rules (~/.claude/CLAUDE.md, section "## Co wiem") — a directory moved without a word makes
-a rule silently false, and nothing but a check will ever notice.
+in the instruction files (section "## Co wiem") — a directory moved without a word makes a rule
+silently false, and nothing but a check will ever notice.
 
-Writing to the rules is allowed, but ONLY inside "## Co wiem"; everything above it and the whole
-block between the MegaRuchacz markers is off limits, and the file is copied aside before a change.
+A confirmed fact goes to EVERY instruction file this machine has, not only to the one of Claude
+Code: the user works in one tool today and in another tomorrow, and a fact written down in a file
+the other tool never reads is a fact nobody knows.
+
+Writing is allowed, but ONLY inside "## Co wiem"; everything above it and the whole block between
+the MegaRuchacz markers is off limits, and a file is copied aside before a change.
 
 Run: uv --directory C:\\dev\\claude-worker\\lore run python -m lore.verify [--proba]
 """
@@ -22,11 +26,19 @@ from datetime import datetime
 from pathlib import Path
 
 from .db import CLAUDE_HOME, log
+from .facts import normalize
 
 KNOWLEDGE_DIR = CLAUDE_HOME / "wiedza"
 CANDIDATES_PATH = KNOWLEDGE_DIR / "kandydaci.md"
-RULES_PATH = CLAUDE_HOME / "CLAUDE.md"  # written, but never outside the "## Co wiem" section
 BACKUP_DIR = KNOWLEDGE_DIR / "kopie"
+
+# The instruction files of the tools the user may be running — written, but never outside the
+# "## Co wiem" section. A list on purpose: another tool is one more line here and nothing else.
+# A file that is not there means the tool is not installed — it is skipped, never created.
+INSTRUCTION_PATHS = (
+    CLAUDE_HOME / "CLAUDE.md",
+    Path.home() / ".codex" / "AGENTS.md",
+)
 
 KNOWLEDGE_HEADING = "## Co wiem"
 GUARD_MARKER = "<!-- MegaRuchacz:start -->"  # from here down the file belongs to the installer
@@ -358,55 +370,115 @@ def _newline(raw: str) -> str:
     return "\r\n" if "\r\n" in raw else "\n"
 
 
-def backup_rules(day: str | None = None) -> Path:
-    """A copy with the date in the name, taken before every change to the rules."""
+def instruction_files() -> list[Path]:
+    """The instruction files that really exist here — a missing one means the tool is not used."""
+    return [path for path in INSTRUCTION_PATHS if path.is_file()]
+
+
+def backup_file(path: Path, day: str | None = None) -> Path:
+    """A copy with the date in the name, taken before every change; the name follows the source."""
     day = day or datetime.now().strftime("%Y-%m-%d-%H%M%S")
     BACKUP_DIR.mkdir(parents=True, exist_ok=True)
-    target = BACKUP_DIR / f"CLAUDE-{day}.md"
-    shutil.copy2(RULES_PATH, target)
+    target = BACKUP_DIR / f"{path.stem}-{day}.md"
+    shutil.copy2(path, target)
     return target
+
+
+def facts_in(lines: list[str]) -> set[str]:
+    """What this file already says, normalized — a fact standing here is not written down twice."""
+    known = {normalize(_UNCONFIRMED.sub("", line).strip().lstrip("-*").strip()) for line in lines}
+    known.discard("")
+    return known
+
+
+@dataclass
+class FileResult:
+    """What one pass did to one instruction file."""
+    path: Path
+    stale: list[tuple[str, list[str]]] = field(default_factory=list)
+    healed: list[str] = field(default_factory=list)
+    added: list[str] = field(default_factory=list)
+    changed: bool = False
+    backup: str | None = None
+    note: str | None = None  # set when the file has no "## Co wiem" — nothing was written
+
+
+def update_file(path: Path, approved: list[str], exists=None, day: str | None = None,
+                dry_run: bool = False) -> FileResult:
+    """Audits what stands in one file and adds the confirmed facts it does not know yet."""
+    raw = _read(path)
+    lines = (raw or "").splitlines()
+    bounds = section_bounds(lines) if raw is not None else None
+    if bounds is None:
+        return FileResult(path, note=f"no '{KNOWLEDGE_HEADING}' section in {path}"
+                                     " — nothing approved automatically")
+    start, end = bounds
+    audited = audit_rules(lines[start:end], exists, day)
+    body = audited.body
+    known = facts_in(lines)
+    out = FileResult(path, stale=audited.stale, healed=audited.healed)
+    for fact in approved:
+        key = normalize(fact)
+        if not key or key in known:
+            continue  # already written down here, possibly in other words than the waiting room used
+        known.add(key)
+        body = insert_fact(body, fact, subsection_for(fact))
+        out.added.append(fact)
+    out.changed = body != lines[start:end]
+    if dry_run or not out.changed:
+        return out
+    out.backup = str(backup_file(path))
+    # only the body of the section is swapped — the lines around it are the very same objects
+    _write(path, lines[:start] + body + lines[end:], _newline(raw))
+    return out
 
 
 # ---------------------------------------------------------------- the whole run
 
 def run(dry_run: bool = False, exists=None, day: str | None = None) -> dict:
-    """One pass: waiting room -> rules, plus an audit of what already stands in the rules."""
+    """One pass: waiting room -> every instruction file, plus an audit of what already stands there."""
     exists = exists or path_exists
     out = {"status": "dry-run" if dry_run else "ok", "approved": [], "suspicious": [],
-           "waiting": 0, "stale": [], "healed": [], "backup": None}
+           "waiting": 0, "stale": [], "healed": [], "backups": [], "files": [], "added": {}}
     raw_candidates = _read(CANDIDATES_PATH)
     reviewed = review_candidates((raw_candidates or "").splitlines(), exists)
     out["approved"] = list(reviewed.approved)
     out["suspicious"] = list(reviewed.suspicious)
     out["waiting"] = reviewed.waiting
 
-    raw_rules = _read(RULES_PATH)
-    rules_lines = (raw_rules or "").splitlines()
-    bounds = section_bounds(rules_lines) if raw_rules is not None else None
-    if bounds is None:
-        out["note"] = f"no '{KNOWLEDGE_HEADING}' section in {RULES_PATH} — nothing approved automatically"
+    files = instruction_files()
+    out["files"] = [str(path) for path in files]
+    results = [update_file(path, reviewed.approved, exists, day, dry_run) for path in files]
+    for r in results:
+        _merge(out["stale"], r.stale, key=lambda item: item[0])
+        _merge(out["healed"], r.healed)
+        if r.added:
+            out["added"][str(r.path)] = r.added
+        if r.backup:
+            out["backups"].append(r.backup)
+    if not any(r.note is None for r in results):
+        # nowhere to put them — the facts stay in the waiting room instead of quietly disappearing
         out["approved"] = []
+        out["note"] = "; ".join(r.note for r in results) or (
+            f"none of the instruction files exists ({', '.join(str(p) for p in INSTRUCTION_PATHS)})"
+            " — nothing approved automatically")
         if not dry_run and raw_candidates is not None and reviewed.suspicious:
             _write(CANDIDATES_PATH, reviewed.lines, _newline(raw_candidates))
         return out
-
-    start, end = bounds
-    audited = audit_rules(rules_lines[start:end], exists, day)
-    out["stale"] = audited.stale
-    out["healed"] = audited.healed
-    body = audited.body
-    for fact in reviewed.approved:
-        body = insert_fact(body, fact, subsection_for(fact))
-    changed_rules = body != rules_lines[start:end]
     if dry_run:
         return out
-    if changed_rules:
-        out["backup"] = str(backup_rules())
-        # only the body of the section is swapped — the lines around it are the very same objects
-        _write(RULES_PATH, rules_lines[:start] + body + rules_lines[end:], _newline(raw_rules))
     if raw_candidates is not None and reviewed.lines != raw_candidates.splitlines():
         _write(CANDIDATES_PATH, reviewed.lines, _newline(raw_candidates))
     return out
+
+
+def _merge(into: list, items: list, key=lambda item: item) -> None:
+    """Adds what is not there yet — the same fact stands in several files and is reported once."""
+    seen = {key(item) for item in into}
+    for item in items:
+        if key(item) not in seen:
+            seen.add(key(item))
+            into.append(item)
 
 
 def _write(path: Path, lines: list[str], newline: str) -> None:
@@ -419,9 +491,12 @@ def _report(r: dict) -> None:
     if r.get("note"):
         log(r["note"])
     head = "dry run — nothing written; " if r["status"] == "dry-run" else ""
-    log(f"{head}approved automatically: {len(r['approved'])},"
+    log(f"{head}instruction files: {len(r['files'])},"
+        f" approved automatically: {len(r['approved'])},"
         f" waiting for a decision: {r['waiting']},"
         f" standing facts that stopped checking out: {len(r['stale'])}")
+    for path in r["files"]:
+        log(f"  -> {path}: {len(r['added'].get(path, []))} new")
     for fact in r["approved"]:
         log(f"  + {fact}")
     for fact, missing in r["suspicious"]:
@@ -430,8 +505,8 @@ def _report(r: dict) -> None:
         log(f"  ! {fact}  (nie ma: {', '.join(missing)})")
     for fact in r["healed"]:
         log(f"  ~ {fact}  — confirmed again, the warning is gone")
-    if r["backup"]:
-        log(f"copy of the rules before the change: {r['backup']}")
+    for backup in r["backups"]:
+        log(f"copy taken before the change: {backup}")
 
 
 def main(argv: list[str] | None = None) -> int:
