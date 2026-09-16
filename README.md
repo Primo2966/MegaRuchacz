@@ -183,14 +183,29 @@ jest podzielona na warstwy.
 
 ### Trzy warstwy
 
-| Warstwa | Co tam jest | Kiedy czytane |
-|---|---|---|
-| **1. Stała** | kim jesteś, czym zajmuje się firma, konwencje, katalogi | zawsze, przy każdej sesji |
-| **2. Bieżąca** | nad czym siedzisz w tym tygodniu, co Cię blokuje | zawsze, ale **z datą i wygasaniem** |
-| **3. Referencyjna** | tabele, listy numerów, cenniki | tylko gdy rozmowa tego dotyczy |
+| Warstwa | Co tam jest | Gdzie fizycznie | Kiedy czytane | Koszt |
+|---|---|---|---|---|
+| **1. Stała** | kim jesteś, czym zajmuje się firma, konwencje | zwykły plik tekstowy | zawsze, przy każdej sesji | mały, ale płacony **za każdym razem** |
+| **2. Bieżąca** | sprawy tego tygodnia, co Cię blokuje | ten sam plik, osobna sekcja | zawsze, **z datą i wygasaniem** | mały, płacony za każdym razem |
+| **3. Referencyjna** | tabele, listy numerów, cenniki | osobne pliki tekstowe | **tylko gdy rozmowa tego dotyczy** | zero, dopóki nikt nie sięgnie |
+| **Archiwum rozmów** | wszystko, co kiedykolwiek powiedziałeś agentowi | **baza wektorowa** (Lore) | **tylko gdy agent szuka** | jedno wyszukanie na zadanie |
 
-Dwie pierwsze są malutkie i wczytują się same. Trzecia jest duża i leży odłogiem,
-dopóki nie jest potrzebna. Poniżej każda po kolei.
+**Warstwa 3 to zwykłe pliki, nie baza wektorowa.** To rozróżnienie jest ważne
+i łatwo je przeoczyć:
+
+- **Warstwy 1–3 to WIEDZA** — fakty spisane po ludzku, krótkie i sprawdzone.
+  Leżą w plikach tekstowych, które możesz otworzyć i poprawić notatnikiem.
+- **Baza wektorowa to ARCHIWUM ROZMÓW** — surowy zapis tego, co padło, razem
+  z myśleniem na głos i pomysłami później odrzuconymi. Nie jest wiedzą, jest
+  materiałem, z którego wiedza bywa wyciągana.
+
+Dlaczego tabela SKU nie idzie do bazy wektorowej: wyszukiwanie po znaczeniu jest
+świetne do „o czym my wtedy rozmawialiśmy", a bezużyteczne do „podaj mi numer
+tego produktu". Przy tabeli chcesz dokładnej wartości, nie czegoś podobnego
+w znaczeniu. Zwykły plik robi to lepiej, szybciej i bez modelu.
+
+Dwie pierwsze warstwy są malutkie i wczytują się same. Trzecia jest duża i leży
+odłogiem, dopóki nie jest potrzebna. Poniżej każda po kolei.
 
 ---
 
