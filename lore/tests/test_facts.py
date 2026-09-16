@@ -420,3 +420,84 @@ def test_no_claude_in_path_ends_with_code_one(waiting_room, monkeypatch):
     assert facts.main(argv=[]) == 1
     assert facts.since_marker() == before  # the marker stays, tomorrow has to catch up
     assert not facts.CANDIDATES_PATH.exists()
+
+
+# ---------------------------------------------------------------- picking the tool
+
+def installed(*names: str):
+    """Stand-in for PATH: these tools are found, everything else is missing."""
+    return lambda name: f"/bin/{name}" if name in names else None
+
+
+@pytest.fixture
+def unforced(monkeypatch):
+    """No LORE_MODEL_CLI — otherwise a variable set on the real machine steers the tests."""
+    monkeypatch.delenv(facts.MODEL_CLI_ENV, raising=False)
+
+
+def test_with_claude_alone_the_claude_command_line_is_used(unforced, monkeypatch):
+    monkeypatch.setattr(facts.shutil, "which", installed("claude"))
+
+    cli = facts.find_model_cli()
+    argv, stdin = cli.invocation("instrukcja", "material")
+
+    assert (cli.name, cli.verified) == ("claude", True)
+    assert argv[1:] == [*facts.MODEL_ARGS, "instrukcja"]  # the instruction in argv
+    assert stdin == "material"  # the material on stdin, where 60 k characters fit
+
+
+def test_with_codex_alone_the_knowledge_layer_still_has_a_model(unforced, monkeypatch):
+    """The whole point: a Codex-only machine used to raise ModelMissing and harvest nothing."""
+    monkeypatch.setattr(facts.shutil, "which", installed("codex"))
+
+    cli = facts.find_model_cli()
+    argv, stdin = cli.invocation("instrukcja", "material")
+
+    assert cli.name == "codex"
+    assert not cli.verified  # this command line was never run here — the code admits it
+    assert argv[1:] == list(facts.CODEX_ARGS)
+    assert stdin == "instrukcja\n\nmaterial"  # codex exec takes one prompt, so both go together
+
+
+def test_claude_wins_when_both_tools_are_installed(unforced, monkeypatch):
+    monkeypatch.setattr(facts.shutil, "which", installed("claude", "codex"))
+
+    assert facts.find_model_cli().name == "claude"
+    assert [c.name for c in facts.model_clis()] == ["claude", "codex"]
+
+
+def test_with_no_tool_at_all_the_error_says_what_was_looked_for(unforced, monkeypatch):
+    monkeypatch.setattr(facts.shutil, "which", installed())
+
+    assert facts.available_model_cli() is None
+    with pytest.raises(facts.ModelMissing) as e:
+        facts.find_model_cli()
+    assert "claude" in str(e.value) and "codex" in str(e.value)
+
+
+def test_the_environment_variable_overrides_the_order(monkeypatch):
+    monkeypatch.setattr(facts.shutil, "which", installed("claude", "codex"))
+    monkeypatch.setenv(facts.MODEL_CLI_ENV, "codex")
+
+    assert facts.find_model_cli().name == "codex"
+
+
+def test_a_forced_tool_that_is_missing_is_not_quietly_replaced(monkeypatch):
+    """Falling back to the other one would hide a typo and bill a tool nobody asked for."""
+    monkeypatch.setattr(facts.shutil, "which", installed("claude"))
+    monkeypatch.setenv(facts.MODEL_CLI_ENV, "codex")
+
+    with pytest.raises(facts.ModelMissing) as e:
+        facts.find_model_cli()
+    assert "codex" in str(e.value)
+
+
+def test_the_dry_run_names_the_tool_it_would_use(waiting_room, unforced, monkeypatch):
+    add(waiting_room, ago(1), "user", "cokolwiek, byle dluzsze niz prog")
+    facts.write_marker(ago(2))
+    monkeypatch.setattr(facts.shutil, "which", installed("codex"))
+
+    r = facts.run(dry_run=True)
+
+    assert r["status"] == "dry-run"
+    assert (r["model_available"], r["model_cli"]) == (True, "codex")
