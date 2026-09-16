@@ -268,6 +268,38 @@ droga i czytana na żądanie.
 
 ---
 
+### Co dzieje się samo, bez Twojego udziału
+
+| Kiedy | Co się dzieje |
+|---|---|
+| co 10 minut | nowe rozmowy trafiają do archiwum wektorowego |
+| przy starcie komputera | przegląd wczorajszych rozmów, wyławianie faktów, przydział warstw |
+| przy starcie sesji | jedna linia: koszt pamięci i to, co wymaga Twojej uwagi — albo cisza |
+| raz w tygodniu | sprawdzenie, czy zapisane fakty nadal się zgadzają |
+
+**Cykl dzienny jest odporny na przerwy.** Sprawdza przed pracą, czy jesteś
+zalogowany, czy jest sieć i czy starcza limitu — a gdy czegoś brakuje, **odkłada
+zamiast udawać porażkę**. Ponawia co 10 minut, najwyżej pięć razy dziennie.
+Żaden dzień nie zostaje pominięty: nieudany przebieg nie przesuwa znacznika, więc
+nazajutrz materiału jest po prostu więcej i nadrabia się partiami.
+
+### Skąd wiadomo, co warto zapisać
+
+Trzy sygnały, każdy inny:
+
+- **Powiedziałeś to wprost** — agent proponuje zapis w trakcie rozmowy.
+- **Maszyna to potwierdziła** — fakt zawierający ścieżkę, która istnieje, wchodzi
+  do wiedzy bez pytania. Nie ma czego zatwierdzać, skoro to sprawdzalna prawda.
+- **Powtarzałeś to wielokrotnie** — archiwum potrafi znaleźć powtórzenia **bez
+  czytania go modelem**. Fragmenty o tym samym znaczeniu mają bliskie sobie
+  wektory, więc skupisko wypowiedzi z wielu różnych sesji to twardy dowód, że coś
+  tłumaczyłeś w kółko. Model czyta wtedy po jednym przedstawicielu ze skupiska —
+  kilkadziesiąt urywków zamiast dziesiątek tysięcy.
+
+Przy tym trzecim liczą się **wyłącznie Twoje wypowiedzi**. Pierwsze uruchomienie
+na prawdziwym archiwum wypchnęło na szczyt rankingu szablon meldunku samego
+agenta, powtarzany w 34 sesjach — to powtarzalna forma, nie powtarzalna wiedza.
+
 #### Co robi poranne wyciąganie faktów
 
 Raz dziennie przeglądane są rozmowy z ostatniej doby i wyłuskiwane z nich trwałe

@@ -281,3 +281,27 @@ ignorowania ostrzeżeń:
 2. Fakt może wprost mówić, że plik leży **na innej maszynie** („na laptopie
    pakowanie2"). Szukanie go na tym dysku zawsze zawiedzie, a to nie znaczy,
    że fakt jest nieprawdziwy — po prostu nie da się go sprawdzić stąd.
+
+## 0.9.0 — 2026-09-16
+
+- **Niezawodny cykl dzienny** (`narzedzia\cykl-dzienny.ps1`, zadanie `LoreCykl`
+  przy starcie systemu i zalogowaniu). Sprawdza przed pracą, czy jest `claude`,
+  sieć i limit — brak czegokolwiek to **odłożenie, nie porażka**. Ponawia co
+  10 minut, najwyżej pięć razy na dobę. **Żaden dzień nie zostaje pominięty**:
+  nieudany przebieg nie przesuwa znacznika, a zaległość nadrabia się partiami
+  (najwyżej 5 dni na przebieg, żeby po urlopie nie przepalić limitu naraz).
+- **Przekopywanie archiwum przez skupiska wektorowe** (`narzedzia\przekop-archiwum.ps1`).
+  Znajduje rzeczy powtarzane w wielu sesjach **bez czytania archiwum modelem** —
+  to czysta matematyka na wektorach. Model dostaje po jednym przedstawicielu ze
+  skupiska, kilkadziesiąt urywków zamiast dziesiątek tysięcy. Skupisko liczy się
+  tylko wtedy, gdy zawiera wypowiedzi z co najmniej 3 różnych sesji.
+- **Jedna linia przy starcie sesji**: koszt pamięci i stan ostatniego cyklu.
+  Gdy wszystko gra i nie ma zaległości — cisza.
+- 23 nowe testy, razem **95**.
+
+**Wpadka wyłapana na prawdziwym archiwum i naprawiona:** pierwsze uruchomienie
+przekopywania wypchnęło na szczyt rankingu **własny szablon meldunku agenta**
+(„zadanie ustawione, teraz sprawdzam"), powtarzany w 34 sesjach. To powtarzalna
+FORMA, nie powtarzalna wiedza. Po ograniczeniu do wypowiedzi użytkownika wyszły
+rzeczy tłumaczone po kilkanaście razy: konfiguracja OAuth (26 sesji),
+monitorowanie załączników (18), kolejność audytu przed wypchnięciem (15).
