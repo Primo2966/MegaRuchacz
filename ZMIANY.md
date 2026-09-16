@@ -394,3 +394,28 @@ Claude Code. Instalować tylko adapter hosta wykrytego na maszynie.
 **Osobny dług:** hooki i workery to kontrakt Claude Code, którego nie da się
 odpiąć podmianą ścieżek. Dla Codeksa trzeba je przeprojektować albo świadomie
 zrezygnować.
+
+## 0.10.0 — 2026-09-16
+
+**Naprawa najgroźniejszego znaleziska z audytu: wiedza szła w ślepy zaułek.**
+
+- **Zatwierdzony fakt trafia do pliku instrukcji KAŻDEGO wykrytego narzędzia**,
+  nie tylko Claude Code. Użytkownik pracuje dziś w jednym, jutro w drugim —
+  fakt zapisany w pliku, którego drugie narzędzie nie czyta, to fakt, którego
+  nikt nie zna. Lista narzędzi jest listą, nie dwoma przypadkami: dołożenie
+  trzeciego to dopisanie jednej linii.
+- **Plik, którego nie ma, jest pomijany**, nie zakładany — brak `~/.codex/AGENTS.md`
+  znaczy po prostu, że użytkownik nie ma Codeksa.
+- **Sprawdzanie faktów obowiązujących** przechodzi po wszystkich plikach.
+- **Kopia zapasowa dla każdego zmienianego pliku**, z nazwą wywiedzioną z jego
+  własnej nazwy, a nie zaszytą na sztywno.
+- **Domknięta luka zgłoszona przez workera:** wyławianie sprawdzało duplikaty
+  tylko w pliku Claude Code, więc fakt zatwierdzony do Codeksa wracałby nazajutrz
+  do poczekalni i prosił o ponowne zatwierdzenie tego samego zdania.
+- 10 nowych testów, razem **104**.
+
+**Czytnik sesji Codeksa — nie powstał i nie powstanie na tej maszynie.** Worker
+sprawdził i zgłosił wprost: katalogu `.codex` tu nie ma, a 57 plików sesji leży na
+maszynie domowej użytkownika. Napisanie parsera z samego opisu formatu oznaczałoby
+zgadywanie, gdzie siedzi rola, treść i znacznik czasu — czyli kod wyglądający na
+gotowy. Ten kawałek musi powstać tam, gdzie są prawdziwe pliki.
