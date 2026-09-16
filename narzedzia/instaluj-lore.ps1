@@ -20,13 +20,21 @@ $NazwaMcp      = "lore"
 $NazwaZadania  = "LoreIndex"
 $InterwalMin   = 10
 $RozmiarModelu = "~465 MB"
+$MinModelMB    = 200   # model wazy ~465 MB; kilka bajtow to przerwane pobranie, nie model
+
+# Katalog domowy Lore - liczony tak samo jak w lore\db.py, zeby test dalo sie
+# puscic na katalogu tymczasowym (LORE_HOME), a nie na prawdziwej bazie.
+$script:Dom = Join-Path $env:USERPROFILE ".claude"
+if ($env:CLAUDE_HISTORIA_HOME) { $script:Dom = $env:CLAUDE_HISTORIA_HOME }
+if ($env:LORE_HOME)            { $script:Dom = $env:LORE_HOME }
 
 $script:Uv     = $null
 $script:Claude = $null
 $script:Lore   = $null
-$script:Baza   = Join-Path $env:USERPROFILE ".claude\lore.db"
-$script:Modele = Join-Path $env:USERPROFILE ".claude\lore_models"
+$script:Baza   = Join-Path $script:Dom "lore.db"
+$script:Modele = Join-Path $script:Dom "lore_models"
 $script:Kroki  = @()   # wyniki sprawdzen do koncowego podsumowania
+$script:Niepelne = @() # rzeczy, ktorych sprawdzenie NIE obejmuje - do podsumowania
 
 # ---------------------------------------------------------------- wypisywanie
 
@@ -48,6 +56,12 @@ function Zapisz-Wynik($nazwa, $ok, $opis) {
   $linia    = "  $etykieta  $nazwa"
   if ($opis) { $linia += " - $opis" }
   Write-Host $linia -ForegroundColor $kolor
+}
+
+# Sprawdzenie, ktore potwierdza tylko zapis na dysku albo obecnosc wpisu, nie
+# nazywa sie "dziala". Takie rzeczy ida tutaj i wracaja w podsumowaniu wprost.
+function Nie-Sprawdzono($tekst) {
+  $script:Niepelne += $tekst
 }
 
 # ---------------------------------------------------------------- warunki wstepne
@@ -192,6 +206,27 @@ function Zarejestruj-Mcp {
   Krok "zarejestrowany dla uzytkownika - widoczny we wszystkich projektach"
 }
 
+# Jedno zrodlo prawdy o zadaniu: pytamy harmonogram, nie wlasna pamiec o tym,
+# ze przed chwila cos zarejestrowalismy. Zwraca (Ok, Opis).
+function Stan-Zadania {
+  if (-not (Get-Command Get-ScheduledTask -ErrorAction SilentlyContinue)) {
+    return [pscustomobject]@{ Ok = $false; Opis = "brak Get-ScheduledTask - nie mam czym sprawdzic harmonogramu" }
+  }
+  $z = Get-ScheduledTask -TaskName $NazwaZadania -ErrorAction SilentlyContinue
+  if (-not $z) {
+    return [pscustomobject]@{ Ok = $false; Opis = "harmonogram nie zna zadania $NazwaZadania" }
+  }
+  if ($z.State -eq "Disabled") {
+    return [pscustomobject]@{ Ok = $false; Opis = "zadanie istnieje, ale jest wylaczone (Disabled) - nie uruchomi sie" }
+  }
+  $akcje = @($z.Actions | ForEach-Object { "$($_.Execute) $($_.Arguments)" })
+  $pasujace = @($akcje | Where-Object { $_ -match "lore\.index" })
+  if ($pasujace.Count -eq 0) {
+    return [pscustomobject]@{ Ok = $false; Opis = "zadanie istnieje, ale jego akcja nie uruchamia lore.index" }
+  }
+  return [pscustomobject]@{ Ok = $true; Opis = "stan: $($z.State)" }
+}
+
 function Zaloz-Zadanie {
   Naglowek "Zadanie w harmonogramie ($NazwaZadania)"
   # conhost --headless: zadanie chodzi co kilka minut i nikt nie chce ogladac mrugajacego okna konsoli
@@ -253,7 +288,16 @@ function Zaloz-Zadanie {
     Krok "jesli to 'Odmowa dostepu' - zasady tej maszyny moga wymagac uprawnien administratora"
     exit 1
   }
-  Krok "indeks odswiezany co $InterwalMin min"
+  # UWAGA - audyt na obcej maszynie: instalator wypisal "indeks odswiezany co 10 min",
+  # a Get-ScheduledTask nie znajdowal potem zadnego zadania. Samo przejscie
+  # Register-ScheduledTask bez wyjatku niczego nie dowodzi - pytamy harmonogram.
+  $stan = Stan-Zadania
+  if (-not $stan.Ok) {
+    Blad "zadanie $NazwaZadania nie powstalo: $($stan.Opis)"
+    Krok "harmonogram przyjal polecenie, ale zadania tam nie ma - sprawdz zasady tej maszyny"
+    exit 1
+  }
+  Krok "zadanie $NazwaZadania jest w harmonogramie ($($stan.Opis)) - indeks odswiezany co $InterwalMin min"
 }
 
 # ---------------------------------------------------------------- sprawdzenie instalacji
@@ -297,31 +341,192 @@ function Sprawdz-Indeksowanie {
   }
 }
 
+function Sprawdz-Zadanie {
+  $stan = Stan-Zadania
+  Zapisz-Wynik "zadanie w harmonogramie ($NazwaZadania)" $stan.Ok $stan.Opis
+}
+
+function Sprawdz-Model {
+  # Model sciaga sie leniwie, przy pierwszym liczeniu wektora. Sprawdzenie "czy
+  # katalog istnieje" przechodzilo na maszynie, ktora nigdy nic nie indeksowala,
+  # bo model nie byl wtedy potrzebny. Dlatego liczymy wektor NAPRAWDE - to
+  # wymusza pobranie i od razu pokazuje, czy model dziala.
+  Krok "sprawdzam model semantyczny (jesli go nie ma, pobiera sie teraz, $RozmiarModelu)..."
+  $kodPy = "from pathlib import Path; from lore.db import EMBED_DIM, MODELS_DIR, embed_query; " +
+           "v = embed_query('czy ten model dziala'); " +
+           "mb = sum(f.stat().st_size for f in Path(MODELS_DIR).rglob('*') if f.is_file()) // (1024*1024); " +
+           "print('MODEL', len(v), EMBED_DIM, mb)"
+  $w = Uruchom-Uv @("python", "-c", $kodPy)
+  $m = [regex]::Match($w.Tekst, 'MODEL (\d+) (\d+) (\d+)')
+  if ($w.Kod -ne 0 -or -not $m.Success) {
+    Zapisz-Wynik "model semantyczny" $false "nie udalo sie policzyc wektora: $(Ostatnia-Linia $w.Tekst)"
+    return
+  }
+  $wymiar     = [int]$m.Groups[1].Value
+  $oczekiwany = [int]$m.Groups[2].Value
+  $mb         = [int]$m.Groups[3].Value
+  if ($wymiar -ne $oczekiwany) {
+    Zapisz-Wynik "model semantyczny" $false "wektor ma $wymiar wymiarow zamiast $oczekiwany"
+  } elseif ($mb -lt $MinModelMB) {
+    Zapisz-Wynik "model semantyczny" $false "katalog modelu ma $mb MB, a powinien miec co najmniej $MinModelMB MB - pobranie nie doszlo do konca ($($script:Modele))"
+  } else {
+    Zapisz-Wynik "model semantyczny" $true "wektor $wymiar wymiarow, model na dysku: $mb MB"
+  }
+}
+
 function Sprawdz-Baze {
   # liczby prosto z bazy - connect() zaklada schemat i jest idempotentne
   # UWAGA: cudzyslowy podwojne wewnatrz argumentu gina przy przekazywaniu do
   # zewnetrznego programu w PowerShell 5.1 - Python dostaje SQL bez cudzyslowow
   # i wywala sie na skladni. Dlatego w kodzie Pythona sa pojedyncze.
-  $kodPy = "from lore.db import connect; c = connect(); " +
-           "print(c.execute('SELECT count(*) FROM files').fetchone()[0], c.execute('SELECT count(*) FROM chunks').fetchone()[0])"
+  #
+  # Zero plikow i zero kawalkow samo w sobie nie znaczy nic: tak samo wyglada
+  # swieza maszyna i calkiem zepsuty indekser. Rozroznia je dopiero liczba
+  # transkryptow, ktore indekser POWINIEN widziec - stad find_files().
+  $kodPy = "from lore.db import connect; from lore.index import find_files; c = connect(); " +
+           "print('BAZA', c.execute('SELECT count(*) FROM files').fetchone()[0], " +
+           "c.execute('SELECT count(*) FROM chunks').fetchone()[0], len(find_files()))"
   $w = Uruchom-Uv @("python", "-c", $kodPy)
-  $m = [regex]::Match($w.Tekst, '(?m)^\s*(\d+)\s+(\d+)\s*$')
-  if ($w.Kod -eq 0 -and $m.Success) {
-    Zapisz-Wynik "zawartosc bazy" $true "plikow: $($m.Groups[1].Value), kawalkow: $($m.Groups[2].Value)"
+  $m = [regex]::Match($w.Tekst, 'BAZA (\d+) (\d+) (\d+)')
+  if ($w.Kod -ne 0 -or -not $m.Success) {
+    Zapisz-Wynik "zawartosc bazy" $false "nie udalo sie odczytac statystyk z $($script:Baza): $(Ostatnia-Linia $w.Tekst)"
+    return
+  }
+  $plikow   = [int]$m.Groups[1].Value
+  $kawalkow = [int]$m.Groups[2].Value
+  $zrodel   = [int]$m.Groups[3].Value
+  if ($zrodel -eq 0 -and $plikow -eq 0) {
+    Zapisz-Wynik "zawartosc bazy" $true "na tej maszynie nie ma jeszcze czego indeksowac - zero transkryptow, zero wpisow"
+  } elseif ($plikow -eq 0) {
+    Zapisz-Wynik "zawartosc bazy" $false "indekser widzi $zrodel transkryptow, a baza jest pusta - indeksowanie nie zadzialalo"
+  } elseif ($kawalkow -eq 0) {
+    Zapisz-Wynik "zawartosc bazy" $false "zaindeksowano $plikow plikow, ale zero fragmentow - nie ma czego szukac"
   } else {
-    Zapisz-Wynik "zawartosc bazy" $false "nie udalo sie odczytac statystyk z $($script:Baza)"
+    Zapisz-Wynik "zawartosc bazy" $true "plikow: $plikow z $zrodel widocznych, kawalkow: $kawalkow"
   }
 }
 
-function Sprawdz-Mcp {
+function Sprawdz-Mcp-Wpis {
+  # To jest sprawdzenie REJESTRACJI, nie dzialania - "claude mcp list" moze
+  # pokazac wpis i na maszynie, na ktorej serwer nie wstaje.
   $lista = & $script:Claude mcp list 2>&1 | Out-String
   $linia = ($lista -split "`r?`n" | Where-Object { $_ -match "^\s*$NazwaMcp\s*:" } | Select-Object -First 1)
   if (-not $linia) {
-    Zapisz-Wynik "serwer MCP widoczny" $false "claude mcp list nie pokazuje wpisu $NazwaMcp"
-  } elseif ($linia -match "Connected") {
-    Zapisz-Wynik "serwer MCP widoczny" $true "polaczony"
+    Zapisz-Wynik "serwer MCP zarejestrowany" $false "claude mcp list nie pokazuje wpisu $NazwaMcp"
   } else {
-    Zapisz-Wynik "serwer MCP widoczny" $false "wpis jest, ale nie jest polaczony"
+    Zapisz-Wynik "serwer MCP zarejestrowany" $true "wpis $NazwaMcp jest w konfiguracji uzytkownika"
+  }
+  Nie-Sprawdzono "czy Twoj klient Claude Code podepnie serwer $NazwaMcp przy starcie - to widac dopiero w nowym oknie"
+}
+
+# Proba serwera MCP - leci do pliku tymczasowego i odpala sie pod Pythonem z uv.
+# Sam stdlib, zeby dzialala niezaleznie od tego, co siedzi w .venv modulu.
+$script:ProbaMcp = @'
+"""Rozmowa z serwerem MCP po stdio: initialize -> tools/list -> tools/call lore_stats.
+Kod wyjscia 0 i linia "MCP OK <liczba narzedzi>" tylko wtedy, gdy serwer naprawde odpowiedzial."""
+import json
+import queue
+import subprocess
+import sys
+import threading
+
+CZAS = 180  # sekund na odpowiedz - pierwszy start moze jeszcze pobierac model
+
+
+def main():
+    polecenie = sys.argv[1:]
+    if not polecenie:
+        print("proba MCP: brak polecenia serwera")
+        return 1
+    p = subprocess.Popen(polecenie, stdin=subprocess.PIPE, stdout=subprocess.PIPE,
+                         stderr=subprocess.PIPE, encoding="utf-8", errors="replace", bufsize=1)
+    linie = queue.Queue()
+    bledy = []
+
+    def czytaj_wyjscie():
+        for linia in p.stdout:
+            linie.put(linia)
+        linie.put(None)
+
+    def czytaj_bledy():
+        for linia in p.stderr:  # serwer loguje na stderr - nie wolno zapchac rury
+            bledy.append(linia.rstrip())
+
+    threading.Thread(target=czytaj_wyjscie, daemon=True).start()
+    threading.Thread(target=czytaj_bledy, daemon=True).start()
+
+    def wyslij(obj):
+        p.stdin.write(json.dumps(obj) + "\n")
+        p.stdin.flush()
+
+    def odpowiedz(ident):
+        # w strumieniu sa tez notyfikacje - czekamy na swoje id
+        while True:
+            linia = linie.get(timeout=CZAS)
+            if linia is None:
+                raise RuntimeError("serwer zamknal wyjscie bez odpowiedzi")
+            linia = linia.strip()
+            if not linia:
+                continue
+            try:
+                d = json.loads(linia)
+            except ValueError:
+                continue
+            if d.get("id") == ident:
+                if "error" in d:
+                    raise RuntimeError("serwer odpowiedzial bledem: %s" % d["error"])
+                return d.get("result", {})
+
+    try:
+        wyslij({"jsonrpc": "2.0", "id": 1, "method": "initialize", "params": {
+            "protocolVersion": "2025-06-18", "capabilities": {},
+            "clientInfo": {"name": "instaluj-lore", "version": "1"}}})
+        odpowiedz(1)
+        wyslij({"jsonrpc": "2.0", "method": "notifications/initialized"})
+        wyslij({"jsonrpc": "2.0", "id": 2, "method": "tools/list"})
+        narzedzia = [t.get("name") for t in odpowiedz(2).get("tools", [])]
+        if "lore_search" not in narzedzia:
+            print("proba MCP: serwer nie wystawia lore_search (widze: %s)" % ", ".join(narzedzia))
+            return 1
+        # lore_stats tylko czyta - bezpieczne, a dotyka bazy, wiec cos naprawde robi
+        wyslij({"jsonrpc": "2.0", "id": 3, "method": "tools/call",
+                "params": {"name": "lore_stats", "arguments": {}}})
+        odpowiedz(3)
+        print("MCP OK %d" % len(narzedzia))
+        return 0
+    except queue.Empty:
+        print("proba MCP: serwer nie odpowiedzial w %d s" % CZAS)
+        return 1
+    except Exception as e:
+        ogon = "; ".join([b for b in bledy if b][-3:])
+        print("proba MCP: %s%s" % (e, (" | " + ogon) if ogon else ""))
+        return 1
+    finally:
+        try:
+            p.kill()
+        except OSError:
+            pass
+
+
+if __name__ == "__main__":
+    sys.exit(main())
+'@
+
+function Sprawdz-Mcp-Dziala {
+  # Prawdziwe wywolanie: uruchamiamy serwer tym samym poleceniem, ktore trafilo
+  # do konfiguracji, i rozmawiamy z nim po JSON-RPC - initialize, tools/list,
+  # tools/call lore_stats. Zepsuty serwer nie ma jak tego przejsc.
+  $plikProby = Join-Path $env:TEMP "lore-mcp-proba-$PID.py"
+  [System.IO.File]::WriteAllText($plikProby, $script:ProbaMcp, (New-Object System.Text.UTF8Encoding($false)))
+  try {
+    $w = Uruchom-Uv @("python", $plikProby, $script:Uv, "--directory", $script:Lore, "run", "python", "-m", "lore.server")
+    if ($w.Kod -eq 0 -and $w.Tekst -match 'MCP OK (\d+)') {
+      Zapisz-Wynik "serwer MCP odpowiada na wywolanie" $true "handshake i lore_stats przeszly, narzedzi: $($Matches[1])"
+    } else {
+      Zapisz-Wynik "serwer MCP odpowiada na wywolanie" $false "$(Ostatnia-Linia $w.Tekst)"
+    }
+  } finally {
+    Remove-Item $plikProby -Force -ErrorAction SilentlyContinue
   }
 }
 
@@ -330,16 +535,22 @@ function Sprawdz-Instalacje {
   if ($Proba) {
     Plan "uv --directory $($script:Lore) run pytest -q"
     Plan "uv --directory $($script:Lore) run python -c ""from lore import server"""
+    Plan "Get-ScheduledTask $NazwaZadania - czy zadanie istnieje i nie jest wylaczone"
     Plan "uv --directory $($script:Lore) run python -m lore.index   (jeden przebieg indeksowania)"
-    Plan "odczyt z bazy: ile plikow i kawalkow zaindeksowano ($($script:Baza))"
-    Plan "claude mcp list - czy $NazwaMcp jest polaczony"
+    Plan "policzenie wektora modelem i rozmiar katalogu $($script:Modele) (min. $MinModelMB MB)"
+    Plan "odczyt z bazy: ile plikow i kawalkow wobec liczby widocznych transkryptow ($($script:Baza))"
+    Plan "claude mcp list - czy wpis $NazwaMcp jest w konfiguracji"
+    Plan "handshake JSON-RPC z serwerem $NazwaMcp: initialize + tools/list + lore_stats"
     return
   }
   Sprawdz-Testy
   Sprawdz-Import
+  Sprawdz-Zadanie
   Sprawdz-Indeksowanie
+  Sprawdz-Model
   Sprawdz-Baze
-  Sprawdz-Mcp
+  Sprawdz-Mcp-Wpis
+  Sprawdz-Mcp-Dziala
 }
 
 function Podsumowanie {
@@ -350,6 +561,11 @@ function Podsumowanie {
     $linia    = "  $etykieta  $($k.Nazwa)"
     if ($k.Opis) { $linia += " - $($k.Opis)" }
     Write-Host $linia -ForegroundColor $kolor
+  }
+  if ($script:Niepelne.Count -gt 0) {
+    Write-Host ""
+    Write-Host "  Czego to sprawdzenie NIE obejmuje:" -ForegroundColor DarkGray
+    foreach ($n in $script:Niepelne) { Write-Host "  -  $n" -ForegroundColor DarkGray }
   }
   $zle = @($script:Kroki | Where-Object { -not $_.Ok })
   Write-Host ""
