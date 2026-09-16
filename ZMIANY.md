@@ -305,3 +305,17 @@ przekopywania wypchnęło na szczyt rankingu **własny szablon meldunku agenta**
 FORMA, nie powtarzalna wiedza. Po ograniczeniu do wypowiedzi użytkownika wyszły
 rzeczy tłumaczone po kilkanaście razy: konfiguracja OAuth (26 sesji),
 monitorowanie załączników (18), kolejność audytu przed wypchnięciem (15).
+
+## 0.9.1 — 2026-09-16
+
+- **Wyławianie faktów czyta tylko wypowiedzi użytkownika.** Pomiar na prawdziwym
+  archiwum: mediana dnia to **328 000 znaków** obu stron rozmowy, ale **41 000**
+  samego użytkownika — **ośmiokrotna różnica**. Połowa asystenta to w większości
+  jego własne meldunki i podsumowania; to samo wyszło wcześniej przy przekopywaniu
+  archiwum, gdzie szablon meldunku wygrał ranking powtórzeń.
+- To nie jest tylko oszczędność. Przy starym ustawieniu **sufit 60 000 znaków
+  pokrywał mniej niż jedną piątą typowego dnia**, więc system byłby trwale w tyle
+  i nigdy by nie nadążył. Teraz cały dzień mieści się z zapasem.
+- Koszt po zmianie: **~13 700 tokenów wejścia na dzień** zamiast ~109 000.
+- Świadomy kompromis: fakt wypowiedziany po raz pierwszy dopiero w podsumowaniu
+  asystenta przepadnie. Niewielki procent za ośmiokrotną oszczędność.

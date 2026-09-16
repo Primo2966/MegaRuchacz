@@ -131,17 +131,27 @@ def test_the_cut_does_not_fall_inside_one_turn(waiting_room):
     assert material.dropped == 0
 
 
-def test_tool_noise_is_filtered_out(waiting_room):
+def test_only_the_user_is_harvested(waiting_room):
+    """Everything but the user is dropped — see HARVESTED_ROLES for why.
+
+    The assistant's half of a real archive is eight times the user's and is mostly
+    its own reports, so harvesting it costs eight times more for noise.
+    """
     add(waiting_room, ago(1), "user", "pracuje na Windowsie")
     add(waiting_room, ago(1), "tool", "[tool: Bash] ls -la")
     add(waiting_room, ago(1), "result", "total 128 drwxr-xr-x")
     add(waiting_room, ago(1), "agent:tool", "[tool: Read] plik.py")
     add(waiting_room, ago(1), "assistant", "zapamietam to")
+    add(waiting_room, ago(1), "agent:user", "podzadanie od kierownika")
     facts.write_marker(ago(2))
 
     material = facts.collect(waiting_room.conn, facts.since_marker())
 
-    assert [t.split(": ", 1)[1] for t in material.texts] == ["pracuje na Windowsie", "zapamietam to"]
+    # "agent:user" counts too: the suffix is what names the speaker
+    assert [t.split(": ", 1)[1] for t in material.texts] == [
+        "pracuje na Windowsie",
+        "podzadanie od kierownika",
+    ]
 
 
 # ---------------------------------------------------------------- the layers
