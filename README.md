@@ -1,4 +1,4 @@
-<img src="logo.svg" width="96" align="right" alt="">
+<img src="logo.png" width="110" align="right" alt="">
 
 # MegaRuchacz
 
