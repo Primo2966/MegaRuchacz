@@ -26,3 +26,6 @@ Thumbs.db
 
 # Kopie robocze workerow - stan lokalny
 .claude/worktrees/
+
+# Notatki robocze kierownika - nie do publikacji
+.claude/plan-repo.md
