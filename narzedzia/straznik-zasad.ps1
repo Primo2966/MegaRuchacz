@@ -406,8 +406,20 @@ try {
     exit 0
   }
 
+  # Fakty wylowione z rozmow czekaja w poczekalni na decyzje uzytkownika.
+  # Bez tego powiadomienia nikt tam nie zaglada i cala robota idzie do kosza.
+  function Zglos-Kandydatow {
+    $plik = Join-Path $KatalogDomowy ".claude\wiedza\kandydaci.md"
+    if (-not (Test-Path $plik)) { return }
+    $ile = @(Select-String -Path $plik -Pattern '^\s*-\s*\[\s*\]' -AllMatches).Count
+    if ($ile -lt 1) { return }
+    $slowo = if ($ile -eq 1) { "fakt czeka" } else { "faktow czeka" }
+    Write-Host "MegaRuchacz: $ile $slowo na Twoja decyzje - powiedz 'pokaz fakty', zeby je przejrzec."
+  }
+
   # Osobne try, zeby potkniecie sie na jednym nie zabralo drugiego.
-  try { Pilnuj-Zasad }  catch { }
-  try { Pilnuj-Wersji } catch { }
+  try { Pilnuj-Zasad }     catch { }
+  try { Pilnuj-Wersji }    catch { }
+  try { Zglos-Kandydatow } catch { }
 } catch { }
 exit 0

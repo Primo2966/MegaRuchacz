@@ -215,3 +215,26 @@ narzędzie, dostaje pusty mechanizm, nie cudzą wiedzę.
 
 Pierwszy pomiar na maszynie autora: **522 tokeny na rozmowę, ~3 650 tokenów przez
 dobę** przy 7 sesjach. Dla porównania sufit warstwy stałej to ~2 700 tokenów.
+
+## 0.7.0 — 2026-09-16
+
+- **Poranne wyławianie faktów z rozmów** (`narzedzia\wyciagnij-fakty.ps1`, zadanie
+  `LoreFacts` o 08:05). Przegląda rozmowy z ostatniej doby i wypisuje trwałe fakty
+  o użytkowniku, jego firmie i sposobie pracy. **Wynik ląduje w poczekalni
+  (`wiedza\kandydaci.md`), nigdy wprost w obowiązującej wiedzy** — automat
+  proponuje, człowiek zatwierdza.
+- **Nadrabianie po przerwie bez gubienia danych.** Bierze najstarszy nieprzetworzony
+  materiał, a znacznik przesuwa dokładnie tam, dokąd doszedł. Po kilku dniach
+  nieobecności nadrabia partiami i mówi, ile zostało. `-Nadrabiaj N` robi to
+  jednym poleceniem. Wcześniejszy projekt brał najnowsze — po dłuższej przerwie
+  starsze rozmowy przepadałyby po cichu.
+- **Powiadomienie o czekających faktach** przy starcie sesji. Bez tego nikt nie
+  zagląda do poczekalni i cała robota idzie do kosza.
+- **Zabezpieczenie przed pętlą**: przebieg wyławiania nie zapisuje własnego
+  transkryptu. Bez tego indekser połykałby go i nazajutrz wyławiał własny wynik
+  jako „fakt".
+- 20 nowych testów, razem **38**.
+
+Pierwszy prawdziwy przebieg wyłowił m.in. gdzie leżą zdjęcia produktów, ograniczenie
+stronicowania w API Amazona i zasadę „tylko odczyt do czasu akceptacji" — czyli
+dokładnie te rzeczy, które trzeba było tłumaczyć w każdym nowym oknie.
