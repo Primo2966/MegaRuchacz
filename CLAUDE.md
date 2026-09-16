@@ -120,6 +120,22 @@ i kasujesz worktree. Nie zostawiasz wiszących gałęzi „do obejrzenia" i nie 
 o zgodę na scalenie udanej zmiany — użytkownik nie chce tego widzieć ani klikać.
 Lista worktree ma być pusta między zadaniami.
 
+**Zanim skasujesz kopię roboczą — sprawdź, czy scalenie cokolwiek wniosło.**
+Worker potrafi zameldować sukces, nie robiąc `git commit`. Jego praca siedzi wtedy
+tylko w kopii roboczej, a `git merge` odpowiada „Already up to date". Skasowanie
+kopii przez `--force` w tym momencie kasuje całą jego robotę bezpowrotnie —
+zdarzyło się to 2026-09-16 i przepadł komplet zmian wraz z dziewięcioma testami.
+Dlatego:
+
+- **Nie łącz scalania i kasowania jednym `&&`.** Najpierw scalenie, potem
+  spojrzenie na wynik, dopiero potem kasowanie.
+- Gdy scalenie mówi „Already up to date", a worker raportował zmiany — to nie jest
+  „nic do zrobienia", tylko **alarm**. Zajrzyj do kopii roboczej
+  (`git -C <kopia> status --porcelain`) ZANIM ją usuniesz.
+- W zleceniu dla implementera zawsze wymagaj commita jako części kryterium
+  ukończenia: „`git add -A` i `git commit`, potem sprawdź `git status --porcelain`
+  — ma być pusto". Raport bez commita jest nieprawdą.
+
 Gałąź, która nie ma ani jednego commita poza `main` (`git log main..gałąź` puste)
 i nie ma niezacommitowanych zmian, to śmieć po zakończonym zadaniu — kasujesz ją
 razem z worktree bez pytania i bez meldunku.

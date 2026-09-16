@@ -266,6 +266,11 @@ function Wolaj-Gita([string]$argumenty, [int]$sekundy) {
   try {
     $p = Start-Process -FilePath "git" -ArgumentList $argumenty -NoNewWindow -PassThru `
            -RedirectStandardOutput $wy -RedirectStandardError $bl
+    # Dotkniecie uchwytu MUSI byc przed czekaniem: bez tego Start-Process -PassThru
+    # oddaje obiekt, w ktorym ExitCode zostaje $null nawet po zakonczeniu procesu,
+    # wiec kazde wolanie wygladalo na nieudane i pobieranie nigdy nie ruszalo.
+    # Sprawdzone 2026-09-16: bez tej linii ExitCode = $null, z nia = 0.
+    $null = $p.Handle
     if (-not $p.WaitForExit($sekundy * 1000)) {
       try { $p.Kill() } catch { }
       return $wynik

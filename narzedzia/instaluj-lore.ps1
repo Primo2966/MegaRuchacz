@@ -727,7 +727,11 @@ function Podsumowanie {
     Blad "instalacja NIE jest kompletna: $($zle.Count) z $($script:Kroki.Count) sprawdzen nie przeszlo."
     exit 1
   }
-  Write-Host "Gotowe. Zamknij i otworz okna Claude Code - serwer $NazwaMcp podepnie sie przy starcie." -ForegroundColor Green
+  $gdzie = @()
+  if ($script:Claude)    { $gdzie += "okna Claude Code" }
+  if ($script:CodexJest) { $gdzie += "sesje Codeksa" }
+  $co = if ($gdzie.Count -gt 0) { $gdzie -join " i " } else { "okna narzedzia AI" }
+  Write-Host "Gotowe. Zamknij i otworz $co - serwer $NazwaMcp podepnie sie przy starcie." -ForegroundColor Green
   exit 0
 }
 
