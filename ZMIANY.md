@@ -342,3 +342,15 @@ monitorowanie załączników (18), kolejność audytu przed wypchnięciem (15).
 
 Stan zadań na maszynie: `LoreIndex` (co 10 min), `LoreCykl` (przy zalogowaniu),
 `LoreKoszt` (codziennie 08:15), `LoreWiedza` (poniedziałki 08:25).
+
+## 0.9.4 — 2026-09-16
+
+- **Przenoszenie ustawień Orki między komputerami** (`narzedzia\orca-ustawienia.js`).
+  Orca trzyma wszystko w jednym pliku, w którym mieszają się ustawienia z **stanem
+  konkretnej maszyny** — identyfikatorami repozytoriów, ścieżkami katalogu
+  roboczego, filtrami po projektach. Skopiowanie całego pliku pokazałoby na drugim
+  komputerze projekty, których tam nie ma, i schowało te, które są.
+  Skrypt przenosi wygląd i preferencje, a stan maszyny pomija — **wypisując wprost,
+  co pominął**. Przy wgrywaniu scala klucz po kluczu zamiast podmieniać całą sekcję,
+  żeby nie skasować tego, co na maszynie docelowej ma zostać. Kopia zapasowa
+  przed każdą zmianą.
