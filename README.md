@@ -10,7 +10,7 @@ Kluczowa różnica wobec zwykłej pracy z agentem: **nie czekasz**. Rzucasz zada
 dostajesz klawiaturę z powrotem w sekundach i piszesz następne. Roboty pilnuje
 kierownik, nie Ty.
 
-W zestawie jest też **przeszukiwalna historia wszystkich Twoich rozmów** z agentem —
+W zestawie jest też **Lore — przeszukiwalna pamięć wszystkich Twoich rozmów** z agentem —
 żeby ustalenie z innego okna sprzed tygodnia nie przepadło.
 
 ---
@@ -22,7 +22,7 @@ W zestawie jest też **przeszukiwalna historia wszystkich Twoich rozmów** z age
 | `CLAUDE.md` | zasady kierownika — serce całości |
 | `.claude/agents/` | prompty czterech ról: implementer, scout, verifier, zastępca |
 | `.claude/` | konfiguracja hooków i pliki stanu |
-| `historia/` | serwer MCP z przeszukiwalną historią rozmów (składnik opcjonalny) |
+| `lore/` | Lore — serwer MCP z przeszukiwalną pamięcią rozmów (składnik opcjonalny) |
 | `rozszerzenie/` | panel VS Code: lista okien zadaniowych, licznik workerów |
 | `wdroz.ps1` | instalator — wdraża tryb do wskazanego projektu |
 | `nowe-zadanie.ps1` | zakłada izolowaną kopię repo na jedno zadanie |
@@ -44,7 +44,7 @@ W zestawie jest też **przeszukiwalna historia wszystkich Twoich rozmów** z age
 - **git** — izolacja workerów stoi na `git worktree`.
 - **Node.js** — na nim działa mechanizm zapisujący, co robią workerzy.
 - **Claude Code** — pełny tryb (workerzy, hooki, izolacja) działa tam.
-- **Python 3.12 + `uv`** — tylko jeśli chcesz historii rozmów.
+- **Python 3.12 + `uv`** — tylko jeśli chcesz Lore, czyli pamięci rozmów.
 
 ## Instalacja
 
@@ -54,7 +54,7 @@ powershell -ExecutionPolicy Bypass -File <ścieżka>\wdroz.ps1
 ```
 
 Instalator **przed zrobieniem czegokolwiek powie, co zamierza**: co zapisze, gdzie,
-i czy ma dołożyć historię rozmów. Historia wymaga osobnej zgody, bo oznacza
+i czy ma dołożyć Lore. Lore wymaga osobnej zgody, bo oznacza
 pobranie ~465 MB modelu i danie agentowi dostępu do treści Twoich rozmów.
 Odmowa nie blokuje reszty — dostajesz sam tryb pracy.
 
@@ -62,7 +62,7 @@ Po instalacji **zamknij i otwórz Claude Code na nowo**, żeby zasady się zała
 
 ## Co działa gdzie — uczciwie
 
-| Narzędzie | Zasady pracy | Rozdawanie roboty workerom | Historia rozmów |
+| Narzędzie | Zasady pracy | Rozdawanie roboty workerom | Lore (pamięć rozmów) |
 |---|---|---|---|
 | Claude Code | tak | tak — własnym narzędziem | tak |
 | Claude Code w Orce | tak | tak | tak |
@@ -86,14 +86,14 @@ uruchomiony samodzielnie, poza Orką, workerów nie ma i mieć nie będzie.
 Tam, gdzie w tabeli jest „nie", zasady nadal działają jako sposób pracy — agent
 po prostu wykonuje wszystko sam, zamiast rozdawać.
 
-## Historia rozmów
+## Lore — pamięć rozmów
 
 Serwer MCP indeksujący transkrypty do lokalnej bazy z wyszukiwaniem pełnotekstowym
 i semantycznym (zapytanie po niemiecku znajdzie rozmowę po polsku). Baza i model
 zostają **na Twojej maszynie** — nic nie wychodzi na zewnątrz.
 
 Agent sięga do niej, gdy powołujesz się na wcześniejsze ustalenie albo gdy ma zadać
-pytanie, które już kiedyś padło w innym oknie. Znalezisko z historii traktuje jako
+pytanie, które już kiedyś padło w innym oknie. Znalezisko z pamięci traktuje jako
 trop do sprawdzenia, nie jako dowód — w zapisie rozmów siedzą też pomysły porzucone
 i decyzje później odwrócone.
 

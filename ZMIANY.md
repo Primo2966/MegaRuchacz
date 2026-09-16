@@ -84,3 +84,19 @@ katalogach na jednej maszynie.
 
 **Uwaga:** zmiana obowiązuje dla danych indeksowanych od teraz. Starsze wpisy
 zostają pocięte po staremu — przebudowy bazy nie robimy.
+
+## 0.3.0 — 2026-09-16
+
+- **Moduł historii rozmów nazywa się teraz `lore`.** Zmiana obejmuje katalog,
+  pakiet, pliki, nazwy narzędzi MCP (`lore_search`, `lore_context`, `lore_stats`,
+  `lore_reindex`) oraz całe wewnętrzne nazewnictwo i komentarze — z polskiego na
+  angielski. Żadne zachowanie się nie zmieniło.
+- **Migracja istniejących danych, bez przebudowy.** Baza `historia.db` przeniesiona
+  na `lore.db`, tabele i kolumny przemianowane, wartości ról przetłumaczone,
+  katalog modelu `historia_modele` na `lore_models` (inaczej 465 MB pobierałoby się
+  od nowa). Migracja jest idempotentna i działa też na bazie już nowej.
+  Zachowane wszystkie 52 626 kawałków i 621 plików.
+- Zmienna środowiskowa `LORE_HOME`, ze wsteczną obsługą `CLAUDE_HISTORIA_HOME`.
+- **5 nowych testów migracji** — razem 18.
+- Przerejestrowany serwer MCP (`historia` → `lore`) i zadanie harmonogramu
+  (`ClaudeHistoriaIndeks` → `LoreIndex`).
