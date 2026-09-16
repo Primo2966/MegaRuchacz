@@ -64,3 +64,23 @@ katalogach na jednej maszynie.
 - Potwierdzone działanie łatki na lukę z Orką: do bazy weszły 3830 fragmentów
   rozmów, które dotąd przepadały. Baza urosła z 47 151 do 52 322 fragmentów.
 - Commity podpisane właściwym adresem autora.
+
+## 0.2.0 — 2026-09-16
+
+- **Grupowanie wypowiedzi w kawałki indeksu.** Dotąd każda wypowiedź trafiała do
+  bazy osobno, więc krótkie „tak, rób to" stawało się samodzielnym wpisem
+  z własnym wektorem — semantycznie pustym, bo pytanie zostawało w innym wpisie.
+  Teraz kolejne wypowiedzi z tej samej sesji są sklejane w jeden kawałek do 1500
+  znaków, z zaznaczeniem, kto co powiedział. Para pytanie-odpowiedź zostaje razem.
+- **Ostatnia grupa czeka na domknięcie.** Indekser nie zapisuje grupy, do której
+  może jeszcze coś dojść, i nie przesuwa za nią punktu wznowienia — dzięki temu
+  podział na kawałki nie zależy od tego, kiedy akurat przebiegło indeksowanie.
+  Ogon domykany jest po 24 godzinach bez zmian w pliku.
+- **Pierwsze testy w projekcie** — 13 sztuk (`uv run pytest`). Pokrywają sklejanie,
+  limit długości, zakładkę przy długich wypowiedziach, brak duplikatów przy
+  powtórnym indeksowaniu i wznowienie po dopisaniu linii.
+- Zasady kierownika: obowiązkowy krok policzenia niezależnych części zadania
+  przed rozdaniem workerów.
+
+**Uwaga:** zmiana obowiązuje dla danych indeksowanych od teraz. Starsze wpisy
+zostają pocięte po staremu — przebudowy bazy nie robimy.
