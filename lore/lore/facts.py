@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import json
 import math
+import os
 import re
 import shutil
 import sqlite3
@@ -136,7 +137,7 @@ _POLISH = str.maketrans("ąćęłńóśźż", "acelnoszz")
 
 
 class ModelMissing(RuntimeError):
-    """`claude` is not in PATH — there is nothing to extract the facts with."""
+    """No agent CLI in PATH — there is nothing to extract the facts with. See MODEL_CLIS."""
 
 
 # ---------------------------------------------------------------- the run marker
@@ -237,28 +238,118 @@ def _align_to_timestamp(material: Material, kept: list[tuple[str, str]], taken: 
     return back - taken  # negative: those chunks go back to the backlog
 
 
+# ---------------------------------------------------------------- the tool that carries the model
+
+# The model does not live in this process: it is reached through whichever agent CLI the machine
+# happens to have — Claude Code on one, Codex on another. Wiring `claude` in was enough to kill the
+# whole knowledge layer on a Codex-only machine, so the tool is looked up when it is needed and
+# every caller goes through find_model_cli(). A third tool is one row in MODEL_CLIS, nothing else.
+MODEL_CLI_ENV = "LORE_MODEL_CLI"  # forces one of them by name — for testing and for overriding
+
+# UNVERIFIED: the `codex` row was written without ever running the command. Codex is not installed
+# on the machine this was built on, so neither `codex --help` nor `codex exec --help` could be
+# read. Two things to confirm before a nightly run is trusted to it: that `exec -` really reads the
+# prompt from stdin (the material does not fit in argv), and what _codex_answer has to strip.
+CODEX_ARGS = ("exec", "--skip-git-repo-check", "-")
+
+# best first: when both are installed Claude Code wins, because its switches and its JSON envelope
+# are the ones this module was measured against
+MODEL_CLIS = (
+    # name, switches before the prompt, instruction goes on stdin too, command line ever run here
+    ("claude", MODEL_ARGS, False, True),
+    ("codex", CODEX_ARGS, True, False),
+)
+
+
+@dataclass(frozen=True)
+class ModelCLI:
+    """One agent CLI: where it is, how the prompt gets in, how the answer comes back out."""
+    name: str
+    exe: str
+    args: tuple[str, ...]
+    prompt_on_stdin: bool
+    verified: bool
+
+    def invocation(self, instruction: str, material: str) -> tuple[list[str], str]:
+        """(argv, stdin) — the 60 k of material never fits in argv, so it always goes on stdin.
+
+        Claude Code takes the instruction in argv and reads the material from stdin. Codex `exec`
+        wants a single prompt instead, so there the two are glued and handed over together.
+        """
+        if self.prompt_on_stdin:
+            return [self.exe, *self.args], f"{instruction}\n\n{material}"
+        return [self.exe, *self.args, instruction], material
+
+    def answer(self, stdout: str) -> str:
+        """The answer alone, whatever the tool wrapped it in."""
+        return _codex_answer(stdout) if self.name == "codex" else stdout
+
+
+def _codex_answer(stdout: str) -> str:
+    """The seam for unwrapping a Codex answer — deliberately a pass-through until it is measured.
+
+    Claude Code returns the `--output-format json` envelope that parse_facts already reads, and
+    parse_facts falls back to reading plain text line by line, so a bare answer survives untouched.
+    What Codex actually prints around it is unknown here (see CODEX_ARGS); when someone reads it on
+    a machine that has Codex, this one function is the place to strip it.
+    """
+    return stdout
+
+
+def model_clis() -> tuple[ModelCLI, ...]:
+    """Every known tool that is really installed, best first. Empty on a machine with none."""
+    return tuple(
+        ModelCLI(name, exe, args, prompt_on_stdin, verified)
+        for name, args, prompt_on_stdin, verified in MODEL_CLIS
+        if (exe := shutil.which(name))
+    )
+
+
+def find_model_cli() -> ModelCLI:
+    """The tool to ask. LORE_MODEL_CLI wins; without it the first installed one from MODEL_CLIS."""
+    found = model_clis()
+    wanted = (os.environ.get(MODEL_CLI_ENV) or "").strip().lower()
+    known = ", ".join(f"`{name}`" for name, *_ in MODEL_CLIS)
+    if wanted:
+        for cli in found:
+            if cli.name == wanted:
+                return cli
+        raise ModelMissing(f"{MODEL_CLI_ENV}={wanted}, but no `{wanted}` in PATH"
+                           f" (tools this knows: {known})")
+    if found:
+        return found[0]
+    raise ModelMissing(f"no agent CLI in PATH — looked for {known}, found none")
+
+
+def available_model_cli() -> ModelCLI | None:
+    """The same choice, without raising — for the dry run, which only reports what it would use."""
+    try:
+        return find_model_cli()
+    except ModelMissing:
+        return None
+
+
 # ---------------------------------------------------------------- the model
 
-def ask_model(material: str) -> str:
-    """`claude -p`: the instruction in argv, the material on stdin — 60 k characters do not fit in argv.
+def ask_model(material: str, instruction: str = PROMPT) -> str:
+    """Asks whichever tool this machine has: the instruction and the material, the answer back.
 
     It runs in an empty scratch directory on purpose: started in a repository it answers about
     that code, and started in the knowledge directory it starts tidying the files it finds there.
     """
-    exe = shutil.which("claude")
-    if not exe:
-        raise ModelMissing("no `claude` in PATH")
+    cli = find_model_cli()
+    argv, stdin = cli.invocation(instruction, material)
     empty = tempfile.mkdtemp(prefix="lore-facts-")
     try:
         r = subprocess.run(
-            [exe, *MODEL_ARGS, PROMPT], input=material, capture_output=True, cwd=empty,
+            argv, input=stdin, capture_output=True, cwd=empty,
             text=True, encoding="utf-8", errors="replace", timeout=MODEL_TIMEOUT_S,
         )
     finally:
         shutil.rmtree(empty, ignore_errors=True)
     if r.returncode != 0:
-        raise RuntimeError(f"claude -p returned {r.returncode}: {(r.stderr or '').strip()[:200]}")
-    return r.stdout or ""
+        raise RuntimeError(f"{cli.name} returned {r.returncode}: {(r.stderr or '').strip()[:200]}")
+    return cli.answer(r.stdout or "")
 
 
 @dataclass
@@ -434,7 +525,9 @@ def run(dry_run: bool = False, ask=ask_model, conn: sqlite3.Connection | None = 
         return out
     if dry_run:
         out["status"] = "dry-run"
-        out["model_available"] = shutil.which("claude") is not None
+        cli = available_model_cli()
+        out["model_available"] = cli is not None
+        out["model_cli"] = cli.name if cli else ""
         return out
     out["facts"] = parse_facts(ask(material.joined()))
     out["added"] = append_facts(out["facts"])
@@ -462,7 +555,7 @@ def _report(r: dict) -> None:
     tail = f", {r['dropped']} chunks dropped" if r["dropped"] else ""
     log(f"material: {r['chunks']} chunks, {r['chars']} characters since {r['since']}{tail}")
     if r["status"] == "dry-run":
-        log(f"dry run — nothing written; claude in PATH: {'yes' if r['model_available'] else 'NO'}")
+        log(f"dry run — nothing written; model tool: {r['model_cli'] or 'NONE in PATH'}")
     else:
         log(f"facts from the model: {len(r['facts'])}, new in {CANDIDATES_PATH}: {len(r['added'])}")
         for fact in r["added"]:
@@ -487,7 +580,7 @@ def main(argv: list[str] | None = None) -> int:
     try:
         results = catch_up(runs=runs, dry_run=dry_run)
     except ModelMissing as e:
-        log(f"{e} — install Claude Code: npm install -g @anthropic-ai/claude-code")
+        log(f"{e} — install Claude Code (npm install -g @anthropic-ai/claude-code) or Codex")
         return 1
     except Exception as e:  # a scheduled task must end with a readable line, not a traceback
         log(f"extracting facts failed: {e!r}")
