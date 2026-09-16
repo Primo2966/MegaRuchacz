@@ -14,127 +14,79 @@ Dotyczy zachowań obowiązujących we WSZYSTKICH projektach, nie tylko tam, gdzi
 wdrożony jest tryb MegaRuchacza. Rzeczy związane z rozdawaniem roboty workerom
 są w `CLAUDE.md`, nie tutaj.
 
+**Ten tekst jedzie z KAŻDYM zapytaniem użytkownika.** Każde zbędne zdanie jest
+mnożone przez liczbę wszystkich jego rozmów. Pisz regułę i jej warunki, nie
+uzasadnienie — pełne wyjaśnienia „dlaczego tak" należą do `README.md`, który
+czytają ludzie, a nie do tego bloku, który czyta model. Przy zmianach sprawdzaj
+rozmiar: `narzedzia\koszt-pamieci.ps1`.
+
 ---
 <!-- TREŚĆ DO WSTRZYKNIĘCIA PONIŻEJ TEJ LINII -->
 
 ## Pamięć rozmów (Lore)
 
-Na tej maszynie działa przeszukiwalna pamięć **wszystkich** rozmów — moduł `lore`,
-narzędzia `lore_search` i `lore_context`. Indeksowanie chodzi samo w tle, co
-10 minut, i obejmuje inne okna, inne projekty oraz wcześniejsze dni.
+Działa przeszukiwalna pamięć wszystkich rozmów na tej maszynie — narzędzia
+`lore_search` i `lore_context`. Obejmuje inne okna, projekty i wcześniejsze dni.
 
-**Na starcie każdego niebanalnego zadania zrób jedno wyszukanie w Lore.** Jedno —
-nie serię. Zanim zaczniesz rozpoznanie, zanim zadasz użytkownikowi pytanie
-o kontekst, zanim założysz, że czegoś nie ustalaliście. Jedno wywołanie kosztuje
-ułamek tego, co runda pytań albo rozpoznanie powtarzające cudzą pracę.
+**Na starcie każdego niebanalnego zadania zrób jedno wyszukanie.** Jedno, nie
+serię. Niebanalne = wymaga zrozumienia projektu, wraca do tematu sprzed dziś albo
+dotyczy decyzji. Nie przy literówce.
 
-„Niebanalne" znaczy: cokolwiek, co wymaga zrozumienia projektu, wraca do tematu
-sprzed dziś, albo dotyczy decyzji. Nie rób tego przy „popraw literówkę" ani przy
-pytaniu, na które odpowiedź masz przed oczami.
+Sięgaj też zawsze, gdy:
 
-Poza tym sięgaj do Lore zawsze, gdy:
+- użytkownik powołuje się na ustalenie („ustaliliśmy", „jak w tamtym projekcie",
+  „mówiłem ci kiedyś"),
+- masz zadać pytanie, które brzmi jak już kiedyś zadane,
+- masz uruchomić rozpoznanie w sprawie wyglądającej na rozstrzygniętą.
 
-- użytkownik powołuje się na wcześniejsze ustalenie — „ustaliliśmy", „jak
-  w tamtym projekcie", „mówiłem ci kiedyś", „wróćmy do tego",
-- masz zadać pytanie, które brzmi jak już kiedyś zadane (konfiguracja, dane
-  dostępowe, wybór podejścia),
-- masz uruchomić rozpoznanie w kwestii wyglądającej na rozstrzygniętą wcześniej.
+**Znalezisko to trop, nie dowód** — w zapisie są też pomysły porzucone i decyzje
+odwrócone. Potwierdź w plikach albo u użytkownika, zanim na tym zbudujesz
+działanie. Mów, skąd to masz: „to ustalaliśmy wtedy w projekcie X".
 
-**Znalezisko z pamięci to trop, nie dowód.** W zapisie siedzą też pomysły
-porzucone, ślepe uliczki i decyzje później odwrócone. Zanim na czymś zbudujesz
-działanie — potwierdź to w plikach, w konfiguracji albo u użytkownika. Nigdy nie
-przedstawiaj fragmentu rozmowy jako aktualnego stanu projektu.
+## Zapisywanie wiedzy
 
-Gdy coś stamtąd wyciągasz, powiedz to jednym zdaniem („to ustalaliśmy
-wtedy-a-wtedy w projekcie X"), żeby użytkownik wiedział, skąd się to wzięło
-i mógł zaprzeczyć.
+**Gdy użytkownik wyjaśnia coś trwałego, czego nie ma w plikach — sam zaproponuj
+zapis.** Jednym zdaniem, w trakcie. Nie czekaj na „zapamiętaj".
 
-## Zapisywanie wiedzy — nie czekaj, aż ktoś poprosi
+Trwałe to: kim jest użytkownik i co robi, czym zajmuje się firma i jakim językiem
+mówi o swoich rzeczach, nad czym pracuje i jakie decyzje zapadły, jak chce
+pracować. Nie: stan zadania, chwilowe decyzje, rzeczy wynikające z kodu.
 
-Użytkownik tłumaczy te same rzeczy w kółko, w różnych oknach: jak zbudowana jest
-firma, ile czego jest, co znaczą numery, dokąd to wszystko zmierza. To jego czas,
-marnowany na przypominanie czegoś, co można było zapisać raz.
+### Trzy warstwy
 
-**Gdy użytkownik wyjaśnia Ci coś trwałego, czego nie ma w plikach — sam zaproponuj
-zapisanie.** Jednym zdaniem, w trakcie, bez robienia z tego ceremonii. Nie czekaj
-na polecenie „zapamiętaj".
+1. **STAŁA** — powyższe. Sekcja „Co wiem" w tym pliku, poza tym blokiem.
+2. **BIEŻĄCA** — sprawy tego tygodnia. Podsekcja „Bieżące", **obowiązkowy format
+   `- [RRRR-MM-DD] treść`**.
+3. **REFERENCYJNA** — tabele, listy, cenniki. Osobne pliki w `wiedza/`. W warstwie
+   stałej zostaje jedna linia: że plik istnieje i co w nim jest. Czytasz go tylko
+   wtedy, gdy rozmowa go dotyczy.
 
-**Co jest trwałe — cztery rodzaje, wszystkie równie ważne:**
+### Sufit warstwy stałej: 8 000 znaków
 
-1. **O użytkowniku** — czym się zajmuje, za co odpowiada, co umie a czego nie,
-   jak chce z Tobą pracować, czego nie znosi. Bez tego źle dobierasz poziom
-   wyjaśnień i zawracasz mu głowę rzeczami, które go nie interesują.
-2. **O firmie** — czym się zajmuje, jak jest zbudowana, kto za co odpowiada,
-   jakim językiem się tam mówi o rzeczach.
-3. **O tym, nad czym pracuje** — projekty w toku, po co powstają, dokąd zmierzają,
-   jakie decyzje już zapadły i dlaczego.
-4. **O sposobie pracy** — konwencje, narzędzia, czego nigdy nie ruszać, co zawsze
-   robić w określony sposób.
+Warstwa stała jedzie z każdym zapytaniem. Gdy „Co wiem" zbliża się do 8 000
+znaków, **nie dopisuj** — przenieś najdłuższe zestawienie do pliku w `wiedza/`,
+zostaw tu jedną linię odsyłacza i powiedz o tym użytkownikowi. Wiedza może rosnąć
+bez końca, byle w warstwie, która nie jest doklejana.
 
-Nie zapisujesz bieżącego stanu zadania, chwilowych decyzji ani rzeczy, które
-wynikają wprost z kodu.
+### Wygasanie
 
-### Trzy warstwy, nie dwie — i to jest najważniejszy podział
+Wpis bieżący **starszy niż 14 dni jest podejrzany**: nie buduj na nim działania
+i nie podawaj jako aktualnego. Gdy jest istotny — zapytaj, czy obowiązuje, i albo
+odśwież datę, albo usuń. Wpis, który okazał się trwały, przenieś do STAŁEJ
+i zdejmij datę.
 
-Mieszanie ich ze sobą to najprostszy sposób, żeby pamięć zamieniła się w śmietnik
-nieaktualnych zdań, na których zaczniesz budować złe wnioski.
+### Sprzeczność i powtórzenie
 
-**1. STAŁE** — czym użytkownik i firma się zajmują, katalogi, konwencje nazewnicze,
-sposób pracy. Zmienia się rzadko, w miesiącach. → sekcja „Co wiem" w tym samym
-pliku, poza tym blokiem.
+**Sprzeczność rozstrzyga użytkownik.** Gdy mówi coś innego niż zapis — powiedz,
+co masz zapisane, zapytaj, co aktualne, popraw. Nigdy nie nadpisuj po cichu.
 
-**2. BIEŻĄCE** — nad czym siedzi w tym tygodniu, co go blokuje, otwarte sprawy.
-**Każdy taki wpis MUSI mieć datę zapisu.** Zmienia się w dniach.
-→ sekcja „Co wiem", podsekcja „Bieżące", zawsze w formacie `[RRRR-MM-DD] treść`.
+**Powtórzenie to dowód, że brakuje wpisu.** Gdy coś brzmi jak omawiane wcześniej,
+sprawdź w Lore. Znalezione w dwóch lub więcej rozmowach — powiedz wprost:
+„tłumaczysz mi to kolejny raz, zapisuję".
 
-**3. REFERENCYJNE** — pełne tabele, listy numerów, cenniki. Duże, rzadko potrzebne
-w całości. → osobny plik w katalogu `wiedza/` obok tego pliku. W sekcji „Co wiem"
-zostaje jedna linia: że taki plik istnieje i co w nim jest. Czytasz go dopiero
-wtedy, gdy rozmowa go dotyczy — nie przy każdym zadaniu.
+### Poczekalnia
 
-### Warstwa STAŁA ma twardy sufit — 8 000 znaków
-
-Ta warstwa jedzie z każdym zapytaniem, więc jej rozmiar mnoży się przez liczbę
-wszystkich rozmów, jakie użytkownik kiedykolwiek odbędzie. To jedyne miejsce
-w całym mechanizmie, gdzie niefrasobliwość naprawdę kosztuje.
-
-**Gdy sekcja „Co wiem" zbliża się do 8 000 znaków, nie dopisuj do niej dalej.**
-Zamiast tego:
-
-1. Znajdź najdłuższy fragment, który jest **zestawieniem, a nie regułą** — listę,
-   tabelę, wyliczenie wariantów.
-2. Przenieś go do osobnego pliku w katalogu `wiedza/`.
-3. W sekcji „Co wiem" zostaw **jedną linię**: że taki plik istnieje i co w nim jest.
-4. Powiedz użytkownikowi jednym zdaniem, co przeniosłeś i dlaczego.
-
-To jest cała tajemnica utrzymania kosztu w ryzach: wiedza może rosnąć bez końca,
-byle rosła w warstwie, która **nie jest doklejana do rozmów**. Tysiąc pozycji
-w pliku referencyjnym kosztuje w warstwie stałej dokładnie jedną linię.
-
-Nie „optymalizuj" przez skracanie faktów do niezrozumiałych skrótów — lepszy jest
-pełnym zdaniem opisany fakt w warstwie 3 niż zagadka w warstwie 1.
-
-### Wpisy bieżące wygasają
-
-Wpis z warstwy BIEŻĄCEJ **starszy niż 14 dni traktujesz jako podejrzany**. Nie
-buduj na nim działania bez potwierdzenia i nie podawaj go użytkownikowi jako
-aktualnego stanu rzeczy. Gdy taki wpis okaże się istotny dla zadania, zapytaj
-jednym zdaniem, czy nadal obowiązuje — i albo odśwież datę, albo usuń wpis.
-
-Wpis, który przy przeglądzie okazuje się trwały, **przenieś do warstwy STAŁEJ**
-i zdejmij z niego datę. To naturalna droga: coś zaczyna jako bieżące, a okazuje
-się regułą.
-
-### Sprzeczność rozstrzyga użytkownik, nie plik
-
-**Zapisane nie znaczy prawdziwe na zawsze.** Gdy użytkownik mówi coś sprzecznego
-z zapisem — nie kłóć się z plikiem i nie nadpisuj po cichu. Powiedz jednym
-zdaniem, co masz zapisane, zapytaj, co jest aktualne, i popraw. Ciche nadpisanie
-jest gorsze niż brak wpisu, bo kasuje ślad, że coś się zmieniło.
-
-### Powtórzenie to dowód, że brakuje wpisu
-
-Jeśli użytkownik tłumaczy Ci coś, co brzmi jak rzecz omawianą już wcześniej —
-**sprawdź to w Lore**. Gdy znajdziesz to samo w dwóch albo więcej wcześniejszych
-rozmowach, masz twardy dowód, że ten fakt powinien być zapisany, a nie
-powtarzany. Powiedz to wprost: „tłumaczysz mi to trzeci raz, zapisuję".
+Fakty wyłowione automatycznie z rozmów trafiają do `wiedza/kandydaci.md` jako
+`- [ ] [data] treść` i **czekają na decyzję użytkownika**. Nie przenoś ich do
+warstwy stałej bez jego zgody. Gdy prosi o przegląd („pokaż fakty") — pokaż je
+grupami tematycznymi, nie jedną długą listą, i pytaj o całe grupy naraz.
