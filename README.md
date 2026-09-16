@@ -171,10 +171,119 @@ Serwer MCP indeksujący transkrypty do lokalnej bazy z wyszukiwaniem pełnotekst
 i semantycznym (zapytanie po niemiecku znajdzie rozmowę po polsku). Baza i model
 zostają **na Twojej maszynie** — nic nie wychodzi na zewnątrz.
 
-Agent sięga do niej, gdy powołujesz się na wcześniejsze ustalenie albo gdy ma zadać
-pytanie, które już kiedyś padło w innym oknie. Znalezisko z pamięci traktuje jako
-trop do sprawdzenia, nie jako dowód — w zapisie rozmów siedzą też pomysły porzucone
-i decyzje później odwrócone.
+### Problem, który to rozwiązuje
+
+Tłumaczysz agentowi te same rzeczy w każdym nowym oknie: czym zajmuje się firma,
+co znaczą Wasze oznaczenia, jak chcesz pracować. Za każdym razem od zera.
+
+Samo przeszukiwanie rozmów tego nie załatwia, bo **rozmowa to drogi nośnik
+wiedzy**: żeby przypomnieć sobie jedno ustalenie, trzeba przeczytać akapity,
+w których połowa to myślenie na głos i pomysły później odrzucone. Dlatego pamięć
+jest podzielona na warstwy.
+
+### Trzy warstwy
+
+| Warstwa | Co tam jest | Kiedy czytane |
+|---|---|---|
+| **1. Stała** | kim jesteś, czym zajmuje się firma, konwencje, katalogi | zawsze, przy każdej sesji |
+| **2. Bieżąca** | nad czym siedzisz w tym tygodniu, co Cię blokuje | zawsze, ale **z datą i wygasaniem** |
+| **3. Referencyjna** | tabele, listy numerów, cenniki | tylko gdy rozmowa tego dotyczy |
+
+Dwie pierwsze są malutkie i wczytują się same. Trzecia jest duża i leży odłogiem,
+dopóki nie jest potrzebna. Poniżej każda po kolei.
+
+---
+
+#### Warstwa 1 — STAŁA
+
+**Gdzie leży:** sekcja `## Co wiem` w globalnym pliku instrukcji Twojego narzędzia
+(`~/.claude/CLAUDE.md`, a dla Codeksa `~/.codex/AGENTS.md`), poza blokiem
+wstawianym przez instalator — żeby aktualizacje narzędzia nigdy jej nie nadpisały.
+
+**Co tam wchodzi**, w czterech kategoriach:
+
+- **O Tobie** — czym się zajmujesz, za co odpowiadasz, czego nie chcesz robić,
+  jak wolisz dostawać odpowiedzi. Bez tego agent źle dobiera poziom wyjaśnień.
+- **O firmie** — czym się zajmuje, jak jest zbudowana, **jakim językiem mówi się
+  tam o rzeczach**. To ostatnie jest niedoceniane: jeśli w Twojej branży „zapachy"
+  znaczą asortyment, a nie metaforę, agent musi to wiedzieć, zanim zgadnie źle.
+- **Nad czym pracujesz** — projekty, po co powstają, jakie decyzje już zapadły.
+- **Jak pracujesz** — konwencje, narzędzia, czego nigdy nie ruszać.
+
+**Rozmiar:** rzędu stu linii. Ma się mieścić w kilku tysiącach tokenów, bo jest
+doklejana do każdej rozmowy. Gdy rośnie — znaczy, że część należy do warstwy 3.
+
+**Jak długo żyje:** miesiącami. Zmiana wymaga Twojego potwierdzenia.
+
+---
+
+#### Warstwa 2 — BIEŻĄCA
+
+**Gdzie leży:** podsekcja `### Bieżące` w tym samym pliku.
+
+**Format jest obowiązkowy:** `- [RRRR-MM-DD] treść`. Bez daty wpis nie ma prawa
+tam trafić, bo data jest jedynym mechanizmem, który chroni przed gniciem.
+
+**Co tam wchodzi:** nad czym siedzisz w tym tygodniu, co czeka na czyjąś decyzję,
+co się zacięło, jaki eksperyment jest w toku.
+
+**Wygasanie:** wpis starszy niż **14 dni** przestaje być traktowany jako prawda.
+Agent nie buduje na nim działania i nie podaje go jako aktualnego stanu rzeczy —
+zamiast tego pyta jednym zdaniem, czy nadal obowiązuje. Wtedy albo odświeża datę,
+albo wpis znika.
+
+**Awans do warstwy 1:** wpis, który przy przeglądzie okazuje się trwały, przenosi
+się do STAŁEJ i traci datę. To naturalna droga — rzeczy zaczynają jako bieżące,
+a okazują się regułą.
+
+---
+
+#### Warstwa 3 — REFERENCYJNA
+
+**Gdzie leży:** osobne pliki w katalogu `~/.claude/wiedza/`.
+
+**Co tam wchodzi:** pełne tabele, listy numerów, cenniki, szczegóły integracji —
+wszystko, co jest za długie, żeby doklejać do każdej rozmowy, a bywa potrzebne
+w całości raz na jakiś czas.
+
+**Jak agent o nich wie:** w warstwie 1 zostaje **jedna linia na plik** — że taki
+plik istnieje i co w nim jest. Agent sięga po treść dopiero wtedy, gdy rozmowa
+tego dotyczy. To jest cały mechanizm: indeks jest tani i zawsze obecny, zawartość
+droga i czytana na żądanie.
+
+---
+
+#### Co robi poranne wyciąganie faktów
+
+Raz dziennie przeglądane są rozmowy z ostatniej doby i wyłuskiwane z nich trwałe
+fakty. Cztery rzeczy, które trzymają to w ryzach:
+
+- **Tylko nowy materiał** od ostatniego przebiegu, nie całe archiwum.
+- **Twardy sufit** na ilość materiału — koszt jest przewidywalny, nie rośnie
+  z gadatliwością dnia.
+- **Wywołania narzędzi są odsiewane** przed wysłaniem — to szum, nie wiedza.
+- **Wynik trafia do poczekalni**, nie do obowiązującej wiedzy. Automat **proponuje**,
+  Ty zatwierdzasz. Bo wyciągnięty z kontekstu „fakt" potrafi być bzdurą, a wpis
+  w warstwie stałej jest traktowany jako prawda.
+
+### Dlaczego wpisy bieżące wygasają
+
+Bo to jest sposób, w jaki taka pamięć gnije. „Produkt X się męczy" jest bezcenne
+w środę i **szkodliwe za miesiąc** — agent zbuduje na tym nieaktualny wniosek
+i poda go jako fakt. Dlatego każdy wpis bieżący ma datę, a po dwóch tygodniach
+bez potwierdzenia przestaje być traktowany jako prawda.
+
+### Jak wiedza tam trafia
+
+- **Agent sam proponuje zapis**, gdy tłumaczysz mu coś trwałego, czego nie ma
+  w plikach. Nie czeka na polecenie „zapamiętaj".
+- **Powtórzenie jest dowodem.** Jeśli to samo pojawia się w kilku wcześniejszych
+  rozmowach, agent to widzi w Lore i mówi wprost: tłumaczysz mi to trzeci raz.
+- **Sprzeczność rozstrzygasz Ty.** Gdy powiesz coś innego niż zapis, agent pyta,
+  co jest aktualne — zamiast cicho nadpisać albo cicho trzymać się starego.
+
+Twoja wiedza zostaje **na Twoim dysku**, poza repozytorium. Kto zainstaluje to
+narzędzie, dostaje pusty mechanizm, nie cudzą wiedzę.
 
 ## Stan i dług — co jeszcze nie działa
 
