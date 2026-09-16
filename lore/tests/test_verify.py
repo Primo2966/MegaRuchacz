@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from pathlib import Path
+
 import pytest
 
 from lore import verify
@@ -40,19 +42,42 @@ _(pusto)_
 <!-- MegaRuchacz:koniec -->
 """
 
+# the Codex file holds the same "## Co wiem" structure; only what stands around it differs
+AGENTS = RULES.replace("# Ustalenia globalne", "# Zasady globalne (Codex)")
+
 CANDIDATES_HEADER = "# Kandydaci do trwałej wiedzy\n\n"
 
 
 @pytest.fixture
 def sandbox(tmp_path, monkeypatch):
-    """The whole cycle inside tmp_path — the real ~/.claude must not be touched by the tests."""
+    """The whole cycle inside tmp_path — the real ~/.claude and ~/.codex stay untouched.
+
+    Only CLAUDE.md is there from the start; a test that wants the Codex file calls `codex_file`.
+    """
     knowledge = tmp_path / "wiedza"
     monkeypatch.setattr(verify, "KNOWLEDGE_DIR", knowledge)
     monkeypatch.setattr(verify, "CANDIDATES_PATH", knowledge / "kandydaci.md")
-    monkeypatch.setattr(verify, "RULES_PATH", tmp_path / "CLAUDE.md")
+    monkeypatch.setattr(verify, "INSTRUCTION_PATHS",
+                        (tmp_path / "CLAUDE.md", tmp_path / ".codex" / "AGENTS.md"))
     monkeypatch.setattr(verify, "BACKUP_DIR", knowledge / "kopie")
     (tmp_path / "CLAUDE.md").write_text(RULES, encoding="utf-8")
     return tmp_path
+
+
+def codex_path(sandbox):
+    return sandbox / ".codex" / "AGENTS.md"
+
+
+def codex_file(sandbox, text: str = None):
+    """Creates ~/.codex/AGENTS.md — the machine where the user runs Codex as well."""
+    p = codex_path(sandbox)
+    p.parent.mkdir(parents=True, exist_ok=True)
+    p.write_text(AGENTS if text is None else text, encoding="utf-8")
+    return p
+
+
+def codex_text(sandbox) -> str:
+    return codex_path(sandbox).read_text(encoding="utf-8")
 
 
 def candidates(sandbox, *entries: str) -> None:
@@ -141,7 +166,7 @@ def test_a_confirmed_fact_moves_to_the_rules(sandbox):
     assert r["approved"] == [f"Robot do Alibaby leży w `{p}`."]
     assert waiting(sandbox) == []
     assert f"- Robot do Alibaby leży w `{p}`." in rules_text(sandbox)
-    assert r["backup"] and verify.BACKUP_DIR.exists()
+    assert r["backups"] and verify.BACKUP_DIR.exists()
 
 
 def test_a_confirmed_fact_lands_in_the_guessed_subsection(sandbox):
@@ -339,7 +364,129 @@ def test_a_copy_of_the_rules_is_made_before_the_change(sandbox):
     assert (sandbox / "wiedza" / "kopie").is_dir()
     copies = list((sandbox / "wiedza" / "kopie").glob("CLAUDE-*.md"))
     assert len(copies) == 1 and copies[0].read_text(encoding="utf-8") == before
-    assert r["backup"] == str(copies[0])
+    assert r["backups"] == [str(copies[0])]
+
+
+# ---------------------------------------------------------------- one fact, every tool's file
+
+def test_a_confirmed_fact_lands_in_every_instruction_file(sandbox):
+    codex_file(sandbox)
+    p = existing(sandbox)
+    candidates(sandbox, f"Kod robota to `{p}`.")
+
+    r = verify.run()
+
+    assert f"- Kod robota to `{p}`." in rules_text(sandbox)
+    assert f"- Kod robota to `{p}`." in codex_text(sandbox)
+    assert r["files"] == [str(sandbox / "CLAUDE.md"), str(codex_path(sandbox))]
+    assert len(r["backups"]) == 2
+
+
+def test_the_codex_file_is_never_created_when_it_is_not_there(sandbox):
+    p = existing(sandbox)
+    candidates(sandbox, f"Kod robota to `{p}`.")
+
+    r = verify.run()
+
+    assert f"- Kod robota to `{p}`." in rules_text(sandbox)
+    assert not codex_path(sandbox).parent.exists()  # no Codex here — nothing to set up either
+    assert r["files"] == [str(sandbox / "CLAUDE.md")]
+
+
+def test_with_the_codex_file_alone_the_fact_lands_there(sandbox):
+    (sandbox / "CLAUDE.md").unlink()
+    codex_file(sandbox)
+    p = existing(sandbox)
+    candidates(sandbox, f"Kod robota to `{p}`.")
+
+    r = verify.run()
+
+    assert r["approved"] == [f"Kod robota to `{p}`."]
+    assert f"- Kod robota to `{p}`." in codex_text(sandbox)
+    assert not (sandbox / "CLAUDE.md").exists()
+    assert waiting(sandbox) == []
+
+
+def test_without_any_instruction_file_nothing_blows_up(sandbox):
+    (sandbox / "CLAUDE.md").unlink()
+    p = existing(sandbox)
+    candidates(sandbox, f"Kod robota to `{p}`.")
+
+    r = verify.run()
+
+    assert r["approved"] == [] and r["files"] == [] and r["backups"] == []
+    assert "CLAUDE.md" in r["note"] and "AGENTS.md" in r["note"]
+    assert waiting(sandbox) == [f"- [ ] [2026-09-16] Kod robota to `{p}`."]
+    assert not codex_path(sandbox).exists()
+    assert verify.main(argv=[]) == 0
+
+
+def test_a_file_without_the_knowledge_section_is_skipped_not_blocking(sandbox):
+    (sandbox / "CLAUDE.md").write_text("# Ustalenia globalne\n\nNic tu nie ma.\n", encoding="utf-8")
+    codex_file(sandbox)
+    p = existing(sandbox)
+    candidates(sandbox, f"Kod robota to `{p}`.")
+
+    r = verify.run()
+
+    assert r["approved"] == [f"Kod robota to `{p}`."]
+    assert rules_text(sandbox) == "# Ustalenia globalne\n\nNic tu nie ma.\n"
+    assert f"- Kod robota to `{p}`." in codex_text(sandbox)
+
+
+def test_a_fact_already_standing_in_a_file_is_not_written_there_twice(sandbox):
+    p = existing(sandbox)
+    fact = f"Kod robota to `{p}`."
+    (sandbox / "CLAUDE.md").write_text(
+        RULES.replace("### Nad czym pracuje\n\n_(pusto)_", f"### Nad czym pracuje\n\n- {fact}"),
+        encoding="utf-8")
+    codex_file(sandbox)
+    candidates(sandbox, fact)
+
+    r = verify.run()
+
+    assert rules_text(sandbox).count("Kod robota to") == 1
+    assert codex_text(sandbox).count("Kod robota to") == 1
+    assert r["added"] == {str(codex_path(sandbox)): [fact]}
+    assert [Path(b).name.split("-")[0] for b in r["backups"]] == ["AGENTS"]
+
+
+def test_a_standing_fact_is_audited_in_every_file(sandbox):
+    broken = f"- Robot leży w `{MISSING}`.\n\n### Bieżące"
+    (sandbox / "CLAUDE.md").write_text(RULES.replace("_(pusto)_\n\n### Bieżące", broken),
+                                       encoding="utf-8")
+    codex_file(sandbox, AGENTS.replace("_(pusto)_\n\n### Bieżące", broken))
+
+    r = verify.run(day="2026-09-16")
+
+    assert r["stale"] == [(f"Robot leży w `{MISSING}`.", [MISSING])]  # one fact, two files, one line
+    assert "niepotwierdzone 2026-09-16" in rules_text(sandbox)
+    assert "niepotwierdzone 2026-09-16" in codex_text(sandbox)
+
+
+def test_everything_outside_the_knowledge_section_of_the_codex_file_stays_byte_for_byte(sandbox):
+    codex_file(sandbox)
+    p = existing(sandbox)
+    candidates(sandbox, f"Kod robota to `{p}`.")
+    before = codex_text(sandbox)
+
+    verify.run()
+
+    after = codex_text(sandbox)
+    assert after != before
+    assert after.split("## Co wiem")[0] == before.split("## Co wiem")[0]
+    assert after.split(verify.GUARD_MARKER)[1] == before.split(verify.GUARD_MARKER)[1]
+
+
+def test_every_changed_file_gets_a_copy_named_after_it(sandbox):
+    codex_file(sandbox)
+    p = existing(sandbox)
+    candidates(sandbox, f"Kod robota to `{p}`.")
+
+    verify.run()
+
+    copies = sorted(c.name.split("-")[0] for c in (sandbox / "wiedza" / "kopie").glob("*.md"))
+    assert copies == ["AGENTS", "CLAUDE"]
 
 
 def test_nothing_blows_up_without_a_waiting_room(sandbox):
