@@ -253,3 +253,31 @@ dokładnie te rzeczy, które trzeba było tłumaczyć w każdym nowym oknie.
 Pomiar pokazał rzecz nieoczywistą: **najdroższym elementem stale wczytywanej
 pamięci nie była wiedza o użytkowniku (475 tokenów), tylko tekst samych zasad
 (2 026 tokenów)** — czterokrotnie więcej. Warto mierzyć, zanim się optymalizuje.
+
+## 0.8.0 — 2026-09-16
+
+Pamięć zaczyna utrzymywać się sama, zamiast czekać na przeglądanie list.
+
+- **Fakty dostają warstwę już przy wyławianiu.** Model i tak czyta materiał —
+  przydzielenie warstwy to ta sama analiza, tylko bogatszy format odpowiedzi.
+  Fakt trwały dostaje podsekcję, bieżący datę, długie zestawienie nazwę pliku
+  referencyjnego i linię odsyłacza. Stary format wpisów nadal się czyta.
+- **Automatyczne zatwierdzanie tego, co maszyna potwierdzi.** Fakt zawierający
+  ścieżkę, która istnieje, nie wymaga decyzji człowieka — to po prostu prawda.
+  Wchodzi do warstwy stałej sam. Fakt ze ścieżką nieistniejącą dostaje znacznik
+  `[!]` i zostaje w poczekalni. Fakt niesprawdzalny (zasada, decyzja użytkownika)
+  czeka na zatwierdzenie, bo żaden skrypt tego nie rozstrzygnie.
+- **Sprawdzanie faktów już obowiązujących** — najgroźniejszy jest ten, który po
+  cichu przestał być prawdą i nadal wygląda wiarygodnie. Taki zostaje oznaczony
+  komentarzem, ale **nie skasowany**: dysk sieciowy bywa chwilowo niedostępny.
+- 34 nowe testy, razem **72**.
+
+**Dwa fałszywe alarmy wyłapane przy pierwszym uruchomieniu na żywych danych**
+i naprawione od razu — bo narzędzie, które krzyczy bez powodu, uczy użytkownika
+ignorowania ostrzeżeń:
+
+1. Program na Windowsie ma rozszerzenie, którego nie widać w mowie: fakt mówi
+   `pg_ctl`, na dysku leży `pg_ctl.exe`.
+2. Fakt może wprost mówić, że plik leży **na innej maszynie** („na laptopie
+   pakowanie2"). Szukanie go na tym dysku zawsze zawiedzie, a to nie znaczy,
+   że fakt jest nieprawdziwy — po prostu nie da się go sprawdzić stąd.

@@ -68,10 +68,22 @@ class Check:
     kind: str = "path"
 
 
+# Windows hides the extension of an executable in everyday speech: a fact says
+# 'pg_ctl' where the file on disk is 'pg_ctl.exe'. Checking the bare name alone
+# reported healthy facts as broken, which teaches the user to ignore the warnings.
+_EXECUTABLE_SUFFIXES = (".exe", ".cmd", ".bat", ".ps1", ".com")
+
+
 def path_exists(raw: str) -> bool:
     """A malformed path is 'does not exist', not a crash — the text comes from a model."""
     try:
-        return Path(raw).exists()
+        p = Path(raw)
+        if p.exists():
+            return True
+        # only for a name with no suffix of its own — 'robot.js' must not become 'robot.js.exe'
+        if not p.suffix:
+            return any(Path(raw + s).exists() for s in _EXECUTABLE_SUFFIXES)
+        return False
     except (OSError, ValueError):
         return False
 
@@ -132,7 +144,25 @@ def _clean(raw: list[str]) -> list[str]:
     return out
 
 
+# A fact can state plainly that the path lives on ANOTHER machine ('na laptopie
+# pakowanie2', 'na serwerze 192.168.0.105'). Looking for it on this disk always
+# fails, and reporting that as 'the fact stopped checking out' is a false alarm —
+# the fact may well be true over there. Such a fact is simply not checkable here.
+_ELSEWHERE = re.compile(
+    r"\b(?:na|w)\s+(?:laptopie|serwerze|maszynie|komputerze|hoscie|hoście)\b"
+    r"|\bpakowanie2\b"
+    r"|\b(?:192\.168|10\.)\d",
+    re.IGNORECASE,
+)
+
+
+def on_another_machine(text: str) -> bool:
+    return bool(_ELSEWHERE.search(text))
+
+
 def check_paths(text: str, exists) -> list[Check]:
+    if on_another_machine(text):
+        return []
     return [Check(p, exists(p)) for p in paths_in(text)]
 
 
