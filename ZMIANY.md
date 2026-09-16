@@ -159,3 +159,43 @@ kodu:**
 repozytorium nie mogą uruchamiać PowerShella, więc nie są w stanie przetestować
 skryptów, które piszą. Wszystkie trzy uczciwie to zgłosiły; testy wykonał
 kierownik. Przy zadaniach skryptowych trzeba to uwzględnić z góry.
+
+## 0.6.0 — 2026-09-16
+
+Pamięć przestaje być tylko wyszukiwarką rozmów, a staje się **wiedzą o użytkowniku**.
+
+Powód: samo przeszukiwanie archiwum nie kończy powtarzania tych samych wyjaśnień
+w każdym nowym oknie. Rozmowa to drogi nośnik — żeby odzyskać jedno ustalenie,
+trzeba przeczytać akapity, w których połowa to myślenie na głos i pomysły później
+odrzucone. Fakt zapisany w pliku po prostu jest, zanim ktokolwiek zapyta.
+
+**Trzy warstwy zamiast jednej:**
+
+1. **Stała** — kim jest użytkownik, czym zajmuje się firma, jakim językiem mówi
+   o swoich rzeczach, nad czym pracuje, jak chce pracować. Rzędu stu linii,
+   wczytywana przy każdej sesji.
+2. **Bieżąca** — sprawy tego tygodnia, w obowiązkowym formacie `[RRRR-MM-DD]`.
+   **Wpis starszy niż 14 dni przestaje być traktowany jako prawda** — agent pyta,
+   czy nadal obowiązuje, zamiast budować na nim wnioski. To jest zabezpieczenie
+   przed gniciem pamięci: „produkt X się męczy" jest bezcenne w środę i szkodliwe
+   za miesiąc.
+3. **Referencyjna** — duże zestawienia w osobnych plikach. W warstwie stałej
+   zostaje jedna linia na plik, treść czytana dopiero, gdy rozmowa tego dotyczy.
+
+**Trzy drogi, którymi wiedza tam trafia:**
+
+- Agent **sam proponuje zapis**, gdy użytkownik tłumaczy coś trwałego — nie czeka
+  na polecenie „zapamiętaj".
+- **Powtórzenie jest dowodem.** Gdy to samo pojawia się w kilku wcześniejszych
+  rozmowach, agent widzi to w Lore i mówi wprost, że tłumaczono mu to już kilka razy.
+- **Sprzeczność rozstrzyga użytkownik.** Gdy nowa wypowiedź kłóci się z zapisem,
+  agent pyta, co jest aktualne — zamiast cicho nadpisać. Ciche nadpisanie kasuje
+  ślad, że coś się zmieniło.
+
+**Poranne wyciąganie faktów** — raz dziennie przegląd rozmów z ostatniej doby.
+Tylko nowy materiał, twardy sufit na wejście, wywołania narzędzi odsiane przed
+wysłaniem. **Wynik ląduje w poczekalni do zatwierdzenia, nigdy wprost
+w obowiązującej wiedzy** — automat proponuje, człowiek zatwierdza.
+
+Wiedza użytkownika zostaje na jego dysku, poza repozytorium. Kto instaluje
+narzędzie, dostaje pusty mechanizm, nie cudzą wiedzę.

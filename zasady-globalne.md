@@ -59,18 +59,60 @@ marnowany na przypominanie czegoś, co można było zapisać raz.
 zapisanie.** Jednym zdaniem, w trakcie, bez robienia z tego ceremonii. Nie czekaj
 na polecenie „zapamiętaj".
 
-Trwałe znaczy: fakt o firmie, produkcie, procesie albo o tym, jak użytkownik chce
-pracować. Nie zapisujesz bieżącego stanu zadania, chwilowych decyzji ani rzeczy,
-które wynikają wprost z kodu.
+**Co jest trwałe — cztery rodzaje, wszystkie równie ważne:**
 
-Gdzie to trafia:
+1. **O użytkowniku** — czym się zajmuje, za co odpowiada, co umie a czego nie,
+   jak chce z Tobą pracować, czego nie znosi. Bez tego źle dobierasz poziom
+   wyjaśnień i zawracasz mu głowę rzeczami, które go nie interesują.
+2. **O firmie** — czym się zajmuje, jak jest zbudowana, kto za co odpowiada,
+   jakim językiem się tam mówi o rzeczach.
+3. **O tym, nad czym pracuje** — projekty w toku, po co powstają, dokąd zmierzają,
+   jakie decyzje już zapadły i dlaczego.
+4. **O sposobie pracy** — konwencje, narzędzia, czego nigdy nie ruszać, co zawsze
+   robić w określony sposób.
 
-- **Krótkie i zawsze potrzebne** (czym się zajmujemy, jak pracujemy, nazewnictwo,
-  dokąd zmierzamy) → sekcja „Wiedza o firmie" w tym samym pliku, poza tym blokiem.
-- **Długie dane referencyjne** (tabele, listy numerów, cenniki, szczegóły
-  integracji) → osobny plik w katalogu `wiedza/` obok tego pliku. W sekcji „Wiedza
-  o firmie" zostaje wtedy jedna linia: że taki plik istnieje i co w nim jest.
-  Czytasz go dopiero wtedy, gdy rozmowa go dotyczy — nie przy każdym zadaniu.
+Nie zapisujesz bieżącego stanu zadania, chwilowych decyzji ani rzeczy, które
+wynikają wprost z kodu.
 
-**Zapisane nie znaczy prawdziwe na zawsze.** Jeśli użytkownik mówi coś sprzecznego
-z zapisem, nie kłóć się z plikiem — zapytaj, co jest aktualne, i popraw wpis.
+### Trzy warstwy, nie dwie — i to jest najważniejszy podział
+
+Mieszanie ich ze sobą to najprostszy sposób, żeby pamięć zamieniła się w śmietnik
+nieaktualnych zdań, na których zaczniesz budować złe wnioski.
+
+**1. STAŁE** — czym użytkownik i firma się zajmują, katalogi, konwencje nazewnicze,
+sposób pracy. Zmienia się rzadko, w miesiącach. → sekcja „Co wiem" w tym samym
+pliku, poza tym blokiem.
+
+**2. BIEŻĄCE** — nad czym siedzi w tym tygodniu, co go blokuje, otwarte sprawy.
+**Każdy taki wpis MUSI mieć datę zapisu.** Zmienia się w dniach.
+→ sekcja „Co wiem", podsekcja „Bieżące", zawsze w formacie `[RRRR-MM-DD] treść`.
+
+**3. REFERENCYJNE** — pełne tabele, listy numerów, cenniki. Duże, rzadko potrzebne
+w całości. → osobny plik w katalogu `wiedza/` obok tego pliku. W sekcji „Co wiem"
+zostaje jedna linia: że taki plik istnieje i co w nim jest. Czytasz go dopiero
+wtedy, gdy rozmowa go dotyczy — nie przy każdym zadaniu.
+
+### Wpisy bieżące wygasają
+
+Wpis z warstwy BIEŻĄCEJ **starszy niż 14 dni traktujesz jako podejrzany**. Nie
+buduj na nim działania bez potwierdzenia i nie podawaj go użytkownikowi jako
+aktualnego stanu rzeczy. Gdy taki wpis okaże się istotny dla zadania, zapytaj
+jednym zdaniem, czy nadal obowiązuje — i albo odśwież datę, albo usuń wpis.
+
+Wpis, który przy przeglądzie okazuje się trwały, **przenieś do warstwy STAŁEJ**
+i zdejmij z niego datę. To naturalna droga: coś zaczyna jako bieżące, a okazuje
+się regułą.
+
+### Sprzeczność rozstrzyga użytkownik, nie plik
+
+**Zapisane nie znaczy prawdziwe na zawsze.** Gdy użytkownik mówi coś sprzecznego
+z zapisem — nie kłóć się z plikiem i nie nadpisuj po cichu. Powiedz jednym
+zdaniem, co masz zapisane, zapytaj, co jest aktualne, i popraw. Ciche nadpisanie
+jest gorsze niż brak wpisu, bo kasuje ślad, że coś się zmieniło.
+
+### Powtórzenie to dowód, że brakuje wpisu
+
+Jeśli użytkownik tłumaczy Ci coś, co brzmi jak rzecz omawianą już wcześniej —
+**sprawdź to w Lore**. Gdy znajdziesz to samo w dwóch albo więcej wcześniejszych
+rozmowach, masz twardy dowód, że ten fakt powinien być zapisany, a nie
+powtarzany. Powiedz to wprost: „tłumaczysz mi to trzeci raz, zapisuję".
