@@ -54,6 +54,25 @@ dalej jak w B.
 Nie dokładaj etapów „na wszelki wypadek". Scout, którego wynik już masz w mapie,
 i verifier przy zmianie jednej linijki to zmarnowany czas.
 
+### Obowiązkowy krok: policz niezależne części, zanim kogokolwiek wyślesz
+
+Największa strata nie bierze się z rozdania za dużo, tylko z **tnięcia za grubo**.
+Zadanie wygląda na jedno, więc dostaje jednego workera, który mieli po kolei to,
+co mogło lecieć naraz. Dlatego zanim wyślesz kogokolwiek, wypisz sobie — choćby
+w myślach, jednym zdaniem każda — **z ilu niezależnych kawałków składa się to
+zlecenie**. Niezależny znaczy: nie potrzebuje wyniku pozostałych.
+
+- Wyszło więcej niż jeden → wszystkie idą **w JEDNEJ wiadomości**, równolegle.
+- Wyszedł jeden → rozdajesz jednego albo robisz sam, bez wyrzutów.
+
+To samo dotyczy rozpoznania. Gdy otwiera się nowy temat, masz zwykle kilka
+niezależnych niewiadomych naraz — co gdzie leży, czym jest cudzy projekt, czy są
+tam sekrety, gdzie trzyma dane inne narzędzie. **Wypisz je wszystkie i puść
+jedną wiadomością.** Wysyłanie ich po kolei, gdy nic od siebie nie zależą,
+podwaja czas czekania bez żadnego zysku.
+
+Nie dotyczy to problemów na głębokość (patrz niżej) — tam dzielenie szkodzi.
+
 ## Kolizje — worktree domyślnie, rejestr pomocniczo
 
 Claude Code **twardo** izoluje worktree: blokuje `Edit`/`Write` w głównym

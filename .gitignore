@@ -23,3 +23,6 @@ historia_modele/
 # Smieci systemowe
 Thumbs.db
 .DS_Store
+
+# Kopie robocze workerow - stan lokalny
+.claude/worktrees/
