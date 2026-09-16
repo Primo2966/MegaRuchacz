@@ -118,3 +118,44 @@ zostają pocięte po staremu — przebudowy bazy nie robimy.
 - **Nowa reguła zapisywania wiedzy**: gdy użytkownik wyjaśnia coś trwałego, czego
   nie ma w plikach, agent sam proponuje zapisanie — krótkie fakty do globalnego
   pliku, długie zestawienia do `~/.claude/wiedza/`.
+
+## 0.5.0 — 2026-09-16
+
+Instalator wdraża wreszcie **całość**, a nie połowę. Do tej pory stawiał tryb
+pracy z workerami i nie wiedział nic o pamięci ani o zasadach globalnych.
+
+- **Podział na dwa niezależne moduły**: `workerzy` (tryb kierownika, nic nie
+  pobiera) i `pamiec` (Lore). Każdy instaluje się, pomija i aktualizuje osobno.
+  Rejestr modułów jest w jednym miejscu — dołożenie trzeciego to dopisanie
+  pozycji, nie przebudowa.
+- **Ekran zgody przed jakąkolwiek zmianą.** Instalator mówi wprost, co zapisze
+  i gdzie, ile zajmie pobieranie i że agent zyska dostęp do treści rozmów.
+  Odmowa modułu `pamiec` nie blokuje reszty.
+- **Zasady globalne wpisywane do plików instrukcji** (`~/.claude/CLAUDE.md`,
+  `~/.codex/AGENTS.md`) w oznaczonym bloku — idempotentnie, z kopią zapasową,
+  bez ruszania własnych zapisków użytkownika. Da się je usunąć bez śladu.
+- **Strażnik zasad** przy starcie sesji: jeśli blok zniknął albo jest
+  nieaktualny, wpisuje go z powrotem i mówi o tym jedną linią. Przy zgodnym
+  stanie milczy całkowicie.
+- **Automatyczne aktualizacje wdrożeń.** Poprawka nakłada się sama, nowa funkcja
+  jest proponowana z opisem kosztu, przebudowa wymaga ręcznego wdrożenia.
+  Odmowa jest zapamiętywana. Pliki stanu (`worklog.md`, `mapa.md`) nigdy nie są
+  nadpisywane. Bez sięgania do sieci przy starcie sesji.
+- **Samosprawdzenie po instalacji** — 5 punktów dla modułu pamięci, komplet
+  plików i poprawność konfiguracji dla trybu pracy.
+
+**Trzy realne błędy złapane przez to samosprawdzenie i testy, nie przez przegląd
+kodu:**
+
+1. Cudzysłowy w argumencie giną przy przekazywaniu do zewnętrznego programu
+   w PowerShell 5.1 — odczyt statystyk bazy cicho padał.
+2. Nawias `@()` wokół konwersji JSON zwija tablicę w jeden element — instalator
+   traktował oba moduły jako jeden o nazwie „workerzy pamiec".
+3. Zakładanie zadania w harmonogramie przez obiekty kończy się odmową dostępu
+   u zwykłego użytkownika; ta sama operacja jako XML przechodzi. Przy okazji
+   zadanie działa teraz również na baterii.
+
+**Znane ograniczenie warsztatu:** workerzy pracujący w izolowanej kopii
+repozytorium nie mogą uruchamiać PowerShella, więc nie są w stanie przetestować
+skryptów, które piszą. Wszystkie trzy uczciwie to zgłosiły; testy wykonał
+kierownik. Przy zadaniach skryptowych trzeba to uwzględnić z góry.
