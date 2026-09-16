@@ -53,3 +53,14 @@ katalogach na jednej maszynie.
 - Panel ma zaszytą ścieżkę do skryptu i działa tylko przy repozytorium
   w konkretnej lokalizacji.
 - Wpisy w rejestrze pracy dublują się — hook zapisuje każdą linię dwa razy.
+
+## 0.1.2 — 2026-09-16
+
+- **Przeprowadzka serwera historii do repozytorium.** Kod przeniesiony z osobnego
+  katalogu do `historia/`, środowisko postawione na nowo, serwer MCP i zadanie
+  harmonogramu przestawione na nową ścieżkę, stary katalog usunięty. Baza leży
+  poza projektem, więc nie została ruszona.
+- **Indeksowanie co 10 minut** zamiast co 30.
+- Potwierdzone działanie łatki na lukę z Orką: do bazy weszły 3830 fragmentów
+  rozmów, które dotąd przepadały. Baza urosła z 47 151 do 52 322 fragmentów.
+- Commity podpisane właściwym adresem autora.
