@@ -22,12 +22,25 @@ import tempfile
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
 
+from pathlib import Path
+
 from .db import CLAUDE_HOME, DB_PATH, connect, log, ts_to_local
 
 KNOWLEDGE_DIR = CLAUDE_HOME / "wiedza"
 MARKER_PATH = KNOWLEDGE_DIR / ".ostatnie-wyciaganie"
 CANDIDATES_PATH = KNOWLEDGE_DIR / "kandydaci.md"
 RULES_PATH = CLAUDE_HOME / "CLAUDE.md"  # read only — the waiting room is the only thing we write
+CODEX_RULES_PATH = Path.home() / ".codex" / "AGENTS.md"
+
+
+def instruction_paths() -> tuple[Path, ...]:
+    """Every instruction file the user may have — for the duplicate check only.
+
+    A function, not a constant: RULES_PATH is redirected in tests, and a tuple frozen at import
+    time would ignore that. Kept in step with INSTRUCTION_PATHS in verify.py, which is what
+    actually writes into these files.
+    """
+    return (RULES_PATH, CODEX_RULES_PATH)
 
 # a cost limit, not a suggestion: one run never sends more than this to the model
 MAX_INPUT_CHARS = 60_000
@@ -347,10 +360,16 @@ def waiting_facts() -> list[Fact]:
 
 
 def known_facts() -> set[str]:
-    """Normalized facts already waiting in the candidates file or already standing in the rules."""
+    """Normalized facts already waiting in the candidates file or already standing in the rules.
+
+    Every instruction file on this machine counts, not only Claude Code's: a fact approved into
+    the Codex file would otherwise look unknown here and come back to the waiting room tomorrow,
+    asking the user to approve the same sentence over and over.
+    """
     known = {normalize(f.text) for f in waiting_facts()}
-    for line in _lines(RULES_PATH):
-        known.add(normalize(_BULLET.sub("", line).strip()))
+    for path in instruction_paths():
+        for line in _lines(path):
+            known.add(normalize(_BULLET.sub("", line).strip()))
     known.discard("")
     return known
 
