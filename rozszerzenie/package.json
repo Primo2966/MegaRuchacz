@@ -1,0 +1,123 @@
+{
+  "name": "megaruchacz-panel",
+  "displayName": "MegaRuchacz",
+  "description": "Nadzor nad rownolegla praca: panel okien zadaniowych, workerzy na zywo, scalanie i domykanie.",
+  "version": "2.2.0",
+  "publisher": "local",
+  "private": true,
+  "engines": {
+    "vscode": "^1.80.0"
+  },
+  "categories": [
+    "Other"
+  ],
+  "activationEvents": [
+    "onStartupFinished"
+  ],
+  "main": "./extension.js",
+  "contributes": {
+    "viewsContainers": {
+      "activitybar": [
+        {
+          "id": "megaruchacz",
+          "title": "MegaRuchacz",
+          "icon": "panel.svg"
+        }
+      ]
+    },
+    "views": {
+      "megaruchacz": [
+        {
+          "id": "megaruchacz.okna",
+          "name": "Okna zadaniowe"
+        }
+      ]
+    },
+    "commands": [
+      {
+        "command": "megaruchacz.noweZadanie",
+        "title": "Nowe zadanie",
+        "icon": "$(add)"
+      },
+      {
+        "command": "megaruchacz.odswiez",
+        "title": "Odswiez",
+        "icon": "$(refresh)"
+      },
+      {
+        "command": "megaruchacz.scalIZamknij",
+        "title": "Scal i zamknij okno",
+        "icon": "$(git-merge)"
+      },
+      {
+        "command": "megaruchacz.otworz",
+        "title": "Otworz to okno",
+        "icon": "$(window)"
+      },
+      {
+        "command": "megaruchacz.rejestr",
+        "title": "Podglad workerow na zywo",
+        "icon": "$(eye)"
+      },
+      {
+        "command": "megaruchacz.scal",
+        "title": "Scal te galaz do glownej"
+      },
+      {
+        "command": "megaruchacz.usun",
+        "title": "Usun te kopie"
+      }
+    ],
+    "menus": {
+      "view/title": [
+        {
+          "command": "megaruchacz.noweZadanie",
+          "when": "view == megaruchacz.okna",
+          "group": "navigation@1"
+        },
+        {
+          "command": "megaruchacz.odswiez",
+          "when": "view == megaruchacz.okna",
+          "group": "navigation@2"
+        }
+      ],
+      "view/item/context": [
+        {
+          "command": "megaruchacz.otworz",
+          "when": "view == megaruchacz.okna && viewItem == kopia",
+          "group": "inline@1"
+        },
+        {
+          "command": "megaruchacz.scalIZamknij",
+          "when": "view == megaruchacz.okna && viewItem == kopia",
+          "group": "inline@2"
+        }
+      ]
+    },
+    "configuration": {
+      "title": "MegaRuchacz",
+      "properties": {
+        "megaruchacz.repo": {
+          "type": "string",
+          "default": "",
+          "description": "Sciezka do glownego repozytorium git. Puste - uzywany jest folder otwarty w VS Code."
+        },
+        "megaruchacz.skrypt": {
+          "type": "string",
+          "default": "C:/dev/claude-worker/nowe-zadanie.ps1",
+          "description": "Skrypt zakladajacy izolowana kopie projektu."
+        }
+      }
+    }
+  },
+  "license": "SEE LICENSE IN LICENSE.txt",
+  "repository": {
+    "type": "git",
+    "url": "https://example.invalid/megaruchacz"
+  },
+  "__metadata": {
+    "installedTimestamp": 1788861938754,
+    "targetPlatform": "undefined",
+    "size": 18971
+  }
+}
