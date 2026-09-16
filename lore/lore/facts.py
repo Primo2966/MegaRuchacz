@@ -1,7 +1,8 @@
 """Daily harvest of durable facts out of recent conversations.
 
-Reads the chunks indexed since the last run, asks a model for facts that stay true, and drops
-them into a waiting room (~/.claude/wiedza/kandydaci.md). Nothing is ever written to the rules
+Reads the chunks indexed since the last run, asks a model for the facts together with the layer
+each of them belongs to (durable / current / reference), and drops them into a waiting room
+(~/.claude/wiedza/kandydaci.md), grouped by that layer. Nothing is ever written to the rules
 the agent obeys (~/.claude/CLAUDE.md) — an automaton can carve a nonsense taken out of context
 into stone, so the machine proposes and the human approves.
 
@@ -36,6 +37,15 @@ SKIPPED_ROLES = frozenset({"tool", "result"})
 MIN_FACT_CHARS = 10  # a single word is not a fact
 MODEL_TIMEOUT_S = 300
 
+# the three shelves of the knowledge — the model picks one per fact while it is reading the material
+# anyway; sorting the same sentences in a separate pass would cost the same and buy nothing
+LAYERS = ("stala", "biezaca", "referencyjna")
+SECTIONS = ("uzytkownik", "firma", "projekty", "praca")  # the subsections of "## Co wiem"
+DEFAULT_LAYER, DEFAULT_SECTION = "stala", "projekty"  # the safest guess: visible and easy to move
+UNNAMED_FILE = "do-nazwania.md"  # a listing the model refused to name still has to land somewhere
+GROUP_HEADINGS = {"stala": "## Trwałe", "biezaca": "## Bieżące",
+                  "referencyjna": "## Do osobnych plików"}
+
 # --safe-mode: no CLAUDE.md, no MCP servers, no hooks — the extractor must not pull the user's
 #   rules into the answer, nor start the lore server again from inside a lore job.
 # --no-session-persistence: without it every run leaves a transcript holding yesterday's material,
@@ -45,7 +55,18 @@ MODEL_TIMEOUT_S = 300
 #   questions and offers of help around the list. A schema gives a list and nothing else.
 FACTS_SCHEMA = json.dumps({
     "type": "object",
-    "properties": {"fakty": {"type": "array", "items": {"type": "string"}}},
+    "properties": {"fakty": {"type": "array", "items": {
+        "type": "object",
+        "properties": {
+            "tresc": {"type": "string"},
+            "warstwa": {"type": "string", "enum": list(LAYERS)},
+            "podsekcja": {"type": "string", "enum": list(SECTIONS)},
+            "plik": {"type": "string"},
+            "odsylacz": {"type": "string"},
+        },
+        "required": ["tresc", "warstwa"],
+        "additionalProperties": False,
+    }}},
     "required": ["fakty"],
     "additionalProperties": False,
 }, ensure_ascii=False)
@@ -54,29 +75,44 @@ MODEL_ARGS = ("-p", "--safe-mode", "--no-session-persistence", "--permission-pro
 
 PROMPT = """Na wejściu (stdin) dostajesz fragmenty rozmów użytkownika z agentem AI.
 
-Wypisz wyłącznie TRWAŁE fakty o użytkowniku, jego firmie, jego produktach i sposobie pracy — takie,
-które będą prawdziwe za pół roku i które warto znać w każdym nowym oknie rozmowy.
+Wypisz fakty, które warto znać w każdym nowym oknie rozmowy, i każdemu przypisz jedną warstwę:
 
-Pomiń: bieżący stan zadań, chwilowe decyzje, plany na dziś, opisy błędów i wszystko, co i tak widać
-w kodzie (nazwy plików, funkcji, struktura repozytorium).
+- "stala" — kim jest użytkownik i czym się zajmuje, czym zajmuje się jego firma i jakim językiem
+  mówi o swoich rzeczach, nad czym pracuje, jakie decyzje zapadły, jak chce pracować, jakie ma
+  konwencje i zasady. Zmienia się w miesiącach. Do takiego faktu podaj też "podsekcja":
+  "uzytkownik", "firma", "projekty" albo "praca".
+- "biezaca" — sprawy w toku: co jest otwarte, co czeka na czyjąś decyzję, co się zacięło, jaki
+  eksperyment trwa. Zmienia się w dniach.
+- "referencyjna" — długie zestawienia: listy, tabele, struktury numeracji, wyliczenia wariantów.
+  Poznajesz je po tym, że są długie i wyliczające, a nie po temacie. Do takiego faktu podaj
+  "plik" — krótką nazwę pliku bez polskich znaków, np. "struktura-sku.md" — oraz "odsylacz",
+  jedną linię, która stanie w trwałej wiedzy w miejsce całego zestawienia.
+
+Pomiń opisy błędów i wszystko, co i tak widać w kodzie (nazwy plików, funkcji, struktura
+repozytorium).
 
 To jest automat: Twoja odpowiedź leci wprost do pliku, nikt jej teraz nie czyta. Nie zwracaj się do
 użytkownika, nie zadawaj pytań, nie proponuj działań, niczego nie zapisuj i nie sięgaj po narzędzia
 — jedyne, co masz zrobić, to wypisać listę.
 
-Każdy fakt w jednej linii, po polsku, bez numeracji, bez nagłówków i bez pogrubień.
-Jeśli nie ma ani jednego takiego faktu — nie wypisuj nic."""
+Treść każdego faktu po polsku, w jednej linii, bez numeracji, bez nagłówków i bez pogrubień.
+Jeśli nie ma ani jednego takiego faktu — zwróć pustą listę."""
 
 CANDIDATES_HEADER = """# Kandydaci do trwałej wiedzy
 
 Propozycje wyłowione automatycznie z rozmów — jeszcze nic nie znaczą. Odhacz to, co prawdziwe,
 i przenieś do ~/.claude/CLAUDE.md ręcznie; nic stąd nie trafia tam samo.
 
+Nawias po dacie mówi, dokąd wpis należy: (stala/podsekcja), (biezaca), (referencyjna:plik.md).
 """
 
 _BULLET = re.compile(r"^\s*(?:[-*\u2022]|\d+[.)])\s*")
-_CANDIDATE_LINE = re.compile(r"^\s*-\s*\[[ xX]\]\s*(?:\[\d{4}-\d{2}-\d{2}\]\s*)?(.+)$")
+# the label in brackets is optional on purpose: entries written before the layers existed are read
+# as the default one instead of dropping out of the duplicate check
+_CANDIDATE_LINE = re.compile(r"^\s*-\s*\[[ xX]\]\s*(?:\[\d{4}-\d{2}-\d{2}\]\s*)?"
+                             r"(?:\((stala|biezaca|referencyjna)(?:[/:]([^)]*))?\)\s*)?(.+)$")
 _PUNCTUATION = re.compile(r"[^\w\s]", re.UNICODE)
+_POLISH = str.maketrans("ąćęłńóśźż", "acelnoszz")
 
 
 class ModelMissing(RuntimeError):
@@ -205,20 +241,64 @@ def ask_model(material: str) -> str:
     return r.stdout or ""
 
 
-def parse_facts(output: str) -> list[str]:
+@dataclass
+class Fact:
+    """A fact with the shelf it belongs to — the layer decides where the human moves it later."""
+    text: str
+    layer: str = DEFAULT_LAYER
+    section: str = DEFAULT_SECTION  # only read for the "stala" layer
+    file: str = ""  # only for "referencyjna": the listing goes to ~/.claude/wiedza/<file>
+    pointer: str = ""  # the single line that stands in the durable knowledge instead of the listing
+
+    def label(self) -> str:
+        """'stala/firma', 'biezaca', 'referencyjna:struktura-sku.md' — the bracket in the entry."""
+        if self.layer == "referencyjna":
+            return f"referencyjna:{self.file}"
+        if self.layer == "stala":
+            return f"stala/{self.section}"
+        return self.layer
+
+
+def parse_facts(output: str) -> list[Fact]:
     """Model output -> facts: the structured answer when there is one, otherwise line by line."""
     structured = _structured(output)
     facts = []
     # an empty list from the envelope means "no facts" — it must not fall back to the raw text
     for raw in output.splitlines() if structured is None else structured:
-        line = _BULLET.sub("", raw).strip()
-        if len(line) < MIN_FACT_CHARS or line.startswith("#") or line.endswith(("?", ":")):
-            continue  # a question or a heading above a list is not a fact
-        facts.append(line)
+        fact = _as_fact(raw)
+        if fact is not None:
+            facts.append(fact)
     return facts
 
 
-def _structured(output: str) -> list[str] | None:
+def _as_fact(raw) -> Fact | None:
+    """One item of the answer -> Fact. A missing or made-up layer falls back to the default one:
+    a fact in the wrong subsection costs one move, a dropped fact is gone for good."""
+    item = {"tresc": raw} if isinstance(raw, str) else raw if isinstance(raw, dict) else None
+    if item is None:
+        return None
+    text = " ".join(_BULLET.sub("", str(item.get("tresc") or "")).split())
+    if len(text) < MIN_FACT_CHARS or text.startswith("#") or text.endswith(("?", ":")):
+        return None  # a question or a heading above a list is not a fact
+    layer = str(item.get("warstwa") or "").strip().lower()
+    if layer not in LAYERS:
+        return Fact(text)
+    if layer == "referencyjna":
+        name = file_name(str(item.get("plik") or ""))
+        pointer = " ".join(str(item.get("odsylacz") or "").split())
+        return Fact(text, layer, file=name, pointer=pointer or f"Szczegóły w ~/.claude/wiedza/{name}")
+    section = str(item.get("podsekcja") or "").strip().lower()
+    return Fact(text, layer, section if section in SECTIONS else DEFAULT_SECTION)
+
+
+def file_name(proposed: str) -> str:
+    """The model's file name, made harmless: ASCII, no path, always .md."""
+    stem = re.sub(r"\.md$", "", proposed.strip().lower()).translate(_POLISH)
+    stem = re.sub(r"[^a-z0-9]+", "-", stem).strip("-")
+    return f"{stem}.md" if stem else UNNAMED_FILE
+
+
+def _structured(output: str) -> list | None:
     """The `--output-format json` envelope -> the list of facts; None when it is plain text."""
     try:
         envelope = json.loads(output)
@@ -226,7 +306,7 @@ def _structured(output: str) -> list[str] | None:
         facts = answer["fakty"]
     except (AttributeError, KeyError, TypeError, ValueError):
         return None
-    return [str(f) for f in facts] if isinstance(facts, list) else None
+    return list(facts) if isinstance(facts, list) else None
 
 
 # ---------------------------------------------------------------- the waiting room
@@ -243,25 +323,41 @@ def _lines(path) -> list[str]:
         return []
 
 
-def known_facts() -> set[str]:
-    """Normalized facts already waiting in the candidates file or already standing in the rules."""
-    known = set()
+def waiting_facts() -> list[Fact]:
+    """The waiting room read back. An entry without the bracket predates the layers — it counts
+    as the default one, so the fifty-odd older candidates keep working."""
+    out = []
     for line in _lines(CANDIDATES_PATH):
         m = _CANDIDATE_LINE.match(line)
-        if m:
-            known.add(normalize(m.group(1)))
+        if not m:
+            continue
+        layer, detail, text = m.group(1) or DEFAULT_LAYER, (m.group(2) or "").strip(), m.group(3).strip()
+        if layer == "referencyjna":
+            out.append(Fact(text, layer, file=detail or UNNAMED_FILE))
+        else:
+            out.append(Fact(text, layer, detail if detail in SECTIONS else DEFAULT_SECTION))
+    return out
+
+
+def known_facts() -> set[str]:
+    """Normalized facts already waiting in the candidates file or already standing in the rules."""
+    known = {normalize(f.text) for f in waiting_facts()}
     for line in _lines(RULES_PATH):
         known.add(normalize(_BULLET.sub("", line).strip()))
     known.discard("")
     return known
 
 
-def append_facts(facts: list[str], day: str | None = None) -> list[str]:
-    """Appends the facts nobody knows yet; returns the ones actually written."""
+def append_facts(facts: list[Fact], day: str | None = None) -> list[Fact]:
+    """Appends the facts nobody knows yet, grouped by layer; returns the ones actually written.
+
+    Grouped, because a human approves a whole shelf at once — fifty entries in one flat list get
+    read by nobody. The date sits in every entry, so the "biezaca" ones can be aged out later.
+    """
     known = known_facts()
     fresh = []
     for fact in facts:
-        key = normalize(fact)
+        key = normalize(fact.text)
         if not key or key in known:
             continue
         known.add(key)  # the model likes to repeat itself inside one answer as well
@@ -274,8 +370,15 @@ def append_facts(facts: list[str], day: str | None = None) -> list[str]:
     with open(CANDIDATES_PATH, "a", encoding="utf-8", newline="\n") as f:
         if first_time:
             f.write(CANDIDATES_HEADER)
-        for fact in fresh:
-            f.write(f"- [ ] [{day}] {fact}\n")
+        for layer in LAYERS:
+            group = [fact for fact in fresh if fact.layer == layer]
+            if not group:
+                continue
+            f.write(f"\n{GROUP_HEADINGS[layer]} — {day}\n\n")
+            for fact in group:
+                f.write(f"- [ ] [{day}] ({fact.label()}) {fact.text}\n")
+                if fact.pointer:  # the line that goes into the durable knowledge in its place
+                    f.write(f"      odsyłacz: {fact.pointer}\n")
     return fresh
 
 
@@ -337,7 +440,7 @@ def _report(r: dict) -> None:
     else:
         log(f"facts from the model: {len(r['facts'])}, new in {CANDIDATES_PATH}: {len(r['added'])}")
         for fact in r["added"]:
-            log(f"  + {fact}")
+            log(f"  + ({fact.label()}) {fact.text}")
     if r["pending"]:
         log(f"backlog: {r['pending']} chunks waiting, about {r['runs_left']} more run(s)"
             f" — catch up with:  -Nadrabiaj {r['runs_left']}")
