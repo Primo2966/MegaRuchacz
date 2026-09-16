@@ -91,7 +91,14 @@ $Straznik   = Join-Path $Zrodlo "narzedzia\straznik-zasad.ps1"
 # i dla straznika. Dolozenie modulu to dopisanie pozycji tam, nie tutaj.
 $Moduly = @()
 if (Test-Path $Straznik) {
-  try { $Moduly = @(& $Straznik -Moduly | ConvertFrom-Json) } catch { $Moduly = @() }
+  try {
+    # UWAGA: w PowerShell 5.1 nawias @() wokol ConvertFrom-Json ZWIJA tablice
+    # z powrotem w jeden element - petla po modulach dostawala wtedy obie
+    # pozycje naraz jako jedna. Dlatego przypisanie wprost, bez @().
+    $tekstJson = (& $Straznik -Moduly) -join [Environment]::NewLine
+    $wczytane  = ConvertFrom-Json $tekstJson
+    if ($wczytane -is [array]) { $Moduly = $wczytane } else { $Moduly = ,$wczytane }
+  } catch { $Moduly = @() }
 }
 if ($Moduly.Count -eq 0) {
   Write-Host "UWAGA  nie moge odczytac rejestru modulow ze straznika - instaluje sam modul podstawowy" -ForegroundColor Yellow

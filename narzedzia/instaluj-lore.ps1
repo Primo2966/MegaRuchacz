@@ -202,23 +202,55 @@ function Zaloz-Zadanie {
     Plan "  wyzwalacz : przy zalogowaniu uzytkownika, potem co $InterwalMin min bez konca"
     return
   }
+  # UWAGA - sprawdzone 2026-09-16: zakladanie zadania przez obiekty
+  # (New-ScheduledTaskPrincipal + Register-ScheduledTask -Principal) konczy sie
+  # "Odmowa dostepu" u zwyklego, niepodniesionego uzytkownika. Ta sama operacja
+  # podana jako XML przechodzi bez uprawnien administratora. Dlatego XML.
   try {
-    $akcja     = New-ScheduledTaskAction -Execute "conhost.exe" -Argument $argumenty -ErrorAction Stop
-    $wyzwalacz = New-ScheduledTaskTrigger -AtLogOn -ErrorAction Stop
-    # powtarzania nie da sie podac wprost przy wyzwalaczu logowania - bierzemy je z jednorazowego
-    $wzorzec = New-ScheduledTaskTrigger -Once -At (Get-Date) `
-                 -RepetitionInterval (New-TimeSpan -Minutes $InterwalMin) -ErrorAction Stop
-    $wyzwalacz.Repetition = $wzorzec.Repetition
-    $ustawienia = New-ScheduledTaskSettingsSet -MultipleInstances IgnoreNew `
-                    -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries `
-                    -ExecutionTimeLimit (New-TimeSpan -Hours 2) -ErrorAction Stop
-    $kto = New-ScheduledTaskPrincipal -UserId "$env:USERDOMAIN\$env:USERNAME" -LogonType Interactive -ErrorAction Stop
-    # -Force nadpisuje zadanie o tej samej nazwie zamiast zakladac drugie
-    Register-ScheduledTask -TaskName $NazwaZadania -Action $akcja -Trigger $wyzwalacz `
-      -Settings $ustawienia -Principal $kto -Force -ErrorAction Stop `
-      -Description "Lore - przyrostowe indeksowanie rozmow Claude Code" | Out-Null
+    $sid = ([Security.Principal.WindowsIdentity]::GetCurrent()).User.Value
+    $start = (Get-Date).ToString("yyyy-MM-ddTHH:mm:ss")
+    $argXml = [System.Security.SecurityElement]::Escape($argumenty)
+    $xml = @"
+<?xml version="1.0" encoding="UTF-16"?>
+<Task version="1.2" xmlns="http://schemas.microsoft.com/windows/2004/02/mit/task">
+  <RegistrationInfo>
+    <Description>Lore - przyrostowe indeksowanie rozmow</Description>
+    <URI>\$NazwaZadania</URI>
+  </RegistrationInfo>
+  <Principals>
+    <Principal id="Author">
+      <UserId>$sid</UserId>
+      <LogonType>InteractiveToken</LogonType>
+    </Principal>
+  </Principals>
+  <Settings>
+    <DisallowStartIfOnBatteries>false</DisallowStartIfOnBatteries>
+    <StopIfGoingOnBatteries>false</StopIfGoingOnBatteries>
+    <MultipleInstancesPolicy>IgnoreNew</MultipleInstancesPolicy>
+    <ExecutionTimeLimit>PT2H</ExecutionTimeLimit>
+    <Enabled>true</Enabled>
+  </Settings>
+  <Triggers>
+    <TimeTrigger>
+      <StartBoundary>$start</StartBoundary>
+      <Repetition>
+        <Interval>PT${InterwalMin}M</Interval>
+      </Repetition>
+      <Enabled>true</Enabled>
+    </TimeTrigger>
+  </Triggers>
+  <Actions Context="Author">
+    <Exec>
+      <Command>conhost.exe</Command>
+      <Arguments>$argXml</Arguments>
+    </Exec>
+  </Actions>
+</Task>
+"@
+    Register-ScheduledTask -TaskName $NazwaZadania -Xml $xml -Force -ErrorAction Stop | Out-Null
   } catch {
     Blad "nie udalo sie zalozyc zadania: $($_.Exception.Message)"
+    Krok "jesli to 'Odmowa dostepu' - zasady tej maszyny moga wymagac uprawnien administratora"
     exit 1
   }
   Krok "indeks odswiezany co $InterwalMin min"
