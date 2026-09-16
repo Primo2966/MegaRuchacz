@@ -22,3 +22,5 @@ MegaRuchacz dopisuje pod spodem swoje notatki o kolejce i blokadach.
 - 09:12:35  KONIEC worker
 - 09:12:58  KONIEC scout
 - 09:12:58  KONIEC scout
+- 09:16:57  KONIEC worker
+- 09:16:57  KONIEC worker
