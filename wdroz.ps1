@@ -20,6 +20,7 @@ $Zrodlo  = Split-Path -Parent $MyInvocation.MyCommand.Path
 $Stempel = Get-Date -Format "yyyyMMdd-HHmmss"
 $script:Kopie = @()
 $script:Bledy = @()
+$script:Niepelne = @()   # co samosprawdzenie potwierdza tylko czesciowo
 
 function Kopia-Zapasowa($sciezka) {
   if (Test-Path $sciezka) {
@@ -36,6 +37,46 @@ function Sprawdz($opis, $ok, $czemu) {
   } else {
     Write-Host "  BLAD  $opis - $czemu" -ForegroundColor Red
     $script:Bledy += $opis
+  }
+}
+
+# Sprawdzenie, ktore potwierdza tylko zapis na dysku albo obecnosc wpisu, nie
+# jest dowodem dzialania. Takie rzeczy ida tutaj i wracaja w podsumowaniu wprost,
+# zeby nikt nie wzial "zapisane" za "dziala".
+function Nie-Sprawdzono($tekst) {
+  $script:Niepelne += $tekst
+}
+
+# Wyjmuje z settings.json konkretny hook - ten, ktorego polecenie zawiera znacznik.
+function Polecenie-Hooka($ustawienia, $zdarzenie, $znacznik) {
+  foreach ($grupa in @($ustawienia.hooks.$zdarzenie)) {
+    foreach ($h in @($grupa.hooks)) {
+      if ($h.command -and $h.command -like "*$znacznik*") { return $h }
+    }
+  }
+  return $null
+}
+
+# Odpala polecenie hooka doslownie tak, jak zrobilby to Claude Code: przez bash,
+# z CLAUDE_PROJECT_DIR wskazujacym projekt. Polecenie idzie do pliku, bo
+# cudzyslowy w argumencie "bash -c" gina po drodze w PowerShell 5.1.
+function Odpal-Przez-Bash($polecenie) {
+  $tmp = Join-Path $env:TEMP ("mr-hook-proba-$Stempel-" + [guid]::NewGuid().ToString("N").Substring(0, 6) + ".sh")
+  # LF, bez BOM - bash na Windowsie nie trawi ani CR, ani znacznika kodowania
+  [System.IO.File]::WriteAllText($tmp, (($polecenie -replace "`r`n", "`n") + "`n"),
+                                 (New-Object System.Text.UTF8Encoding($false)))
+  $poprzedni = $env:CLAUDE_PROJECT_DIR
+  $env:CLAUDE_PROJECT_DIR = $Projekt
+  try {
+    $global:LASTEXITCODE = 0
+    $wyjscie = & bash ($tmp -replace "\\", "/") 2>&1 | Out-String
+    return @{ kod = $LASTEXITCODE; tekst = $wyjscie }
+  } catch {
+    return @{ kod = -1; tekst = $_.Exception.Message }
+  } finally {
+    if ($null -eq $poprzedni) { Remove-Item Env:CLAUDE_PROJECT_DIR -ErrorAction SilentlyContinue }
+    else { $env:CLAUDE_PROJECT_DIR = $poprzedni }
+    Remove-Item $tmp -Force -ErrorAction SilentlyContinue
   }
 }
 
@@ -333,7 +374,8 @@ foreach ($m in $Moduly) {
 Write-Host "OK  .claude\megaruchacz-wersja.txt (wersja $wersja, commit $commit)"
 
 # ------------------------------------------------------------ 7. samosprawdzenie
-# Instalator sam po sobie sprawdza, czy to, co obiecal, naprawde lezy na dysku.
+# Instalator sam po sobie sprawdza, co obiecal. Czesc sprawdzen dotyka tylko
+# dysku - te sa dalej opisane wprost jako "zapisane", a nie "dziala".
 Write-Host ""
 Write-Host "--- samosprawdzenie ---"
 
@@ -345,6 +387,7 @@ foreach ($plik in $wymagane) {
 Get-ChildItem (Join-Path $Zrodlo ".claude\agents\*.md") | ForEach-Object {
   Sprawdz ".claude\agents\$($_.Name)" (Test-Path (Join-Path $Projekt ".claude\agents\$($_.Name)")) "plik nie powstal"
 }
+Nie-Sprawdzono "obecnosc plikow w .claude\ potwierdza tylko zapis na dysku - nie to, ze Claude Code je wczyta"
 
 $plikZasad = Join-Path $Projekt ".claude\megaruchacz-zasady.md"
 $zasadyOk = (Test-Path $plikZasad) -and ((Get-Item $plikZasad).Length -gt 0)
@@ -367,13 +410,88 @@ if (Test-Path $celSettings) {
   }
 }
 if ($settingsOk -and -not $hookiOk) { $settingsOk = $false; $czemuSettings = "hookow nie udalo sie dopisac (kod $kod)" }
-Sprawdz ".claude\settings.json - poprawny JSON z hookami" $settingsOk $czemuSettings
+Sprawdz ".claude\settings.json - wpisy hookow sa w poprawnym JSON-ie" $settingsOk $czemuSettings
+
+# --- czy te hooki w ogole da sie URUCHOMIC na tej maszynie ---
+# Sam wpis w settings.json niczego nie dowodzi: audyt na obcej maszynie pokazal
+# komplet wpisow i instalator meldujacy sukces, podczas gdy nic ich nie wykonalo.
+# Dlatego kazde polecenie wyjmujemy z konfiguracji i probujemy odpalic.
+$ustawienia = $null
+if (Test-Path $celSettings) {
+  try { $ustawienia = (Get-Content $celSettings -Raw).TrimStart([char]0xFEFF) | ConvertFrom-Json } catch { }
+}
+$bash = Get-Command bash -CommandType Application -ErrorAction SilentlyContinue | Select-Object -First 1
+$node = Get-Command node -CommandType Application -ErrorAction SilentlyContinue | Select-Object -First 1
+
+if (-not $ustawienia) {
+  Sprawdz "hooki daja sie uruchomic" $false "nie da sie odczytac settings.json, wiec nie mam czego probowac"
+} elseif (-not $bash) {
+  # kazdy hook MegaRuchacza ma shell "bash" - bez basha nie wykona sie ZADEN
+  Sprawdz "hooki daja sie uruchomic" $false "ten host nie ma bash-a w PATH, a wszystkie nasze hooki sa na bashu - nie wykona sie zaden z nich"
+} else {
+  # a) hooki podajace gotowy JSON - odpalamy naprawde i sprawdzamy, co wyszlo
+  $ladunki = @(
+    @{ zdarzenie = "SessionStart";     znacznik = "megaruchacz-sesja.json" },
+    @{ zdarzenie = "UserPromptSubmit"; znacznik = "orchestrator-reminder.json" }
+  )
+  foreach ($para in $ladunki) {
+    $zdarzenie = $para.zdarzenie
+    $znacznik  = $para.znacznik
+    $h = Polecenie-Hooka $ustawienia $zdarzenie $znacznik
+    if (-not $h) {
+      Sprawdz "hook $zdarzenie ($znacznik) wykonuje sie" $false "nie ma go w settings.json"
+      continue
+    }
+    $w = Odpal-Przez-Bash $h.command
+    $tresc = "$($w.tekst)".Trim()
+    $ok = ($w.kod -eq 0 -and $tresc)
+    if ($ok) { try { $tresc | ConvertFrom-Json | Out-Null } catch { $ok = $false } }
+    Sprawdz "hook $zdarzenie ($znacznik) wykonuje sie" $ok "polecenie z settings.json nie wypisalo poprawnego JSON-a (kod $($w.kod))"
+  }
+
+  # b) hooki rejestru - samego mr-log.js NIE uruchamiamy, bo dopisalby do
+  #    worklog.md zmyslony wpis o workerze, ktorego nie bylo. "node --check"
+  #    mowi to, co tu potrzebne: czy interpreter jest i czy wczyta ten plik.
+  $plikLog = Join-Path $Projekt ".claude\mr-log.js"
+  foreach ($zdarzenie in @("SubagentStart", "SubagentStop")) {
+    $h = Polecenie-Hooka $ustawienia $zdarzenie "mr-log.js"
+    if (-not $h) {
+      Sprawdz "hook $zdarzenie (mr-log.js) da sie uruchomic" $false "nie ma go w settings.json"
+      continue
+    }
+    if (-not $node) {
+      Sprawdz "hook $zdarzenie (mr-log.js) da sie uruchomic" $false "nie ma node w PATH - polecenie tego hooka nie ma czym wystartowac"
+      continue
+    }
+    $global:LASTEXITCODE = 0
+    & node --check $plikLog 2>&1 | Out-Null
+    Sprawdz "hook $zdarzenie (mr-log.js) da sie uruchomic" ($LASTEXITCODE -eq 0) "node nie wczytuje $plikLog"
+  }
+  Nie-Sprawdzono "hooki rejestru sprawdzono przez 'node --check' - nie uruchamialem mr-log.js, zeby nie dopisac do rejestru wpisu o nieistniejacym workerze"
+
+  # c) straznik - jedyny hook, ktory startuje powershella z bashu. Zdejmujemy
+  #    koncowe "|| true" (z nim nawet trup zwraca zero) i podmieniamy argumenty
+  #    na -Moduly: to samo uruchomienie, tylko bez skutkow ubocznych.
+  $h = Polecenie-Hooka $ustawienia "SessionStart" "straznik-zasad.ps1"
+  if (-not $h) {
+    Sprawdz "hook straznika da sie uruchomic" $false "nie ma go w settings.json"
+  } else {
+    $polecenie = $h.command -replace '\s*\|\|\s*true\s*$', ''
+    $polecenie = $polecenie -replace '\s-Zrodlo\s.*$', ' -Moduly'
+    $w = Odpal-Przez-Bash $polecenie
+    $ok = ($w.kod -eq 0 -and "$($w.tekst)" -match '"nazwa"')
+    Sprawdz "hook straznika da sie uruchomic" $ok "bash nie odpalil powershella ze straznikiem (kod $($w.kod))"
+    Nie-Sprawdzono "straznika uruchomiono w wariancie -Moduly; pelne wywolanie z hooka konczy sie '|| true', wiec jego niepowodzenie i tak nigdy nie zatrzyma sesji"
+  }
+}
+Nie-Sprawdzono "czy Claude Code faktycznie wykona te hooki w Twojej sesji - to widac dopiero po zamknieciu i otwarciu okna"
 
 Sprawdz "wpisanie zasad globalnych" $wynikZasad.ok $wynikZasad.czemu
 
 $blokOk = $false
 if (Test-Path $plikDomowy) { $blokOk = ((Get-Content $plikDomowy -Raw) -like "*<!-- MegaRuchacz:start -->*") }
-Sprawdz "blok zasad globalnych w $plikDomowy" $blokOk "nie ma znacznika MegaRuchacz:start"
+Sprawdz "blok zasad globalnych zapisany w $plikDomowy" $blokOk "nie ma znacznika MegaRuchacz:start"
+Nie-Sprawdzono "zasady globalne sa zapisane w pliku; czy Twoj klient je czyta, widac dopiero w nowej sesji"
 
 foreach ($m in $Moduly) {
   if (-not $wybrane[$m.nazwa] -or -not $m.instalator) { continue }
@@ -387,6 +505,14 @@ if ($script:Kopie.Count -gt 0) {
   Write-Host ""
   Write-Host "Kopie zapasowe:"
   $script:Kopie | ForEach-Object { Write-Host "  $_" }
+}
+
+# Zielone "OK" bez tej listy czytaloby sie jak obietnica, ktorej samosprawdzenie
+# nie jest w stanie zlozyc. Roznica miedzy "zapisane" a "dziala" ma byc widoczna.
+if ($script:Niepelne.Count -gt 0) {
+  Write-Host ""
+  Write-Host "Czego to sprawdzenie NIE obejmuje:" -ForegroundColor DarkGray
+  $script:Niepelne | ForEach-Object { Write-Host "  -  $_" -ForegroundColor DarkGray }
 }
 
 Write-Host ""
