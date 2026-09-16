@@ -17,15 +17,17 @@ W zestawie jest też **Lore — przeszukiwalna pamięć wszystkich Twoich rozmó
 
 ## Co tu jest
 
-| Katalog | Co to |
+| Co | Do czego |
 |---|---|
-| `CLAUDE.md` | zasady kierownika — serce całości |
+| `CLAUDE.md` | zasady kierownika — serce modułu `workerzy` |
+| `zasady-globalne.md` | zasady wpisywane do plików instrukcji narzędzi AI |
 | `.claude/agents/` | prompty czterech ról: implementer, scout, verifier, zastępca |
-| `.claude/` | konfiguracja hooków i pliki stanu |
-| `lore/` | Lore — serwer MCP z przeszukiwalną pamięcią rozmów (składnik opcjonalny) |
+| `lore/` | moduł `pamiec` — serwer MCP z przeszukiwalną pamięcią rozmów |
+| `narzedzia/` | instalator pamięci, wpisywanie zasad, strażnik |
 | `rozszerzenie/` | panel VS Code: lista okien zadaniowych, licznik workerów |
-| `wdroz.ps1` | instalator — wdraża tryb do wskazanego projektu |
+| `wdroz.ps1` | główny instalator — wdraża wybrane moduły do projektu |
 | `nowe-zadanie.ps1` | zakłada izolowaną kopię repo na jedno zadanie |
+| `ZMIANY.md` | historia wersji — co doszło i co się zmieniło |
 
 ## Cztery role
 
@@ -53,12 +55,37 @@ W zestawie jest też **Lore — przeszukiwalna pamięć wszystkich Twoich rozmó
 powershell -ExecutionPolicy Bypass -File <ścieżka>\wdroz.ps1
 ```
 
-Instalator **przed zrobieniem czegokolwiek powie, co zamierza**: co zapisze, gdzie,
-i czy ma dołożyć Lore. Lore wymaga osobnej zgody, bo oznacza
-pobranie ~465 MB modelu i danie agentowi dostępu do treści Twoich rozmów.
-Odmowa nie blokuje reszty — dostajesz sam tryb pracy.
+Instalator **przed zrobieniem czegokolwiek mówi, co zamierza**: jakie pliki zapisze
+i gdzie, że dopisze hooki uruchamiane przy starcie sesji, i że wpisze zasady do
+Twoich plików instrukcji. O każdy moduł pyta osobno — odmowa `pamiec` nie blokuje
+reszty.
+
+**Na koniec sam sprawdza, czy to naprawdę działa** i wypisuje wynik punkt po
+punkcie. Jeśli coś nie wyszło, mówi wprost co i kończy błędem, zamiast udawać
+sukces.
 
 Po instalacji **zamknij i otwórz Claude Code na nowo**, żeby zasady się załadowały.
+
+### Co się dzieje po instalacji, bez Twojego udziału
+
+**Zasady pilnują się same.** Przy starcie każdej sesji sprawdzane jest, czy blok
+zasad nadal siedzi w plikach instrukcji. Jeśli ktoś go skasował, nadpisał plik
+albo zmienił konfigurację — wpisuje się z powrotem i dostajesz o tym jedną linię.
+Gdy wszystko się zgadza, nie widzisz nic.
+
+**Poprawki nakładają się same.** Gdy ściągniesz nowszą wersję narzędzia
+(`git pull`), wszystkie projekty, w których je wdrożyłeś, podciągną się przy
+najbliższym otwarciu okna. Zasada jest taka:
+
+| Zmiana wersji | Co się dzieje |
+|---|---|
+| trzecia cyfra (0.5.0 → 0.5.1) | poprawka nakłada się sama, jedna linia informacji |
+| druga cyfra (0.5 → 0.6) | poprawki wchodzą, **nowa funkcja jest proponowana** z opisem kosztu |
+| pierwsza cyfra (0.x → 1.0) | nic automatycznie, trzeba wdrożyć ręcznie |
+
+Odmowa nowej funkcji jest zapamiętywana — nie będzie o nią pytać przy każdym
+oknie. **Twoje pliki robocze** (rejestr zadań, mapa projektu) nigdy nie są
+nadpisywane. Nic nie sięga do sieci przy starcie sesji.
 
 ## Dwa moduły — bierzesz jeden albo oba
 
@@ -149,11 +176,23 @@ pytanie, które już kiedyś padło w innym oknie. Znalezisko z pamięci traktuj
 trop do sprawdzenia, nie jako dowód — w zapisie rozmów siedzą też pomysły porzucone
 i decyzje później odwrócone.
 
-## Stan i dług
+## Stan i dług — co jeszcze nie działa
 
-Rzeczy, o których wiemy, że są niedokończone:
+Wolimy to napisać, niż udawać, że jest komplet.
 
-- **Brak testów** w części odpowiadającej za historię rozmów.
-- **Czytnik transkryptów Codeksa** jeszcze nie istnieje.
+- **Czytnik transkryptów Codeksa nie istnieje.** Lore indeksuje dziś wyłącznie
+  rozmowy z Claude Code. Wiadomo, gdzie Codex trzyma swoje (`~/.codex/sessions`),
+  ale bez prawdziwych próbek nie piszemy czytnika na ślepo.
+- **Druga warstwa pamięci jest pusta.** Zamysł jest taki: tania warstwa faktów
+  wczytywana zawsze, plus droga warstwa wyszukiwania po rozmowach. Ta druga
+  działa. Pierwsza ma zrobiony mechanizm i regułę, ale zapełnia się dopiero
+  z użycia — automatycznego wyciągania faktów z archiwum jeszcze nie ma.
 - **Panel VS Code** ma zaszytą ścieżkę do skryptu i działa tylko przy repozytorium
   w konkretnej lokalizacji.
+- **Tylko Windows.** Instalator jest w PowerShellu; wersji na Linuksa i maca nie
+  planujemy, dopóki nikt ich nie potrzebuje.
+- **Mierzymy na oko.** Reguły w `CLAUDE.md` mają uzasadnienia, ale nie mamy liczb,
+  które by potwierdzały, ile faktycznie oszczędzają.
+
+Co jest przetestowane: moduł pamięci ma **18 testów** (`uv run pytest` w `lore/`),
+a instalator sprawdza sam siebie po każdym wdrożeniu.

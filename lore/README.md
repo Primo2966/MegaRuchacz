@@ -60,7 +60,7 @@ Dodatkowo zadanie harmonogramu Windows odświeża indeks co 30 min.
 claude mcp add --scope user lore -- <ścieżka>\uv.exe --directory C:\dev\claude-worker\lore run python -m lore.server
 ```
 
-Wpis ląduje w `C:\Users\Primo\.claude.json` → `mcpServers.lore`. Po rejestracji trzeba
+Wpis ląduje w `C:\Users\<twoje-konto>\.claude.json` → `mcpServers.lore`. Po rejestracji trzeba
 zrestartować okna Claude Code.
 
 ## Przejście ze starej wersji (`historia`)
