@@ -5,6 +5,7 @@ from __future__ import annotations
 import itertools
 import json
 import sqlite3
+import subprocess
 
 import numpy as np
 import pytest
@@ -339,3 +340,63 @@ def test_the_archive_is_opened_read_only(archive, tmp_path):
             conn.execute("DELETE FROM chunks")
     finally:
         conn.close()
+
+
+# ---------------------------------------------------------------- picking the tool
+
+def installed(*names: str):
+    """Stand-in for PATH: these tools are found, everything else is missing."""
+    return lambda name: f"/bin/{name}" if name in names else None
+
+
+@pytest.fixture
+def unforced(monkeypatch):
+    """No LORE_MODEL_CLI — otherwise a variable set on the real machine steers the tests."""
+    monkeypatch.delenv(facts.MODEL_CLI_ENV, raising=False)
+
+
+@pytest.fixture
+def called(monkeypatch):
+    """Writes down the command line and the stdin instead of starting anything."""
+    seen: dict = {}
+
+    def fake_run(argv, **kwargs):
+        seen["argv"], seen["stdin"] = argv, kwargs.get("input", "")
+        return subprocess.CompletedProcess(argv, 0, "odpowiedz", "")
+
+    monkeypatch.setattr(facts.subprocess, "run", fake_run)
+    return seen
+
+
+def test_with_claude_alone_the_mining_instruction_goes_to_claude(unforced, called, monkeypatch):
+    monkeypatch.setattr(facts.shutil, "which", installed("claude"))
+
+    assert mining.ask_model("material") == "odpowiedz"
+    assert called["argv"] == ["/bin/claude", *facts.MODEL_ARGS, mining.PROMPT]
+    assert called["stdin"] == "material"  # the instruction is the dig's own, not the daily one
+
+
+def test_with_codex_alone_the_dig_still_has_a_model(unforced, called, monkeypatch):
+    """The whole point: a Codex-only machine used to raise ModelMissing and dig up nothing."""
+    monkeypatch.setattr(facts.shutil, "which", installed("codex"))
+
+    assert mining.ask_model("material") == "odpowiedz"
+    assert called["argv"] == ["/bin/codex", *facts.CODEX_ARGS]
+    assert called["stdin"] == f"{mining.PROMPT}\n\nmaterial"  # codex exec takes one prompt
+
+
+def test_with_no_tool_at_all_the_error_says_what_was_looked_for(unforced, monkeypatch):
+    monkeypatch.setattr(facts.shutil, "which", installed())
+
+    with pytest.raises(facts.ModelMissing) as e:
+        mining.ask_model("material")
+    assert "claude" in str(e.value) and "codex" in str(e.value)
+
+
+def test_the_dry_run_names_the_tool_it_would_use(archive, unforced, monkeypatch):
+    repeated(archive, seed=34, sessions=["a", "b", "c"])
+    monkeypatch.setattr(facts.shutil, "which", installed("codex"))
+
+    r = mining.run(dry_run=True, ask=forbidden, conn=archive.conn)
+
+    assert (r["model_available"], r["model_cli"]) == (True, "codex")
