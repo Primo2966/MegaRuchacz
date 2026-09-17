@@ -2,11 +2,23 @@
 #
 # 1. wylawianie nowych faktow z rozmow (uruchamia narzedzia\wyciagnij-fakty.ps1)
 # 2. weryfikacja: co da sie sprawdzic maszynowo (na razie: sciezki w systemie plikow)
-# 3. fakty potwierdzone wedruja z poczekalni do obowiazujacej wiedzy
-#    (%USERPROFILE%\.claude\CLAUDE.md, wylacznie sekcja "## Co wiem")
+# 3. fakty wchodza do obowiazujacej wiedzy SAME - kazdy do swojej warstwy
+#    (%USERPROFILE%\.claude\CLAUDE.md, wylacznie sekcja "## Co wiem"). Poczekalnia nie
+#    jest juz kolejka do klikania: rano bylo w niej 90 pozycji i nikt ich nie czytal.
+#    W poczekalni zostaje tylko to, czego automat nie ma prawa rozstrzygnac:
+#      [!] odrzucone - podana sciezka nie istnieje albo wpis nie miesci sie w progu
+#          warstwy stalej (8000 znakow; prog stoi w narzedzia\koszt-pamieci.ps1),
+#      [?] sporne - fakt przeczy temu, co juz jest zapisane. Automat musialby zgadnac,
+#          ktora wersja jest prawdziwa - a to jest dokladnie ten rodzaj cichej pomylki,
+#          ktora zyje potem miesiacami. Decyduje uzytkownik.
 # 4. fakty JUZ obowiazujace tez sa sprawdzane - te, ktore przestaly sie potwierdzac,
 #    dostaja dopisek "niepotwierdzone" i trafiaja do podsumowania. Nic nie jest kasowane:
 #    nieobecna sciezka moze byc odpietym dyskiem sieciowym, a nie nieprawda.
+# 5. przed kazda zmiana powstaje kopia pliku z data w nazwie (wiedza\kopie) - fakty
+#    wchodza bez pytania, wiec musi byc prosta droga powrotu.
+#
+# Skad sie wzial ktorykolwiek fakt: wiedza\zrodla.md (data + rozmowy, z ktorych pochodzi).
+# Podsumowanie przebiegu w formacie "klucz: wartosc": wiedza\.wiedza-stan.txt
 #
 # Uzycie:
 #   powershell -ExecutionPolicy Bypass -File narzedzia\aktualizuj-wiedze.ps1
@@ -228,10 +240,41 @@ function Sprawdz-Wiedze {
   }
   Naglowek "Gdzie to teraz jest"
   Krok "obowiazujaca wiedza : $(Join-Path $script:Dom 'CLAUDE.md') (sekcja '## Co wiem')"
-  Krok "poczekalnia         : $(Join-Path $script:Dom 'wiedza\kandydaci.md')"
+  Krok "poczekalnia         : $(Join-Path $script:Dom 'wiedza\kandydaci.md')  - juz tylko [!] i [?]"
+  Krok "skad sie wzialy     : $(Join-Path $script:Dom 'wiedza\zrodla.md')"
   Krok "kopie przed zmiana  : $(Join-Path $script:Dom 'wiedza\kopie')"
-  Krok "liczby (zatwierdzone / czekaja / przestaly sie potwierdzac) - w podsumowaniu powyzej"
+  Pokaz-Podsumowanie
   exit 0
+}
+
+function Pokaz-Podsumowanie {
+  # Cisza jest zakazana: przebieg, ktory nic nie dopisal, ma powiedziec dlaczego, a nie
+  # wygladac jak brak przebiegu. Dlatego czytamy plik stanu zamiast milczec, gdy go nie ma.
+  $plik = Join-Path $script:Dom "wiedza\.wiedza-stan.txt"
+  Naglowek "Podsumowanie przebiegu"
+  if ($Proba) {
+    Krok "tryb probny - podsumowanie nie jest zapisywane (liczby powyzej sa prawdziwe)"
+    return
+  }
+  if (-not (Test-Path -LiteralPath $plik)) {
+    Ostrzezenie "nie ma $plik - weryfikacja nie zapisala podsumowania, czyli cos poszlo nie tak"
+    return
+  }
+  $stan = @{}
+  foreach ($linia in (Get-Content -LiteralPath $plik -Encoding UTF8)) {
+    $czesci = $linia -split ":", 2
+    if ($czesci.Count -eq 2) { $stan[$czesci[0].Trim()] = $czesci[1].Trim() }
+  }
+  Krok "dopisane : $($stan['dopisane'])  (stala $($stan['stala']) / biezaca $($stan['biezaca']) / referencyjna $($stan['referencyjna']))"
+  Krok "zostaje  : $($stan['odrzucone']) odrzuconych, $($stan['sporne']) spornych, $($stan['wstrzymane_progiem']) wstrzymanych progiem"
+  Krok "warstwa stala: $($stan['prog_stalej']) znakow"
+  Krok "powod    : $($stan['powod'])"
+  # bez "??" - ten skrypt chodzi takze na Windows PowerShell 5.1, gdzie to jest blad skladni
+  $sporne = 0
+  if ($stan.ContainsKey("sporne")) { [void][int]::TryParse($stan["sporne"], [ref]$sporne) }
+  if ($sporne -gt 0) {
+    Ostrzezenie "sporne fakty czekaja na Twoja decyzje w $(Join-Path $script:Dom 'wiedza\kandydaci.md') - szukaj [?]"
+  }
 }
 
 # ---------------------------------------------------------------- przebieg
