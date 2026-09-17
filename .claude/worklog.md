@@ -1106,3 +1106,5 @@ MegaRuchacz dopisuje pod spodem swoje notatki o kolejce i blokadach.
 - 11:28:56  KONIEC worker
 - 11:29:02  KONIEC implementer
 - 11:29:02  KONIEC implementer
+- 11:36:37  KONIEC worker
+- 11:36:37  KONIEC worker
