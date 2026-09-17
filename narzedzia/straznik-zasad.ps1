@@ -12,6 +12,13 @@
 # na godzine (w trybie -Tlo przy kazdym starcie sesji, patrz Odswiez-Zrodlo);
 # bez niego punkt 2. porownywalby wdrozenie ze staroscia i zawsze wychodzilo mu, ze gra.
 #
+# Przy KAZDYM przebiegu, w kazdym trybie, straznik odklada w pliku stanu slad
+# "bylem tu" (data, godzina, tryb) i to, co mu sie po drodze wywrocilo. Z tego
+# bierze sie jedyna odpowiedz na pytanie "czy to w ogole chodzi": brak
+# wiadomosci ma byc odroznialny od "wszystko gra". Cisze po drugiej stronie
+# (niezatwierdzone hooki Codeksa) meldujemy pod Claude Code i na odwrot - hook,
+# ktory nie chodzi, sam o sobie nie powie nigdy.
+#
 # Uzycie:
 #   powershell -NoProfile -File narzedzia\straznik-zasad.ps1 [-Zrodlo <repo>] [-Projekt <katalog>]
 #   powershell -NoProfile -File narzedzia\straznik-zasad.ps1 -Odrzuc <modul>
@@ -237,6 +244,218 @@ function Zapisz-Klucze($sciezka, $stan) {
   Zapisz-Tekst $sciezka (($linie -join "`r`n") + "`r`n")
 }
 
+# Plik stanu straznika trzyma nie tylko skroty zasad, ale takze slad obecnosci
+# i wywrotki z przebiegow, ktorych nikt nie ogladal. Dlatego zapisujemy do niego
+# WYLACZNIE przez scalenie - przepisanie go w calosci (tak robil Pilnuj-Zasad do
+# 0.15.1) kasowaloby wszystko, co skrotem zasad nie jest.
+function Dopisz-Klucze($sciezka, $nowe) {
+  $stan = Czytaj-Klucze $sciezka
+  foreach ($k in $nowe.Keys) { $stan[$k] = $nowe[$k] }
+  Zapisz-Klucze $sciezka $stan
+}
+
+# ------------------------------- znacznik obecnosci, wywrotki i cisza hookow
+# Najdrozsza usterka tego narzedzia nie wyglada jak usterka, tylko jak spokoj:
+# hook niezatwierdzony w Codeksie (/hooks), piaskownica, ktora nie przepuszcza
+# powershella, albo zadanie wywrocone w pustym "catch" - we wszystkich trzech
+# wypadkach widac dokladnie to samo co przy narzedziu sprawnym, czyli nic.
+# Brak wiadomosci ma byc odroznialny od "wszystko gra", stad dwa slady w pliku
+# stanu straznika (tym samym, w ktorym siedza skroty zasad - osobnego pliku nie
+# zakladamy, zeby caly jego stan lezal w jednym miejscu):
+#   byl.<tryb> - kiedy straznik ostatnio chodzil i w ktorym trybie,
+#   blad.<n>   - co sie wywrocilo przy przebiegu, ktorego nikt nie ogladal.
+# Tryby sa rozdzielone z premedytacja: pod Claude Code wszystko moze chodzic
+# wzorowo, a hook Codeksa nie ruszyc ani razu - i na odwrot.
+$GODZIN_CISZY = 24
+$WYWROTEK_NAJWYZEJ = 5
+$script:Wywrotki = @()
+
+# Tryb, w ktorym straznik akurat chodzi - to samo slowo jest koncowka klucza
+# "byl.<tryb>". CLAUDE_PROJECT_DIR ustawia samo Claude Code, wolajac hooka; bez
+# niej to uruchomienie z reki, ktore o zdrowiu hookow nie mowi nic.
+function Nazwa-Trybu {
+  if ($Tlo)        { return "tlo" }      # hook SessionStart Codeksa, bezobslugowy
+  if ($KosztCodex) { return "codex" }    # hook Codeksa od rachunku za pamiec
+  if ($env:CLAUDE_PROJECT_DIR) { return "claude" }
+  return "recznie"
+}
+
+# Wywrotka zadania NIE przerywa przebiegu (start sesji jest wazniejszy), ale ma
+# zostawic slad: w dzienniku od razu, a w pliku stanu do zameldowania czlowiekowi
+# przy najblizszym przebiegu, ktory ma komu mowic.
+function Zanotuj-Wywrotke([string]$zadanie, $blad) {
+  $tresc = "$blad"
+  if ($blad -and $blad.Exception) { $tresc = $blad.Exception.Message }
+  $tresc = ($tresc -replace '[\r\n\t]+', ' ').Trim()
+  if (-not $tresc) { $tresc = "wyjatek bez tresci" }
+  if ($tresc.Length -gt 300) { $tresc = $tresc.Substring(0, 300) }
+  $script:Wywrotki += ("{0} | {1}" -f $zadanie, $tresc)
+  Notuj "wywrocilo sie: ${zadanie} - ${tresc}"
+}
+
+# Jeden zapis na koniec przebiegu: "bylem tu" plus wywrotki, ktore sie zebraly.
+function Zapisz-Obecnosc([string]$tryb) {
+  try {
+    $stan = Czytaj-Klucze $plikStanu
+    $stan["byl.$tryb"] = (Get-Date -Format 'yyyy-MM-dd HH:mm:ss')
+    $naj = 0
+    foreach ($k in @($stan.Keys)) {
+      $m = [regex]::Match($k, '^blad\.(\d+)$')
+      if ($m.Success -and ([int]$m.Groups[1].Value) -gt $naj) { $naj = [int]$m.Groups[1].Value }
+    }
+    foreach ($w in $script:Wywrotki) {
+      # Piata wywrotka niczego juz nie tlumaczy, a plik stanu ma zostac czytelny.
+      if ($naj -ge $WYWROTEK_NAJWYZEJ) { break }
+      $naj++
+      $stan["blad.$naj"] = ("{0} | {1} | {2}" -f $tryb, (Get-Date -Format 'yyyy-MM-dd HH:mm'), $w)
+    }
+    Zapisz-Klucze $plikStanu $stan
+  } catch {
+    # Ostatnie ogniwo lancucha: gdy nie da sie zapisac nawet tego, zostaje
+    # dziennik trybu bezobslugowego. Wyjatek stad nie ma prawa wyjsc.
+    Notuj "zapis znacznika obecnosci nie wyszedl: $($_.Exception.Message)"
+  }
+}
+
+# Wywrotki z poprzednich przebiegow - zwraca gotowe linie i CZYSCI je z pliku
+# stanu. Raz zameldowany blad ma nie wracac do konca swiata; gdy rzecz sie
+# powtorzy, wpis pojawi sie na nowo przy nastepnej wywrotce.
+function Odbierz-Wywrotki {
+  $stan = Czytaj-Klucze $plikStanu
+  $klucze = @($stan.Keys | Where-Object { $_ -match '^blad\.\d+$' })
+  if ($klucze.Count -eq 0) { return @() }
+  $linie = @()
+  foreach ($k in $klucze) {
+    $cz = "$($stan[$k])" -split '\s*\|\s*', 4
+    if ($cz.Count -eq 4) { $linie += "$($cz[2]) - $($cz[3]) (tryb $($cz[0]), $($cz[1]))" }
+    else { $linie += "$($stan[$k])" }
+    $stan.Remove($k)
+  }
+  try { Zapisz-Klucze $plikStanu $stan } catch { }   # nie wyczyscilo sie - wroca raz jeszcze, trudno
+  return $linie
+}
+
+# Kiedy dany program chodzil na tej maszynie ostatni raz - po swiezosci plikow,
+# ktore prowadzi sam w swoim katalogu domowym. To jedyny dowod przychodzacy
+# SPOZA naszych hookow, wiec tylko on pozwala odroznic "hook nie wystartowal"
+# od "uzytkownik po prostu nie odpalal tego programu". Pliki pisane przez nas
+# samych sie nie licza (stad wzorce do pominiecia), a w podkatalogi nie
+# schodzimy - caly przebieg ma sie zmiescic w kilkunastu sekundach.
+function Kiedy-Chodzil($katalog, $nieNasze) {
+  if (-not $katalog -or -not (Test-Path $katalog)) { return $null }
+  $naj = $null
+  foreach ($p in @(Get-ChildItem -Path $katalog -File -ErrorAction SilentlyContinue)) {
+    $pomin = $false
+    foreach ($wzor in $nieNasze) { if ($p.Name -like $wzor) { $pomin = $true } }
+    if ($pomin) { continue }
+    if ($null -eq $naj -or $p.LastWriteTime -gt $naj) { $naj = $p.LastWriteTime }
+  }
+  return $naj
+}
+
+# Czy w tym projekcie stoi wdrozenie dla Codeksa i czy Codex w ogole jest na tej
+# maszynie. Brak przebiegow pod Codeksem tam, gdzie Codeksa nie ma, to nie
+# usterka, tylko normalny stan komputera - a falszywy alarm jest gorszy niz brak
+# alarmu, bo uczy ignorowac alarmy.
+function Jest-Wdrozenie-Codex {
+  if (-not (Test-Path (Split-Path -Parent $plikCodex))) { return $false }
+  if (-not $Projekt) { return $false }
+  if (Test-Path (Join-Path $Projekt ".codex")) { return $true }
+  foreach ($p in @($plikWersji, (Join-Path $Projekt ".megaruchacz\wersja.txt"))) {
+    if (Test-Path $p) {
+      $w = Czytaj-Klucze $p
+      if ($w["codex.wersja"]) { return $true }
+    }
+  }
+  return $false
+}
+
+# Wspolny rdzen obu meldunkow o ciszy: porownuje slady naszego hooka (klucze
+# "byl.*") ze sladami, ktore zostawil sam program. Dwa stopnie pewnosci:
+#   1. program chodzil, a hook nie zostawil sladu - dowod twardy,
+#   2. wdrozenie stoi od doby, a hook nie odnotowal ANI JEDNEGO przebiegu -
+#      dokladnie tak wyglada niezatwierdzony /hooks.
+# Zwykla przerwa w pracy (weekend, tydzien bez Codeksa) nie jest ani jednym,
+# ani drugim i alarmu nie wywola. Zostaje jedna dziura, ktorej nie zalatamy:
+# kto uzywa programu WYLACZNIE w projektach bez MegaRuchacza, ten ma swieze
+# slady mimo sprawnych hookow - dlatego meldunek podaje obie daty zamiast
+# wyrokowac i odzywa sie raz na dobe, a nie przy kazdym oknie.
+# Zwraca powod jako kawalek zdania albo pusty tekst, gdy nie ma o czym mowic.
+function Powod-Ciszy($kluczeSladu, $kiedyChodzil, $kluczZauwazenia) {
+  $stan = Czytaj-Klucze $plikStanu
+  $teraz = [datetime]::Now
+
+  # Pierwsze zauwazenie wdrozenia zaczyna okres ochronny - bez niego swieze
+  # wdrozenie krzyczaloby "hook nie chodzil" w minucie, w ktorej powstalo.
+  $zauwazony = [datetime]::MinValue
+  if (-not [datetime]::TryParse($stan[$kluczZauwazenia], [ref]$zauwazony)) {
+    try { Dopisz-Klucze $plikStanu ([ordered]@{ $kluczZauwazenia = $teraz.ToString('yyyy-MM-dd HH:mm:ss') }) } catch { }
+    return ""
+  }
+
+  $ostatni = [datetime]::MinValue
+  foreach ($k in $kluczeSladu) {
+    $d = [datetime]::MinValue
+    if ([datetime]::TryParse($stan[$k], [ref]$d) -and $d -gt $ostatni) { $ostatni = $d }
+  }
+
+  if ($ostatni -eq [datetime]::MinValue) {
+    $godzin = [int]($teraz - $zauwazony).TotalHours
+    if ($godzin -le $GODZIN_CISZY) { return "" }
+    return "nie odnotowal ani jednego przebiegu od wdrozenia (${godzin} godzin temu)"
+  }
+  if ($kiedyChodzil -and ($kiedyChodzil - $ostatni).TotalHours -gt $GODZIN_CISZY) {
+    return ("nie zostawil sladu od " + $ostatni.ToString('yyyy-MM-dd HH:mm') +
+            ", a sam program chodzil " + $kiedyChodzil.ToString('yyyy-MM-dd HH:mm'))
+  }
+  return ""
+}
+
+# Meldunek o ciszy pod Claude Code dotyczy hookow CODEKSA - i odwrotnie: o hooku
+# Claude Code mowi ladunek pod Codeksem (patrz Wypisz-Koszt-Codex). Ten podzial
+# jest sednem sprawy, bo hook, ktory nie chodzi, sam o sobie nie powie NIGDY,
+# wiec wykrycie musi przyjsc z drugiej strony.
+function Zglos-Cisze {
+  if (-not (Jest-Wdrozenie-Codex)) { return }
+  $chodzil = Kiedy-Chodzil (Split-Path -Parent $plikCodex) @("AGENTS.md", "AGENTS.md.bak-*")
+  $powod = Powod-Ciszy @("byl.tlo", "byl.codex") $chodzil "codex.zauwazony"
+  if (-not $powod) { return }
+  $stan = Czytaj-Klucze $plikStanu
+  $dzis = (Get-Date -Format 'yyyy-MM-dd')
+  if ($stan["cisza.codex"] -eq $dzis) { return }   # raz na dobe wystarczy
+  try { Dopisz-Klucze $plikStanu ([ordered]@{ "cisza.codex" = $dzis }) } catch { }
+  Write-Host "MegaRuchacz: hook Codeksa ${powod}."
+  Write-Host "    Sprawdz w Codeksie polecenie /hooks - najpewniej hooki nie sa zatwierdzone. Jesli sa zatwierdzone, to piaskownica Codeksa nie przepuszcza powershella i tez nic nie chodzi."
+}
+
+# To samo w druga strone, jedna linia do ladunku hooka Codeksa. Krotko, bo ten
+# ladunek ma sufit 1000 znakow i jest ucinany od konca.
+function Cisza-Claude-Linia {
+  if (-not $Projekt -or -not (Test-Path $plikWersji)) { return "" }
+  $dom = Split-Path -Parent $plikDomowy
+  # Claude Code poznajemy po plikach, ktore prowadzi sam - katalog ~\.claude
+  # zaklada tez MegaRuchacz, wiec sam katalog niczego nie dowodzi.
+  if (-not (Test-Path (Join-Path $dom "history.jsonl")) -and
+      -not (Test-Path (Join-Path $KatalogDomowy ".claude.json"))) { return "" }
+  $chodzil = Kiedy-Chodzil $dom @("CLAUDE.md", "CLAUDE.md.bak*", ".megaruchacz-*")
+  $powod = Powod-Ciszy @("byl.claude") $chodzil "claude.zauwazony"
+  if (-not $powod) { return "" }
+  $stan = Czytaj-Klucze $plikStanu
+  $dzis = (Get-Date -Format 'yyyy-MM-dd')
+  if ($stan["cisza.claude"] -eq $dzis) { return "" }
+  try { Dopisz-Klucze $plikStanu ([ordered]@{ "cisza.claude" = $dzis }) } catch { }
+  return "UWAGA: hook MegaRuchacza pod Claude Code ${powod} - sprawdz hooki w .claude\settings.json tego projektu."
+}
+
+# Wywrotki z przebiegow, ktorych nikt nie ogladal (tlo, hooki Codeksa) - tu jest
+# pierwsze miejsce, w ktorym maja szanse dotrzec do czlowieka.
+function Zglos-Wywrotki {
+  $linie = @(Odbierz-Wywrotki)
+  if ($linie.Count -eq 0) { return }
+  Write-Host "MegaRuchacz: przy poprzednim przebiegu straznika cos sie wywrocilo (sesji to nie zatrzymalo, ale samo sie nie naprawi):"
+  foreach ($l in $linie) { Write-Host "    $l" }
+}
+
 # Zamyka przebieg w tle: zbierane komunikaty ida na koniec dziennika, a z gory
 # leci wszystko powyzej $LINII_DZIENNIKA - plik ma byc dowodem, ze zadanie
 # chodzi, a nie archiwum rosnacym bez konca.
@@ -256,7 +475,10 @@ function Dopisz-Dziennik {
   if ($wszystkie.Count -gt $LINII_DZIENNIKA) {
     $wszystkie = @($wszystkie | Select-Object -Last $LINII_DZIENNIKA)
   }
-  try { Zapisz-Tekst $plikDziennika (($wszystkie -join "`r`n") + "`r`n") } catch { }
+  # Dziennik jest jedynym wyjsciem trybu bezobslugowego - gdy i on nie dziala,
+  # slad musi zostac w pliku stanu, inaczej caly przebieg znika bez ladu.
+  try { Zapisz-Tekst $plikDziennika (($wszystkie -join "`r`n") + "`r`n") }
+  catch { Zanotuj-Wywrotke "zapis dziennika" $_ }
 }
 
 function Kopia-Zapasowa($sciezka, $stempel) {
@@ -698,7 +920,7 @@ function Pilnuj-Zasad {
   if ($doNaprawy.Count -eq 0) {
     $rozne = $false
     foreach ($k in $skroty.Keys) { if ($stan[$k] -ne $skroty[$k]) { $rozne = $true } }
-    if ($rozne) { Zapisz-Klucze $plikStanu $skroty }
+    if ($rozne) { Dopisz-Klucze $plikStanu $skroty }
     Notuj ("zasady: aktualne (" + (($cele | ForEach-Object { $_.nazwa }) -join ", ") + ")")
     Pilnuj-Limitu $cele
     return
@@ -727,7 +949,7 @@ function Pilnuj-Zasad {
     if (-not $blok) { $nadal += $c.nazwa }
   }
   if ($kod -eq 0 -and $nadal.Count -eq 0) {
-    Zapisz-Klucze $plikStanu $nowe
+    Dopisz-Klucze $plikStanu $nowe
     Mow "MegaRuchacz: zasady globalne wymagaly poprawki ($opis) - wpisalem je z powrotem."
     Pilnuj-Limitu $cele
   } else {
@@ -852,7 +1074,7 @@ function Policz-Koszt {
     $global:LASTEXITCODE = 0
     $wy = @(& $skrypt -KatalogDomowy $KatalogDomowy -Zwiezle 2>$null)
     $kod = $LASTEXITCODE
-  } catch { return $null }
+  } catch { Zanotuj-Wywrotke "liczenie rachunku za pamiec" $_; return $null }
   $linia = ""
   foreach ($l in $wy) {
     $t = "$l".Trim()
@@ -874,7 +1096,7 @@ function Zapisz-Koszt($wynik) {
   }
   if ($stare["pelny"]) { $stan["pelny"] = $stare["pelny"] }
   if ($stare["proba"]) { $stan["proba"] = $stare["proba"] }
-  try { Zapisz-Klucze $plikKosztu $stan } catch { }
+  try { Zapisz-Klucze $plikKosztu $stan } catch { Zanotuj-Wywrotke "zapis podrecznego rachunku" $_ }
 }
 
 # Odpala liczenie osobnym procesem i NIE czeka na wynik - to jest cala sztuczka,
@@ -889,7 +1111,7 @@ function Odswiez-Koszt-W-Tle {
   # uda. Liczenie, ktore sie wywraca, ma wracac co kwadrans, a nie co okno.
   $stan = Czytaj-Klucze $plikKosztu
   $stan["proba"] = (Get-Date -Format 'yyyy-MM-dd HH:mm:ss')
-  try { Zapisz-Klucze $plikKosztu $stan } catch { }
+  try { Zapisz-Klucze $plikKosztu $stan } catch { Zanotuj-Wywrotke "zapis znacznika proby liczenia" $_ }
 
   $ogon = '-NoProfile -NonInteractive -ExecutionPolicy Bypass -File "' + $PSCommandPath +
           '" -PoliczKoszt -Zrodlo "' + $Zrodlo + '" -KatalogDomowy "' + $KatalogDomowy + '"'
@@ -897,8 +1119,9 @@ function Odswiez-Koszt-W-Tle {
     Start-Process -FilePath "conhost.exe" -ArgumentList ("--headless powershell.exe " + $ogon) `
       -WindowStyle Hidden -ErrorAction Stop | Out-Null
     return
-  } catch { }
-  try { Start-Process -FilePath "powershell.exe" -ArgumentList $ogon -WindowStyle Hidden | Out-Null } catch { }
+  } catch { }   # conhost sie nie udal - zaraz probujemy zwyklym powershellem
+  try { Start-Process -FilePath "powershell.exe" -ArgumentList $ogon -WindowStyle Hidden | Out-Null }
+  catch { Zanotuj-Wywrotke "start liczenia rachunku w tle" $_ }
 }
 
 # Jedna linia o koszcie pamieci - zawsze, niezaleznie od tego, czy cokolwiek
@@ -990,6 +1213,29 @@ function Wypisz-Koszt-Codex {
     else            { $tresc = "MegaRuchacz: ${linia}${ogon}" }
   }
 
+  # Alarmy ida PRZED rachunkiem: ten ladunek ma wlasny sufit (additionalContextLimit
+  # w .codex\hooks.json) i jest ucinany od konca, wiec to, co najwazniejsze, musi
+  # stac na poczatku. Tutaj tez odbieramy wywrotki z trybu -Tlo: na maszynie
+  # z samym Codeksem nie ma innego miejsca, w ktorym ktokolwiek by je przeczytal.
+  $przed = @()
+  try {
+    $wywrotki = @(Odbierz-Wywrotki)
+    if ($wywrotki.Count -gt 0) {
+      # Sufit ladunku to 1000 znakow, wiec do modelu ida najwyzej dwie wywrotki,
+      # i to przyciete - komplet lezy w dzienniku trybu bezobslugowego.
+      $krotkie = @()
+      foreach ($w in @($wywrotki | Select-Object -First 2)) {
+        if ("$w".Length -gt 120) { $krotkie += "$w".Substring(0, 120) + "..." } else { $krotkie += "$w" }
+      }
+      $ogonek = ""
+      if ($wywrotki.Count -gt 2) { $ogonek = " (oraz $($wywrotki.Count - 2) innych - komplet w ${plikDziennika})" }
+      $przed += ("UWAGA: przy poprzednim przebiegu straznika wywrocilo sie: " + ($krotkie -join "; ") + "${ogonek}.")
+    }
+    $ciszaClaude = Cisza-Claude-Linia
+    if ($ciszaClaude) { $przed += $ciszaClaude }
+  } catch { }   # alarm, ktory sam sie wywraca, nie ma prawa zabrac rachunku
+  if ($przed.Count -gt 0) { $tresc = ($przed -join " ") + " " + $tresc }
+
   # ConvertTo-Json, a nie sklejanie tekstu - linia potrafi miec cudzyslow albo
   # ukosnik i recznie zescapowany ladunek przestalby byc JSON-em.
   $ladunek = [ordered]@{
@@ -1013,7 +1259,7 @@ function Zglos-Koszt-Dzienny {
   # Znacznik idzie na dysk PRZED wypisaniem - potkniecie ma znaczyc jeden
   # pominiety meldunek, a nie meldunek przy kazdym oknie do konca dnia.
   $stan["pelny"] = $dzis
-  try { Zapisz-Klucze $plikKosztu $stan } catch { }
+  try { Zapisz-Klucze $plikKosztu $stan } catch { Zanotuj-Wywrotke "znacznik dziennego rachunku" $_ }
 
   $plik = Join-Path $KatalogDomowy ".claude\wiedza\koszt-ostatni.txt"
   $skrypt = Join-Path $Zrodlo "narzedzia\koszt-pamieci.ps1"
@@ -1095,6 +1341,9 @@ try {
   # pobierania, pilnowania zasad ani liczenia: ten hook ma oddac jedna linie
   # od razu, a cala reszta roboty siedzi w hooku bezobslugowym (-Tlo).
   if ($KosztCodex) {
+    # Slad "bylem tu" idzie PRZED ladunkiem: to jedyny dowod, ze hooki Codeksa
+    # w ogole chodza, i nie ma prawa zalezec od tego, co bedzie dalej.
+    Zapisz-Obecnosc "codex"
     Wypisz-Koszt-Codex
     exit 0
   }
@@ -1110,12 +1359,15 @@ try {
   # jedna linia z data przy kazdym przebiegu to jedyny zapis tego, jak ten koszt
   # rosnie w czasie - z niego widac trend, ktorego pojedyncze okno nie pokaze.
   if ($Tlo) {
-    try { Odswiez-Zrodlo } catch { Mow "odswiezanie zrodla wywrocilo sie: $($_.Exception.Message)" }
-    try { Pilnuj-Zasad }   catch { Mow "pilnowanie zasad wywrocilo sie: $($_.Exception.Message)" }
-    try { Pilnuj-Sufitu-Zawsze } catch { Mow "pilnowanie sufitu ladunku wywrocilo sie: $($_.Exception.Message)" }
-    try { Pilnuj-Wersji }  catch { Mow "pilnowanie wersji wdrozenia wywrocilo sie: $($_.Exception.Message)" }
-    try { Zglos-Koszt }    catch { Mow "rachunek za pamiec wywrocil sie: $($_.Exception.Message)" }
+    try { Odswiez-Zrodlo } catch { Zanotuj-Wywrotke "odswiezanie zrodla" $_ }
+    try { Pilnuj-Zasad }   catch { Zanotuj-Wywrotke "pilnowanie zasad" $_ }
+    try { Pilnuj-Sufitu-Zawsze } catch { Zanotuj-Wywrotke "pilnowanie sufitu ladunku" $_ }
+    try { Pilnuj-Wersji }  catch { Zanotuj-Wywrotke "pilnowanie wersji wdrozenia" $_ }
+    try { Zglos-Koszt }    catch { Zanotuj-Wywrotke "rachunek za pamiec" $_ }
+    # Najpierw dziennik (zbiera tez wywrotki), potem znacznik obecnosci wraz
+    # z nimi - w tej kolejnosci, bo potkniecie samego dziennika tez ma sie zapisac.
     Dopisz-Dziennik
+    Zapisz-Obecnosc "tlo"
     exit 0
   }
 
@@ -1161,15 +1413,25 @@ try {
   # Osobne try, zeby potkniecie sie na jednym nie zabralo drugiego.
   # Pobranie idzie pierwsze - reszta porownuje sie z katalogiem zrodlowym,
   # wiec ma sens dopiero wtedy, gdy ten katalog jest swiezy.
-  try { Odswiez-Zrodlo }   catch { }
-  try { Pilnuj-Zasad }     catch { }
-  try { Pilnuj-Sufitu-Zawsze } catch { }
-  try { Pilnuj-Wersji }    catch { }
-  try { Zglos-Kandydatow } catch { }
-  try { Zglos-Cykl }       catch { }
+  try { Odswiez-Zrodlo }   catch { Zanotuj-Wywrotke "odswiezanie zrodla" $_ }
+  try { Pilnuj-Zasad }     catch { Zanotuj-Wywrotke "pilnowanie zasad" $_ }
+  try { Pilnuj-Sufitu-Zawsze } catch { Zanotuj-Wywrotke "pilnowanie sufitu ladunku" $_ }
+  try { Pilnuj-Wersji }    catch { Zanotuj-Wywrotke "pilnowanie wersji wdrozenia" $_ }
+  try { Zglos-Kandydatow } catch { Zanotuj-Wywrotke "poczekalnia faktow" $_ }
+  try { Zglos-Cykl }       catch { Zanotuj-Wywrotke "meldunek o cyklu" $_ }
+  # Wywrotki z przebiegow bez widowni i cisza po stronie Codeksa - tu jest
+  # jedyne miejsce, w ktorym maja szanse dotrzec do czlowieka.
+  try { Zglos-Wywrotki }   catch { Zanotuj-Wywrotke "meldunek o wywrotkach" $_ }
+  try { Zglos-Cisze }      catch { Zanotuj-Wywrotke "wykrywanie ciszy" $_ }
   # Rachunek za pamiec na koncu, zeby zostal pod reka uzytkownika - a pelniejszy
   # meldunek raz na dobe zaraz za nim, bo objasnia te sama liczbe.
-  try { Zglos-Koszt }        catch { }
-  try { Zglos-Koszt-Dzienny } catch { }
-} catch { }
+  try { Zglos-Koszt }        catch { Zanotuj-Wywrotke "rachunek za pamiec" $_ }
+  try { Zglos-Koszt-Dzienny } catch { Zanotuj-Wywrotke "dzienny rachunek za pamiec" $_ }
+  Zapisz-Obecnosc (Nazwa-Trybu)
+} catch {
+  # Ostatnia siatka. Przebieg i tak konczy sie kodem 0, bo start sesji jest
+  # wazniejszy - ale nie konczy sie juz po cichu: slad idzie do pliku stanu
+  # i zostanie zameldowany przy nastepnym otwarciu okna.
+  try { Zanotuj-Wywrotke "przebieg straznika" $_; Zapisz-Obecnosc (Nazwa-Trybu) } catch { }
+}
 exit 0
