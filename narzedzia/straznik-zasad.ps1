@@ -133,6 +133,9 @@ $GODZIN_KOSZT_STARY = 30
 # Dlawik na samo startowanie procesu liczacego: dziesiec okien otwartych naraz
 # ma go odpalic raz, a nieudane liczenie nie ma prawa wracac przy kazdym oknie.
 $MINUT_MIEDZY_PROBAMI = 15
+# Koszt cyklu wiedzy starszy niz tyle dni znaczy, ze cykl przestal chodzic -
+# ta sama liczba, co przy meldunku o samym cyklu (Zglos-Cykl).
+$DNI_KOSZT_CYKLU_STARY = 2
 # Codex czyta AGENTS.md do 32 KiB - dluzszy plik przycina, wiec koniec zasad
 # po prostu przepada. Za ten limit nie odpowiadamy, ale mamy o nim powiedziec.
 $LIMIT_AGENTS = 32768
@@ -1170,10 +1173,17 @@ function Zglos-Koszt {
     $ogon = " (liczba z $(Get-Date $kiedy -Format 'yyyy-MM-dd HH:mm'), swiezsza bedzie za chwile)"
   }
 
-  if ($kod -ne 0) {
+  # Kod 1 znaczy "cos jest nie tak", ale nie zawsze "cos jest ucinane" - moze to
+  # byc sam przekroczony prog (np. koszt cyklu wiedzy). Naglowek o ucinanych
+  # zasadach przy zwyklym progu bylby po prostu nieprawda, wiec rozdzielamy to
+  # po tresci linii: ucinanie koszt-pamieci.ps1 nazywa slowem UCINANE.
+  if ($kod -ne 0 -and $linia -like "*UCINANE:*") {
     Mow "!!! MegaRuchacz: CZESC ZASAD NIE DOCIERA DO AGENTA !!!"
     Mow "    ${linia}${ogon}"
     Mow "    Dopoki tego nie skrocisz, agent pracuje bez ucietego kawalka - pelny rachunek: powershell -File $Zrodlo\narzedzia\koszt-pamieci.ps1"
+  } elseif ($kod -ne 0) {
+    Mow "MegaRuchacz: ${linia}${ogon}"
+    Mow "    Nic nie jest ucinane - to przekroczony prog. Pelny rachunek: powershell -File $Zrodlo\narzedzia\koszt-pamieci.ps1"
   } else {
     Mow "MegaRuchacz: ${linia}${ogon}"
   }
@@ -1209,8 +1219,11 @@ function Wypisz-Koszt-Codex {
     if ($godzin -gt $GODZIN_KOSZT_STARY -and $kiedy -gt [datetime]::MinValue) {
       $ogon = " (liczba z $(Get-Date $kiedy -Format 'yyyy-MM-dd HH:mm'), swiezsza bedzie za chwile)"
     }
-    if ($kod -ne 0) { $tresc = "UWAGA: czesc zasad NIE DOCIERA do agenta - ${linia}${ogon}" }
-    else            { $tresc = "MegaRuchacz: ${linia}${ogon}" }
+    # tak samo jak w Zglos-Koszt: kod 1 bez slowa UCINANE to przekroczony prog,
+    # a nie uciete zasady - nazywanie tego ucinaniem byloby klamstwem
+    if ($kod -ne 0 -and $linia -like "*UCINANE:*") { $tresc = "UWAGA: czesc zasad NIE DOCIERA do agenta - ${linia}${ogon}" }
+    elseif ($kod -ne 0) { $tresc = "UWAGA: ${linia}${ogon}" }
+    else                { $tresc = "MegaRuchacz: ${linia}${ogon}" }
   }
 
   # Alarmy ida PRZED rachunkiem: ten ladunek ma wlasny sufit (additionalContextLimit
@@ -1247,6 +1260,79 @@ function Wypisz-Koszt-Codex {
   Write-Output ($ladunek | ConvertTo-Json -Depth 4 -Compress)
 }
 
+function Liczba-Ludzka($n) {
+  # separator tysiecy na sztywno spacja - tak samo jak w koszt-pamieci.ps1
+  return ([long]$n).ToString("#,0", [Globalization.CultureInfo]::InvariantCulture).Replace(",", " ")
+}
+
+function Ile-Wywolan($n) {
+  $reszta = $n % 10
+  $setka  = $n % 100
+  if ($n -eq 1) { return "1 wywolanie" }
+  if (($reszta -ge 2) -and ($reszta -le 4) -and (($setka -lt 12) -or ($setka -gt 14))) { return "$n wywolania" }
+  return "$n wywolan"
+}
+
+# Koszt cyklu wiedzy - JEDNA linia, raz na dobe, w dziennym meldunku. To inny
+# rodzaj kosztu niz rachunek za pamiec wyzej: tamten to tekst doklejany do
+# rozmowy, ten to prawdziwe wywolanie modelu, ktore cykl dzienny placi za
+# przeczytanie wczorajszych rozmow. Dlatego liczby nie sa sumowane.
+#
+# Plik pisze sam cykl (<dom>\.claude\wiedza\.koszt-cyklu.txt, format
+# "klucz: wartosc"). Brak pliku albo pomiar sprzed kilku dni mowimy WPROST:
+# cisza w tym miejscu znaczylaby "cykl chodzi i nic nie kosztuje", a prawda
+# bylaby wtedy odwrotna - cykl w ogole nie chodzi i wiedza nie przyrasta.
+function Zglos-Koszt-Cyklu {
+  $plik = Join-Path $KatalogDomowy ".claude\wiedza\.koszt-cyklu.txt"
+  if (-not (Test-Path $plik)) {
+    Write-Host "    cykl wiedzy: kosztu jeszcze nie policzyl - jesli cykl chodzi, liczba bedzie po jego najblizszym przebiegu"
+    return
+  }
+  $k = Czytaj-Klucze $plik
+
+  # Wiek liczymy z klucza "data" (dzien, ktorego dotycza liczby), a dopiero
+  # w ostatecznosci z daty pliku - plik moze byc przepisany bez nowej pracy.
+  $data = [datetime]::MinValue
+  $wiek = $null
+  if ([datetime]::TryParse($k["data"], [ref]$data)) {
+    $wiek = [int]([datetime]::Today - $data.Date).TotalDays
+  } else {
+    try { $wiek = [int]([datetime]::Now - (Get-Item $plik).LastWriteTime).TotalDays } catch { $wiek = $null }
+  }
+
+  if (($null -ne $wiek) -and ($wiek -gt $DNI_KOSZT_CYKLU_STARY)) {
+    $kiedy = $k["data"]
+    if (-not $kiedy) { $kiedy = "dawno" }
+    Write-Host "    cykl wiedzy: ostatni koszt z ${kiedy} (${wiek} dni temu) - cykl od tego czasu nie wylawial faktow, wiec nie chodzi"
+    return
+  }
+
+  $kiedy = "ostatnio"
+  if ($wiek -eq 0)    { $kiedy = "dzis" }
+  elseif ($wiek -eq 1) { $kiedy = "wczoraj" }
+  elseif ($k["data"]) { $kiedy = "z dnia $($k['data'])" }
+
+  $tokeny = "nie wiadomo ile"
+  if ($k["tokeny"] -match '^\d+$') { $tokeny = "~$(Liczba-Ludzka ([long]$k['tokeny']))" }
+  $zrodlo = ""
+  if ($k["tokeny_zrodlo"]) { $zrodlo = " ($($k['tokeny_zrodlo']))" }
+
+  $czesci = @()
+  if ($k["wywolania"] -match '^\d+$') {
+    $opisW = Ile-Wywolan ([int]$k["wywolania"])
+    if ($k["narzedzie"]) { $opisW = "$opisW $($k['narzedzie'])" }
+    $czesci += $opisW
+  }
+  if ($k["fakty"] -match '^\d+$') { $czesci += "$($k['fakty']) faktow" }
+  if ($k["poprzedni.tokeny"] -match '^\d+$') {
+    $czesci += "poprzednio ~$(Liczba-Ludzka ([long]$k['poprzedni.tokeny']))"
+  }
+  $ogon = ""
+  if ($czesci.Count -gt 0) { $ogon = " (" + ($czesci -join ", ") + ")" }
+
+  Write-Host "    cykl wiedzy ${kiedy}: ${tokeny} tokenow${zrodlo}${ogon} - to prawdziwe wywolanie modelu, osobno od liczb wyzej"
+}
+
 # Raz na dobe, przy pierwszym otwarciu okna tego dnia, pelniejszy meldunek -
 # uzytkownik chcial byc informowany CODZIENNIE, a nie tylko wtedy, gdy sam
 # zajrzy do pliku. Zrodlem jest raport zadania LoreKoszt z Harmonogramu
@@ -1267,6 +1353,9 @@ function Zglos-Koszt-Dzienny {
     if (Test-Path $skrypt) {
       Write-Host "  Dziennego rachunku za pamiec nie ma na tej maszynie - zaloz go raz: powershell -File $skrypt -ZalozZadanie"
     }
+    # koszt cyklu to osobny plik i osobny rodzaj kosztu - brak jednego rachunku
+    # nie ma prawa zabrac drugiego
+    try { Zglos-Koszt-Cyklu } catch { Zanotuj-Wywrotke "koszt cyklu wiedzy" $_ }
     return
   }
 
@@ -1288,6 +1377,7 @@ function Zglos-Koszt-Dzienny {
   }
   if ($wybrane.Count -eq 0) { $wybrane += "nic nie wymagalo uwagi" }
   foreach ($t in ($wybrane | Select-Object -First 6)) { Write-Host "    $t" }
+  try { Zglos-Koszt-Cyklu } catch { Zanotuj-Wywrotke "koszt cyklu wiedzy" $_ }
   if ($dni -gt 2) {
     Write-Host "    Ten raport ma $dni dni - zadanie LoreKoszt nie chodzi. Zaloz je od nowa: powershell -File $skrypt -ZalozZadanie"
   }
