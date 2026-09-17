@@ -691,9 +691,9 @@ if ($Zwiezle) {
     $opis = "UCINANE: $($g.Krotka) -$($g.Strata) $($g.Jednostka)"
     if ($g.Naglowek) { $opis = $opis + " (od ""$(Skroc $g.Naglowek 34)"")" }
     if ($ucinane.Count -gt 1) { $opis = $opis + " i jeszcze $($ucinane.Count - 1)" }
-    $linia = "UWAGA pamiec: ~$razemTokenow tokenow na wiadomosc, $opis"
+    $linia = "UWAGA pamiec: ~$razemTokenow tokenow na starcie sesji, $opis"
   } else {
-    $linia = "pamiec: ~$razemTokenow tokenow na wiadomosc, nic nie jest ucinane"
+    $linia = "pamiec: ~$razemTokenow tokenow na starcie sesji, nic nie jest ucinane"
   }
   if ($skokKosztu) { $linia = $linia + " (+$zmianaProc% od wczoraj)" }
   Write-Output $linia
@@ -855,7 +855,7 @@ if (-not $w.Jest) {
   Wiersz "blok zasad instalatora" $w.Blok
   Wiersz "warstwa STALA (Co wiem)" $w.Stala
   Wiersz "warstwa BIEZACA" $w.Biezaca
-  Linia ("  {0,-26} {1,5} linii, {2,9} znakow, ~{3,7} tokenow" -f "RAZEM na jedna wiadomosc", (Liczba $razemLinii), (Liczba $razemZnakow), (Liczba $razemTokenow))
+  Linia ("  {0,-26} {1,5} linii, {2,9} znakow, ~{3,7} tokenow" -f "RAZEM na starcie sesji", (Liczba $razemLinii), (Liczba $razemZnakow), (Liczba $razemTokenow))
   if ($w.Blok.Znaki -eq 0) { Linia "  (bloku zasad MegaRuchacza w tym pliku nie ma)" }
   if (-not $w.MaSekcje)    { Linia "  (sekcji '## Co wiem' w tym pliku nie ma - warstwa stala i biezaca sa puste)" }
   Linia "  Tokeny to SZACUNEK, nie pomiar: przyjete ~$ZnakiNaToken znaki na token dla polszczyzny."
@@ -872,7 +872,7 @@ if (-not $poprz) {
   elseif ($zmiana -lt 0) { $opisZmiany = "$(Liczba $zmiana), $zmianaProc%" }
   $kolorZmiany = $null
   if ($skokKosztu) { $kolorZmiany = "Yellow" }
-  Linia ("  Poprzedni pomiar ({0}): {1} -> {2} tokenow na wiadomosc ({3})" -f `
+  Linia ("  Poprzedni pomiar ({0}): {1} -> {2} tokenow na starcie sesji ({3})" -f `
          $dataPoprz, (Liczba $poprz.Tokeny), (Liczba $razemTokenow), $opisZmiany) $kolorZmiany
   if ($skokKosztu) {
     Linia "  UWAGA  to wiecej niz $ProgWzrostu% wzrostu - pamiec puchnie i kazda wiadomosc placi za to osobno." "Yellow"
