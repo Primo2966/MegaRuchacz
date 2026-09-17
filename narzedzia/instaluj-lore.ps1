@@ -161,22 +161,31 @@ function Sprawdz-Warunki {
   }
 }
 
+# Jedno miejsce na warunek "co tu w ogole jest": dostaje opis Claude Code i opis
+# Codeksa, oddaje tylko te, ktore Sprawdz-Warunki naprawde znalazlo. Inaczej ten
+# sam warunek siedzi w kilku ekranach naraz i rozjezdza sie przy pierwszej zmianie.
+function Wykryte-Narzedzia($opisClaude, $opisCodex) {
+  $lista = @()
+  if ($script:Claude)    { $lista += $opisClaude }
+  if ($script:CodexJest) { $lista += $opisCodex }
+  return $lista
+}
+
 # ---------------------------------------------------------------- zgoda uzytkownika
 
 function Ekran-Zgody {
-  # Punkt 3 ma mowic prawde o TEJ maszynie - wymieniamy tylko te narzedzia,
-  # ktore Sprawdz-Warunki naprawde na niej znalazlo.
-  $gdzie = @()
-  if ($script:Claude) { $gdzie += "Claude Code - przez 'claude mcp add', w zasiegu Twojego uzytkownika" }
-  if ($script:CodexJest) {
-    if ($script:CodexMa) { $gdzie += "Codex CLI - przez 'codex mcp add'" }
-    else                 { $gdzie += "Codex CLI - wpisem w $($script:CodexCfg) (stary plik zostanie skopiowany obok)" }
-  }
+  # Kazdy tekst tego ekranu ma mowic prawde o TEJ maszynie - wymieniamy tylko te
+  # narzedzia, ktore Sprawdz-Warunki (wolane wczesniej) naprawde na niej znalazlo.
+  $zKim  = @(Wykryte-Narzedzia "Claude Code" "Codeksem")
+  $czyje = if ($zKim.Count -gt 0) { $zKim -join " i " } else { "Twoim narzedziem AI" }
+
+  $opisCodex = if ($script:CodexMa) { "Codex CLI - przez 'codex mcp add'" } else { "Codex CLI - wpisem w $($script:CodexCfg) (stary plik zostanie skopiowany obok)" }
+  $gdzie = @(Wykryte-Narzedzia "Claude Code - przez 'claude mcp add', w zasiegu Twojego uzytkownika" $opisCodex)
   $lista = ($gdzie | ForEach-Object { "        - $_" }) -join "`n"
 
   Naglowek "Co zaraz stanie sie na tym komputerze"
   Write-Host @"
-  Lore to lokalna, przeszukiwalna pamiec Twoich rozmow z Claude Code.
+  Lore to lokalna, przeszukiwalna pamiec Twoich rozmow z $($czyje).
 
   1. Powstanie LOKALNA baza SQLite z wyszukiwaniem pelnotekstowym i semantycznym
      (znajduje po sensie zdania, nie tylko po doslownym slowie).
@@ -727,9 +736,7 @@ function Podsumowanie {
     Blad "instalacja NIE jest kompletna: $($zle.Count) z $($script:Kroki.Count) sprawdzen nie przeszlo."
     exit 1
   }
-  $gdzie = @()
-  if ($script:Claude)    { $gdzie += "okna Claude Code" }
-  if ($script:CodexJest) { $gdzie += "sesje Codeksa" }
+  $gdzie = @(Wykryte-Narzedzia "okna Claude Code" "sesje Codeksa")
   $co = if ($gdzie.Count -gt 0) { $gdzie -join " i " } else { "okna narzedzia AI" }
   Write-Host "Gotowe. Zamknij i otworz $co - serwer $NazwaMcp podepnie sie przy starcie." -ForegroundColor Green
   exit 0
