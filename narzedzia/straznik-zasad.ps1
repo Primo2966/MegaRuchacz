@@ -1352,6 +1352,71 @@ function Odswiez-Koszt-W-Tle {
   catch { Zanotuj-Wywrotke "start liczenia rachunku w tle" $_ }
 }
 
+# To samo, ale z dlawikiem na probe - ten sam warunek, ktorego pilnuje Zglos-Koszt.
+# Dziesiec okien otwartych naraz ma odpalic liczenie raz, a liczenie, ktore sie
+# wywraca, ma wracac co kwadrans, a nie przy kazdym oknie. W trybie -Tlo nic nie
+# startujemy: tam liczymy na miejscu i drugi proces byloby marnotrawstwem.
+function Zamow-Przeliczenie {
+  if ($Tlo) { return }
+  $stan = Czytaj-Klucze $plikKosztu
+  $probowano = [datetime]::MinValue
+  $odProby = [double]::MaxValue
+  if ([datetime]::TryParse($stan["proba"], [ref]$probowano)) {
+    $odProby = ([datetime]::Now - $probowano).TotalMinutes
+  }
+  if ($odProby -le $MINUT_MIEDZY_PROBAMI) { return }
+  Odswiez-Koszt-W-Tle
+}
+
+# Czy gotowe rozbicie w pliku podrecznym jest jeszcze swieze. Osobno od liczby
+# z $plikKosztu, bo to osobny plik i potrafi zostac w tyle za nia.
+function Rozbicie-Swieze {
+  if (-not (Test-Path $plikRozbicia)) { return $false }
+  try {
+    return (([datetime]::Now - (Get-Item $plikRozbicia).LastWriteTime).TotalHours -le $GODZIN_MIEDZY_KOSZTAMI)
+  } catch {
+    Zanotuj-Wywrotke "odczyt wieku rozbicia rachunku" $_
+    return $false
+  }
+}
+
+# Ogon przy JEDNOLINIJKOWYM rachunku: z kiedy jest pokazywana liczba. Do
+# 2026-09-17 stal dopiero po $GODZIN_KOSZT_STARY, wiec liczba sprzed siedmiu
+# godzin szla jako biezaca - to jest dokladnie to klamstwo, ktorego zakazuje
+# "Cisza jest zakazana": dane maja byc swieze albo jawnie opisane wiekiem.
+function Ogon-Wieku($kiedy) {
+  if ((-not $kiedy) -or ($kiedy -eq [datetime]::MinValue)) {
+    return " (nie wiadomo, z kiedy jest ta liczba - bufor bez daty)"
+  }
+  $godzin = ([datetime]::Now - $kiedy).TotalHours
+  # "po przeliczeniu w tle", a nie "przeliczam teraz": przeliczenie ma wlasny
+  # dlawik i moze akurat nie ruszyc. Obiecywanie czegos, co sie nie dzieje, uczy
+  # ignorowac te dopiski.
+  if ($godzin -gt $GODZIN_KOSZT_STARY) {
+    return " (liczba z $(Get-Date $kiedy -Format 'yyyy-MM-dd HH:mm'), sprzed $([int]$godzin) godzin - NIESWIEZA, swiezsza po przeliczeniu w tle)"
+  }
+  if ($godzin -gt $GODZIN_MIEDZY_KOSZTAMI) {
+    return " (liczba z $(Get-Date $kiedy -Format 'yyyy-MM-dd HH:mm'), swiezsza po przeliczeniu w tle)"
+  }
+  return ""
+}
+
+# To samo dla BLOKU rozbicia - osobna linia, bo blok ma wiecej niz jeden wiersz.
+# Godzina stoi przy nim zawsze: blok idzie z bufora, wiec nigdy nie jest "z tej
+# chwili", a liczby podane bez godziny kazdy czyta jako stan na teraz.
+function Znacznik-Wieku($kiedy, [string]$co) {
+  if ((-not $kiedy) -or ($kiedy -eq [datetime]::MinValue)) {
+    return "    (nie wiadomo, z kiedy sa te ${co} - nie da sie odczytac daty bufora)"
+  }
+  $godzin = ([datetime]::Now - $kiedy).TotalHours
+  $stempel = $kiedy.ToString('yyyy-MM-dd HH:mm')
+  if ($godzin -gt $GODZIN_MIEDZY_KOSZTAMI) {
+    return ("    (UWAGA: ${co} sprzed $([int]$godzin) godzin, z bufora z ${stempel} - to NIE jest stan na teraz; " +
+            "swiezsze beda po przeliczeniu w tle, przy nastepnym otwarciu)")
+  }
+  return "    (${co} z bufora z ${stempel})"
+}
+
 # Jedna linia o koszcie pamieci - zawsze, niezaleznie od tego, czy cokolwiek
 # innego wymaga uwagi. Gdy cos jest ucinane (kod 1), linia idzie jako wyrozniony
 # alarm, a nie dopisek w cudzym meldunku: po cichu ucinac sie nie ma prawa.
@@ -1394,10 +1459,7 @@ function Zglos-Koszt {
     return
   }
 
-  $ogon = ""
-  if ($godzin -gt $GODZIN_KOSZT_STARY) {
-    $ogon = " (liczba z $(Get-Date $kiedy -Format 'yyyy-MM-dd HH:mm'), swiezsza bedzie za chwile)"
-  }
+  $ogon = Ogon-Wieku $kiedy
 
   # Kod 1 znaczy "cos jest nie tak", ale nie zawsze "cos jest ucinane" - moze to
   # byc sam przekroczony prog (np. koszt cyklu wiedzy). Naglowek o ucinanych
@@ -1419,10 +1481,21 @@ function Zglos-Koszt {
 # tak samo jak robi to narzedzia\sufit-ladunku.ps1 przy ladunkach z pliku.
 # Hooka poznajemy po przelaczniku "-KosztCodex" w poleceniu. $null = nie wiadomo,
 # gdzie stoi sufit (brak pliku, cudzy hooks.json, starsza kopia narzedzia).
+#
+# Gdy w projekcie tego pliku nie ma (hooki siedza w konfiguracji domowej Codeksa
+# albo wdrozenie jest starsze), bierzemy sufit z szablonu w katalogu zrodlowym -
+# to ten sam plik, ktory wdrozenie tam kopiuje. Lepszy sufit wzorcowy niz zaden:
+# bez zadnej liczby nie wiedzielibysmy, ze ladunek jest ucinany.
 function Sufit-Kosztu-Codex {
-  if (-not $Projekt) { return $null }
   if (-not (Get-Command Limit-Ladunku -ErrorAction SilentlyContinue)) { return $null }
-  try { return (Limit-Ladunku (Join-Path $Projekt ".codex\hooks.json") "-KosztCodex") } catch { return $null }
+  if ($Projekt) {
+    try {
+      $z = Limit-Ladunku (Join-Path $Projekt ".codex\hooks.json") "-KosztCodex"
+      if ($z) { return $z }
+    } catch { Zanotuj-Wywrotke "odczyt sufitu hooka Codeksa z projektu" $_ }
+  }
+  try { return (Limit-Ladunku (Join-Path $Zrodlo "szablony-codex\hooks.json") "-KosztCodex") }
+  catch { Zanotuj-Wywrotke "odczyt sufitu hooka Codeksa z szablonu" $_; return $null }
 }
 
 # Dziennemu rozbiciu daleko do jednej linii, a ladunek hooka ma sufit i jest
@@ -1473,14 +1546,8 @@ function Wypisz-Koszt-Codex {
     $tresc = "MegaRuchacz: rachunek za pamiec agenta nie jest jeszcze policzony - liczba bedzie przy nastepnym otwarciu sesji."
   } else {
     $kiedy = [datetime]::MinValue
-    $godzin = [double]::MaxValue
-    if ([datetime]::TryParse($stan["data"], [ref]$kiedy)) {
-      $godzin = ([datetime]::Now - $kiedy).TotalHours
-    }
-    $ogon = ""
-    if ($godzin -gt $GODZIN_KOSZT_STARY -and $kiedy -gt [datetime]::MinValue) {
-      $ogon = " (liczba z $(Get-Date $kiedy -Format 'yyyy-MM-dd HH:mm'), swiezsza bedzie za chwile)"
-    }
+    if (-not [datetime]::TryParse($stan["data"], [ref]$kiedy)) { $kiedy = [datetime]::MinValue }
+    $ogon = Ogon-Wieku $kiedy
     # tak samo jak w Zglos-Koszt: kod 1 bez slowa UCINANE to przekroczony prog,
     # a nie uciete zasady - nazywanie tego ucinaniem byloby klamstwem
     if ($kod -ne 0 -and $linia -like "*UCINANE:*") { $tresc = "UWAGA: czesc zasad NIE DOCIERA do agenta - ${linia}${ogon}" }
@@ -1496,8 +1563,9 @@ function Wypisz-Koszt-Codex {
   try {
     $wywrotki = @(Odbierz-Wywrotki)
     if ($wywrotki.Count -gt 0) {
-      # Sufit ladunku to 1000 znakow, wiec do modelu ida najwyzej dwie wywrotki,
-      # i to przyciete - komplet lezy w dzienniku trybu bezobslugowego.
+      # Do modelu ida najwyzej dwie wywrotki, i to przyciete - komplet lezy
+      # w dzienniku trybu bezobslugowego. Sufit ladunku musi starczyc przede
+      # wszystkim na rozbicie, a nie na liste tego, co sie potknelo.
       $krotkie = @()
       foreach ($w in @($wywrotki | Select-Object -First 2)) {
         if ("$w".Length -gt 120) { $krotkie += "$w".Substring(0, 120) + "..." } else { $krotkie += "$w" }
@@ -1526,7 +1594,20 @@ function Wypisz-Koszt-Codex {
   # rozbicie liczyl tryb -Tlo, zapisywal je do pliku i na tym sie konczylo, bo
   # pokazywala je wylacznie galaz interaktywna. Znacznik jest osobny ("pelny.codex"),
   # zeby wczesniejsze okno Claude Code nie zabralo meldunku Codeksowi.
-  try { $tresc = Dolacz-Rozbicie-Codex $tresc } catch { }
+  try { $tresc = Dolacz-Rozbicie-Codex $tresc } catch { Zanotuj-Wywrotke "dolaczanie rozbicia rachunku (Codex)" $_ }
+
+  # Przeliczenie zamawiamy DOPIERO TERAZ, gdy ladunek jest juz zlozony: proces
+  # liczacy przepisuje bufor, a my mamy oddac to, co wlasnie opisalismy godzina.
+  # Zamawiamy takze wtedy, gdy rozbicie dzis juz poszlo - inaczej pod Codeksem
+  # odswiezal rachunek wylacznie hook -Tlo i kazde okno czytalo stan sprzed sesji.
+  try {
+    $wiekLiczby = [datetime]::MinValue
+    $swiezaLiczba = $false
+    if ([datetime]::TryParse($stan["data"], [ref]$wiekLiczby)) {
+      $swiezaLiczba = (([datetime]::Now - $wiekLiczby).TotalHours -le $GODZIN_MIEDZY_KOSZTAMI)
+    }
+    if ((-not $swiezaLiczba) -or (-not (Rozbicie-Swieze))) { Zamow-Przeliczenie }
+  } catch { Zanotuj-Wywrotke "start przeliczenia rachunku (Codex)" $_ }
 
   # Ostatnia bramka: nawet sam rachunek z alarmami moze nie zmiescic sie w suficie
   # (ktos obnizyl limit recznie). Ucinane jest to, co na koncu, wiec ostrzezenie
@@ -1538,7 +1619,7 @@ function Wypisz-Koszt-Codex {
         (Get-Command Ostrzezenie-O-Ucieciu -ErrorAction SilentlyContinue)) {
       $tresc = (Ostrzezenie-O-Ucieciu $tresc.Length $limitH) + $tresc
     }
-  } catch { }
+  } catch { Zanotuj-Wywrotke "pilnowanie sufitu ladunku (Codex)" $_ }
 
   # ConvertTo-Json, a nie sklejanie tekstu - linia potrafi miec cudzyslow albo
   # ukosnik i recznie zescapowany ladunek przestalby byc JSON-em.
@@ -1641,6 +1722,9 @@ function Linie-Kosztu-Dziennego {
   # nie mowi, co skrocic. Gotowy blok lezy w pliku podrecznym (liczy go w tle
   # koszt-pamieci.ps1 -Rozbicie), wiec otwarcie sesji na nic nie czeka.
   $linie = @(Linie-Rozbicia)
+  # Bufor pusty albo starszy niz $GODZIN_MIEDZY_KOSZTAMI - przeliczenie idzie
+  # w tle, nikt na nie nie czeka, a to, co pokazujemy teraz, niesie swoja godzine.
+  if (-not (Rozbicie-Swieze)) { try { Zamow-Przeliczenie } catch { Zanotuj-Wywrotke "start przeliczenia rozbicia" $_ } }
   if ($linie.Count -gt 0) { return $linie }
 
   # Rozbicia jeszcze nie ma (pierwsze uruchomienie) - zostaje to, co bylo:
@@ -1655,8 +1739,21 @@ function Linie-Kosztu-Dziennego {
     return $linie
   }
 
-  $dni = [int]([datetime]::Now - (Get-Item $plik).LastWriteTime).TotalDays
-  $linie += "MegaRuchacz - dzienny rachunek za pamiec (z $((Get-Item $plik).LastWriteTime.ToString('yyyy-MM-dd HH:mm'))):"
+  $kiedyRaport = (Get-Item $plik).LastWriteTime
+  $dni = [int]([datetime]::Now - $kiedyRaport).TotalDays
+  $godzinRaportu = ([datetime]::Now - $kiedyRaport).TotalHours
+  # Ten raport pisze zadanie LoreKoszt raz na dobe, wiec bywa sprzed godzin, a
+  # niesie rzeczy, ktore zdazyly sie zmienic (ile faktow czeka w poczekalni,
+  # ktore progi byly przekroczone). Sama data w nawiasie okazala sie za cicha:
+  # 2026-09-17 poszlo stad "W poczekalni czeka 90 faktow", gdy byla juz pusta.
+  # Dlatego przy nieswiezym raporcie mowimy to pierwsza linia, wprost.
+  if ($godzinRaportu -gt $GODZIN_MIEDZY_KOSZTAMI) {
+    $linie += ("MegaRuchacz - UWAGA: ponizszy rachunek za pamiec jest sprzed $([int]$godzinRaportu) godzin " +
+               "(z $($kiedyRaport.ToString('yyyy-MM-dd HH:mm'))) i NIE opisuje stanu na teraz - liczby i ostrzezenia " +
+               "z niego mogly sie od tego czasu zdezaktualizowac. Rozbicie na pozycje bedzie po przeliczeniu w tle.")
+  } else {
+    $linie += "MegaRuchacz - dzienny rachunek za pamiec (z $($kiedyRaport.ToString('yyyy-MM-dd HH:mm'))):"
+  }
 
   # Z pelnego raportu bierzemy tylko to, co jest liczba albo ostrzezeniem -
   # reszta to objasnienia, ktore uzytkownik przeczyta w pliku, jesli zechce.
@@ -1699,13 +1796,14 @@ function Zglos-Koszt-Dzienny {
 function Linie-Rozbicia {
   $blok = Czytaj-Tekst $plikRozbicia
   if (-not $blok) { return @() }
-  $wiek = [double]::MaxValue
-  try { $wiek = ([datetime]::Now - (Get-Item $plikRozbicia).LastWriteTime).TotalDays } catch { }
+  # Godzina bufora idzie ZAWSZE, nie dopiero po tygodniu: blok jest czytany
+  # z pliku, wiec zawsze opisuje przeszlosc, a bez stempla czyta sie go jak stan
+  # na teraz. 2026-09-17 poszly tak do Codeksa liczby sprzed siedmiu godzin.
+  $kiedy = $null
+  try { $kiedy = (Get-Item $plikRozbicia).LastWriteTime } catch { Zanotuj-Wywrotke "odczyt daty rozbicia rachunku" $_ }
   $linie = @("MegaRuchacz: przepisz uzytkownikowi ponizszy blok w pierwszej odpowiedzi, bez zmian i bez komentarza.")
   foreach ($l in (($blok -replace "`r`n", "`n") -split "`n")) { $linie += $l }
-  if ($wiek -gt 7) {
-    $linie += "    (liczby z $((Get-Item $plikRozbicia).LastWriteTime.ToString('yyyy-MM-dd')) - swiezsze beda po przeliczeniu w tle)"
-  }
+  $linie += (Znacznik-Wieku $kiedy "liczby")
   return $linie
 }
 
@@ -1854,7 +1952,14 @@ try {
     # Slad "bylem tu" idzie PRZED ladunkiem: to jedyny dowod, ze hooki Codeksa
     # w ogole chodza, i nie ma prawa zalezec od tego, co bedzie dalej.
     Zapisz-Obecnosc "codex"
+    # To, co zebralo sie do tej pory, jest juz na dysku i za chwile zostanie
+    # odebrane do ladunku - zerujemy licznik, zeby nie poszlo drugi raz.
+    $script:Wywrotki = @()
     Wypisz-Koszt-Codex
+    # Drugi zapis, bo wywrotka przy SKLADANIU ladunku wydarza sie PO pierwszym
+    # i bez tego nie zostawilaby po sobie ani sladu - a cisza w tym miejscu
+    # wygladalaby jak sprawnie zlozony rachunek.
+    if ($script:Wywrotki.Count -gt 0) { Zapisz-Obecnosc "codex" }
     exit 0
   }
 
