@@ -80,13 +80,18 @@ w projekcie nie zostało w tyle. Dzięki temu poprawka wypchnięta na jednej mas
 dociera na drugą bez Twojego udziału. Gdy coś się podciągnie, dostajesz **jedną
 linię: z której wersji na którą**.
 
-Start sesji to mechanizm Claude Code, więc na maszynie bez niego nikt by strażnika
-nie uruchomił. Dlatego instalator zakłada dodatkowo **zadanie `MegaRuchaczOdswiez`
-w Harmonogramie zadań Windows** — co godzinę robi to samo pobranie i pilnuje plików
-zasad, tyle że w ciszy, bo nikt tego nie czyta. Ślad każdego przebiegu (ostatnie
-200 linii) leży w `~\.claude\.megaruchacz-tlo.log` — tam sprawdzisz, czy to chodzi.
-Zadanie zakłada się bez uprawnień administratora i powtórna instalacja go podmienia,
-zamiast dokładać drugie.
+**Dzieje się to wyłącznie przy starcie sesji** — u Claude Code robi to hook
+`SessionStart`, u Codeksa jego własny hook. Zadania okresowego w Harmonogramie
+zadań Windows **nie ma**: instalator go nie zakłada, a jeśli zastanie stare
+`MegaRuchaczOdswiez` ze starszej wersji, zdejmuje je i mówi o tym jedną linią.
+Zdjąć je osobno, bez pełnej instalacji, można tak:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File <ścieżka>\narzedzia\instaluj-lore.ps1 -UsunOdswiezanie
+```
+
+Wniosek praktyczny: **narzędzie nie zaktualizuje się, dopóki nie otworzysz nowego
+okna**. Sesja, która chodzi od wczoraj, pracuje na wczorajszej wersji.
 
 Pobranie jest celowo tchórzliwe — nigdy nie rusza Twojej pracy:
 
@@ -162,20 +167,20 @@ zapytaniem o zgodę** i nie udaje, że wdrożył tryb workerów.
 | Co | Na maszynie z samym Codeksem |
 |---|---|
 | zasady globalne | **działa** — Codex sam wczytuje `~/.codex/AGENTS.md` przy każdej sesji, bez żadnego hooka |
-| aktualizacja narzędzia | **działa** — zadanie `MegaRuchaczOdswiez` w Harmonogramie, co godzinę |
-| pilnowanie, czy zasady nie zniknęły | **działa** — to samo zadanie, przy okazji |
+| aktualizacja narzędzia | przy starcie sesji Codeksa, jego własnym hookiem — patrz zastrzeżenie niżej |
+| pilnowanie, czy zasady nie zniknęły | ten sam hook, przy okazji |
 | `pamiec` (Lore) | **działa** — instalator rejestruje serwer MCP także w Codeksie |
 | tryb workerów (rozdawanie zadań) | **nie działa** — stoi na hookach i podsesjach Claude Code |
-| hooki, izolowane kopie repozytorium | **nie działa** — tych mechanizmów Codex nie ma |
+| izolowane kopie repozytorium | **nie działa** — tego mechanizmu Codex nie ma |
 
 Pliki trybu workerów instalator i tak zapisuje — zaczną działać, jeśli Claude Code
 kiedyś się na tej maszynie pojawi.
 
-**Hooków Codeksa nie używamy i nie zamierzamy.** Codex ma własne `SessionStart`,
-ale liczy skrót definicji hooka i odmawia uruchomienia, dopóki człowiek nie
-zatwierdzi go w CLI — i tak po **każdej** zmianie skryptu. Automat, który wymaga
-klikania po każdej aktualizacji, nie jest automatem. Dlatego aktualizacja idzie
-przez Harmonogram Windows, a zasady przez plik, który Codex czyta sam.
+**Zastrzeżenie do hooka Codeksa.** Codex ma własne `SessionStart`, ale liczy skrót
+jego definicji i odmawia uruchomienia, dopóki człowiek nie zatwierdzi go w CLI —
+i tak po **każdej** zmianie tej definicji. Dopóki tego nie zatwierdzisz, przy
+starcie sesji nie odpali się nic. Zasady tego nie dotyczy: idą przez `AGENTS.md`,
+który Codex czyta sam, bez żadnego hooka.
 
 Uwaga na rozmiar: Codex wczytuje `AGENTS.md` **do 32 KiB** — dłuższy plik przycina
 i koniec zasad przepada. Strażnik mówi o tym jedną linią, gdy plik przekroczy limit.
