@@ -1,0 +1,58 @@
+{
+  "hooks": {
+    "SessionStart": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "cat \"{{PROJEKT}}/.megaruchacz/zasady-sesja.json\"",
+            "commandWindows": "powershell -NoProfile -NonInteractive -Command \"Get-Content -Raw -LiteralPath '{{PROJEKT}}/.megaruchacz/zasady-sesja.json'\"",
+            "timeout": 10,
+            "statusMessage": "MegaRuchacz: zasady kierownika",
+            "additionalContextLimit": 8000
+          }
+        ]
+      }
+    ],
+    "UserPromptSubmit": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "cat \"{{PROJEKT}}/.megaruchacz/przypomnienie.json\"",
+            "commandWindows": "powershell -NoProfile -NonInteractive -Command \"Get-Content -Raw -LiteralPath '{{PROJEKT}}/.megaruchacz/przypomnienie.json'\"",
+            "timeout": 5,
+            "statusMessage": "MegaRuchacz: przypomnienie",
+            "additionalContextLimit": 500
+          }
+        ]
+      }
+    ],
+    "SubagentStart": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node \"{{ZRODLO}}/narzedzia/mr-log-codex.js\" start \"{{PROJEKT}}\"",
+            "commandWindows": "node \"{{ZRODLO}}/narzedzia/mr-log-codex.js\" start \"{{PROJEKT}}\"",
+            "timeout": 5,
+            "statusMessage": "MegaRuchacz: wpis do rejestru pracy"
+          }
+        ]
+      }
+    ],
+    "SubagentStop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node \"{{ZRODLO}}/narzedzia/mr-log-codex.js\" stop \"{{PROJEKT}}\"",
+            "commandWindows": "node \"{{ZRODLO}}/narzedzia/mr-log-codex.js\" stop \"{{PROJEKT}}\"",
+            "timeout": 5,
+            "statusMessage": "MegaRuchacz: wpis do rejestru pracy"
+          }
+        ]
+      }
+    ]
+  }
+}
