@@ -750,3 +750,46 @@ i milczy, więc zapory zostają wyłącznie po jego stronie.
 **Zasada, która wyszła dziś trzy razy z rzędu:** zabezpieczenie, którego nikt nie
 próbował złamać, było martwe. Trzy na trzy. Każda zapora dostaje odtąd próbę
 negatywną, albo nie liczy się za zrobioną.
+
+## 0.16.0 — 2026-09-17
+
+Pytanie użytkownika, które ujawniło dziurę: *„jak coś nie będzie działać w Codeksie,
+to wyskoczą jakieś błędy? nie będzie cichego niedziałania?"* Odpowiedź brzmiała:
+**będzie** — i częściowo sami je wbudowaliśmy.
+
+**Brak wiadomości przestaje znaczyć „wszystko gra"**
+- Strażnik zapisuje znacznik obecności przy każdym przebiegu, osobno dla każdego
+  trybu: hook Claude Code, hook Codeksa, tło, uruchomienie ręczne.
+- Gdy wdrożenie dla Codeksa istnieje, a jego hook nie odnotował ani jednego
+  przebiegu, strażnik mówi wprost, co sprawdzić — i podaje obie możliwe przyczyny:
+  niezatwierdzone hooki (`/hooks`) albo piaskownica Codeksa, która nie przepuszcza
+  PowerShella.
+- **Cisza melduje się krzyżowo**, bo hook, który nie chodzi, sam o sobie nigdy nie
+  powie: o hookach Codeksa mówi przebieg pod Claude Code, a o hooku Claude Code —
+  ładunek wstrzykiwany Codeksowi. Alarm idzie na POCZĄTEK ładunku, bo sufit tnie
+  od końca.
+- Zabezpieczenia przed fałszywym alarmem: wymagany katalog domowy narzędzia
+  i wdrożenie w projekcie, dowód spoza naszych hooków, doba karencji od pierwszego
+  zauważenia i jeden meldunek na dobę. Fałszywy alarm uczy ignorować ostrzeżenia,
+  więc jest gorszy niż brak alarmu.
+
+**Koniec połykania błędów**
+- Puste `catch { }` w głównym przebiegu strażnika chroniły start sesji przed
+  potknięciem jednego zadania — ale gdy padało wszystko, też było cicho. Teraz
+  każda wywrotka trafia do pliku stanu z nazwą zadania i treścią wyjątku,
+  a przy następnym starcie jest meldowana i czyszczona.
+- Strażnik nadal nie przerywa sesji. Ma nie przeszkadzać, ale nie ma prawa milczeć.
+
+**Opisy zgodne z kodem**
+- README twierdził, że na maszynie z samym Codeksem „nie dzieje się nic samo"
+  i że aktualizacja nie przychodzi — nieprawda od 0.14.1. Tym razem opis **zaniżał**
+  możliwości, czyli odstraszał od rzeczy, która działa.
+- Z mapy projektu usunięte wszystkie numery linii, zostały nazwy funkcji. Numery
+  rozjeżdżały się przy każdej zmianie i to one były źródłem dzisiejszych pomyłek:
+  mapa wskazywała linię 304, gdy funkcja siedziała w 754.
+
+**Sprawdzone uruchomieniem, obie próby negatywne:**
+- po cofnięciu znacznika o pięć dni strażnik zameldował ciszę z konkretną poradą
+  i nie powtórzył meldunku tego samego dnia;
+- po wstawieniu sztucznej awarii błąd trafił do stanu, został zameldowany przy
+  następnym przebiegu, wyczyszczony, a czwarty przebieg był już milczący.
