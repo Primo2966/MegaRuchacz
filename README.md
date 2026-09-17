@@ -150,14 +150,14 @@ i wprost. Nic nie wychodzi poza Twój komputer.
 | **Claude Code** (CLI, wtyczka do IDE) | tak, pełny tryb | tak, instalator sam rejestruje |
 | **Claude Code w Orce** | tak | tak |
 | **Codex w Orce** | tak — workerów odpala Orca | czytnik w przygotowaniu |
-| **Codex sam z siebie** | nie — brak mechanizmu | czytnik w przygotowaniu |
+| **Codex sam z siebie** | tak, w wersji dla Codeksa — bez pracy w tle i bez izolowanych kopii repozytorium; hooki wymagają jednorazowego `/hooks` | czytnik w przygotowaniu |
 | **Claude Desktop** (aplikacja) | **nie** | da się, ale ręcznie — patrz niżej |
 | Zwykły GPT, ChatGPT w przeglądarce | nie | nie |
 
 ### Maszyna z samym Codeksem — co tam działa, a co nie
 
 Instalator uruchomiony tam, gdzie nie ma Claude Code, **mówi to wprost przed
-zapytaniem o zgodę** i nie udaje, że wdrożył tryb workerów.
+zapytaniem o zgodę** i nie udaje, że wdrożył więcej, niż wdrożył.
 
 | Co | Na maszynie z samym Codeksem |
 |---|---|
@@ -165,17 +165,21 @@ zapytaniem o zgodę** i nie udaje, że wdrożył tryb workerów.
 | aktualizacja narzędzia | **działa** — zadanie `MegaRuchaczOdswiez` w Harmonogramie, co godzinę |
 | pilnowanie, czy zasady nie zniknęły | **działa** — to samo zadanie, przy okazji |
 | `pamiec` (Lore) | **działa** — instalator rejestruje serwer MCP także w Codeksie |
-| tryb workerów (rozdawanie zadań) | **nie działa** — stoi na hookach i podsesjach Claude Code |
-| hooki, izolowane kopie repozytorium | **nie działa** — tych mechanizmów Codex nie ma |
+| tryb workerów (rozdawanie zadań) | **działa w wersji dla Codeksa** — role w `.codex/agents/`, zasady w `AGENTS.md` projektu, rejestr i mapa w `.megaruchacz/` |
+| praca w tle | **nie ma** — wątek główny czeka na wszystkich podagentów, użytkownik czeka razem z nim |
+| izolowane kopie repozytorium (worktree) | **nie ma** — rozłączności plików pilnuje wyłącznie treść zlecenia i rejestr |
+| hooki (zasady na starcie, rejestr workerów) | **działają dopiero po zatwierdzeniu** poleceniem `/hooks` w CLI |
 
-Pliki trybu workerów instalator i tak zapisuje — zaczną działać, jeśli Claude Code
-kiedyś się na tej maszynie pojawi.
+Pliki trybu workerów dla Claude Code instalator zapisuje i tak — zaczną działać,
+jeśli Claude Code kiedyś się na tej maszynie pojawi.
 
-**Hooków Codeksa nie używamy i nie zamierzamy.** Codex ma własne `SessionStart`,
-ale liczy skrót definicji hooka i odmawia uruchomienia, dopóki człowiek nie
-zatwierdzi go w CLI — i tak po **każdej** zmianie skryptu. Automat, który wymaga
-klikania po każdej aktualizacji, nie jest automatem. Dlatego aktualizacja idzie
-przez Harmonogram Windows, a zasady przez plik, który Codex czyta sam.
+**Hooki Codeksa wymagają jednego kliknięcia i trzeba o tym wiedzieć.** Codex liczy
+skrót definicji hooka i odmawia uruchomienia, dopóki człowiek nie zatwierdzi go
+w CLI poleceniem `/hooks` — i tak po **każdej** zmianie tych plików, również po
+aktualizacji narzędzia. Dlatego instalator mówi o tym na ekranie zgody i jeszcze
+raz na końcu, a najważniejsza rzecz — zasady kierownika — idzie do modelu
+`AGENTS.md`-em, czyli drogą, która żadnego zatwierdzania nie wymaga. Aktualizacja
+narzędzia też nie wisi na hookach, tylko na Harmonogramie Windows.
 
 Uwaga na rozmiar: Codex wczytuje `AGENTS.md` **do 32 KiB** — dłuższy plik przycina
 i koniec zasad przepada. Strażnik mówi o tym jedną linią, gdy plik przekroczy limit.
@@ -208,13 +212,14 @@ historię z Claude Code. To nadal użyteczne, ale warto wiedzieć, czego szukasz
 
 - W **Claude Code** worker to narzędzie, które ma sam model — odpala go, kiedy
   uzna za stosowne.
+- W **Codeksie** worker to podagent, którego również odpala sam model — tyle że
+  wątek główny czeka na wszystkich naraz i dopiero wtedy odzywa się do Ciebie.
 - W **Orce** worker to osobna sesja, którą odpala **Orca**, a nie model. Orce
   jest w zasadzie obojętne, co siedzi w tej sesji: `--agent claude`
   i `--agent codex` są równorzędne.
 
-Dlatego Codex podpięty do Orki dostaje rozdawanie roboty „z zewnątrz" — nie
-dlatego, że nabył nową umiejętność, tylko dlatego, że steruje nim coś, co ją ma.
-Codex uruchomiony samodzielnie, poza Orką, workerów nie ma i mieć nie będzie.
+Dlatego Codex podpięty do Orki dostaje rozdawanie roboty dodatkowo „z zewnątrz" —
+niezależnie od własnych podagentów.
 
 Tam, gdzie w tabeli jest „nie", zasady nadal działają jako sposób pracy — agent
 po prostu wykonuje wszystko sam, zamiast rozdawać.

@@ -1,4 +1,4 @@
-# Worker wykonawczy - odpowiednik .claude/agents/implementer.md z Claude Code.
+# Worker wykonawczy - odpowiednik .claude/agents/implementer.md z Claude Code. kierownik-template
 # Jedyna rola z prawem zapisu: dziedziczy sandbox po rodzicu (zwykle workspace-write).
 name = "implementer"
 description = "Worker wykonawczy - wprowadza konkretna, wyznaczona zmiane w kodzie w wyznaczonym zakresie plikow. Uzywaj do rownoleglej implementacji rozlacznych kawalkow zadania."
