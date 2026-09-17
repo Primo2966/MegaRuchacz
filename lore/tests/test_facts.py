@@ -517,6 +517,75 @@ def test_a_second_run_does_not_duplicate_a_fact(waiting_room):
     assert entries(facts.CANDIDATES_PATH) == ["Użytkownik pracuje na Windowsie."]
 
 
+def test_an_entry_rejected_by_the_verifier_is_not_harvested_again(waiting_room):
+    """'[!]' and '[?]' are boxes lore.verify writes — an entry it flagged is still known here."""
+    facts.KNOWLEDGE_DIR.mkdir(parents=True, exist_ok=True)
+    facts.CANDIDATES_PATH.write_text(
+        "- [!] [2026-09-16] (stala/praca) Użytkownik pracuje na Windowsie. (nie znaleziono: X)\n"
+        "- [?] [2026-09-16] Redis nie jest potrzebny. (sporne: przeczy wpisowi „X”)\n",
+        encoding="utf-8")
+    add(waiting_room, ago(1), "user", "cokolwiek")
+    facts.write_marker(ago(2))
+
+    r = facts.run(ask=answers("Użytkownik pracuje na Windowsie.", "Redis nie jest potrzebny."),
+                  conn=waiting_room.conn)
+
+    assert r["added"] == []
+
+
+def test_a_fact_standing_in_the_current_layer_is_not_proposed_again(waiting_room):
+    # "### Bieżące" carries the date inside the entry; taken for part of the fact, the same
+    # sentence would look new every single day
+    facts.RULES_PATH.write_text("# Ustalenia\n- [2026-09-16] Trwa przenoszenie magazynu.\n",
+                                encoding="utf-8")
+    add(waiting_room, ago(1), "user", "cokolwiek")
+    facts.write_marker(ago(2))
+
+    r = facts.run(ask=answers("Trwa przenoszenie magazynu."), conn=waiting_room.conn)
+
+    assert r["added"] == []
+
+
+# ---------------------------------------------------------------- where a fact came from
+
+def trail(path) -> str:
+    return (facts.KNOWLEDGE_DIR / facts.SOURCES_NAME).read_text(encoding="utf-8")
+
+
+def test_the_harvest_writes_down_which_conversations_a_fact_came_from(waiting_room):
+    """The user's own question: 'I don't know where this came from'. It has to be answerable."""
+    waiting_room.conn.execute(
+        "INSERT INTO chunks(project, session, file, line, part, ts, role, text)"
+        " VALUES (?,?,?,?,?,?,?,?)",
+        ("test-project", "rozmowa-o-ebayu", "a.jsonl", 1, 0, ago(1), "user", "cokolwiek"))
+    facts.write_marker(ago(2))
+
+    facts.run(ask=answers("Użytkownik pracuje na Windowsie."), conn=waiting_room.conn)
+
+    line = trail(facts.KNOWLEDGE_DIR)
+    assert "wyłowiony" in line and "rozmowa-o-ebayu" in line
+    assert "Użytkownik pracuje na Windowsie." in line
+
+
+def test_the_trail_is_not_written_into_the_waiting_room_entry(waiting_room):
+    """It is kept apart on purpose — the layer it feeds is sent with every session."""
+    add(waiting_room, ago(1), "user", "cokolwiek")
+    facts.write_marker(ago(2))
+
+    facts.run(ask=answers("Użytkownik pracuje na Windowsie."), conn=waiting_room.conn)
+
+    assert "test-session" not in facts.CANDIDATES_PATH.read_text(encoding="utf-8")
+
+
+def test_a_dry_run_leaves_no_trail(waiting_room):
+    add(waiting_room, ago(1), "user", "cokolwiek")
+    facts.write_marker(ago(2))
+
+    facts.run(dry_run=True, ask=answers("Użytkownik pracuje na Windowsie."), conn=waiting_room.conn)
+
+    assert not (facts.KNOWLEDGE_DIR / facts.SOURCES_NAME).exists()
+
+
 def test_a_fact_already_standing_in_the_rules_is_not_proposed(waiting_room):
     facts.RULES_PATH.write_text("# Ustalenia\n- Użytkownik pracuje na Windowsie!\n", encoding="utf-8")
     add(waiting_room, ago(1), "user", "cokolwiek")
