@@ -771,10 +771,11 @@ foreach ($m in $Moduly) {
   }
   $linieWersji += "$k.data: $teraz"
 }
-# Wdrozenie dla Codeksa ma wlasny stan - straznik go dzis nie aktualizuje, ale
-# format jest ten sam ("klucz: wartosc"), wiec da sie po nim poznac, co i kiedy
-# tam weszlo. Klucz zostaje takze w pliku wersji Claude Code, zeby jedno miejsce
-# mowilo cala prawde o wdrozeniu.
+# Wdrozenie dla Codeksa ma wlasny plik stanu (.megaruchacz\wersja.txt), w tym
+# samym formacie "klucz: wartosc". Od 0.14.1 odswieza go takze straznik -
+# Nanies-Poprawki-Codex przesuwa tam "codex.wersja" i "codex.data" razem z reszta
+# poprawek. Ten sam klucz zostaje w pliku wersji Claude Code, zeby jedno miejsce
+# mowilo cala prawde o wdrozeniu; Pilnuj-Wersji przesuwa go razem z modulem.
 if ($JestCodex) {
   $linieWersji += "codex.wersja: $wersja"
   $linieWersji += "codex.data: $teraz"

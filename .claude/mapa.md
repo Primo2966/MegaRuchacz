@@ -11,19 +11,72 @@ wysle kogokolwiek na rozpoznanie.
 
 ## Aktualizacja wdrozen (mechanizm wersji)
 
-- `narzedzia/straznik-zasad.ps1` - straznik wolany hookiem SessionStart; funkcje: `Rejestr-Modulow` (l.78, moduly `workerzy` i `pamiec`, pola `pytaj`/`instalator`/`aktualizacja`), `Pilnuj-Zasad` (l.250, blok zasad w ~/.claude/CLAUDE.md), `Pilnuj-Wersji` (l.304, porownanie wersji), `Nanies-Poprawki` (l.234, kopiuje pliki ze zrodla do `.claude/` projektu), `Napraw-Hooki` (l.193, dokleja brakujace hooki do settings.json).
-- Porownanie wersji: najwyzszy naglowek `## X.Y.Z` w `ZMIANY.md` zrodla (`Wersja-Narzedzia`) kontra klucz `modul.<nazwa>.wersja` w `.claude/megaruchacz-wersja.txt` projektu.
-- Regula: patch -> `Nanies-Poprawki` sam; minor -> pliki wchodza, nowa funkcja tylko proponowana; major -> nic, komunikat o recznym `wdroz.ps1`. Modul z `aktualizacja = "instalator"` (np. `pamiec`) nigdy nie aktualizuje sie sam - straznik podaje komende.
-- Odmowy zapamietywane w pliku wersji: `modul.<x>.status: odrzucony`, `modul.<x>.odrzucone`, `modul.<x>.zaproponowane`. Ustawia je `straznik-zasad.ps1 -Odrzuc <modul>`.
-- `.claude/megaruchacz-wersja.txt` - pisany przez `wdroz.ps1` (l.352-374); klucze `zrodlo:` (BEZWZGLEDNA sciezka do repo narzedzia), `commit:`, `data:`, `modul.*`.
-- Sciezka do repo zrodlowego jest zaszywana bezwzglednie tez w hooku SessionStart w `settings.json` - generuje to `dodajStraznika()` w `wdroz.ps1` (l.294). Przeniesienie repo psuje hook; straznik przy nieistniejacym `-Zrodlo` milczy i konczy zerem.
-- `wdroz.ps1` - jedyny instalator; czyta rejestr modulow przez `straznik-zasad.ps1 -Moduly`, na koncu robi samosprawdzenie (sekcja od l.378).
+Numerow linii tu nie ma z premedytacja - rozjezdzaly sie przy kazdej zmianie
+i dwa razy wprowadzily w blad. Funkcje szukaj po nazwie (`grep -n "^function "`).
+
+- `narzedzia/straznik-zasad.ps1` - straznik wolany hookiem `SessionStart`. Pod Claude Code
+  zwykly przebieg (wpis w `.claude/settings.json`), pod Codeksem przebieg `-Tlo`
+  (grupa w `.codex/hooks.json`, `async`, nic nie wstrzykuje do rozmowy - slad idzie
+  do dziennika `~/.claude/.megaruchacz-tlo.log`). Funkcje: `Rejestr-Modulow` (moduly
+  `workerzy` i `pamiec`, pola `pytaj`/`instalator`/`aktualizacja`), `Odswiez-Zrodlo`
+  (pobranie nowszej wersji samego narzedzia - patrz nizej), `Pilnuj-Zasad` (blok zasad
+  w `~/.claude/CLAUDE.md` ORAZ w `~/.codex/AGENTS.md`, gdy katalog Codeksa istnieje),
+  `Pilnuj-Wersji` (porownanie wersji), `Nanies-Poprawki` (kopiuje pliki ze zrodla do
+  `.claude/` projektu), `Nanies-Poprawki-Codex` (`.codex/agents/`, `.megaruchacz/*`,
+  blok w `AGENTS.md`, ladunki hookow), `Napraw-Hooki` i `Napraw-Hooki-Codex` (dokladaja
+  wylacznie BRAKUJACE hooki), `Pilnuj-Sufitu-Zawsze` (sufit ladunku przy kazdym przebiegu),
+  `Zglos-Koszt` / `Wypisz-Koszt-Codex` (rachunek za pamiec agenta).
+- Porownanie wersji: najwyzszy naglowek `## X.Y.Z` w `ZMIANY.md` zrodla (`Wersja-Narzedzia`)
+  kontra klucz `modul.<nazwa>.wersja` w `.claude/megaruchacz-wersja.txt` projektu.
+- Regula: patch -> `Nanies-Poprawki` sam; minor -> pliki wchodza, nowa funkcja tylko
+  proponowana; major -> nic, komunikat o recznym `wdroz.ps1`. Modul z `aktualizacja = "instalator"`
+  (np. `pamiec`) nigdy nie aktualizuje sie sam - straznik podaje komende.
+- Odmowy zapamietywane w pliku wersji: `modul.<x>.status: odrzucony`, `modul.<x>.odrzucone`,
+  `modul.<x>.zaproponowane`. Ustawia je `straznik-zasad.ps1 -Odrzuc <modul>`.
+- `.claude/megaruchacz-wersja.txt` - zaklada `wdroz.ps1` (sekcja "6. Znacznik wersji"), potem
+  przesuwa `Pilnuj-Wersji`; klucze `zrodlo:` (BEZWZGLEDNA sciezka do repo narzedzia), `commit:`,
+  `data:`, `modul.*`, a przy wdrozeniu dla Codeksa takze `codex.wersja` / `codex.data`.
+  Drugi plik tego samego formatu lezy w `.megaruchacz/wersja.txt` - pisze go `wdroz.ps1`
+  i odswieza `Nanies-Poprawki-Codex`.
+- Sciezka do repo zrodlowego jest zaszywana bezwzglednie tez w hooku `SessionStart`
+  w `settings.json` - generuje to `dodajStraznika()` w `wdroz.ps1` (i `{{ZRODLO}}`
+  w `szablony-codex/hooks.json` po stronie Codeksa). Przeniesienie repo psuje hook;
+  straznik przy nieistniejacym `-Zrodlo` milczy i konczy zerem.
+- `wdroz.ps1` - jedyny instalator; czyta rejestr modulow przez `straznik-zasad.ps1 -Moduly`,
+  na koncu robi samosprawdzenie.
+
+### Kto odswieza kopie narzedzia (od 0.13.0)
+
+- Robi to `Odswiez-Zrodlo` w `narzedzia/straznik-zasad.ps1` - PIERWSZY krok kazdego przebiegu
+  straznika, przed jakimkolwiek porownywaniem wersji. To jedyne miejsce w repo, ktore siega
+  do zdalnej: `git fetch --quiet`, a potem wylacznie `git merge --ff-only @{u}`.
+- Kiedy: przy starcie sesji. W przebiegu zwyklym (Claude Code) nie czesciej niz raz na
+  60 minut na katalog zrodlowy - znacznik w `~/.claude/.megaruchacz-pobranie.txt`, klucz to
+  skrot sciezki, bo dziesiec otwartych okien ma odpytac zdalna raz. W trybie `-Tlo` (hook
+  Codeksa) dlawika NIE MA z decyzji uzytkownika: pobranie ma sie dziac przy kazdym starcie sesji.
+- Limity czasu: przebieg zwykly 5 s na komende gita i 6 s na `fetch` (caly hook ma 15 s),
+  tryb `-Tlo` odpowiednio 30 s i 60 s (nikt tam nie czeka). Zadnych pytan o haslo
+  (`GIT_TERMINAL_PROMPT=0`, `credential.interactive=never`).
+- Warunki odmowy - kazdy konczy sie cisza albo jedna linia, nigdy sila:
+  brak gita w PATH; katalog zrodlowy nie jest repozytorium; NIEZAPISANE ZMIANY w zrodle
+  (mowi o tym glosno i zostaje na tym, co jest); galaz bez zdalnej albo odpiety HEAD;
+  `fetch` sie nie udal (brak sieci albo dostepu); zdalna nie ma nic nowego; HISTORIA
+  ROZJECHANA (sa commity lokalne, ktorych nie ma na zdalnej - mowi glosno, nie scala);
+  `merge --ff-only` odrzucony przez gita.
+- Zadnego `reset --hard`, `checkout -f`, `clean` ani autostash - cudza praca jest wazniejsza
+  niz swiezosc narzedzia. Udane przewiniecie ZAWSZE konczy sie jedna linia o tym,
+  co sie zmienilo (stara -> nowa wersja albo liczba zmian).
 
 ### Czego tu nie ma
 
-- Nigdzie w repo nie ma `git pull`, `git fetch` ani zadnego odwolania do `origin` - jedyne uzycie gita poza worktree to `git -C $Zrodlo rev-parse --short HEAD` w `wdroz.ps1:356`. Kopia repo narzedzia na dysku nigdy nie odswieza sie sama.
-- Nie ma zadania w Harmonogramie Windows aktualizujacego narzedzie. Zadania rejestruja tylko: `cykl-dzienny.ps1`, `instaluj-lore.ps1`, `wyciagnij-fakty.ps1`, `aktualizuj-wiedze.ps1`, `koszt-pamieci.ps1` - wszystkie dotycza Lore/pamieci, nie wersji narzedzia.
+- Nie ma zadania w Harmonogramie Windows aktualizujacego narzedzie. `MegaRuchaczOdswiez`
+  istnialo tylko w 0.13.0 - w 0.14.0 zostalo usuniete, a `wdroz.ps1` ZDEJMUJE je z maszyn,
+  gdzie zdazylo powstac. Zadania rejestruja dzis tylko: `cykl-dzienny.ps1`, `instaluj-lore.ps1`,
+  `wyciagnij-fakty.ps1`, `aktualizuj-wiedze.ps1`, `koszt-pamieci.ps1` - wszystkie dotycza
+  Lore/pamieci, nie wersji narzedzia.
 - `narzedzia/cykl-dzienny.ps1` nie wola ani `wdroz.ps1`, ani straznika.
+- Poza `Odswiez-Zrodlo` git sluzy tylko do odczytu: `git -C $Zrodlo rev-parse --short HEAD`
+  (znacznik commitu we `wdroz.ps1`) i `git ls-files` (sprawdzenie, czy plik jest sledzony).
 
 ## Codex CLI - hooki, instrukcje, subagenci (rozpoznanie 2026-09-17)
 
@@ -80,18 +133,30 @@ Dokumentacja zrodlowa: repo `openai/codex/docs/*.md` to same odsylacze; tresc je
 
 ## Tryb workerow: na czym stoi w Claude Code (inwentarz 2026-09-17)
 
-- `wdroz.ps1:207-217` - kopiuje `.claude/agents/*.md` (4 role); nadpisuje cudze pliki dopiero po kopii
-  zapasowej, rozpoznaje swoje po znaczniku `kierownik-template`.
-- `wdroz.ps1:220-234` - `worklog.md` i `mapa.md` tylko gdy ich nie ma; `CLAUDE.md` zrodla ->
-  `.claude/megaruchacz-zasady.md`, plus `orchestrator-reminder.json` i `mr-log.js`.
-- `wdroz.ps1:236-251` - generuje `.claude/megaruchacz-sesja.json`: JSON z
-  `hookSpecificOutput.additionalContext` = cala tresc zasad (ladunek hooka SessionStart).
-- `wdroz.ps1:253-311` - pisze `.claude/settings.json`: `worktree = {baseRef:"fresh", bgIsolation:"worktree"}`
-  oraz 5 hookow (kazdy `shell:"bash"`, timeout 5 s, 15 s dla straznika):
+Bez numerow linii - te same powody co wyzej. Sekcje we `wdroz.ps1` sa ponumerowane
+komentarzami ("# 1. Workerzy", "# 4. settings.json" itd.), wiec szukaj po nich.
+
+- `wdroz.ps1`, sekcja "1. Workerzy" - kopiuje `.claude/agents/*.md` (4 role: implementer,
+  scout, verifier, zastepca); nadpisuje cudze pliki dopiero po kopii zapasowej,
+  rozpoznaje swoje po znaczniku `kierownik-template`.
+- `wdroz.ps1`, sekcja "2. Pliki stanu" - `worklog.md` i `mapa.md` tylko gdy ich nie ma.
+  Sekcja "3. Zasady + payloady": `CLAUDE.md` zrodla -> `.claude/megaruchacz-zasady.md`,
+  plus `orchestrator-reminder.json` i `mr-log.js`, a node sklada
+  `.claude/megaruchacz-sesja.json`: JSON z `hookSpecificOutput.additionalContext`
+  = cala tresc zasad (ladunek hooka SessionStart).
+- `wdroz.ps1`, sekcja "4. settings.json" - pisze `.claude/settings.json`:
+  `worktree = {baseRef:"fresh", bgIsolation:"worktree"}` oraz 5 hookow
+  (kazdy `shell:"bash"`, timeout 5 s, 15 s dla straznika):
   SessionStart -> `cat megaruchacz-sesja.json` (pelne zasady raz na sesje);
   SessionStart -> `narzedzia/straznik-zasad.ps1` (wersje/poprawki, sciezka bezwzgledna);
   UserPromptSubmit -> `cat orchestrator-reminder.json` (przypomnienie przy kazdym enterze);
   SubagentStart -> `node mr-log.js`; SubagentStop -> `node mr-log.js stop`.
+- `wdroz.ps1`, sekcja "4b. Codex CLI" - to samo wdrozenie po stronie Codeksa: role TOML
+  do `.codex/agents/`, hooki do `.codex/hooks.json` (szablon `szablony-codex/hooks.json`,
+  podstawiane `{{PROJEKT}}` i `{{ZRODLO}}`), zasady do `AGENTS.md` projektu, a rejestr,
+  mapa i ladunki hookow do `<projekt>/.megaruchacz/` - bo piaskownica Codeksa trzyma
+  `.codex/` rekurencyjnie tylko do odczytu. Start i koniec workera dopisuje
+  `narzedzia/mr-log-codex.js`.
 - `.claude/mr-log.js` - wolany z SubagentStart/SubagentStop; czyta payload ze stdin (`agent_type`,
   `description`), dopisuje linie START/KONIEC do `.claude/worklog.md` i aktualizuje rejestr okien
   `<rodzic-repo>/.mr-okna/<ID>.json` (pola `aktywni`, `lacznie`, `puls`) dla panelu nadzoru.
