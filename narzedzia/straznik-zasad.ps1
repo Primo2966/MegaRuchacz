@@ -347,6 +347,47 @@ function Odbierz-Wywrotki {
   return $linie
 }
 
+# Zdanie do czlowieka z przebiegu, ktory nie ma widowni. W trybie -Tlo (jedyny
+# hook Codeksa, ktory cokolwiek nanosi) "Mow" znaczy "do dziennika", a dziennik
+# jest dowodem, ze zadanie chodzi - nie skrzynka na prosby. Prosba, na ktora
+# uzytkownik ma odpowiedziec (np. zatwierdzic hooki przez /hooks), czeka wiec
+# w pliku stanu na najblizszy przebieg, ktory ma komu mowic - tak samo jak wywrotki.
+$WIADOMOSCI_NAJWYZEJ = 3
+function Odloz-Wiadomosc([string]$tekst) {
+  if (-not $tekst) { return }
+  try {
+    $stan = Czytaj-Klucze $plikStanu
+    $naj = 0
+    $ile = 0
+    foreach ($k in @($stan.Keys)) {
+      $m = [regex]::Match($k, '^mow\.(\d+)$')
+      if (-not $m.Success) { continue }
+      if ("$($stan[$k])" -eq $tekst) { return }   # juz czeka, nie dubluj
+      $ile++
+      if (([int]$m.Groups[1].Value) -gt $naj) { $naj = [int]$m.Groups[1].Value }
+    }
+    if ($ile -ge $WIADOMOSCI_NAJWYZEJ) { return }
+    $nowy = [ordered]@{}
+    $nowy["mow." + ($naj + 1)] = $tekst
+    Dopisz-Klucze $plikStanu $nowy
+  } catch { Notuj "odlozenie wiadomosci nie wyszlo: $($_.Exception.Message)" }
+}
+
+# Odlozone zdania - zwraca je i CZYSCI, bo maja dojsc raz. Gdy sprawa wroci,
+# odlozy je na nowo ten sam przebieg, ktory ja zauwazy.
+function Odbierz-Wiadomosci {
+  $stan = Czytaj-Klucze $plikStanu
+  $klucze = @($stan.Keys | Where-Object { $_ -match '^mow\.\d+$' })
+  if ($klucze.Count -eq 0) { return @() }
+  $linie = @()
+  foreach ($k in $klucze) {
+    $linie += "$($stan[$k])"
+    $stan.Remove($k)
+  }
+  try { Zapisz-Klucze $plikStanu $stan } catch { }   # nie wyczyscilo sie - wroca raz jeszcze, trudno
+  return $linie
+}
+
 # Kiedy dany program chodzil na tej maszynie ostatni raz - po swiezosci plikow,
 # ktore prowadzi sam w swoim katalogu domowym. To jedyny dowod przychodzacy
 # SPOZA naszych hookow, wiec tylko on pozwala odroznic "hook nie wystartowal"
@@ -466,6 +507,13 @@ function Zglos-Wywrotki {
   if ($linie.Count -eq 0) { return }
   Write-Host "MegaRuchacz: przy poprzednim przebiegu straznika cos sie wywrocilo (sesji to nie zatrzymalo, ale samo sie nie naprawi):"
   foreach ($l in $linie) { Write-Host "    $l" }
+}
+
+# Prosby odlozone przez przebiegi bez widowni - to samo miejsce w lancuchu,
+# co wywrotki. Pod Codeksem odbiera je Wypisz-Koszt-Codex; kto pierwszy, ten
+# je pokaze, bo po obu stronach ekranu siedzi ten sam czlowiek.
+function Zglos-Odlozone {
+  foreach ($l in @(Odbierz-Wiadomosci)) { Write-Host $l }
 }
 
 # Zamyka przebieg w tle: zbierane komunikaty ida na koniec dziennika, a z gory
@@ -663,17 +711,80 @@ function Pilnuj-Sufitu-Sesji-Codex($celMega, $celCodex) {
        "przy hooku od zasady-sesja.json w .codex\hooks.json albo skroc zasady.")
 }
 
+# Czy to polecenie WOLA skrypt przypomnienia, czy tylko wypisuje plik ladunku.
+# Zwykle "-like *przypomnienie.js*" tego NIE odroznia: nazwa ladunku
+# (przypomnienie.json) zawiera nazwe skryptu (przypomnienie.js) jako podciag,
+# wiec warunek trafial ZAWSZE i podmiana starego hooka nie zaszla ani razu -
+# sprawdzone 2026-09-17. Granica po ".js" jest odporna na cudzyslowy, ukosniki
+# i na to, czy polecenie idzie przez bash, czy przez powershella (w wariancie
+# windowsowym sciezka stoi w apostrofach, wiec dopasowanie do 'przypomnienie.js"'
+# tez by sie przewrocilo).
+function Wola-Przypomnienie([string]$polecenie) {
+  return ($polecenie -match 'przypomnienie\.js(?![A-Za-z0-9])')
+}
+
+# Ustawia pole obiektu z JSON-a niezaleznie od tego, czy ono tam juz jest.
+function Ustaw-Pole($obiekt, $nazwa, $wartosc) {
+  if ($obiekt.PSObject.Properties.Name -contains $nazwa) { $obiekt.$nazwa = $wartosc }
+  else { $obiekt | Add-Member -NotePropertyName $nazwa -NotePropertyValue $wartosc -Force }
+}
+
+# Istniejaca grupa hookow zostaje w spokoju - z dwoma wyjatkami, bo inaczej
+# usterka naprawiona w szablonie zyje we wdrozeniu do konca swiata:
+#   1. POLECENIE inne niz szablonowe (np. bez zabezpieczenia na brak node'a).
+#      To zmiana definicji hooka, wiec uniewaznia zatwierdzenie z /hooks i musi
+#      byc zameldowana czlowiekowi.
+#   2. additionalContextLimit NIZSZY niz szablonowy - podnosimy do szablonowego,
+#      nigdy nie obnizamy. Wlasny, wyzszy sufit uzytkownika rzadzi (tak samo
+#      czyta go narzedzia\sufit-ladunku.ps1), a zanizony ucinalby ladunek po cichu.
+#      Sam limit nie jest czescia definicji hooka, wiec /hooks tego nie dotyczy.
+function Zsynchronizuj-Grupe($grupa, $wzor) {
+  $wynik = [ordered]@{ Polecenie = $false; Limit = $false }
+  $mam = @($grupa.hooks)
+  $ich = @($wzor.hooks)
+  for ($i = 0; $i -lt $ich.Count; $i++) {
+    if ($i -ge $mam.Count) { break }
+    $h = $mam[$i]
+    $w = $ich[$i]
+    if ($null -eq $h -or $null -eq $w) { continue }
+    foreach ($pole in @("command", "commandWindows")) {
+      if ($w.PSObject.Properties.Name -notcontains $pole) { continue }
+      if ("$($h.$pole)" -eq "$($w.$pole)") { continue }
+      Ustaw-Pole $h $pole $w.$pole
+      $wynik.Polecenie = $true
+    }
+    if ($w.PSObject.Properties.Name -contains "additionalContextLimit") {
+      $limitWzoru = [int]$w.additionalContextLimit
+      $limitMoj = 0
+      if ($h.PSObject.Properties.Name -contains "additionalContextLimit") { $limitMoj = [int]$h.additionalContextLimit }
+      if ($limitMoj -lt $limitWzoru) {
+        Ustaw-Pole $h "additionalContextLimit" $limitWzoru
+        $wynik.Limit = $true
+      }
+    }
+  }
+  return $wynik
+}
+
+# Co Napraw-Hooki-Codex zrobil z plikiem. Trzy listy zdarzen, bo trzy rozne
+# rzeczy do powiedzenia: dopisana grupa i zmienione polecenie wymagaja ponownego
+# /hooks, samo podniesienie sufitu ladunku - nie.
+function Wynik-Hookow {
+  return [ordered]@{ Dodane = @(); Poprawione = @(); Limity = @() }
+}
+
 # .codex\hooks.json - tu chodzimy na palcach. Zmiana DEFINICJI hooka (polecenie,
 # timeout, matcher, async) uniewaznia zatwierdzenie z /hooks i zmusza uzytkownika
-# do powtarzania go, wiec grup, ktore juz tam sa, NIE RUSZAMY w ogole - dopisujemy
-# wylacznie brakujace. Swoje poznajemy po "statusMessage", tak samo jak wdroz.ps1.
-# Zwraca liste zdarzen, ktorych grupy doszly - o kazdej trzeba powiedziec wprost.
+# do powtarzania go, wiec grupy, ktore juz tam sa, ruszamy WYLACZNIE tak, jak
+# opisuje Zsynchronizuj-Grupe (rozjechane polecenie, zanizony sufit) - poza tym
+# dopisujemy tylko brakujace. Swoje poznajemy po "statusMessage", tak samo jak
+# wdroz.ps1. Zwraca Wynik-Hookow - o kazdej pozycji trzeba powiedziec wprost.
 function Napraw-Hooki-Codex($celCodex, $zrodlo, $projekt, $stempel) {
   $surowy = Czytaj-Tekst (Join-Path $zrodlo "szablony-codex\hooks.json")
-  if (-not $surowy) { return @() }
+  if (-not $surowy) { return (Wynik-Hookow) }
   $surowy = $surowy.TrimStart([char]0xFEFF).Replace("{{PROJEKT}}", $projekt.Replace("\","/")).Replace("{{ZRODLO}}", $zrodlo.Replace("\","/"))
-  try { $szablon = $surowy | ConvertFrom-Json } catch { return @() }
-  if (-not $szablon.hooks) { return @() }
+  try { $szablon = $surowy | ConvertFrom-Json } catch { return (Wynik-Hookow) }
+  if (-not $szablon.hooks) { return (Wynik-Hookow) }
 
   $plik = Join-Path $celCodex "hooks.json"
   $s = [pscustomobject]@{}
@@ -681,7 +792,7 @@ function Napraw-Hooki-Codex($celCodex, $zrodlo, $projekt, $stempel) {
   # Cudzy plik, ktory nie jest czystym JSON-em, zostaje nietkniety - tak samo
   # jak w instalatorze. Lepiej nie dopisac hooka niz zepsuc komus ustawienia.
   if ($raw) {
-    try { $s = $raw.TrimStart([char]0xFEFF) | ConvertFrom-Json } catch { return @() }
+    try { $s = $raw.TrimStart([char]0xFEFF) | ConvertFrom-Json } catch { return (Wynik-Hookow) }
   }
   if (-not ($s.PSObject.Properties.Name -contains "hooks") -or $null -eq $s.hooks) {
     $s | Add-Member -NotePropertyName hooks -NotePropertyValue ([pscustomobject]@{}) -Force
@@ -697,7 +808,7 @@ function Napraw-Hooki-Codex($celCodex, $zrodlo, $projekt, $stempel) {
   $wzorPrzyp = $null
   foreach ($g in @($szablon.hooks.UserPromptSubmit)) {
     foreach ($hw in @($g.hooks)) {
-      if ("$($hw.command)" -like "*przypomnienie.js*") { $wzorPrzyp = $hw }
+      if (Wola-Przypomnienie ("" + $hw.command + " " + $hw.commandWindows)) { $wzorPrzyp = $hw }
     }
   }
   if ($wzorPrzyp -and ($s.hooks.PSObject.Properties.Name -contains "UserPromptSubmit")) {
@@ -706,7 +817,7 @@ function Napraw-Hooki-Codex($celCodex, $zrodlo, $projekt, $stempel) {
         if (-not $h) { continue }
         $pol = "" + $h.command + " " + $h.commandWindows
         if ($pol -notlike "*przypomnienie.json*") { continue }
-        if ($pol -like "*przypomnienie.js*") { continue }
+        if (Wola-Przypomnienie $pol) { continue }
         $h.command = $wzorPrzyp.command
         if ($h.PSObject.Properties.Name -contains "commandWindows") { $h.commandWindows = $wzorPrzyp.commandWindows }
         else { $h | Add-Member -NotePropertyName commandWindows -NotePropertyValue $wzorPrzyp.commandWindows -Force }
@@ -715,26 +826,37 @@ function Napraw-Hooki-Codex($celCodex, $zrodlo, $projekt, $stempel) {
     }
   }
 
-  $dodane = @()
-  if ($podmienione) { $dodane += "UserPromptSubmit" }
+  $wynik = Wynik-Hookow
+  if ($podmienione) { $wynik.Poprawione += "UserPromptSubmit" }
   foreach ($zdarzenie in $szablon.hooks.PSObject.Properties.Name) {
     $obecne = @()
     if ($s.hooks.PSObject.Properties.Name -contains $zdarzenie) { $obecne = @($s.hooks.$zdarzenie) }
     foreach ($grupa in @($szablon.hooks.$zdarzenie)) {
       $znacznik = $grupa.hooks[0].statusMessage
       if (-not $znacznik) { $znacznik = "MegaRuchacz" }
-      if ($obecne.Count -gt 0 -and (($obecne | ConvertTo-Json -Depth 20 -Compress) -like "*$znacznik*")) { continue }
-      $obecne += $grupa
-      $dodane += $zdarzenie
+      # Nasza grupa, jesli juz tam jest - poznajemy ja po tym samym znaczniku,
+      # ktorym rozpoznaje swoje wdroz.ps1.
+      $nasza = $null
+      foreach ($g in $obecne) {
+        if ((($g | ConvertTo-Json -Depth 20 -Compress) -like "*$znacznik*")) { $nasza = $g; break }
+      }
+      if (-not $nasza) {
+        $obecne += $grupa
+        $wynik.Dodane += $zdarzenie
+        continue
+      }
+      $co = Zsynchronizuj-Grupe $nasza $grupa
+      if ($co.Polecenie) { $wynik.Poprawione += $zdarzenie }
+      if ($co.Limit)     { $wynik.Limity += $zdarzenie }
     }
     if ($obecne.Count -eq 0) { continue }
     if ($s.hooks.PSObject.Properties.Name -contains $zdarzenie) { $s.hooks.$zdarzenie = @($obecne) }
     else { $s.hooks | Add-Member -NotePropertyName $zdarzenie -NotePropertyValue @($obecne) -Force }
   }
-  if ($dodane.Count -eq 0) { return @() }
+  if ($wynik.Dodane.Count -eq 0 -and $wynik.Poprawione.Count -eq 0 -and $wynik.Limity.Count -eq 0) { return $wynik }
   Kopia-Zapasowa $plik $stempel
   Zapisz-Tekst $plik ($s | ConvertTo-Json -Depth 20)
-  return $dodane
+  return $wynik
 }
 
 # Czesc codeksowa wdrozenia: role w .codex\agents\, zasady i ladunki hookow
@@ -763,10 +885,22 @@ function Nanies-Poprawki-Codex($zrodlo, $projekt, $stempel) {
 
   # Nowy hook nie ruszy sam z siebie - zatwierdza go czlowiek. Cicha podmiana
   # pliku znaczylaby, ze uzytkownik czeka na cos, co nigdy nie wystartuje.
-  $dodane = Napraw-Hooki-Codex $celCodex $zrodlo $projekt $stempel
-  if ($dodane.Count -gt 0) {
-    Mow ("MegaRuchacz: doszedl albo zmienil sie hook Codeksa (" + (($dodane | Select-Object -Unique) -join ", ") +
-         ") w .codex\hooks.json - zatwierdz go w Codeksie poleceniem /hooks, inaczej nie wystartuje.")
+  $wynikH = Napraw-Hooki-Codex $celCodex $zrodlo $projekt $stempel
+  $doZatwierdzenia = @(@($wynikH.Dodane) + @($wynikH.Poprawione) | Select-Object -Unique)
+  if ($doZatwierdzenia.Count -gt 0) {
+    $prosba = "MegaRuchacz: doszedl albo zmienil sie hook Codeksa (" + ($doZatwierdzenia -join ", ") +
+              ") w .codex\hooks.json - zatwierdz go w Codeksie poleceniem /hooks, inaczej nie wystartuje."
+    Mow $prosba
+    # Pod Codeksem straznik chodzi w trybie -Tlo, a tam "Mow" znaczy "do dziennika",
+    # ktorego nikt nie czyta - czyli prosba skierowana do uzytkownika Codeksa
+    # trafialaby dokladnie tam, gdzie jej nie zobaczy. Odkladamy ja wiec do pliku
+    # stanu i doklejamy do ladunku hooka od rachunku (Wypisz-Koszt-Codex).
+    if ($Tlo) { Odloz-Wiadomosc $prosba }
+  }
+  if (@($wynikH.Limity).Count -gt 0) {
+    Mow ("MegaRuchacz: podniesiony sufit ladunku hooka Codeksa (" +
+         ((@($wynikH.Limity) | Select-Object -Unique) -join ", ") +
+         ") w .codex\hooks.json do wartosci z szablonu - sufit nie jest czescia definicji hooka, wiec /hooks zatwierdzac nie trzeba.")
   }
 
   # Slad w pliku wersji wdrozenia Codeksa - ten sam format "klucz: wartosc".
@@ -1183,7 +1317,12 @@ function Zapisz-Koszt($wynik) {
     kod   = $wynik.kod
     linia = $wynik.linia
   }
-  if ($stare["pelny"]) { $stan["pelny"] = $stare["pelny"] }
+  # "pelny" i "pelny.codex" - znaczniki dziennego meldunku, osobne dla kazdego
+  # narzedzia, bo uzytkownik Codeksa ma zobaczyc rozbicie takze wtedy, gdy tego
+  # samego dnia otworzyl wczesniej okno Claude Code.
+  foreach ($k in @($stare.Keys)) {
+    if ($k -like "pelny*") { $stan[$k] = $stare[$k] }
+  }
   if ($stare["proba"]) { $stan["proba"] = $stare["proba"] }
   try { Zapisz-Klucze $plikKosztu $stan } catch { Zanotuj-Wywrotke "zapis podrecznego rachunku" $_ }
 }
@@ -1276,6 +1415,42 @@ function Zglos-Koszt {
   }
 }
 
+# Sufit ladunku TEGO hooka, czytany z .codex\hooks.json lezacego w projekcie -
+# tak samo jak robi to narzedzia\sufit-ladunku.ps1 przy ladunkach z pliku.
+# Hooka poznajemy po przelaczniku "-KosztCodex" w poleceniu. $null = nie wiadomo,
+# gdzie stoi sufit (brak pliku, cudzy hooks.json, starsza kopia narzedzia).
+function Sufit-Kosztu-Codex {
+  if (-not $Projekt) { return $null }
+  if (-not (Get-Command Limit-Ladunku -ErrorAction SilentlyContinue)) { return $null }
+  try { return (Limit-Ladunku (Join-Path $Projekt ".codex\hooks.json") "-KosztCodex") } catch { return $null }
+}
+
+# Dziennemu rozbiciu daleko do jednej linii, a ladunek hooka ma sufit i jest
+# ucinany OD KONCA bez slowa. Dlatego: albo rozbicie miesci sie w calosci, albo
+# nie idzie wcale i zostaje jedno zdanie o tym, czego brakuje i jak to naprawic.
+# Znacznik dnia odkladamy DOPIERO po udanym doklejeniu - meldunek, ktory sie nie
+# zmiescil, ma wrocic przy nastepnym otwarciu, a nie przepasc na caly dzien.
+function Dolacz-Rozbicie-Codex([string]$tresc) {
+  $stan = Czytaj-Klucze $plikKosztu
+  $dzis = (Get-Date -Format 'yyyy-MM-dd')
+  if ($stan["pelny.codex"] -eq $dzis) { return $tresc }
+
+  $linie = @(Linie-Kosztu-Dziennego)
+  if ($linie.Count -eq 0) { return $tresc }
+  $blok = ($linie -join "`n")
+
+  $limit = Sufit-Kosztu-Codex
+  if (($null -ne $limit) -and ($limit -gt 0) -and (($tresc.Length + 1 + $blok.Length) -gt $limit)) {
+    return ($tresc + "`n" + "MegaRuchacz: dzienne rozbicie rachunku ($($blok.Length) znakow) nie miesci sie w suficie hooka " +
+            "($limit znakow), wiec go tu nie wklejam - podnies additionalContextLimit przy hooku od -KosztCodex " +
+            "w .codex\hooks.json. Cale rozbicie lezy w ${plikRozbicia}.")
+  }
+
+  $stan["pelny.codex"] = $dzis
+  try { Zapisz-Klucze $plikKosztu $stan } catch { Zanotuj-Wywrotke "znacznik dziennego rachunku (Codex)" $_ }
+  return ($tresc + "`n" + $blok)
+}
+
 # To samo pod Codeksem. Codex nie wciaga wyjscia hooka do rozmowy tak jak Claude
 # Code - chce ladunku "hookSpecificOutput.additionalContext", wiec ta sama liczba
 # musi wyjsc JSON-em, z osobnego hooka SessionStart. Osobnego, bo ten od
@@ -1333,8 +1508,37 @@ function Wypisz-Koszt-Codex {
     }
     $ciszaClaude = Cisza-Claude-Linia
     if ($ciszaClaude) { $przed += $ciszaClaude }
+    # Prosby odlozone przez tryb -Tlo (np. "zatwierdz hooki przez /hooks"). Pod
+    # Codeksem to jedyne miejsce, w ktorym maja szanse dotrzec do czlowieka -
+    # tam, skad je odlozono, jest tylko dziennik.
+    foreach ($odlozone in @(Odbierz-Wiadomosci)) { $przed += $odlozone }
+    # Bez node'a nie chodzi ani przypomnienie o zasadach (zostaje samo wypisanie
+    # ladunku, bez linii o cyklu), ani rejestr pracy workerow. Oba maja wtedy
+    # awaryjne wyjscie i milcza - a cisza w tym miejscu wygladalaby jak sprawnosc.
+    if (-not (Get-Command node -ErrorAction SilentlyContinue)) {
+      $przed += "UWAGA: nie ma node w PATH - przypomnienie o zasadach idzie bez linii o cyklu wiedzy, a wpisy o workerach do .megaruchacz\worklog.md nie powstaja wcale."
+    }
   } catch { }   # alarm, ktory sam sie wywraca, nie ma prawa zabrac rachunku
   if ($przed.Count -gt 0) { $tresc = ($przed -join " ") + " " + $tresc }
+
+  # Rozbicie rachunku na pozycje - raz dziennie, dokladnie to samo, co widzi
+  # uzytkownik Claude Code (Zglos-Koszt-Dzienny). Do 2026-09-17 nie szlo tu nic:
+  # rozbicie liczyl tryb -Tlo, zapisywal je do pliku i na tym sie konczylo, bo
+  # pokazywala je wylacznie galaz interaktywna. Znacznik jest osobny ("pelny.codex"),
+  # zeby wczesniejsze okno Claude Code nie zabralo meldunku Codeksowi.
+  try { $tresc = Dolacz-Rozbicie-Codex $tresc } catch { }
+
+  # Ostatnia bramka: nawet sam rachunek z alarmami moze nie zmiescic sie w suficie
+  # (ktos obnizyl limit recznie). Ucinane jest to, co na koncu, wiec ostrzezenie
+  # idzie na POCZATEK - jedyne miejsce, ktore uciecie przezyje zawsze. Ten sam
+  # komunikat, co w narzedzia\sufit-ladunku.ps1, zeby obie drogi brzmialy tak samo.
+  try {
+    $limitH = Sufit-Kosztu-Codex
+    if (($null -ne $limitH) -and ($limitH -gt 0) -and ($tresc.Length -gt $limitH) -and
+        (Get-Command Ostrzezenie-O-Ucieciu -ErrorAction SilentlyContinue)) {
+      $tresc = (Ostrzezenie-O-Ucieciu $tresc.Length $limitH) + $tresc
+    }
+  } catch { }
 
   # ConvertTo-Json, a nie sklejanie tekstu - linia potrafi miec cudzyslow albo
   # ukosnik i recznie zescapowany ladunek przestalby byc JSON-em.
@@ -1369,11 +1573,14 @@ function Ile-Wywolan($n) {
 # "klucz: wartosc"). Brak pliku albo pomiar sprzed kilku dni mowimy WPROST:
 # cisza w tym miejscu znaczylaby "cykl chodzi i nic nie kosztuje", a prawda
 # bylaby wtedy odwrotna - cykl w ogole nie chodzi i wiedza nie przyrasta.
-function Zglos-Koszt-Cyklu {
+#
+# Zwraca LINIE, a nie wypisuje: ten sam tekst idzie na ekran pod Claude Code
+# i do ladunku hooka pod Codeksem (Wypisz-Koszt-Codex). Dwie kopie tego samego
+# meldunku rozjechalyby sie przy pierwszej poprawce.
+function Linie-Kosztu-Cyklu {
   $plik = Join-Path $KatalogDomowy ".claude\wiedza\.koszt-cyklu.txt"
   if (-not (Test-Path $plik)) {
-    Write-Host "    cykl wiedzy: kosztu jeszcze nie policzyl - jesli cykl chodzi, liczba bedzie po jego najblizszym przebiegu"
-    return
+    return @("    cykl wiedzy: kosztu jeszcze nie policzyl - jesli cykl chodzi, liczba bedzie po jego najblizszym przebiegu")
   }
   $k = Czytaj-Klucze $plik
 
@@ -1390,8 +1597,7 @@ function Zglos-Koszt-Cyklu {
   if (($null -ne $wiek) -and ($wiek -gt $DNI_KOSZT_CYKLU_STARY)) {
     $kiedy = $k["data"]
     if (-not $kiedy) { $kiedy = "dawno" }
-    Write-Host "    cykl wiedzy: ostatni koszt z ${kiedy} (${wiek} dni temu) - cykl od tego czasu nie wylawial faktow, wiec nie chodzi"
-    return
+    return @("    cykl wiedzy: ostatni koszt z ${kiedy} (${wiek} dni temu) - cykl od tego czasu nie wylawial faktow, wiec nie chodzi")
   }
 
   $kiedy = "ostatnio"
@@ -1417,7 +1623,7 @@ function Zglos-Koszt-Cyklu {
   $ogon = ""
   if ($czesci.Count -gt 0) { $ogon = " (" + ($czesci -join ", ") + ")" }
 
-  Write-Host "    cykl wiedzy ${kiedy}: ${tokeny} tokenow${zrodlo}${ogon} - to prawdziwe wywolanie modelu, osobno od liczb wyzej"
+  return @("    cykl wiedzy ${kiedy}: ${tokeny} tokenow${zrodlo}${ogon} - to prawdziwe wywolanie modelu, osobno od liczb wyzej")
 }
 
 # Raz na dobe, przy pierwszym otwarciu okna tego dnia, pelniejszy meldunek -
@@ -1425,35 +1631,32 @@ function Zglos-Koszt-Cyklu {
 # zajrzy do pliku. Zrodlem jest raport zadania LoreKoszt z Harmonogramu
 # (<dom>\.claude\wiedza\koszt-ostatni.txt). Gdy tego zadania nie ma albo nie
 # chodzi, mowimy i o tym: cisza wygladalaby jak "wszystko policzone".
-function Zglos-Koszt-Dzienny {
-  $stan = Czytaj-Klucze $plikKosztu
-  $dzis = (Get-Date -Format 'yyyy-MM-dd')
-  if ($stan["pelny"] -eq $dzis) { return }
-  # Znacznik idzie na dysk PRZED wypisaniem - potkniecie ma znaczyc jeden
-  # pominiety meldunek, a nie meldunek przy kazdym oknie do konca dnia.
-  $stan["pelny"] = $dzis
-  try { Zapisz-Klucze $plikKosztu $stan } catch { Zanotuj-Wywrotke "znacznik dziennego rachunku" $_ }
-
+#
+# Tu powstaja same LINIE - bez wypisywania i bez odkladania znacznika "raz
+# dziennie". Znacznik odklada ten, kto te linie POKAZE, bo pod Codeksem pokazanie
+# moze sie nie udac (sufit ladunku) i wtedy meldunek ma wrocic, a nie przepasc.
+function Linie-Kosztu-Dziennego {
   # Rozbicie na pozycje - to jest ten meldunek, o ktory uzytkownik poprosil: przy
   # kazdej pozycji ma stac, GDZIE ona siedzi i DO CZEGO jest doklejana, bo sama suma
   # nie mowi, co skrocic. Gotowy blok lezy w pliku podrecznym (liczy go w tle
   # koszt-pamieci.ps1 -Rozbicie), wiec otwarcie sesji na nic nie czeka.
-  if (Pokaz-Rozbicie) { return }
+  $linie = @(Linie-Rozbicia)
+  if ($linie.Count -gt 0) { return $linie }
 
   # Rozbicia jeszcze nie ma (pierwsze uruchomienie) - zostaje to, co bylo:
   # wyciag z dziennego raportu zadania LoreKoszt i osobna linia o koszcie cyklu.
   $plik = Join-Path $KatalogDomowy ".claude\wiedza\koszt-ostatni.txt"
   $skrypt = Join-Path $Zrodlo "narzedzia\koszt-pamieci.ps1"
   if (-not (Test-Path $plik)) {
-    Write-Host "MegaRuchacz: rozbicie rachunku za pamiec licze wlasnie w tle - bedzie przy nastepnym otwarciu okna."
+    $linie += "MegaRuchacz: rozbicie rachunku za pamiec licze wlasnie w tle - bedzie przy nastepnym otwarciu okna."
     # koszt cyklu to osobny plik i osobny rodzaj kosztu - brak jednego rachunku
     # nie ma prawa zabrac drugiego
-    try { Zglos-Koszt-Cyklu } catch { Zanotuj-Wywrotke "koszt cyklu wiedzy" $_ }
-    return
+    try { $linie += @(Linie-Kosztu-Cyklu) } catch { Zanotuj-Wywrotke "koszt cyklu wiedzy" $_ }
+    return $linie
   }
 
   $dni = [int]([datetime]::Now - (Get-Item $plik).LastWriteTime).TotalDays
-  Write-Host "MegaRuchacz - dzienny rachunek za pamiec (z $((Get-Item $plik).LastWriteTime.ToString('yyyy-MM-dd HH:mm'))):"
+  $linie += "MegaRuchacz - dzienny rachunek za pamiec (z $((Get-Item $plik).LastWriteTime.ToString('yyyy-MM-dd HH:mm'))):"
 
   # Z pelnego raportu bierzemy tylko to, co jest liczba albo ostrzezeniem -
   # reszta to objasnienia, ktore uzytkownik przeczyta w pliku, jesli zechce.
@@ -1469,29 +1672,41 @@ function Zglos-Koszt-Dzienny {
     }
   }
   if ($wybrane.Count -eq 0) { $wybrane += "nic nie wymagalo uwagi" }
-  foreach ($t in ($wybrane | Select-Object -First 6)) { Write-Host "    $t" }
-  try { Zglos-Koszt-Cyklu } catch { Zanotuj-Wywrotke "koszt cyklu wiedzy" $_ }
+  foreach ($t in ($wybrane | Select-Object -First 6)) { $linie += "    $t" }
+  try { $linie += @(Linie-Kosztu-Cyklu) } catch { Zanotuj-Wywrotke "koszt cyklu wiedzy" $_ }
   if ($dni -gt 2) {
-    Write-Host "    Ten raport ma $dni dni - zadanie LoreKoszt nie chodzi. Zaloz je od nowa: powershell -File $skrypt -ZalozZadanie"
+    $linie += "    Ten raport ma $dni dni - zadanie LoreKoszt nie chodzi. Zaloz je od nowa: powershell -File $skrypt -ZalozZadanie"
   }
-  Write-Host "    Caly rachunek: $plik"
+  $linie += "    Caly rachunek: $plik"
+  return $linie
 }
 
-# Gotowy blok rozbicia z pliku podrecznego. Wypisujemy go slowo w slowo i prosimy
+function Zglos-Koszt-Dzienny {
+  $stan = Czytaj-Klucze $plikKosztu
+  $dzis = (Get-Date -Format 'yyyy-MM-dd')
+  if ($stan["pelny"] -eq $dzis) { return }
+  # Znacznik idzie na dysk PRZED wypisaniem - potkniecie ma znaczyc jeden
+  # pominiety meldunek, a nie meldunek przy kazdym oknie do konca dnia.
+  $stan["pelny"] = $dzis
+  try { Zapisz-Klucze $plikKosztu $stan } catch { Zanotuj-Wywrotke "znacznik dziennego rachunku" $_ }
+  foreach ($l in @(Linie-Kosztu-Dziennego)) { Write-Host $l }
+}
+
+# Gotowy blok rozbicia z pliku podrecznego. Oddajemy go slowo w slowo i prosimy
 # model, zeby przepisal go uzytkownikowi: wyjscie hooka trafia do KONTEKSTU MODELU,
 # a nie na ekran, wiec bez tej prosby uzytkownik nie zobaczy z tego ani linii.
-# $false = nie ma czego pokazac (pierwsze uruchomienie albo liczenie sie wywrocilo).
-function Pokaz-Rozbicie {
+# Pusta lista = nie ma czego pokazac (pierwsze uruchomienie albo liczenie sie wywrocilo).
+function Linie-Rozbicia {
   $blok = Czytaj-Tekst $plikRozbicia
-  if (-not $blok) { return $false }
+  if (-not $blok) { return @() }
   $wiek = [double]::MaxValue
   try { $wiek = ([datetime]::Now - (Get-Item $plikRozbicia).LastWriteTime).TotalDays } catch { }
-  Write-Host "MegaRuchacz: przepisz uzytkownikowi ponizszy blok w pierwszej odpowiedzi, bez zmian i bez komentarza."
-  foreach ($l in (($blok -replace "`r`n", "`n") -split "`n")) { Write-Host $l }
+  $linie = @("MegaRuchacz: przepisz uzytkownikowi ponizszy blok w pierwszej odpowiedzi, bez zmian i bez komentarza.")
+  foreach ($l in (($blok -replace "`r`n", "`n") -split "`n")) { $linie += $l }
   if ($wiek -gt 7) {
-    Write-Host "    (liczby z $((Get-Item $plikRozbicia).LastWriteTime.ToString('yyyy-MM-dd')) - swiezsze beda po przeliczeniu w tle)"
+    $linie += "    (liczby z $((Get-Item $plikRozbicia).LastWriteTime.ToString('yyyy-MM-dd')) - swiezsze beda po przeliczeniu w tle)"
   }
-  return $true
+  return $linie
 }
 
 # ------------------------------------------------- 4. cykl wiedzy przy pierwszej sesji
@@ -1721,6 +1936,7 @@ try {
   # Wywrotki z przebiegow bez widowni i cisza po stronie Codeksa - tu jest
   # jedyne miejsce, w ktorym maja szanse dotrzec do czlowieka.
   try { Zglos-Wywrotki }   catch { Zanotuj-Wywrotke "meldunek o wywrotkach" $_ }
+  try { Zglos-Odlozone }   catch { Zanotuj-Wywrotke "odlozone prosby" $_ }
   try { Zglos-Cisze }      catch { Zanotuj-Wywrotke "wykrywanie ciszy" $_ }
   # Rachunek za pamiec na koncu, zeby zostal pod reka uzytkownika - a pelniejszy
   # meldunek raz na dobe zaraz za nim, bo objasnia te sama liczbe.
