@@ -92,10 +92,17 @@ def load(conn: sqlite3.Connection) -> tuple[list[Chunk], np.ndarray]:
     return chunks, _unit(np.vstack(vectors))
 
 
-def newest_ts(conn: sqlite3.Connection) -> str:
-    """The last timestamp in the archive — where the marker would land. Every role counts here."""
-    row = conn.execute("SELECT max(ts) FROM chunks").fetchone()
-    return (row[0] if row else "") or ""
+def newest_ts(conn: sqlite3.Connection) -> facts.Marker:
+    """The far end of the archive — where the marker would land. Every role counts here.
+
+    On the indexing axis, the same one the daily harvest walks (facts.Marker): the last chunk that
+    entered the database, with its id. Moving the marker means "never read anything below this
+    again", so it has to be expressed in the units the harvest actually compares against.
+    """
+    row = conn.execute(
+        f"SELECT {facts.INDEXED}, id FROM chunks ORDER BY {facts.INDEXED} DESC, id DESC LIMIT 1"
+    ).fetchone()
+    return facts.Marker(row[0] or "", int(row[1])) if row else facts.Marker("")
 
 
 def _unit(m: np.ndarray) -> np.ndarray:
@@ -256,7 +263,7 @@ def run(limit: int = DEFAULT_CLUSTERS, dry_run: bool = False, move_marker: bool 
     clusters = describe(groups, chunks, matrix)
     taken = clusters[:max(1, limit)]
     out = {"status": "ok", "chunks": len(chunks), "groups": len(groups), "clusters": len(clusters),
-           "taken": taken, "facts": [], "added": [], "marker": "", "newest": newest,
+           "taken": taken, "facts": [], "added": [], "marker": "", "newest": newest.stamp,
            "preview": [(c.sessions, c.months, snippet(chunks[c.representative].text, MAX_PREVIEW_SNIPPET))
                        for c in taken[:PREVIEW]]}
     if not chunks:
@@ -277,9 +284,9 @@ def run(limit: int = DEFAULT_CLUSTERS, dry_run: bool = False, move_marker: bool 
     out["facts"] = facts.parse_facts(ask(material(taken, chunks)))
     out["added"] = facts.append_facts(out["facts"])
     facts.record_cost(found=len(out["facts"]))  # same tally as the daily harvest: same tokens paid
-    if move_marker and newest:
+    if move_marker and newest.stamp:
         facts.write_marker(newest)
-        out["marker"] = newest
+        out["marker"] = newest.stamp
     return out
 
 
