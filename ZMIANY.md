@@ -533,3 +533,48 @@ w `~\.claude` (powstała dzień wcześniej). Instalator ją wykrył i zostawił 
 miejscu, zamiast zakładać drugą obok — dokładnie tak, jak miało działać.
 
 131 testów.
+
+## 0.13.0 — 2026-09-17
+
+Narzędzie działa bez Claude Code — także w tych częściach, które dotąd na nim wisiały.
+
+**Samoaktualizacja nie potrzebuje już Claude Code**
+- Strażnik dostał tryb `-Tlo`: robi tylko to, co ma sens bez człowieka przy
+  klawiaturze (pobranie nowej wersji, pilnowanie plików zasad), a wynik dopisuje
+  do dziennika `~\.claude\.megaruchacz-tlo.log`, przycinanego do 200 linii.
+- Instalator zakłada drugie zadanie w Harmonogramie, `MegaRuchaczOdswiez`, co
+  60 minut. Osobne, a nie doklejone do `LoreIndex`, bo `LoreIndex` należy do
+  modułu `pamiec`, który wolno odrzucić — narzędzie ma się aktualizować
+  niezależnie od tego wyboru.
+- **Dlaczego nie hook Codeksa:** Codex liczy odcisk palca definicji hooka
+  i odmawia uruchomienia, dopóki człowiek nie zatwierdzi go przez `/hooks` —
+  po KAŻDEJ zmianie skryptu od nowa. Do samoaktualizacji to się nie nadaje.
+  Zadanie w Harmonogramie nie wymaga ani zatwierdzania, ani praw administratora.
+- Strażnik pilnuje teraz obu plików zasad: `~\.claude\CLAUDE.md` i
+  `~\.codex\AGENTS.md`. Zapis do `AGENTS.md` istniał już w `wpisz-zasady.ps1`,
+  ale strażnik go nie odtwarzał — po skasowaniu bloku nikt go nie przywracał.
+- `wdroz.ps1` wykrywa, czego na maszynie nie ma, i mówi wprost, że tryb workerów
+  tam nie zadziała, zamiast zakładać bezużyteczne wpisy i meldować sukces.
+
+**Szablony trybu workerów dla Codeksa** (`szablony-codex\`)
+- Cztery role w formacie TOML, zasady kierownika i szablon hooków.
+- Zasady to **nie** kopia `CLAUDE.md`. Reguła „odpowiadasz w sekundach, robota
+  leci w tle" jest pod Codeksem nieprawdziwa — wątek główny czeka na wszystkich
+  podagentów. Wpisanie jej byłoby kłamstwem utrwalonym w pliku, więc zastąpiła ją
+  uczciwa: rozdaj wszystkich naraz, poczekaj, podsumuj — z wnioskiem, że skoro
+  czekanie kosztuje, tym ważniejsze jest nie ciąć zadań za grubo.
+- Tak samo zniknęły obietnice, których Codex nie dotrzyma: twarda izolacja
+  worktree (zastąpiona zasadą rozłącznych plików) i prawo workera do zadania
+  pytania (zastąpione kończeniem raportem „wymaga decyzji").
+- Scout w trybie tylko-do-odczytu nie może dopisać do mapy, więc oddaje gotowy
+  blok tekstu. Rejestr i mapa idą do `<projekt>\.megaruchacz\`, bo Codex trzyma
+  `.codex\` jako tylko do odczytu.
+
+**Sprawdzone uruchomieniem:** składnia trzech skryptów, rejestr modułów, plan
+instalatora z obydwoma zadaniami, tryb tła na brudnym katalogu (odmawia pobrania
+i mówi dlaczego) oraz na cofniętym klonie — przewinął się z 0.11.0 na 0.12.1
+i zapisał to w dzienniku.
+
+**Niezrobione:** wpięcie szablonów Codeksa w instalator — brakuje skryptu
+dopisującego start i koniec workera do rejestru oraz generowania ładunków dla
+hooków. Wypisane w `szablony-codex\CZYTAJ.md`.
