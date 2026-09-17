@@ -27,6 +27,11 @@
 #       przelicza rachunek za pamiec agenta i zapisuje gotowa linie do pliku
 #       podrecznego; nic nie wypisuje. Straznik startuje to sam, osobnym
 #       procesem, zeby otwarcie okna nie czekalo na liczenie.
+#   powershell -NoProfile -File narzedzia\straznik-zasad.ps1 -KosztCodex
+#       wypisuje sam rachunek za pamiec, w formacie ladunku "additionalContext"
+#       Codeksa. Osobny hook SessionStart, bo ten od aktualizacji chodzi w tle
+#       i jego wyjscia Codex do rozmowy nie wciaga. Nic nie liczy - czyta
+#       gotowa linie z pliku podrecznego, wiec start sesji na nic nie czeka.
 #   -KatalogDomowy  podstawiony katalog domowy - do testow
 
 param(
@@ -36,7 +41,8 @@ param(
   [string]$Odrzuc = "",
   [switch]$Moduly,
   [switch]$Tlo,
-  [switch]$PoliczKoszt
+  [switch]$PoliczKoszt,
+  [switch]$KosztCodex
 )
 
 $ErrorActionPreference = "Stop"
@@ -902,6 +908,51 @@ function Zglos-Koszt {
   }
 }
 
+# To samo pod Codeksem. Codex nie wciaga wyjscia hooka do rozmowy tak jak Claude
+# Code - chce ladunku "hookSpecificOutput.additionalContext", wiec ta sama liczba
+# musi wyjsc JSON-em, z osobnego hooka SessionStart. Osobnego, bo ten od
+# samoaktualizacji chodzi w tle i celowo nie mowi do modelu ani slowa.
+#
+# Tu NIC sie nie liczy: czytamy gotowa linie z pliku podrecznego (liczenie trwa
+# sekundy i opoznialoby start sesji), a odswieza ja hook bezobslugowy - w trybie
+# -Tlo Zglos-Koszt przelicza rachunek przy kazdym przebiegu. Gdy liczby jeszcze
+# nie ma albo jest stara, mowimy to wprost: cisza wygladalaby jak "nic nie kosztuje".
+#
+# Ucinanie (kod inny niz 0) idzie na POCZATEK linii, slowem UWAGA - alarm
+# schowany w srodku zdania jest alarmem, ktorego nikt nie zauwaza.
+function Wypisz-Koszt-Codex {
+  $stan = Czytaj-Klucze $plikKosztu
+  $linia = $stan["linia"]
+  $kod = 0
+  if ($stan["kod"] -match '^\d+$') { $kod = [int]$stan["kod"] }
+
+  if (-not $linia) {
+    $tresc = "MegaRuchacz: rachunek za pamiec agenta nie jest jeszcze policzony - liczba bedzie przy nastepnym otwarciu sesji."
+  } else {
+    $kiedy = [datetime]::MinValue
+    $godzin = [double]::MaxValue
+    if ([datetime]::TryParse($stan["data"], [ref]$kiedy)) {
+      $godzin = ([datetime]::Now - $kiedy).TotalHours
+    }
+    $ogon = ""
+    if ($godzin -gt $GODZIN_KOSZT_STARY -and $kiedy -gt [datetime]::MinValue) {
+      $ogon = " (liczba z $(Get-Date $kiedy -Format 'yyyy-MM-dd HH:mm'), swiezsza bedzie za chwile)"
+    }
+    if ($kod -ne 0) { $tresc = "UWAGA: czesc zasad NIE DOCIERA do agenta - ${linia}${ogon}" }
+    else            { $tresc = "MegaRuchacz: ${linia}${ogon}" }
+  }
+
+  # ConvertTo-Json, a nie sklejanie tekstu - linia potrafi miec cudzyslow albo
+  # ukosnik i recznie zescapowany ladunek przestalby byc JSON-em.
+  $ladunek = [ordered]@{
+    hookSpecificOutput = [ordered]@{
+      hookEventName     = "SessionStart"
+      additionalContext = $tresc
+    }
+  }
+  Write-Output ($ladunek | ConvertTo-Json -Depth 4 -Compress)
+}
+
 # Raz na dobe, przy pierwszym otwarciu okna tego dnia, pelniejszy meldunek -
 # uzytkownik chcial byc informowany CODZIENNIE, a nie tylko wtedy, gdy sam
 # zajrzy do pliku. Zrodlem jest raport zadania LoreKoszt z Harmonogramu
@@ -989,6 +1040,14 @@ try {
   if ($PoliczKoszt) {
     $w = Policz-Koszt
     if ($w) { Zapisz-Koszt $w }
+    exit 0
+  }
+
+  # Ladunek dla Codeksa - sama linia o koszcie pamieci i nic wiecej. Zadnego
+  # pobierania, pilnowania zasad ani liczenia: ten hook ma oddac jedna linie
+  # od razu, a cala reszta roboty siedzi w hooku bezobslugowym (-Tlo).
+  if ($KosztCodex) {
+    Wypisz-Koszt-Codex
     exit 0
   }
 

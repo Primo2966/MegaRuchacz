@@ -217,9 +217,11 @@ if ($JestCodex) {
   Write-Host "1b) Widze Codeksa - tryb workerow wchodzi takze dla niego:"
   Write-Host "   .codex\agents\*.toml        definicje czterech rol podagentow"
   Write-Host "   .codex\hooks.json           DOPISANE HOOKI Codeksa: zasady na starcie sesji,"
-  Write-Host "                               przypomnienie przy kazdym poleceniu, rejestr workerow"
-  Write-Host "                               i samoaktualizacja narzedzia przy starcie sesji"
-  Write-Host "                               (chodzi w tle, nic nie dopisuje do rozmowy)"
+  Write-Host "                               jedna linia o koszcie pamieci agenta (i o tym, czy"
+  Write-Host "                               cokolwiek jest ucinane), przypomnienie przy kazdym"
+  Write-Host "                               poleceniu, rejestr workerow i samoaktualizacja"
+  Write-Host "                               narzedzia przy starcie sesji (chodzi w tle,"
+  Write-Host "                               nic nie dopisuje do rozmowy)"
   Write-Host "   AGENTS.md w korzeniu projektu   zasady kierownika miedzy znacznikami MegaRuchacz."
   Write-Host "                               Gdy tego pliku nie ma - powstanie nowy (niesledzony"
   Write-Host "                               przez gita). Gdy Twoj AGENTS.md jest sledzony w repo -"
@@ -896,7 +898,9 @@ if ($JestCodex) {
     try {
       $rawH | ConvertFrom-Json | Out-Null
       $brakH = @()
-      foreach ($zn in @("zasady-sesja.json","przypomnienie.json","mr-log-codex.js","straznik-zasad.ps1")) {
+      # "-KosztCodex" osobno, bo straznika wola tez hook od samoaktualizacji -
+      # sama nazwa skryptu nie odrozni tych dwoch wpisow.
+      foreach ($zn in @("zasady-sesja.json","przypomnienie.json","mr-log-codex.js","straznik-zasad.ps1","-KosztCodex")) {
         if ($rawH -notlike "*$zn*") { $brakH += $zn }
       }
       if ($brakH.Count -eq 0) { $hookiCodexOk = $true } else { $czemuH = "brak hookow: " + ($brakH -join ", ") }

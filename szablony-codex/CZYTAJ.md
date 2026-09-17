@@ -18,13 +18,23 @@ Odpowiednik modulu `workerzy` z Claude Code. Tu lezy sama TRESC - wdraza to
   nadpisuje cudzych; swoje poznaje po `statusMessage`. Dlatego KAZDY hook siedzi we
   wlasnej grupie z wlasnym `statusMessage` - drugi hook dolozony do istniejacej grupy
   nigdy by nie doszedl tam, gdzie ta grupa juz stoi (znacznik brany jest z `hooks[0]`).
-- `SessionStart` ma DWIE grupy: zasady kierownika (ladunek `additionalContext`) i
-  samoaktualizacje narzedzia - `straznik-zasad.ps1 -Tlo`. Ta druga nie dopisuje
+- `SessionStart` ma TRZY grupy: zasady kierownika (ladunek `additionalContext`),
+  rachunek za pamiec agenta - `straznik-zasad.ps1 -KosztCodex` - i samoaktualizacje
+  narzedzia - `straznik-zasad.ps1 -Tlo`. Ta ostatnia nie dopisuje
   do rozmowy ani slowa (brak `additionalContextLimit`, tryb `-Tlo` nic nie wypisuje;
   slad zostaje w `~\.claude\.megaruchacz-tlo.log`) i ma `async: true`, wiec start
   sesji na nia nie czeka. `timeout` 300 s jest wiekszy niz wlasne limity straznika
   na gita (30 s na polecenie, 60 s na `fetch`) - o przerwaniu ma decydowac straznik,
   a nie Codex w polowie operacji na repozytorium.
+- Rachunek za pamiec musi byc OSOBNA grupa, a nie dopiskiem do ktorejkolwiek
+  z tamtych. Hook w tle celowo milczy do modelu, a ladunek z zasadami
+  (`.megaruchacz\zasady-sesja.json`) jest statyczny - koszt zmienia sie co dzien,
+  wiec trzeba by go przegenerowywac przy kazdym starcie. `-KosztCodex` niczego nie
+  liczy: czyta gotowa linie z `~\.claude\.megaruchacz-koszt.txt`, ktora odswieza
+  hook `-Tlo`. Gdy liczby nie ma albo jest starsza niz 30 h, linia mowi to wprost.
+  Ucinanie idzie na POCZATEK linii, slowem `UWAGA` - alarm schowany w srodku zdania
+  jest alarmem, ktorego nikt nie widzi. `additionalContextLimit` 1000 to z okladem
+  dwa razy tyle, ile ma najdluzszy wariant tej linii (alarm + adnotacja o dacie).
 - **`timeout` w kazdym hooku podajemy JAWNIE i tak ma zostac.** Skrot zaufania Codex
   liczy z definicji hooka juz po normalizacji, wiec wartosc domyslna tez do niego
   wchodzi - gdyby zmienila sie w nowszej wersji Codeksa, zatwierdzenie uzytkownika

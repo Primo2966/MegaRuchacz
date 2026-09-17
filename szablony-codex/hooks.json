@@ -17,6 +17,18 @@
         "hooks": [
           {
             "type": "command",
+            "command": "powershell -NoProfile -NonInteractive -ExecutionPolicy Bypass -File \"{{ZRODLO}}/narzedzia/straznik-zasad.ps1\" -KosztCodex -Zrodlo \"{{ZRODLO}}\" -Projekt \"{{PROJEKT}}\"",
+            "commandWindows": "powershell -NoProfile -NonInteractive -ExecutionPolicy Bypass -File \"{{ZRODLO}}/narzedzia/straznik-zasad.ps1\" -KosztCodex -Zrodlo \"{{ZRODLO}}\" -Projekt \"{{PROJEKT}}\"",
+            "timeout": 10,
+            "statusMessage": "MegaRuchacz: rachunek za pamiec agenta",
+            "additionalContextLimit": 1000
+          }
+        ]
+      },
+      {
+        "hooks": [
+          {
+            "type": "command",
             "command": "powershell -NoProfile -NonInteractive -ExecutionPolicy Bypass -File \"{{ZRODLO}}/narzedzia/straznik-zasad.ps1\" -Tlo -Zrodlo \"{{ZRODLO}}\" -Projekt \"{{PROJEKT}}\" >/dev/null 2>&1 || true",
             "commandWindows": "powershell -NoProfile -NonInteractive -ExecutionPolicy Bypass -File \"{{ZRODLO}}/narzedzia/straznik-zasad.ps1\" -Tlo -Zrodlo \"{{ZRODLO}}\" -Projekt \"{{PROJEKT}}\"",
             "timeout": 300,
