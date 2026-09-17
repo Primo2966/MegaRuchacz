@@ -8,17 +8,25 @@
 #   ... -BezPytania         pomija ekran zgody (dla instalatora nadrzednego, ktory juz ja zebral)
 #   ... -Proba              wypisuje, co by zrobil, i NIE robi nic
 #   ... -TylkoSprawdz       sam test juz zainstalowanego modulu
+#   ... -TylkoOdswiezanie   zaklada wylacznie zadanie odswiezajace narzedzie
+#                           (bez Pythona, bez MCP) - dla instalacji bez modulu pamieci
 
 param(
   [string]$Zrodlo = (Split-Path -Parent $PSScriptRoot),
   [switch]$BezPytania,
   [switch]$Proba,
-  [switch]$TylkoSprawdz
+  [switch]$TylkoSprawdz,
+  [switch]$TylkoOdswiezanie
 )
 
 $NazwaMcp      = "lore"
 $NazwaZadania  = "LoreIndex"
 $InterwalMin   = 10
+# Drugie zadanie: nowsza wersja narzedzia sciagana z gita i pilnowanie plikow
+# zasad. Osobne od LoreIndex z premedytacja - modul pamieci jest opcjonalny
+# i da sie go odrzucic, a aktualizowac ma sie narzedzie tak czy inaczej.
+$NazwaZadaniaOdswiez = "MegaRuchaczOdswiez"
+$InterwalOdswiezMin  = 60
 $RozmiarModelu = "~465 MB"
 $MinModelMB    = 200   # model wazy ~465 MB; kilka bajtow to przerwane pobranie, nie model
 
@@ -197,8 +205,11 @@ function Ekran-Zgody {
 $lista
      UWAGA: od tej chwili agent AI ma dostep do TRESCI wszystkich Twoich rozmow
      zebranych na tej maszynie - ze wszystkich projektow i wszystkich okien.
-  4. Powstanie zadanie w Harmonogramie zadan Windows ("$NazwaZadania"), ktore odswieza
-     indeks co $InterwalMin minut i startuje razem z Twoim zalogowaniem.
+  4. Powstana dwa zadania w Harmonogramie zadan Windows, oba startuja razem
+     z Twoim zalogowaniem:
+        "$NazwaZadania"           - odswieza indeks rozmow co $InterwalMin minut
+        "$NazwaZadaniaOdswiez" - co $InterwalOdswiezMin minut pobiera nowsza wersje samego
+                             narzedzia z gita i pilnuje plikow zasad
 
   Nic nie wychodzi poza ta maszyne: baza, model i samo wyszukiwanie dzialaja lokalnie,
   bez zewnetrznych API. Jedynym ruchem w sieci jest jednorazowe pobranie modelu.
@@ -339,50 +350,45 @@ function Zarejestruj-Mcp {
 }
 
 # Jedno zrodlo prawdy o zadaniu: pytamy harmonogram, nie wlasna pamiec o tym,
-# ze przed chwila cos zarejestrowalismy. Zwraca (Ok, Opis).
-function Stan-Zadania {
+# ze przed chwila cos zarejestrowalismy. $wzorzec to fragment akcji, po ktorym
+# poznajemy, ze to NASZE zadanie, a nie cudze o tej samej nazwie. Zwraca (Ok, Opis).
+function Stan-Zadania($nazwa, $wzorzec) {
   if (-not (Get-Command Get-ScheduledTask -ErrorAction SilentlyContinue)) {
     return [pscustomobject]@{ Ok = $false; Opis = "brak Get-ScheduledTask - nie mam czym sprawdzic harmonogramu" }
   }
-  $z = Get-ScheduledTask -TaskName $NazwaZadania -ErrorAction SilentlyContinue
+  $z = Get-ScheduledTask -TaskName $nazwa -ErrorAction SilentlyContinue
   if (-not $z) {
-    return [pscustomobject]@{ Ok = $false; Opis = "harmonogram nie zna zadania $NazwaZadania" }
+    return [pscustomobject]@{ Ok = $false; Opis = "harmonogram nie zna zadania $nazwa" }
   }
   if ($z.State -eq "Disabled") {
     return [pscustomobject]@{ Ok = $false; Opis = "zadanie istnieje, ale jest wylaczone (Disabled) - nie uruchomi sie" }
   }
   $akcje = @($z.Actions | ForEach-Object { "$($_.Execute) $($_.Arguments)" })
-  $pasujace = @($akcje | Where-Object { $_ -match "lore\.index" })
+  $pasujace = @($akcje | Where-Object { $_ -match $wzorzec })
   if ($pasujace.Count -eq 0) {
-    return [pscustomobject]@{ Ok = $false; Opis = "zadanie istnieje, ale jego akcja nie uruchamia lore.index" }
+    return [pscustomobject]@{ Ok = $false; Opis = "zadanie istnieje, ale jego akcja nie uruchamia $wzorzec" }
   }
   return [pscustomobject]@{ Ok = $true; Opis = "stan: $($z.State)" }
 }
 
-function Zaloz-Zadanie {
-  Naglowek "Zadanie w harmonogramie ($NazwaZadania)"
-  # conhost --headless: zadanie chodzi co kilka minut i nikt nie chce ogladac mrugajacego okna konsoli
-  $argumenty = "--headless `"$($script:Uv)`" --directory `"$($script:Lore)`" run python -m lore.index"
-  if ($Proba) {
-    Plan "Register-ScheduledTask -TaskName $NazwaZadania -Force   (nadpisuje istniejace, nie doklada drugiego)"
-    Plan "  akcja     : conhost.exe $argumenty"
-    Plan "  wyzwalacz : przy zalogowaniu uzytkownika, potem co $InterwalMin min bez konca"
-    return
-  }
-  # UWAGA - sprawdzone 2026-09-16: zakladanie zadania przez obiekty
-  # (New-ScheduledTaskPrincipal + Register-ScheduledTask -Principal) konczy sie
-  # "Odmowa dostepu" u zwyklego, niepodniesionego uzytkownika. Ta sama operacja
-  # podana jako XML przechodzi bez uprawnien administratora. Dlatego XML.
-  try {
-    $sid = ([Security.Principal.WindowsIdentity]::GetCurrent()).User.Value
-    $start = (Get-Date).ToString("yyyy-MM-ddTHH:mm:ss")
-    $argXml = [System.Security.SecurityElement]::Escape($argumenty)
-    $xml = @"
+# Rejestracja zadania przez XML - jedno miejsce dla obu zadan.
+# UWAGA - sprawdzone 2026-09-16: zakladanie zadania przez obiekty
+# (New-ScheduledTaskPrincipal + Register-ScheduledTask -Principal) konczy sie
+# "Odmowa dostepu" u zwyklego, niepodniesionego uzytkownika. Ta sama operacja
+# podana jako XML przechodzi bez uprawnien administratora. Dlatego XML.
+# -Force nadpisuje zadanie o tej samej nazwie, wiec ponowna instalacja nie
+# doklada drugiego wpisu, tylko podmienia istniejacy.
+function Zarejestruj-Zadanie($nazwa, $opis, $argumenty, $interwal) {
+  $sid = ([Security.Principal.WindowsIdentity]::GetCurrent()).User.Value
+  $start = (Get-Date).ToString("yyyy-MM-ddTHH:mm:ss")
+  $argXml = [System.Security.SecurityElement]::Escape($argumenty)
+  $opisXml = [System.Security.SecurityElement]::Escape($opis)
+  $xml = @"
 <?xml version="1.0" encoding="UTF-16"?>
 <Task version="1.2" xmlns="http://schemas.microsoft.com/windows/2004/02/mit/task">
   <RegistrationInfo>
-    <Description>Lore - przyrostowe indeksowanie rozmow</Description>
-    <URI>\$NazwaZadania</URI>
+    <Description>$opisXml</Description>
+    <URI>\$nazwa</URI>
   </RegistrationInfo>
   <Principals>
     <Principal id="Author">
@@ -401,7 +407,7 @@ function Zaloz-Zadanie {
     <TimeTrigger>
       <StartBoundary>$start</StartBoundary>
       <Repetition>
-        <Interval>PT${InterwalMin}M</Interval>
+        <Interval>PT${interwal}M</Interval>
       </Repetition>
       <Enabled>true</Enabled>
     </TimeTrigger>
@@ -414,7 +420,31 @@ function Zaloz-Zadanie {
   </Actions>
 </Task>
 "@
-    Register-ScheduledTask -TaskName $NazwaZadania -Xml $xml -Force -ErrorAction Stop | Out-Null
+  Register-ScheduledTask -TaskName $nazwa -Xml $xml -Force -ErrorAction Stop | Out-Null
+}
+
+# Argumenty obu zadan. conhost --headless: zadania chodza co kilkanascie minut
+# i nikt nie chce ogladac mrugajacego okna konsoli.
+function Argumenty-Indeksu {
+  return "--headless `"$($script:Uv)`" --directory `"$($script:Lore)`" run python -m lore.index"
+}
+
+function Argumenty-Odswiezania {
+  $straznik = Join-Path $Zrodlo "narzedzia\straznik-zasad.ps1"
+  return "--headless powershell -NoProfile -NonInteractive -ExecutionPolicy Bypass -File `"$straznik`" -Zrodlo `"$Zrodlo`" -Tlo"
+}
+
+function Zaloz-Zadanie {
+  Naglowek "Zadanie w harmonogramie ($NazwaZadania)"
+  $argumenty = Argumenty-Indeksu
+  if ($Proba) {
+    Plan "Register-ScheduledTask -TaskName $NazwaZadania -Force   (nadpisuje istniejace, nie doklada drugiego)"
+    Plan "  akcja     : conhost.exe $argumenty"
+    Plan "  wyzwalacz : przy zalogowaniu uzytkownika, potem co $InterwalMin min bez konca"
+    return
+  }
+  try {
+    Zarejestruj-Zadanie $NazwaZadania "Lore - przyrostowe indeksowanie rozmow" $argumenty $InterwalMin
   } catch {
     Blad "nie udalo sie zalozyc zadania: $($_.Exception.Message)"
     Krok "jesli to 'Odmowa dostepu' - zasady tej maszyny moga wymagac uprawnien administratora"
@@ -423,13 +453,47 @@ function Zaloz-Zadanie {
   # UWAGA - audyt na obcej maszynie: instalator wypisal "indeks odswiezany co 10 min",
   # a Get-ScheduledTask nie znajdowal potem zadnego zadania. Samo przejscie
   # Register-ScheduledTask bez wyjatku niczego nie dowodzi - pytamy harmonogram.
-  $stan = Stan-Zadania
+  $stan = Stan-Zadania $NazwaZadania "lore\.index"
   if (-not $stan.Ok) {
     Blad "zadanie $NazwaZadania nie powstalo: $($stan.Opis)"
     Krok "harmonogram przyjal polecenie, ale zadania tam nie ma - sprawdz zasady tej maszyny"
     exit 1
   }
   Krok "zadanie $NazwaZadania jest w harmonogramie ($($stan.Opis)) - indeks odswiezany co $InterwalMin min"
+}
+
+# Drugie zadanie - jedyna droga aktualizacji narzedzia na maszynie bez Claude
+# Code. Tam nikt nie uruchamia straznika, bo hook SessionStart nalezy do Claude
+# Code; harmonogram robi to za niego, w trybie -Tlo (cisza + dziennik).
+function Zaloz-Zadanie-Odswiezania {
+  Naglowek "Zadanie w harmonogramie ($NazwaZadaniaOdswiez)"
+  $straznik = Join-Path $Zrodlo "narzedzia\straznik-zasad.ps1"
+  if (-not (Test-Path $straznik)) {
+    Blad "nie ma $straznik - nie mam czego uruchamiac z harmonogramu"
+    exit 1
+  }
+  $argumenty = Argumenty-Odswiezania
+  if ($Proba) {
+    Plan "Register-ScheduledTask -TaskName $NazwaZadaniaOdswiez -Force   (nadpisuje istniejace, nie doklada drugiego)"
+    Plan "  akcja     : conhost.exe $argumenty"
+    Plan "  wyzwalacz : przy zalogowaniu uzytkownika, potem co $InterwalOdswiezMin min bez konca"
+    Plan "  po co     : bez Claude Code nikt nie odpala straznika, wiec narzedzie samo by sie nie zaktualizowalo"
+    return
+  }
+  try {
+    Zarejestruj-Zadanie $NazwaZadaniaOdswiez "MegaRuchacz - pobranie nowszej wersji narzedzia i pilnowanie zasad" $argumenty $InterwalOdswiezMin
+  } catch {
+    Blad "nie udalo sie zalozyc zadania $NazwaZadaniaOdswiez : $($_.Exception.Message)"
+    Krok "jesli to 'Odmowa dostepu' - zasady tej maszyny moga wymagac uprawnien administratora"
+    exit 1
+  }
+  $stan = Stan-Zadania $NazwaZadaniaOdswiez "straznik-zasad"
+  if (-not $stan.Ok) {
+    Blad "zadanie $NazwaZadaniaOdswiez nie powstalo: $($stan.Opis)"
+    Krok "harmonogram przyjal polecenie, ale zadania tam nie ma - sprawdz zasady tej maszyny"
+    exit 1
+  }
+  Krok "zadanie $NazwaZadaniaOdswiez jest w harmonogramie ($($stan.Opis)) - narzedzie odswiezane co $InterwalOdswiezMin min"
 }
 
 # ---------------------------------------------------------------- sprawdzenie instalacji
@@ -474,8 +538,14 @@ function Sprawdz-Indeksowanie {
 }
 
 function Sprawdz-Zadanie {
-  $stan = Stan-Zadania
+  $stan = Stan-Zadania $NazwaZadania "lore\.index"
   Zapisz-Wynik "zadanie w harmonogramie ($NazwaZadania)" $stan.Ok $stan.Opis
+}
+
+function Sprawdz-Zadanie-Odswiezania {
+  $stan = Stan-Zadania $NazwaZadaniaOdswiez "straznik-zasad"
+  Zapisz-Wynik "zadanie w harmonogramie ($NazwaZadaniaOdswiez)" $stan.Ok $stan.Opis
+  Nie-Sprawdzono "czy odswiezanie naprawde cos podciagnie - to widac dopiero w dzienniku ~\.claude\.megaruchacz-tlo.log po pierwszym przebiegu"
 }
 
 function Sprawdz-Model {
@@ -695,6 +765,7 @@ function Sprawdz-Instalacje {
     Plan "uv --directory $($script:Lore) run pytest -q"
     Plan "uv --directory $($script:Lore) run python -c ""from lore import server"""
     Plan "Get-ScheduledTask $NazwaZadania - czy zadanie istnieje i nie jest wylaczone"
+    Plan "Get-ScheduledTask $NazwaZadaniaOdswiez - czy zadanie odswiezania istnieje i nie jest wylaczone"
     Plan "uv --directory $($script:Lore) run python -m lore.index   (jeden przebieg indeksowania)"
     Plan "policzenie wektora modelem i rozmiar katalogu $($script:Modele) (min. $MinModelMB MB)"
     Plan "odczyt z bazy: ile plikow i kawalkow wobec liczby widocznych transkryptow ($($script:Baza))"
@@ -709,6 +780,7 @@ function Sprawdz-Instalacje {
   Sprawdz-Testy
   Sprawdz-Import
   Sprawdz-Zadanie
+  Sprawdz-Zadanie-Odswiezania
   Sprawdz-Indeksowanie
   Sprawdz-Model
   Sprawdz-Baze
@@ -746,8 +818,9 @@ function Podsumowanie {
 
 Write-Host ""
 Write-Host "Instalator modulu pamieci rozmow Lore"
-if ($Proba)        { Ostrzezenie "TRYB PROBNY - tylko pokazuje plan, niczego nie zmienia" }
-if ($TylkoSprawdz) { Ostrzezenie "TRYB SPRAWDZANIA - tylko test juz zainstalowanego modulu" }
+if ($Proba)            { Ostrzezenie "TRYB PROBNY - tylko pokazuje plan, niczego nie zmienia" }
+if ($TylkoSprawdz)     { Ostrzezenie "TRYB SPRAWDZANIA - tylko test juz zainstalowanego modulu" }
+if ($TylkoOdswiezanie) { Ostrzezenie "TRYB ODSWIEZANIA - zakladam wylacznie zadanie $NazwaZadaniaOdswiez, pamieci rozmow nie ruszam" }
 
 $sciezka = Resolve-Path $Zrodlo -ErrorAction SilentlyContinue
 if (-not $sciezka) {
@@ -757,6 +830,30 @@ if (-not $sciezka) {
 $Zrodlo = $sciezka.Path
 $script:Lore = Join-Path $Zrodlo "lore"
 
+# Samo odswiezanie narzedzia nie ma nic wspolnego z pamiecia rozmow - nie potrzebuje
+# ani Pythona, ani uv, ani serwera MCP. Rejestracja zadania przez XML siedzi jednak
+# tutaj i ma zostac w jednym miejscu, stad ten tryb: wdroz.ps1 wola go takze wtedy,
+# gdy uzytkownik modulu pamieci nie chcial.
+if ($TylkoOdswiezanie) {
+  Zaloz-Zadanie-Odswiezania
+  if ($Proba) {
+    Write-Host ""
+    Write-Host "TRYB PROBNY - nic nie zostalo zmienione."
+    exit 0
+  }
+  Naglowek "Sprawdzenie"
+  Sprawdz-Zadanie-Odswiezania
+  $zle = @($script:Kroki | Where-Object { -not $_.Ok })
+  Write-Host ""
+  if ($zle.Count -gt 0) {
+    Blad "zadanie $NazwaZadaniaOdswiez NIE stoi - narzedzie nie bedzie sie samo aktualizowac."
+    exit 1
+  }
+  Write-Host "Gotowe - narzedzie bedzie sie odswiezac co $InterwalOdswiezMin min, bez Twojego udzialu." -ForegroundColor Green
+  Write-Host "Slad kazdego przebiegu: $(Join-Path $HOME '.claude\.megaruchacz-tlo.log')"
+  exit 0
+}
+
 Sprawdz-Warunki
 
 if (-not $TylkoSprawdz) {
@@ -764,6 +861,7 @@ if (-not $TylkoSprawdz) {
   Zainstaluj-Srodowisko
   Zarejestruj-Mcp
   Zaloz-Zadanie
+  Zaloz-Zadanie-Odswiezania
 }
 
 Sprawdz-Instalacje

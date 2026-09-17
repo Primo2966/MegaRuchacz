@@ -15,6 +15,10 @@
 #       zapamietuje, ze modul (albo nowa funkcja w nim) ma zostac niewlaczony
 #   powershell -NoProfile -File narzedzia\straznik-zasad.ps1 -Moduly
 #       wypisuje rejestr modulow w JSON-ie; z tego korzysta wdroz.ps1
+#   powershell -NoProfile -File narzedzia\straznik-zasad.ps1 -Tlo
+#       tryb bezobslugowy dla Harmonogramu zadan: tylko pobranie nowszej wersji
+#       narzedzia i pilnowanie plikow zasad. Nic nie wypisuje na ekran - slad
+#       zostaje w dzienniku, bo w tle nie ma kto czytac komunikatow.
 #   -KatalogDomowy  podstawiony katalog domowy - do testow
 
 param(
@@ -22,7 +26,8 @@ param(
   [string]$Projekt = "",
   [string]$KatalogDomowy = $HOME,
   [string]$Odrzuc = "",
-  [switch]$Moduly
+  [switch]$Moduly,
+  [switch]$Tlo
 )
 
 $ErrorActionPreference = "Stop"
@@ -68,6 +73,10 @@ $POCZATEK = "<!-- MegaRuchacz:start -->"
 $KONIEC   = "<!-- MegaRuchacz:koniec -->"
 
 $plikDomowy   = Join-Path $KatalogDomowy ".claude\CLAUDE.md"
+# Plik instrukcji Codeksa. Bez $env:CODEX_HOME z premedytacja: zasady wpisuje
+# wpisz-zasady.ps1, ktory liczy go tak samo - z $KatalogDomowy. Gdybysmy tu
+# patrzyli gdzie indziej, straznik pilnowalby innego pliku, niz naprawia.
+$plikCodex    = Join-Path $KatalogDomowy ".codex\AGENTS.md"
 $plikStanu    = Join-Path $KatalogDomowy ".claude\.megaruchacz-straznik.txt"
 $plikWersji   = Join-Path $Projekt ".claude\megaruchacz-wersja.txt"
 # Znacznik ostatniego zagladania do sieci. Lezy w katalogu domowym, a nie przy
@@ -75,6 +84,31 @@ $plikWersji   = Join-Path $Projekt ".claude\megaruchacz-wersja.txt"
 # otwartych okien ma go odpytac raz, nie dziesiec razy.
 $plikPobrania = Join-Path $KatalogDomowy ".claude\.megaruchacz-pobranie.txt"
 $MINUT_MIEDZY_POBRANIAMI = 60
+
+# Slad po trybie bezobslugowym. Lezy przy pozostalych plikach stanu straznika,
+# zeby wszystko jego bylo w jednym miejscu.
+$plikDziennika = Join-Path $KatalogDomowy ".claude\.megaruchacz-tlo.log"
+$LINII_DZIENNIKA = 200
+# Codex czyta AGENTS.md do 32 KiB - dluzszy plik przycina, wiec koniec zasad
+# po prostu przepada. Za ten limit nie odpowiadamy, ale mamy o nim powiedziec.
+$LIMIT_AGENTS = 32768
+
+# W tle nikt nie czeka na otwarcie okna, wiec git dostaje wiecej czasu niz
+# w hooku, gdzie caly przebieg ma sie zmiescic w kilkunastu sekundach.
+if ($Tlo) { $CZAS_GIT = 30; $CZAS_GIT_FETCH = 60 } else { $CZAS_GIT = 5; $CZAS_GIT_FETCH = 6 }
+
+# Jedyne wyjscie straznika. W hooku idzie na ekran (Claude Code wciaga to do
+# kontekstu sesji), w tle - do dziennika, bo Write-Host nie trafia tam do nikogo.
+$script:Dziennik = @()
+function Mow([string]$tekst) {
+  if ($Tlo) { $script:Dziennik += $tekst } else { Write-Host $tekst }
+}
+
+# To, o czym hook milczy celowo (brak sieci, nic nowego), a co w dzienniku jest
+# jedyna odpowiedzia na pytanie "czy to zadanie w ogole chodzi".
+function Notuj([string]$tekst) {
+  if ($Tlo) { $script:Dziennik += $tekst }
+}
 
 function Bez-Bom { return (New-Object System.Text.UTF8Encoding($false)) }
 
@@ -164,6 +198,28 @@ function Zapisz-Klucze($sciezka, $stan) {
   $linie = @()
   foreach ($k in $stan.Keys) { $linie += ("{0}: {1}" -f $k, $stan[$k]) }
   Zapisz-Tekst $sciezka (($linie -join "`r`n") + "`r`n")
+}
+
+# Zamyka przebieg w tle: zbierane komunikaty ida na koniec dziennika, a z gory
+# leci wszystko powyzej $LINII_DZIENNIKA - plik ma byc dowodem, ze zadanie
+# chodzi, a nie archiwum rosnacym bez konca.
+function Dopisz-Dziennik {
+  if (-not $Tlo) { return }
+  $stempel = Get-Date -Format 'yyyy-MM-dd HH:mm'
+  $swieze = @()
+  if ($script:Dziennik.Count -eq 0) {
+    $swieze += "$stempel | nic nie wymagalo uwagi"
+  } else {
+    foreach ($l in $script:Dziennik) { $swieze += "$stempel | $l" }
+  }
+  $stare = @()
+  $raw = Czytaj-Tekst $plikDziennika
+  if ($raw) { $stare = @(($raw -split '\r?\n') | Where-Object { $_.Trim() }) }
+  $wszystkie = @($stare + $swieze)
+  if ($wszystkie.Count -gt $LINII_DZIENNIKA) {
+    $wszystkie = @($wszystkie | Select-Object -Last $LINII_DZIENNIKA)
+  }
+  try { Zapisz-Tekst $plikDziennika (($wszystkie -join "`r`n") + "`r`n") } catch { }
 }
 
 function Kopia-Zapasowa($sciezka, $stempel) {
@@ -295,34 +351,41 @@ function Wolaj-Gita([string]$argumenty, [int]$sekundy) {
 # dalej z tym, co lezy na dysku.
 function Odswiez-Zrodlo {
   # Do sieci zagladamy nie czesciej niz raz na $MINUT_MIEDZY_POBRANIAMI, osobno
-  # dla kazdego katalogu zrodlowego - stad skrot sciezki w kluczu.
+  # dla kazdego katalogu zrodlowego - stad skrot sciezki w kluczu. W tle dlawika
+  # nie ma: tam czestotliwosc ustawia harmonogram, a nie liczba otwartych okien.
   $klucz = "z" + (Skrot $Zrodlo.ToLower())
   $stanP = Czytaj-Klucze $plikPobrania
   $kiedy = [datetime]::MinValue
-  if ($stanP[$klucz] -and [datetime]::TryParse($stanP[$klucz], [ref]$kiedy)) {
+  if (-not $Tlo -and $stanP[$klucz] -and [datetime]::TryParse($stanP[$klucz], [ref]$kiedy)) {
     if (([datetime]::Now - $kiedy).TotalMinutes -lt $MINUT_MIEDZY_POBRANIAMI) { return }
   }
-  if (-not (Get-Command git -ErrorAction SilentlyContinue)) { return }
+  if (-not (Get-Command git -ErrorAction SilentlyContinue)) { Notuj "zrodlo: nie ma gita na tej maszynie - pomijam pobranie"; return }
 
   $cyt = '"' + $Zrodlo.TrimEnd('\') + '"'
-  $repo = Wolaj-Gita "-C $cyt rev-parse --is-inside-work-tree" 5
-  if (-not $repo.ok -or $repo.tekst -ne "true") { return }   # to nie repozytorium
+  $repo = Wolaj-Gita "-C $cyt rev-parse --is-inside-work-tree" $CZAS_GIT
+  if (-not $repo.ok -or $repo.tekst -ne "true") {
+    Notuj "zrodlo: $Zrodlo to nie repozytorium git - nie ma skad pobierac"
+    return
+  }
 
   # Od tej chwili proba byla prawdziwa - znacznik idzie na dysk niezaleznie od
   # wyniku, zeby nieudane pobranie nie powtarzalo sie przy kazdym oknie.
   $stanP[$klucz] = (Get-Date -Format 'yyyy-MM-dd HH:mm:ss')
   Zapisz-Klucze $plikPobrania $stanP
 
-  $brudne = Wolaj-Gita "-C $cyt status --porcelain" 5
-  if (-not $brudne.ok) { return }
+  $brudne = Wolaj-Gita "-C $cyt status --porcelain" $CZAS_GIT
+  if (-not $brudne.ok) { Notuj "zrodlo: git nie odpowiedzial na pytanie o niezapisane zmiany"; return }
   if ($brudne.tekst) {
-    Write-Host "MegaRuchacz: w $Zrodlo sa niezapisane zmiany - nie pobieram nowszej wersji narzedzia, pracuje na tej, ktora jest."
+    Mow "MegaRuchacz: w $Zrodlo sa niezapisane zmiany - nie pobieram nowszej wersji narzedzia, pracuje na tej, ktora jest."
     return
   }
 
   # Galaz bez zdalnej (albo odpiety HEAD) - nie ma czego i skad pobierac.
-  $zdalna = Wolaj-Gita "-C $cyt rev-parse --abbrev-ref --symbolic-full-name @{u}" 5
-  if (-not $zdalna.ok -or -not $zdalna.tekst) { return }
+  $zdalna = Wolaj-Gita "-C $cyt rev-parse --abbrev-ref --symbolic-full-name @{u}" $CZAS_GIT
+  if (-not $zdalna.ok -or -not $zdalna.tekst) {
+    Notuj "zrodlo: galaz w $Zrodlo nie ma zdalnej - nie ma skad pobierac"
+    return
+  }
 
   $plikZmian = Join-Path $Zrodlo "ZMIANY.md"
   $przedWersja = Wersja-Narzedzia $plikZmian
@@ -331,26 +394,26 @@ function Odswiez-Zrodlo {
   # Limity czasu sa krotkie z premedytacja: caly hook ma 15 sekund, a start
   # okna nie moze na nas czekac. Gdy sie nie wyrobimy, wracamy po godzinie.
   $env:GIT_TERMINAL_PROMPT = "0"
-  $pobrane = Wolaj-Gita "-C $cyt -c credential.interactive=never fetch --quiet" 6
-  if (-not $pobrane.ok) { return }   # brak sieci to nie jest blad
+  $pobrane = Wolaj-Gita "-C $cyt -c credential.interactive=never fetch --quiet" $CZAS_GIT_FETCH
+  if (-not $pobrane.ok) { Notuj "zrodlo: fetch nie wyszedl (brak sieci albo dostepu) - zostaje przy tym, co na dysku"; return }
 
-  $licznik = Wolaj-Gita "-C $cyt rev-list --left-right --count HEAD...@{u}" 5
-  if (-not $licznik.ok) { return }
+  $licznik = Wolaj-Gita "-C $cyt rev-list --left-right --count HEAD...@{u}" $CZAS_GIT
+  if (-not $licznik.ok) { Notuj "zrodlo: git nie policzyl roznicy wobec zdalnej"; return }
   $czesci = $licznik.tekst -split '\s+'
   if ($czesci.Count -lt 2) { return }
   $nasze = [int]$czesci[0]   # commity lokalne, ktorych nie ma na zdalnej
   $zdalne = [int]$czesci[1]  # commity zdalne, ktorych nie mamy u siebie
-  if ($zdalne -le 0) { return }   # nic nowego - cisza, tak jak reszta straznika
+  if ($zdalne -le 0) { Notuj "zrodlo: bez zmian, zdalna nie ma nic nowego"; return }
 
   if ($nasze -gt 0) {
-    Write-Host "MegaRuchacz: historia w $Zrodlo rozjechala sie ze zdalna ($nasze lokalnych, $zdalne zdalnych) - nie scalam sam, zrob to recznie."
+    Mow "MegaRuchacz: historia w $Zrodlo rozjechala sie ze zdalna ($nasze lokalnych, $zdalne zdalnych) - nie scalam sam, zrob to recznie."
     return
   }
 
   # Tylko proste przewiniecie do przodu. Gdy git odmowi, zostajemy przy starym.
-  $scalone = Wolaj-Gita "-C $cyt merge --ff-only @{u}" 6
+  $scalone = Wolaj-Gita "-C $cyt merge --ff-only @{u}" $CZAS_GIT_FETCH
   if (-not $scalone.ok) {
-    Write-Host "MegaRuchacz: nie udalo sie przewinac $Zrodlo do nowszej wersji - pracuje na tej, ktora jest."
+    Mow "MegaRuchacz: nie udalo sie przewinac $Zrodlo do nowszej wersji - pracuje na tej, ktora jest."
     return
   }
 
@@ -358,47 +421,77 @@ function Odswiez-Zrodlo {
   # co sie wlasnie zmienilo pod reka uzytkownika.
   $poWersja = Wersja-Narzedzia $plikZmian
   if ($przedWersja -and $poWersja -and $przedWersja -ne $poWersja) {
-    Write-Host "MegaRuchacz: narzedzie podciagniete z gita - wersja ${przedWersja} -> ${poWersja} (co doszlo: $plikZmian)"
+    Mow "MegaRuchacz: narzedzie podciagniete z gita - wersja ${przedWersja} -> ${poWersja} (co doszlo: $plikZmian)"
   } else {
     $slowo = if ($zdalne -eq 1) { "nowa zmiana" } else { "nowych zmian" }
-    Write-Host "MegaRuchacz: narzedzie podciagniete z gita - $zdalne $slowo, numer wersji bez zmian (co doszlo: $plikZmian)"
+    Mow "MegaRuchacz: narzedzie podciagniete z gita - $zdalne $slowo, numer wersji bez zmian (co doszlo: $plikZmian)"
   }
 }
 
 # --------------------------------------------------------- 1. zasady globalne
+# Pliki instrukcji do pilnowania. Claude Code czyta ~\.claude\CLAUDE.md, Codex
+# ~\.codex\AGENTS.md - i to jest jedyna droga zasad na maszynie bez Claude Code,
+# bo Codex wczytuje AGENTS.md sam, bez zadnego hooka. Zapisuje wpisz-zasady.ps1
+# (oba pliki naraz), tu tylko sprawdzamy, czy blok nadal tam siedzi i jest swiezy.
+# Klucz to nazwa pola w pliku stanu - "blok" zostaje przy CLAUDE.md, zeby stare
+# pliki stanu dalej sie zgadzaly.
+function Cele-Zasad {
+  $cele = @(
+    [ordered]@{ nazwa = "Claude Code"; plik = $plikDomowy; klucz = "blok"; limit = 0 }
+  )
+  # Codeksa uznajemy za obecnego po jego katalogu domowym - tak samo jak robia
+  # to wpisz-zasady.ps1 i instaluj-lore.ps1.
+  if (Test-Path (Split-Path -Parent $plikCodex)) {
+    $cele += [ordered]@{ nazwa = "Codex"; plik = $plikCodex; klucz = "blok.codex"; limit = $LIMIT_AGENTS }
+  }
+  # przecinek z premedytacja: bez niego lista jednoelementowa wraca jako goly
+  # slownik, a nie tablica - ta sama pulapka, ktora zlapala rejestr modulow
+  return ,$cele
+}
+
 function Pilnuj-Zasad {
   $oczekiwane = Tresc-Zrodla (Join-Path $Zrodlo "zasady-globalne.md")
   if (-not $oczekiwane) { return }
-  $blok = Tresc-Bloku $plikDomowy
-
   $skrotZrodla = Skrot (Znormalizuj $oczekiwane)
-  $skrotBloku  = Skrot (Znormalizuj $blok)
+  $stan = Czytaj-Klucze $plikStanu
+  $cele = Cele-Zasad
 
   # Zgodne, gdy blok zawiera tresc ze zrodla, albo gdy oba skroty sa takie same
   # jak przy ostatnim udanym wpisie - to drugie ratuje nas, gdyby wpisz-zasady.ps1
   # skladalo blok inaczej, niz wyglada surowe zrodlo.
-  $zgodne = $false
-  if ($blok) {
-    if ((Znormalizuj $blok).Contains((Znormalizuj $oczekiwane))) {
-      $zgodne = $true
-    } else {
-      $stan = Czytaj-Klucze $plikStanu
-      if ($stan["zrodlo"] -eq $skrotZrodla -and $stan["blok"] -eq $skrotBloku) { $zgodne = $true }
+  $skroty = [ordered]@{ zrodlo = $skrotZrodla }
+  $doNaprawy = @()
+  foreach ($c in $cele) {
+    $blok = Tresc-Bloku $c.plik
+    $skrotBloku = Skrot (Znormalizuj $blok)
+    $skroty[$c.klucz] = $skrotBloku
+    $zgodne = $false
+    if ($blok) {
+      if ((Znormalizuj $blok).Contains((Znormalizuj $oczekiwane))) {
+        $zgodne = $true
+      } elseif ($stan["zrodlo"] -eq $skrotZrodla -and $stan[$c.klucz] -eq $skrotBloku) {
+        $zgodne = $true
+      }
+    }
+    if (-not $zgodne) {
+      $powod = if ($blok) { "nieaktualne" } else { "zniknely" }
+      $doNaprawy += [ordered]@{ nazwa = $c.nazwa; plik = $c.plik; powod = $powod }
     }
   }
 
-  if ($zgodne) {
-    $stan = Czytaj-Klucze $plikStanu
-    if ($stan["zrodlo"] -ne $skrotZrodla -or $stan["blok"] -ne $skrotBloku) {
-      Zapisz-Klucze $plikStanu ([ordered]@{ zrodlo = $skrotZrodla; blok = $skrotBloku })
-    }
+  if ($doNaprawy.Count -eq 0) {
+    $rozne = $false
+    foreach ($k in $skroty.Keys) { if ($stan[$k] -ne $skroty[$k]) { $rozne = $true } }
+    if ($rozne) { Zapisz-Klucze $plikStanu $skroty }
+    Notuj ("zasady: aktualne (" + (($cele | ForEach-Object { $_.nazwa }) -join ", ") + ")")
+    Pilnuj-Limitu $cele
     return
   }
 
-  $powod = if ($blok) { "byly nieaktualne" } else { "zniknely" }
+  $opis = ($doNaprawy | ForEach-Object { "$($_.nazwa): $($_.powod)" }) -join ", "
   $wpisz = Join-Path $Zrodlo "narzedzia\wpisz-zasady.ps1"
   if (-not (Test-Path $wpisz)) {
-    Write-Host "MegaRuchacz: zasady globalne $powod w $plikDomowy, a nie ma $wpisz - wpisz je recznie."
+    Mow "MegaRuchacz: zasady globalne wymagaja poprawki ($opis), a nie ma $wpisz - wpisz je recznie."
     return
   }
   $kod = 1
@@ -408,12 +501,35 @@ function Pilnuj-Zasad {
     $kod = $LASTEXITCODE
   } catch { $kod = 1 }
 
-  $poNaprawie = Tresc-Bloku $plikDomowy
-  if ($kod -eq 0 -and $poNaprawie) {
-    Zapisz-Klucze $plikStanu ([ordered]@{ zrodlo = $skrotZrodla; blok = (Skrot (Znormalizuj $poNaprawie)) })
-    Write-Host "MegaRuchacz: zasady globalne $powod w $plikDomowy - wpisalem je z powrotem."
+  # Po naprawie liczymy wszystko jeszcze raz z dysku - to, co wpisz-zasady.ps1
+  # wypisalo o sobie, nie jest dowodem.
+  $nowe = [ordered]@{ zrodlo = $skrotZrodla }
+  $nadal = @()
+  foreach ($c in $cele) {
+    $blok = Tresc-Bloku $c.plik
+    $nowe[$c.klucz] = Skrot (Znormalizuj $blok)
+    if (-not $blok) { $nadal += $c.nazwa }
+  }
+  if ($kod -eq 0 -and $nadal.Count -eq 0) {
+    Zapisz-Klucze $plikStanu $nowe
+    Mow "MegaRuchacz: zasady globalne wymagaly poprawki ($opis) - wpisalem je z powrotem."
+    Pilnuj-Limitu $cele
   } else {
-    Write-Host "MegaRuchacz: zasady globalne $powod, a odtworzenie nie wyszlo (kod $kod) - uruchom $wpisz recznie."
+    $ogon = ""
+    if ($nadal.Count -gt 0) { $ogon = ", nadal bez bloku: " + ($nadal -join ", ") }
+    Mow "MegaRuchacz: zasady globalne ($opis), a odtworzenie nie wyszlo (kod ${kod}${ogon}) - uruchom $wpisz recznie."
+  }
+}
+
+# Plik ponad limitem czyta sie tylko do limitu - reszta zasad przepada po cichu.
+# To nie jest nasza wina i nie mamy tego czym naprawic, ale mamy o tym powiedziec.
+function Pilnuj-Limitu($cele) {
+  foreach ($c in $cele) {
+    if ($c.limit -le 0) { continue }
+    if (-not (Test-Path $c.plik)) { continue }
+    $ile = (Get-Item $c.plik).Length
+    if ($ile -le $c.limit) { continue }
+    Mow "MegaRuchacz: $($c.plik) ma $([int]($ile / 1024)) KiB, a $($c.nazwa) czyta najwyzej $([int]($c.limit / 1024)) KiB - koniec pliku sie nie wczyta, skroc go."
   }
 }
 
@@ -521,6 +637,17 @@ try {
     }
     Zapisz-Klucze $plikWersji $stan
     Write-Host "  Wrocic mozna instalatorem: powershell -File $Zrodlo\wdroz.ps1"
+    exit 0
+  }
+
+  # Tryb bezobslugowy - zadanie z Harmonogramu, nikogo nie ma przy klawiaturze.
+  # Robimy tylko to, co ma sens bez czlowieka: pobranie nowszej wersji narzedzia
+  # i utrzymanie plikow zasad. Propozycje modulow, poczekalnia faktow i meldunek
+  # o cyklu sa dla czytajacego - w tle poszlyby w pustke, wiec ich tu nie ma.
+  if ($Tlo) {
+    try { Odswiez-Zrodlo } catch { Mow "odswiezanie zrodla wywrocilo sie: $($_.Exception.Message)" }
+    try { Pilnuj-Zasad }   catch { Mow "pilnowanie zasad wywrocilo sie: $($_.Exception.Message)" }
+    Dopisz-Dziennik
     exit 0
   }
 

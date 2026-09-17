@@ -122,6 +122,14 @@ if ($Projekt -eq (Resolve-Path $Zrodlo).Path) {
   exit 1
 }
 
+# Co jest na TEJ maszynie. Tryb workerow stoi w calosci na mechanizmach Claude
+# Code (hooki, subagenci, izolowane kopie repozytorium) - bez niego nie zadziala
+# i nie wolno udawac, ze jest inaczej. Zasady globalne i odswiezanie narzedzia
+# dzialaja niezaleznie od niego, wiec te wdrazamy tak czy owak.
+$Claude = Get-Command claude -CommandType Application -ErrorAction SilentlyContinue | Select-Object -First 1
+$Node   = Get-Command node   -CommandType Application -ErrorAction SilentlyContinue | Select-Object -First 1
+$Bash   = Get-Command bash   -CommandType Application -ErrorAction SilentlyContinue | Select-Object -First 1
+
 # --------------------------------------------------------------- 0. ekran zgody
 # Zanim cokolwiek ruszymy - co dokladnie sie stanie i gdzie. Nikt nie ma byc
 # zaskoczony ani jednym plikiem, ani zadaniem w harmonogramie.
@@ -171,7 +179,12 @@ Write-Host "   miedzy znacznikami <!-- MegaRuchacz:start --> i <!-- MegaRuchacz:
 Write-Host "   Twoje wlasne zapiski zostaja nietkniete, przed zmiana powstaje kopia zapasowa,"
 Write-Host "   a caly blok da sie usunac: narzedzia\wpisz-zasady.ps1 -Usun"
 Write-Host ""
-Write-Host "3) Moduly - kazdy instaluje sie i aktualizuje osobno:" -ForegroundColor Yellow
+Write-Host "3) Zadanie w Harmonogramie zadan Windows (MegaRuchaczOdswiez):"
+Write-Host "   co godzine pobiera nowsza wersje narzedzia z gita i pilnuje plikow zasad."
+Write-Host "   Na maszynie bez Claude Code to jedyna droga aktualizacji - hooka, ktory"
+Write-Host "   robi to przy starcie sesji, ma wylacznie Claude Code."
+Write-Host ""
+Write-Host "4) Moduly - kazdy instaluje sie i aktualizuje osobno:" -ForegroundColor Yellow
 foreach ($m in $Moduly) {
   $kiedy = if ($m.pytaj) { "zapytam osobno" } else { "wchodzi domyslnie" }
   Write-Host "   [$($m.nazwa)] - $kiedy"
@@ -179,6 +192,23 @@ foreach ($m in $Moduly) {
   Write-Host "      kosztuje: $($m.koszt)"
 }
 Write-Host ""
+
+# Uczciwie i przed zgoda: czego na tej maszynie nie da sie wdrozyc.
+if (-not $Claude) {
+  Write-Host "UWAGA - nie widze Claude Code na tej maszynie:" -ForegroundColor Yellow
+  Write-Host "   Tryb workerow (rozdawanie zadan, hooki, izolowane kopie repozytorium) dziala" -ForegroundColor Yellow
+  Write-Host "   WYLACZNIE w Claude Code. Tutaj NIE zadziala i instalator nie bedzie udawal," -ForegroundColor Yellow
+  Write-Host "   ze jest inaczej." -ForegroundColor Yellow
+  Write-Host "   Dziala za to: zasady globalne (Codex czyta ~\.codex\AGENTS.md sam, bez hooka)," -ForegroundColor Yellow
+  Write-Host "   odswiezanie narzedzia z Harmonogramu i modul pamieci [pamiec]." -ForegroundColor Yellow
+  Write-Host "   Pliki trybu workerow zapisze mimo to - zaczna dzialac, gdy Claude Code sie pojawi." -ForegroundColor Yellow
+  Write-Host ""
+}
+if (-not $Node) {
+  Write-Host "UWAGA  nie ma node w PATH - pliki hookow Claude Code (sesja i rejestr workerow)" -ForegroundColor Yellow
+  Write-Host "       nie powstana; reszta wdrozenia idzie normalnie." -ForegroundColor Yellow
+  Write-Host ""
+}
 
 $wybrane = @{}
 if ($BezPytania) {
@@ -245,10 +275,16 @@ fs.writeFileSync(dir + "/.claude/megaruchacz-sesja.json", JSON.stringify({
 }));
 console.log("OK  .claude/megaruchacz-sesja.json (zasady wstrzykiwane na starcie sesji)");
 '@
-$tmp1 = Join-Path $env:TEMP "mr-sesja-$Stempel.js"
-$budujSesje | Out-File -FilePath $tmp1 -Encoding utf8
-node $tmp1 $Projekt
-Remove-Item $tmp1 -Force
+# Ladunek dla hooka sesji sklada node. Bez node'a go nie bedzie - i nie ma to
+# znaczenia tam, gdzie nie ma Claude Code, bo hooki naleza wylacznie do niego.
+if ($Node) {
+  $tmp1 = Join-Path $env:TEMP "mr-sesja-$Stempel.js"
+  $budujSesje | Out-File -FilePath $tmp1 -Encoding utf8
+  node $tmp1 $Projekt
+  Remove-Item $tmp1 -Force
+} else {
+  Write-Host "--  .claude\megaruchacz-sesja.json pominiete - nie ma node w PATH"
+}
 
 # 4. settings.json - hooki + worktree
 $js = @'
@@ -310,13 +346,18 @@ dodajHook("UserPromptSubmit", "orchestrator-reminder.json", "przypomnienie przy 
 if (zmiana) { fs.writeFileSync(p, JSON.stringify(s, null, 2)); process.exit(0); }
 process.exit(4);
 '@
-$tmp2 = Join-Path $env:TEMP "mr-hook-$Stempel.js"
-$js | Out-File -FilePath $tmp2 -Encoding utf8
 $celSettings = Join-Path $Projekt ".claude\settings.json"
-Kopia-Zapasowa $celSettings
-node $tmp2 $celSettings $Zrodlo
-$kod = $LASTEXITCODE
-Remove-Item $tmp2 -Force
+$kod = 5   # 5 = w ogole nie probowalismy, bo nie ma czym
+if ($Node) {
+  $tmp2 = Join-Path $env:TEMP "mr-hook-$Stempel.js"
+  $js | Out-File -FilePath $tmp2 -Encoding utf8
+  Kopia-Zapasowa $celSettings
+  node $tmp2 $celSettings $Zrodlo
+  $kod = $LASTEXITCODE
+  Remove-Item $tmp2 -Force
+} else {
+  Write-Host "--  .claude\settings.json pominiete - nie ma node w PATH"
+}
 
 if ($kod -ne 0) {
   $zbedne = @($script:Kopie | Where-Object { $_ -like "*settings.json.bak-*" })
@@ -343,6 +384,25 @@ foreach ($m in $Moduly) {
   $wyniki[$m.nazwa] = Uruchom-Podskrypt (Join-Path $Zrodlo $m.instalator) `
     @{ Zrodlo = $Zrodlo; BezPytania = $true } $m.instalator
   if (-not $wyniki[$m.nazwa].ok) { Write-Host "BLAD  modul [$($m.nazwa)]: $($wyniki[$m.nazwa].czemu)" -ForegroundColor Red }
+}
+
+# Zadanie odswiezajace narzedzie ma stac niezaleznie od modulu pamieci - to
+# jedyna droga aktualizacji tam, gdzie nie ma Claude Code, a [pamiec] wolno
+# odrzucic. Gdy modul wszedl, zadanie zalozyl juz jego instalator; gdy nie -
+# zakladamy je osobno, tym samym instalatorem w trybie -TylkoOdswiezanie.
+$zadanieJuzJest = $false
+foreach ($m in $Moduly) {
+  if ($wybrane[$m.nazwa] -and $m.instalator -like "*instaluj-lore.ps1" -and $wyniki[$m.nazwa].ok) {
+    $zadanieJuzJest = $true
+  }
+}
+$wynikOdswiezania = $null
+if (-not $zadanieJuzJest) {
+  $wynikOdswiezania = Uruchom-Podskrypt (Join-Path $Zrodlo "narzedzia\instaluj-lore.ps1") `
+    @{ Zrodlo = $Zrodlo; TylkoOdswiezanie = $true } "instaluj-lore.ps1 -TylkoOdswiezanie"
+  if (-not $wynikOdswiezania.ok) {
+    Write-Host "BLAD  zadanie odswiezajace narzedzie: $($wynikOdswiezania.czemu)" -ForegroundColor Red
+  }
 }
 
 # 6. Znacznik wersji - z niego straznik wie, ktore moduly stoja we wdrozeniu,
@@ -379,8 +439,11 @@ Write-Host "OK  .claude\megaruchacz-wersja.txt (wersja $wersja, commit $commit)"
 Write-Host ""
 Write-Host "--- samosprawdzenie ---"
 
-$wymagane = @("megaruchacz-zasady.md","megaruchacz-sesja.json","orchestrator-reminder.json",
-              "mr-log.js","worklog.md","mapa.md","settings.json","megaruchacz-wersja.txt")
+$wymagane = @("megaruchacz-zasady.md","orchestrator-reminder.json",
+              "mr-log.js","worklog.md","mapa.md","megaruchacz-wersja.txt")
+# Pliki skladane node'em. Bez niego ich nie ma i nie udajemy, ze sa - ale to
+# porazka tylko tam, gdzie w ogole moglyby do czegos sluzyc.
+if ($Node) { $wymagane += @("megaruchacz-sesja.json","settings.json") }
 foreach ($plik in $wymagane) {
   Sprawdz ".claude\$plik" (Test-Path (Join-Path $Projekt ".claude\$plik")) "plik nie powstal"
 }
@@ -393,24 +456,31 @@ $plikZasad = Join-Path $Projekt ".claude\megaruchacz-zasady.md"
 $zasadyOk = (Test-Path $plikZasad) -and ((Get-Item $plikZasad).Length -gt 0)
 Sprawdz "zasady kierownika nie sa puste" $zasadyOk "plik zasad jest pusty albo go nie ma"
 
-# settings.json - czysty JSON i komplet hookow
-$settingsOk = $false
-$czemuSettings = "nie ma pliku"
-if (Test-Path $celSettings) {
-  $rawSet = Get-Content $celSettings -Raw
-  try {
-    $rawSet.TrimStart([char]0xFEFF) | ConvertFrom-Json | Out-Null
-    $brakujace = @()
-    foreach ($znacznik in @("megaruchacz-sesja.json","orchestrator-reminder.json","mr-log.js","straznik-zasad.ps1")) {
-      if ($rawSet -notlike "*$znacznik*") { $brakujace += $znacznik }
+# settings.json - czysty JSON i komplet hookow. Hooki sa mechanizmem Claude
+# Code; tam, gdzie go nie ma, ich brak nie jest bledem wdrozenia, tylko rzecza,
+# ktorej na tej maszynie po prostu nie da sie wdrozyc.
+if (-not $Claude) {
+  Write-Host "  --    .claude\settings.json (hooki) - pominiete, nie ma Claude Code na tej maszynie"
+  Nie-Sprawdzono "hookow nie sprawdzano ani nie wymagano: naleza do Claude Code, a tego tu nie ma - tryb workerow na tej maszynie nie dziala"
+} else {
+  $settingsOk = $false
+  $czemuSettings = "nie ma pliku"
+  if (Test-Path $celSettings) {
+    $rawSet = Get-Content $celSettings -Raw
+    try {
+      $rawSet.TrimStart([char]0xFEFF) | ConvertFrom-Json | Out-Null
+      $brakujace = @()
+      foreach ($znacznik in @("megaruchacz-sesja.json","orchestrator-reminder.json","mr-log.js","straznik-zasad.ps1")) {
+        if ($rawSet -notlike "*$znacznik*") { $brakujace += $znacznik }
+      }
+      if ($brakujace.Count -eq 0) { $settingsOk = $true } else { $czemuSettings = "brak hookow: " + ($brakujace -join ", ") }
+    } catch {
+      $czemuSettings = "to nie jest poprawny JSON"
     }
-    if ($brakujace.Count -eq 0) { $settingsOk = $true } else { $czemuSettings = "brak hookow: " + ($brakujace -join ", ") }
-  } catch {
-    $czemuSettings = "to nie jest poprawny JSON"
   }
+  if ($settingsOk -and -not $hookiOk) { $settingsOk = $false; $czemuSettings = "hookow nie udalo sie dopisac (kod $kod)" }
+  Sprawdz ".claude\settings.json - wpisy hookow sa w poprawnym JSON-ie" $settingsOk $czemuSettings
 }
-if ($settingsOk -and -not $hookiOk) { $settingsOk = $false; $czemuSettings = "hookow nie udalo sie dopisac (kod $kod)" }
-Sprawdz ".claude\settings.json - wpisy hookow sa w poprawnym JSON-ie" $settingsOk $czemuSettings
 
 # --- czy te hooki w ogole da sie URUCHOMIC na tej maszynie ---
 # Sam wpis w settings.json niczego nie dowodzi: audyt na obcej maszynie pokazal
@@ -420,12 +490,11 @@ $ustawienia = $null
 if (Test-Path $celSettings) {
   try { $ustawienia = (Get-Content $celSettings -Raw).TrimStart([char]0xFEFF) | ConvertFrom-Json } catch { }
 }
-$bash = Get-Command bash -CommandType Application -ErrorAction SilentlyContinue | Select-Object -First 1
-$node = Get-Command node -CommandType Application -ErrorAction SilentlyContinue | Select-Object -First 1
-
-if (-not $ustawienia) {
+if (-not $Claude) {
+  Write-Host "  --    hooki - pominiete, uruchamia je wylacznie Claude Code, a tego tu nie ma"
+} elseif (-not $ustawienia) {
   Sprawdz "hooki daja sie uruchomic" $false "nie da sie odczytac settings.json, wiec nie mam czego probowac"
-} elseif (-not $bash) {
+} elseif (-not $Bash) {
   # kazdy hook MegaRuchacza ma shell "bash" - bez basha nie wykona sie ZADEN
   Sprawdz "hooki daja sie uruchomic" $false "ten host nie ma bash-a w PATH, a wszystkie nasze hooki sa na bashu - nie wykona sie zaden z nich"
 } else {
@@ -459,7 +528,7 @@ if (-not $ustawienia) {
       Sprawdz "hook $zdarzenie (mr-log.js) da sie uruchomic" $false "nie ma go w settings.json"
       continue
     }
-    if (-not $node) {
+    if (-not $Node) {
       Sprawdz "hook $zdarzenie (mr-log.js) da sie uruchomic" $false "nie ma node w PATH - polecenie tego hooka nie ma czym wystartowac"
       continue
     }
@@ -484,9 +553,18 @@ if (-not $ustawienia) {
     Nie-Sprawdzono "straznika uruchomiono w wariancie -Moduly; pelne wywolanie z hooka konczy sie '|| true', wiec jego niepowodzenie i tak nigdy nie zatrzyma sesji"
   }
 }
-Nie-Sprawdzono "czy Claude Code faktycznie wykona te hooki w Twojej sesji - to widac dopiero po zamknieciu i otwarciu okna"
+if ($Claude) {
+  Nie-Sprawdzono "czy Claude Code faktycznie wykona te hooki w Twojej sesji - to widac dopiero po zamknieciu i otwarciu okna"
+}
 
 Sprawdz "wpisanie zasad globalnych" $wynikZasad.ok $wynikZasad.czemu
+
+# Zadanie odswiezajace zakladalismy tylko wtedy, gdy nie zrobil tego instalator
+# modulu pamieci - inaczej sprawdzil je juz on sam.
+if ($null -ne $wynikOdswiezania) {
+  Sprawdz "zadanie odswiezajace narzedzie (MegaRuchaczOdswiez)" $wynikOdswiezania.ok $wynikOdswiezania.czemu
+  Nie-Sprawdzono "zadanie odswiezajace jest w harmonogramie; czy naprawde cos podciagnie, widac dopiero w ~\.claude\.megaruchacz-tlo.log po pierwszym przebiegu"
+}
 
 $blokOk = $false
 if (Test-Path $plikDomowy) { $blokOk = ((Get-Content $plikDomowy -Raw) -like "*<!-- MegaRuchacz:start -->*") }
@@ -518,10 +596,16 @@ if ($script:Niepelne.Count -gt 0) {
 Write-Host ""
 if ($script:Bledy.Count -eq 0) {
   Write-Host "Gotowe - wszystko na miejscu, zaden sledzony plik nie ruszony." -ForegroundColor Green
-  Write-Host "Zamknij i otworz Claude Code na nowo, zeby zasady weszly w zycie."
+  if ($Claude) {
+    Write-Host "Zamknij i otworz Claude Code na nowo, zeby zasady weszly w zycie."
+  } else {
+    Write-Host "Zamknij i otworz swoje narzedzie AI na nowo, zeby zasady weszly w zycie."
+    Write-Host "Na tej maszynie NIE dziala tryb workerow - wymaga Claude Code. Dziala: zasady" -ForegroundColor Yellow
+    Write-Host "globalne i odswiezanie narzedzia zadaniem MegaRuchaczOdswiez z Harmonogramu." -ForegroundColor Yellow
+  }
   exit 0
 } else {
   Write-Host ("Instalacja NIEPELNA - do poprawy: " + ($script:Bledy -join "; ")) -ForegroundColor Red
-  Write-Host "Popraw powyzsze i uruchom instalator ponownie, potem zamknij i otworz Claude Code na nowo."
+  Write-Host "Popraw powyzsze i uruchom instalator ponownie, potem zamknij i otworz narzedzie AI na nowo."
   exit 1
 }
