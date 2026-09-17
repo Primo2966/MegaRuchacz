@@ -66,19 +66,25 @@ CREATE TABLE IF NOT EXISTS files (
     session  TEXT
 );
 CREATE TABLE IF NOT EXISTS chunks (
-    id      INTEGER PRIMARY KEY,
-    project TEXT NOT NULL,
-    session TEXT NOT NULL,
-    file    TEXT NOT NULL,
-    line    INTEGER NOT NULL,
-    part    INTEGER NOT NULL DEFAULT 0,
-    ts      TEXT NOT NULL,
-    role    TEXT NOT NULL,
-    text    TEXT NOT NULL
+    id         INTEGER PRIMARY KEY,
+    project    TEXT NOT NULL,
+    session    TEXT NOT NULL,
+    file       TEXT NOT NULL,
+    line       INTEGER NOT NULL,
+    part       INTEGER NOT NULL DEFAULT 0,
+    ts         TEXT NOT NULL,
+    role       TEXT NOT NULL,
+    text       TEXT NOT NULL,
+    -- when the row landed HERE, as opposed to `ts`, which is when it was said. The two are not the
+    -- same axis: the indexer runs every ten minutes, so a chunk can enter the database long after
+    -- its own date (a delayed transcript, an import from another machine). Only this one ever
+    -- grows, which is why the harvest walks it — see lore/facts.py.
+    indexed_at TEXT NOT NULL DEFAULT ''
 );
 CREATE INDEX IF NOT EXISTS idx_chunks_file ON chunks(file, line, part);
 CREATE INDEX IF NOT EXISTS idx_chunks_ts ON chunks(ts);
 CREATE INDEX IF NOT EXISTS idx_chunks_project ON chunks(project);
+CREATE INDEX IF NOT EXISTS idx_chunks_indexed ON chunks(indexed_at, id);
 CREATE VIRTUAL TABLE IF NOT EXISTS chunks_fts USING fts5(
     text,
     content='chunks',
@@ -105,6 +111,7 @@ def connect() -> sqlite3.Connection:
     conn.execute("PRAGMA synchronous=NORMAL")
     conn.execute("PRAGMA foreign_keys=ON")
     rebuild_fts = migrate_legacy_names(conn)
+    migrate_indexed_at(conn)  # before the schema script: its index needs the column to exist
     conn.executescript(SCHEMA)
     if rebuild_fts:
         conn.execute("INSERT INTO chunks_fts(chunks_fts) VALUES('rebuild')")
@@ -200,6 +207,28 @@ def _rename_all(conn: sqlite3.Connection, tables: set[str]) -> bool:
     return rebuild_fts
 
 
+def migrate_indexed_at(conn: sqlite3.Connection) -> int:
+    """Adds chunks.indexed_at to a database that predates it. Returns the rows filled in.
+
+    Idempotent and cheap to repeat: the column is added once, and the backfill only ever touches
+    rows still carrying the empty default.
+
+    The old rows get their own `ts`, NOT the moment of the migration. Stamping fifty thousand
+    chunks with "now" would make three years of archive look like it arrived today, and the first
+    harvest after the migration would push the whole thing through the model in one go. With `ts`
+    the existing read marker keeps meaning exactly what it meant, nothing moves backwards, and
+    everything indexed from here on carries the real moment it landed.
+    """
+    if "chunks" not in _tables(conn):
+        return 0  # a brand new database — SCHEMA creates the column with the table
+    if "indexed_at" not in _columns(conn, "chunks"):
+        conn.execute("ALTER TABLE chunks ADD COLUMN indexed_at TEXT NOT NULL DEFAULT ''")
+    filled = conn.execute("UPDATE chunks SET indexed_at = ts WHERE indexed_at = ''").rowcount
+    if filled:
+        log(f"indexed_at filled in for {filled} older chunks (from their own date)")
+    return filled
+
+
 def _migrate_roles(conn: sqlite3.Connection) -> None:
     """Role labels stored in rows: narzedzie/wynik/podsumowanie/rozmowa -> tool/result/summary/conversation."""
     for old, new in (("narzedzie", "tool"), ("wynik", "result"),
@@ -284,6 +313,11 @@ def embed_query(query: str) -> np.ndarray:
 
 
 # ---------------------------------------------------------------- dates
+
+def now_iso() -> str:
+    """'2026-09-16T10:00:00.000Z' — the same shape the transcripts use, so string compare orders right."""
+    return datetime.now(timezone.utc).isoformat(timespec="milliseconds").replace("+00:00", "Z")
+
 
 def ts_to_local(ts: str) -> str:
     """ISO UTC ('2026-09-11T06:27:15.470Z') -> 'YYYY-MM-DD HH:MM' in local time."""

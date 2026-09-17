@@ -15,7 +15,7 @@ from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
 
-from .db import DB_PATH, PROJECTS_DIR, connect, embed_passages, log
+from .db import DB_PATH, PROJECTS_DIR, connect, embed_passages, log, now_iso
 from .masking import mask
 
 CHUNK_SIZE = 1500
@@ -540,6 +540,10 @@ def process_file(conn: sqlite3.Connection, p: Path) -> int:
     # embeddings are computed outside the transaction (we do not hold a write lock for minutes)
     emb = embed_passages([c.text for c in chunks]) if chunks else None
 
+    # one stamp for the whole pass: this is the moment the material entered the database, and the
+    # harvest reads it instead of `ts` (the id breaks the ties inside a pass). See lore/facts.py.
+    landed = now_iso()
+
     conn.execute("BEGIN IMMEDIATE")
     try:
         # somebody may have got there before us (another window / the scheduler)
@@ -553,8 +557,9 @@ def process_file(conn: sqlite3.Connection, p: Path) -> int:
             _delete_file_chunks(conn, path, from_line=start_line)
         for i, c in enumerate(chunks):
             cur = conn.execute(
-                "INSERT INTO chunks(project, session, file, line, part, ts, role, text) VALUES (?,?,?,?,?,?,?,?)",
-                (project, session, path, c.line, c.part, c.ts, c.role, c.text),
+                "INSERT INTO chunks(project, session, file, line, part, ts, role, text, indexed_at)"
+                " VALUES (?,?,?,?,?,?,?,?,?)",
+                (project, session, path, c.line, c.part, c.ts, c.role, c.text, landed),
             )
             cid = cur.lastrowid
             conn.execute("INSERT INTO chunks_fts(rowid, text) VALUES (?,?)", (cid, c.text))

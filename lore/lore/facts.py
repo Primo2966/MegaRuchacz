@@ -29,6 +29,12 @@ from .db import CLAUDE_HOME, DB_PATH, connect, log, ts_to_local
 
 KNOWLEDGE_DIR = CLAUDE_HOME / "wiedza"
 MARKER_PATH = KNOWLEDGE_DIR / ".ostatnie-wyciaganie"
+# The id of the last chunk read goes into its OWN file, not next to the date: two PowerShell tools
+# read .ostatnie-wyciaganie and parse the whole of it as a date (narzedzia\cykl-dzienny.ps1 ->
+# Czytaj-Znacznik, narzedzia\koszt-pamieci.ps1 -> Kolejka-Lore). Anything appended there would
+# quietly turn their marker into "never read anything".
+MARKER_ID_PATH = KNOWLEDGE_DIR / ".ostatnie-wyciaganie-id"
+DAY_ZERO_PATH = KNOWLEDGE_DIR / ".dzien-zero"  # when this machine started learning — see day_zero()
 CANDIDATES_PATH = KNOWLEDGE_DIR / "kandydaci.md"
 COST_NAME = ".koszt-cyklu.txt"  # next to .cykl-stan, in the same 'klucz: wartosc' shape
 RULES_PATH = CLAUDE_HOME / "CLAUDE.md"  # read only — the waiting room is the only thing we write
@@ -56,8 +62,19 @@ SKIPPED_ROLES = frozenset({"tool", "result"})
 # knowledge. The trade: a fact stated for the first time in a summary is lost,
 # which is a small price for fitting a whole day under the cost cap.
 HARVESTED_ROLES = frozenset({"user"})
+# the same rule in SQL, for the counting queries: "user" and "agent:user", nothing else
+HARVESTED_SQL = " OR ".join(f"role = '{r}' OR role LIKE '%:{r}'" for r in sorted(HARVESTED_ROLES))
 MIN_FACT_CHARS = 10  # a single word is not a fact
 MODEL_TIMEOUT_S = 300
+
+# The axis the harvest walks: when a chunk landed in the database, not when it was said. `ts` is the
+# moment of the conversation, but indexing runs on its own every ten minutes, so a chunk can be
+# written AFTER the marker has already moved past its date — and "ts > marker" would then never show
+# it to anybody again. `indexed_at` only ever grows, so a marker walking it cannot jump over a row.
+# COALESCE: a row written before the column existed (or by hand) carries the empty default, and a
+# plain comparison would hide it for good; falling back to its own date at worst repeats the old
+# behaviour instead of losing the row silently.
+INDEXED = "COALESCE(NULLIF(indexed_at, ''), ts)"
 
 # the three shelves of the knowledge — the model picks one per fact while it is reading the material
 # anyway; sorting the same sentences in a separate pass would cost the same and buy nothing
@@ -148,37 +165,134 @@ def iso_utc(d: datetime) -> str:
     return d.astimezone(timezone.utc).isoformat(timespec="milliseconds").replace("+00:00", "Z")
 
 
-def since_marker() -> str:
-    """ISO of the last run; a missing or broken marker means 'the last 24 hours'."""
+def _saved(path) -> str:
+    """The single line a marker file holds; '' when there is no file or it cannot be read."""
     try:
-        saved = MARKER_PATH.read_text(encoding="utf-8").strip()
+        return path.read_text(encoding="utf-8").strip()
     except OSError:
-        saved = ""
+        return ""
+
+
+def _is_iso(text: str) -> bool:
+    try:
+        datetime.fromisoformat(text.replace("Z", "+00:00"))
+        return True
+    except ValueError:
+        return False
+
+
+@dataclass(frozen=True)
+class Marker:
+    """How far the harvest has got on the indexing axis: the stamp of the last chunk read, and its id.
+
+    The id is the tiebreaker. One indexing pass writes all of its chunks under a single stamp, so a
+    marker made of the stamp alone would either lose the rest of that pass (when the cap cut inside
+    it) or hand it over twice. A marker written before this axis existed has no id — it is then read
+    on the stamp alone, which is exactly the old behaviour, because the migration gave every older
+    row `indexed_at = ts`.
+    """
+    stamp: str
+    chunk_id: int | None = None
+
+    def window(self) -> tuple[str, tuple]:
+        """The WHERE clause for 'everything this marker has not read yet', plus its arguments.
+
+        The `id` half is the second door: a row whose stamp somehow lands BEHIND the marker (a clock
+        set back, a database edited by hand) still has a higher id, so it is picked up instead of
+        disappearing. Nothing is read twice — a run always takes a prefix of this window in
+        (stamp, id) order, so everything already read sits below both halves.
+        """
+        if self.chunk_id is None:
+            return f"{INDEXED} > ?", (self.stamp,)
+        return f"{INDEXED} > ? OR id > ?", (self.stamp, self.chunk_id)
+
+
+def since_marker() -> Marker:
+    """Where the last run stopped; a missing or broken marker means 'the last 24 hours'."""
+    saved = _saved(MARKER_PATH)
+    if saved and _is_iso(saved):
+        return Marker(saved, _saved_id())
     if saved:
-        try:
-            datetime.fromisoformat(saved.replace("Z", "+00:00"))
-            return saved
-        except ValueError:
-            log(f"unreadable marker {MARKER_PATH.name}: {saved!r} — falling back to the last {DEFAULT_WINDOW_H} h")
-    return iso_utc(datetime.now(timezone.utc) - timedelta(hours=DEFAULT_WINDOW_H))
+        log(f"unreadable marker {MARKER_PATH.name}: {saved!r} — falling back to the last {DEFAULT_WINDOW_H} h")
+    return Marker(iso_utc(datetime.now(timezone.utc) - timedelta(hours=DEFAULT_WINDOW_H)))
 
 
-def write_marker(ts: str) -> None:
+def _saved_id() -> int | None:
+    """The chunk id that goes with the marker date; None when it was never written."""
+    saved = _saved(MARKER_ID_PATH)
+    if saved.isdigit():
+        return int(saved)
+    if saved:
+        log(f"unreadable {MARKER_ID_PATH.name}: {saved!r} — the marker is read on its date alone")
+    return None
+
+
+def write_marker(marker: "Marker | str") -> None:
     """The marker moves only after a run that really asked the model — a failed run has to catch up."""
+    marker = marker if isinstance(marker, Marker) else Marker(marker)
     KNOWLEDGE_DIR.mkdir(parents=True, exist_ok=True)
-    MARKER_PATH.write_text(ts + "\n", encoding="utf-8")
+    MARKER_PATH.write_text(marker.stamp + "\n", encoding="utf-8")
+    if marker.chunk_id is None:
+        MARKER_ID_PATH.unlink(missing_ok=True)  # an id left from before would point somewhere else
+    else:
+        MARKER_ID_PATH.write_text(f"{marker.chunk_id}\n", encoding="utf-8")
+
+
+def day_zero() -> str:
+    """The moment this machine started learning. Nothing indexed earlier is ever harvested.
+
+    A fresh install finds years of transcripts on the disk and the indexer pulls all of them into
+    the database within the hour. Without a floor the first harvest would walk that whole archive —
+    conversations from before the tool existed, paid for in tokens, without anybody asking for it.
+    The line is drawn once, on the first run that gets this far: at the existing read marker when
+    there is one (an install caught in the middle of a backlog must not lose it), and at "now" on a
+    machine that has never harvested anything.
+
+    A trial run writes it as well: the dry run exists to report the numbers the real run would give,
+    and it cannot do that with the floor still undecided.
+    """
+    saved = _saved(DAY_ZERO_PATH)
+    if saved and _is_iso(saved):
+        return saved
+    if saved:
+        log(f"unreadable {DAY_ZERO_PATH.name}: {saved!r} — drawing the line again")
+    start = _saved(MARKER_PATH)
+    if not (start and _is_iso(start)):
+        start = iso_utc(datetime.now(timezone.utc))
+    try:
+        KNOWLEDGE_DIR.mkdir(parents=True, exist_ok=True)
+        DAY_ZERO_PATH.write_text(start + "\n", encoding="utf-8")
+        log(f"day zero set to {start} — chunks indexed before it are never harvested")
+    except OSError as e:  # the floor still holds for this run; it is simply decided again next time
+        log(f"day zero could not be written to {DAY_ZERO_PATH.name}: {e}")
+    return start
 
 
 # ---------------------------------------------------------------- material for the model
 
 @dataclass
+class Piece:
+    """One row of the window: what it says, when it was said, when it landed, and where it sits."""
+    chunk_id: int
+    said: str  # `ts` — the moment of the conversation
+    landed: str  # `indexed_at` — the moment it entered the database
+    text: str
+
+
+@dataclass
 class Material:
     texts: list[str] = field(default_factory=list)  # chronological
     chars: int = 0
-    last_ts: str = ""  # where the marker goes after a successful run
+    last_ts: str = ""  # indexing stamp of the last chunk taken — where the marker goes
+    last_id: int | None = None  # and its id, so the next run starts exactly here
     pending: int = 0  # chunks left for the next runs
     pending_chars: int = 0
-    dropped: int = 0  # lost on a single timestamp bigger than the whole cap — normally 0
+    in_range: int = 0  # rows the window matched, every role
+    candidates: int = 0  # of those, the ones a harvest is allowed to read (HARVESTED_ROLES)
+    late: int = 0  # taken although their stamp sits BEHIND the marker — the hole, measured
+    before_zero: int = 0  # never harvested at all: indexed before day zero
+    first_said: str = ""  # the conversation dates of what really went to the model
+    last_said: str = ""
 
     def joined(self) -> str:
         return "\n\n".join(self.texts)
@@ -186,56 +300,97 @@ class Material:
     def runs_left(self) -> int:
         return math.ceil(self.pending_chars / MAX_INPUT_CHARS)
 
+    def marker(self) -> Marker:
+        return Marker(self.last_ts, self.last_id)
 
-def collect(conn: sqlite3.Connection, since: str) -> Material:
-    """Chunks newer than `since`, OLDEST first up to the cap.
+    def missing(self) -> int:
+        """Candidates that neither went to the model nor wait in the backlog. Always 0 — if it ever
+        is not, material disappeared between the query and the prompt and somebody has to hear it."""
+        return max(0, self.candidates - len(self.texts) - self.pending)
+
+
+def collect(conn: sqlite3.Connection, marker: Marker, zero: str = "") -> Material:
+    """Chunks the marker has not read yet, OLDEST first up to the cap.
 
     Oldest first on purpose: the marker moves exactly as far as we got, so a backlog after a few
     days away is worked off run by run instead of being silently skipped over.
+
+    `zero` is day zero — the moment this machine started learning. Everything indexed before it is
+    left alone (and counted, never swallowed): that is the archive from before the tool existed.
     """
+    where, args = marker.window()
+    floor = f" AND {INDEXED} >= ?" if zero else ""
     rows = conn.execute(
-        "SELECT ts, role, text FROM chunks WHERE ts > ? ORDER BY ts, id", (since,)
+        f"SELECT id, ts, role, text, {INDEXED} FROM chunks WHERE ({where}){floor}"
+        f" ORDER BY {INDEXED}, id",
+        (*args, zero) if zero else args,
     ).fetchall()
     kept = [
-        (ts, f"[{ts_to_local(ts)}] {role}: {text}")
-        for ts, role, text in rows
+        Piece(cid, ts, landed, f"[{ts_to_local(ts)}] {role}: {text}")
+        for cid, ts, role, text, landed in rows
         if role.split(":")[-1] in HARVESTED_ROLES
     ]
-    material = Material()
+    material = Material(in_range=len(rows), candidates=len(kept))
+    if marker.chunk_id is not None:  # only the id half of the window can bring such a row in
+        material.late = sum(1 for piece in kept if piece.landed <= marker.stamp)
+    material.before_zero = _before_zero(conn, where, args, zero)
     taken = 0
-    for ts, piece in kept:
-        if material.chars + len(piece) > MAX_INPUT_CHARS:
+    for piece in kept:
+        if material.chars + len(piece.text) > MAX_INPUT_CHARS:
             break
-        material.texts.append(piece)
-        material.chars += len(piece)
-        material.last_ts = ts
+        material.texts.append(piece.text)
+        material.chars += len(piece.text)
+        material.last_ts, material.last_id = piece.landed, piece.chunk_id
         taken += 1
-    taken += _align_to_timestamp(material, kept, taken)
+    taken += _align_to_turn(material, kept, taken)
+    # the oldest and the newest CONVERSATION date of what was taken — "przeczytane X wiadomości
+    # z okresu od-do". Not the first and the last of the list: the list runs in indexing order,
+    # and a late transcript lands among chunks that were said after it.
+    said = sorted(piece.said for piece in kept[:taken])
+    material.first_said = said[0] if said else ""
+    material.last_said = said[-1] if said else ""
     rest = kept[taken:]
     material.pending = len(rest)
-    material.pending_chars = sum(len(p) for _, p in rest)
+    material.pending_chars = sum(len(p.text) for p in rest)
     return material
 
 
-def _align_to_timestamp(material: Material, kept: list[tuple[str, str]], taken: int) -> int:
-    """Moves the cut onto a timestamp boundary — 'ts > marker' would drop the rest of a split turn.
+def _before_zero(conn: sqlite3.Connection, where: str, args: tuple, zero: str) -> int:
+    """How much the day-zero floor held back this time — the conversations from before the install.
 
-    Returns how many further chunks leave the backlog: normally 0, and only in the degenerate case
-    of one timestamp heavier than the whole cap the leftovers of that turn (counted as dropped).
+    Said out loud rather than dropped in silence: it is knowledge lying in the archive that we
+    deliberately do not use, and the user may one day want it dug out on purpose (lore.mining).
     """
-    if taken == 0 or taken == len(kept) or material.last_ts != kept[taken][0]:
+    if not zero:
+        return 0
+    row = conn.execute(
+        f"SELECT count(*) FROM chunks WHERE ({where}) AND {INDEXED} < ? AND ({HARVESTED_SQL})",
+        (*args, zero),
+    ).fetchone()
+    return int(row[0] or 0)
+
+
+def _align_to_turn(material: Material, kept: list[Piece], taken: int) -> int:
+    """Moves the cut onto a turn boundary, so one turn is not split between two prompts.
+
+    Parts of one turn share a `ts`. Nothing is lost when the cut does fall inside one — the marker
+    carries the id of the last chunk taken, so the tail is the first thing the next run sees — but a
+    half turn read out of context is worth less to the model, so we push the cut back.
+
+    Returns how many chunks go back to the backlog (a negative number), or 0 when nothing moves.
+    """
+    if taken == 0 or taken == len(kept) or kept[taken - 1].said != kept[taken].said:
         return 0
     back = taken
-    while back and kept[back - 1][0] == material.last_ts:
+    while back and kept[back - 1].said == kept[taken].said:
         back -= 1
-    if back == 0:  # a single turn larger than the cap — we take what fits and lose its tail
-        material.dropped = sum(1 for ts, _ in kept[taken:] if ts == material.last_ts)
-        log(f"one timestamp ({material.last_ts}) exceeds the {MAX_INPUT_CHARS} character cap"
-            f" — {material.dropped} chunks of that turn are skipped")
-        return material.dropped
+    if back == 0:  # one turn heavier than the whole cap: take what fits, the rest waits its turn
+        log(f"one turn ({kept[taken].said}) exceeds the {MAX_INPUT_CHARS} character cap"
+            f" — it is split across runs, nothing is skipped")
+        return 0
     del material.texts[back:]
     material.chars = sum(len(t) for t in material.texts)
-    material.last_ts = kept[back - 1][0]
+    material.last_ts, material.last_id = kept[back - 1].landed, kept[back - 1].chunk_id
     return back - taken  # negative: those chunks go back to the backlog
 
 
@@ -391,8 +546,14 @@ def ask_model(material: str, instruction: str = PROMPT) -> str:
 # added up in one small file beside .cykl-stan; the PowerShell side reads it with the code it
 # already has for its own state files.
 COST_KEYS = ("narzedzie", "wywolania", "znaki_wyslane", "znaki_odebrane", "tokeny",
-             "tokeny_zrodlo", "fakty")
-COUNTED_KEYS = ("wywolania", "znaki_wyslane", "znaki_odebrane", "tokeny", "fakty")  # these add up
+             "tokeny_zrodlo", "fakty", "wiadomosci", "zakres_od", "zakres_do",
+             "spoznione", "pominiete", "sprzed_dnia_zero")
+COUNTED_KEYS = ("wywolania", "znaki_wyslane", "znaki_odebrane", "tokeny", "fakty",
+                "wiadomosci", "spoznione", "pominiete")  # these add up over the day
+# "przeczytane X wiadomości z okresu od-do" — the cycle says that line without asking a model, so
+# the numbers behind it are written down here, where it already reads the cost.
+RANGE_KEYS = ("zakres_od", "zakres_do")  # the earliest and the latest message of the day
+PEAK_KEYS = ("sprzed_dnia_zero",)  # a state, not a sum: the biggest number the day has seen
 PREVIOUS = "poprzedni."  # yesterday under the same keys, so "wczoraj / dziś" can be shown
 CHARS_PER_TOKEN = 3  # the estimate narzedzia\koszt-pamieci.ps1 uses for Polish — see tokeny_zrodlo
 # `claude -p --output-format json` really carries the numbers it was billed by — checked against
@@ -455,7 +616,31 @@ def _number(saved: dict[str, str], key: str) -> int:
         return 0
 
 
-def record_cost(usage: Usage | None = None, found: int = 0, day: str | None = None) -> None:
+@dataclass
+class Reading:
+    """What one harvest really read — the numbers the cycle shows the user, and its two controls.
+
+    The controls are the point: `late` and `missing` are 0 on a healthy run, and anything else means
+    material was about to fall out of the learning. A run that reports nothing is not the same as a
+    run that reports zero.
+    """
+    messages: int = 0  # chunks that really went to the model
+    first: str = ""  # local time of the oldest message handed over, 'YYYY-MM-DD HH:MM'
+    last: str = ""
+    late: int = 0  # read although their stamp was behind the marker — the hole, caught
+    missing: int = 0  # in range, not read, not waiting either — must always be 0
+    before_zero: int = 0  # left alone because they predate day zero
+
+    @classmethod
+    def of(cls, material: Material) -> "Reading":
+        return cls(len(material.texts),
+                   ts_to_local(material.first_said) if material.first_said else "",
+                   ts_to_local(material.last_said) if material.last_said else "",
+                   material.late, material.missing(), material.before_zero)
+
+
+def record_cost(usage: Usage | None = None, found: int = 0, day: str | None = None,
+                read: Reading | None = None) -> None:
     """Adds one call — and the facts it brought — to today's tally.
 
     Runs of the same day add up: the cycle goes several times over when it is catching up on
@@ -482,7 +667,21 @@ def record_cost(usage: Usage | None = None, found: int = 0, day: str | None = No
         # a measurement would be a lie in the one place that reports what this costs
         source = "pomiar" if usage.measured and source in ("", "pomiar") else "szacunek"
     counted["fakty"] += max(0, found)
-    entry = {"data": day, "narzedzie": tool, "tokeny_zrodlo": source,
+    span = {key: "" if new_day else saved.get(key, "") for key in RANGE_KEYS}
+    peak = {key: 0 if new_day else _number(saved, key) for key in PEAK_KEYS}
+    if read is not None:
+        counted["wiadomosci"] += max(0, read.messages)
+        counted["spoznione"] += max(0, read.late)
+        counted["pominiete"] += max(0, read.missing)
+        # the day's range grows at both ends; 'YYYY-MM-DD HH:MM' sorts by itself, so min/max are
+        # enough, and a run that read nothing leaves the range it found alone
+        if read.first:
+            span["zakres_od"] = min(span["zakres_od"] or read.first, read.first)
+        if read.last:
+            span["zakres_do"] = max(span["zakres_do"], read.last)
+        peak["sprzed_dnia_zero"] = max(peak["sprzed_dnia_zero"], read.before_zero)
+    entry = {"data": day, "narzedzie": tool, "tokeny_zrodlo": source, **span,
+             **{key: str(peak[key]) for key in PEAK_KEYS},
              **{key: str(counted[key]) for key in COUNTED_KEYS}}
     try:
         _write_cost(entry, _yesterday(saved, new_day))
@@ -654,27 +853,45 @@ def append_facts(facts: list[Fact], day: str | None = None) -> list[Fact]:
 
 # ---------------------------------------------------------------- the whole run
 
+def _empty_run() -> dict:
+    """The shape every run returns, so a caller never has to guess which keys are there.
+
+    A function, not a constant: the two lists would otherwise be shared between all the runs of
+    one process.
+    """
+    return {"chunks": 0, "chars": 0, "pending": 0, "runs_left": 0, "in_range": 0, "candidates": 0,
+            "late": 0, "missing": 0, "before_zero": 0, "from": "", "to": "",
+            "facts": [], "added": []}
+
+
 def run(dry_run: bool = False, ask=ask_model, conn: sqlite3.Connection | None = None) -> dict:
     """One pass: material -> model -> waiting room. Never raises on missing data, only reports it."""
-    since = since_marker()
+    marker = since_marker()
     own = conn is None
     if own and not DB_PATH.exists():
-        return {"status": "no-database", "since": since, "chunks": 0, "chars": 0, "pending": 0,
-                "runs_left": 0, "dropped": 0, "facts": [], "added": [],
+        return {**_empty_run(), "status": "no-database", "since": marker.stamp, "day_zero": "",
                 "note": f"no database at {DB_PATH} — index the conversations first"}
+    zero = day_zero()
     if own:
         conn = connect()
     try:
-        material = collect(conn, since)
+        material = collect(conn, marker, zero)
     finally:
         if own:
             conn.close()
-    out = {"status": "ok", "since": since, "chunks": len(material.texts), "chars": material.chars,
-           "pending": material.pending, "runs_left": material.runs_left(),
-           "dropped": material.dropped, "facts": [], "added": []}
+    read = Reading.of(material)
+    out = {**_empty_run(), "status": "ok", "since": marker.stamp, "day_zero": zero,
+           "chunks": len(material.texts), "chars": material.chars, "pending": material.pending,
+           "runs_left": material.runs_left(), "in_range": material.in_range,
+           "candidates": material.candidates, "late": read.late, "missing": read.missing,
+           "before_zero": read.before_zero, "from": read.first, "to": read.last}
     if not material.texts:
         out["status"] = "no-material"
-        out["note"] = f"no conversations newer than {since}"
+        out["note"] = f"nothing indexed after {marker.stamp}"
+        # a run that read nothing has nothing to add up — unless it has something to WARN about,
+        # and then the number has to reach the cycle, not only the log
+        if not dry_run and (read.before_zero or read.late or read.missing):
+            record_cost(read=read)
         return out
     if dry_run:
         out["status"] = "dry-run"
@@ -684,8 +901,8 @@ def run(dry_run: bool = False, ask=ask_model, conn: sqlite3.Connection | None = 
         return out
     out["facts"] = parse_facts(ask(material.joined()))
     out["added"] = append_facts(out["facts"])
-    record_cost(found=len(out["facts"]))  # the call itself was counted inside ask_model
-    write_marker(material.last_ts)  # exactly as far as we got, so the next run picks up from here
+    record_cost(found=len(out["facts"]), read=read)  # the call was counted inside ask_model
+    write_marker(material.marker())  # exactly as far as we got, so the next run picks up from here
     return out
 
 
@@ -702,12 +919,32 @@ def catch_up(runs: int = 1, dry_run: bool = False, ask=ask_model,
     return out
 
 
+def _controls(r: dict) -> None:
+    """The two checks of one pass, and what day zero held back. Zero is reported by silence here;
+    anything else is a sentence, because both numbers mean material nearly fell out of the learning."""
+    if r["late"]:
+        log(f"{r['late']} chunks were indexed behind the marker — the old 'ts > marker' rule would"
+            f" have hidden them for good; they went to the model this time")
+    if r["missing"]:
+        log(f"ALARM: {r['missing']} chunks of the window went neither to the model nor to the"
+            f" backlog — material is disappearing between the query and the prompt")
+    if r["before_zero"]:
+        log(f"{r['before_zero']} chunks skipped as older than day zero ({r['day_zero']}) — the"
+            f" archive from before the install is never harvested on its own; to go through it on"
+            f" purpose use narzedzia\\przekop-archiwum.ps1")
+
+
 def _report(r: dict) -> None:
-    if r["status"] in ("no-database", "no-material"):
+    if r["status"] == "no-database":
         log(r["note"])
         return
-    tail = f", {r['dropped']} chunks dropped" if r["dropped"] else ""
-    log(f"material: {r['chunks']} chunks, {r['chars']} characters since {r['since']}{tail}")
+    if r["status"] == "no-material":
+        log(r["note"])
+        _controls(r)
+        return
+    log(f"material: {r['chunks']} chunks, {r['chars']} characters indexed after {r['since']}"
+        f" (messages from {r['from']} to {r['to']})")
+    _controls(r)
     if r["status"] == "dry-run":
         log(f"dry run — nothing written; model tool: {r['model_cli'] or 'NONE in PATH'}")
     else:
