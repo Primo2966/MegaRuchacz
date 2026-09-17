@@ -578,3 +578,52 @@ i zapisał to w dzienniku.
 **Niezrobione:** wpięcie szablonów Codeksa w instalator — brakuje skryptu
 dopisującego start i koniec workera do rejestru oraz generowania ładunków dla
 hooków. Wypisane w `szablony-codex\CZYTAJ.md`.
+
+## 0.14.0 — 2026-09-17
+
+**Tryb workerów wdraża się także do Codeksa**
+- `wdroz.ps1` zapisuje role do `.codex\agents\`, hooki do `.codex\hooks.json`
+  (z osobnym poleceniem dla Windowsa przy każdym), a rejestr pracy i mapę do
+  `<projekt>\.megaruchacz\` — bo `.codex\` jest u Codeksa tylko do odczytu.
+- Nowy `narzedzia\mr-log-codex.js` dopisuje start i koniec workera do rejestru.
+
+**Zatwierdzanie hooków Codeksa — ustalone, nie zgadnięte**
+- Odcisk palca liczony jest wyłącznie z DEFINICJI hooka (zdarzenie, `matcher`,
+  `command`, `timeout`, `async`), a nie z treści skryptu. Dowód: funkcja
+  `hook_hash` w źródłach Codeksa plus odtworzenie trzech zapisanych wartości
+  `trusted_hash` co do znaku.
+- Wniosek praktyczny: **użytkownik zatwierdza raz.** Nasze poprawki w skryptach
+  zaufania nie unieważniają, aktualizacja Codeksa też nie. Wszystkie komunikaty
+  mówiące „po każdej zmianie trzeba powtórzyć" były nieprawdziwe i zostały
+  poprawione — w instalatorze, w README i w opisie szablonów.
+- `timeout` podajemy w hookach jawnie: wartość domyślna wchodzi do skrótu dopiero
+  przy normalizacji i mogłaby się zmienić w nowej wersji Codeksa, kasując zaufanie.
+
+**Koniec zadania odświeżania co godzinę**
+- Aktualizacja dzieje się przy starcie sesji. Instalator wykrywa i wyrejestrowuje
+  zadanie `MegaRuchaczOdswiez` z maszyn, gdzie już powstało.
+
+**Cykl dzienny nadrabia wg rzeczywistej kolejki, nie wg kalendarza**
+- Błąd wyszedł na prawdziwym przebiegu: cykl zameldował `ok`, `nadrobione: 0`,
+  a w kolejce stały 133 kawałki materiału. Liczył zaległość w **całych dniach**
+  (znacznik na wczoraj = „1 dzień, biorę 1 przebieg"), podczas gdy samo wyławianie
+  mówiło wprost, że potrzeba czterech. Cykl tę liczbę czytał — i używał jej
+  wyłącznie do napisania podsumowania.
+- `wyciagnij-fakty.ps1 -Kolejka` podaje teraz stan kolejki liczbami, bez modelu
+  i bez zapisu (0,4 s), a cykl pyta o to **przed** podjęciem decyzji.
+- Statusy `dogania` / `nie nadaza` zamiast fałszywego `ok`; podsumowanie mówi
+  w kawałkach materiału, nie w dniach.
+- `Kierunek-Zaleglosci` — ostrzeżenie o rosnącej kolejce — **nigdy się nie
+  pokazywało**: czytało plik `klucz: wartość` przez `ConvertFrom-Json` w pustym
+  `catch`. Poprawione; porównuje przebiegi z przebiegami, nie dni z przebiegami.
+
+**Koniec fałszywych alarmów w samosprawdzeniu wdrożenia**
+- „brak bash-a w PATH" — Claude Code odnajduje basha sam; sprawdzenie szuka teraz
+  także w znanych lokalizacjach Gita, a brak to ostrzeżenie, nie błąd.
+- „rejestr workerów nie działa" — działał; próba nie dowoziła zdarzenia na wejście
+  skryptu przez potok PowerShella. Teraz idzie przez przekierowanie wejścia.
+- Fałszywy alarm jest gorszy niż brak alarmu: uczy człowieka ignorować ostrzeżenia.
+
+**Sprawdzone uruchomieniem:** wdrożenie do pustego projektu kończy się kodem 0
+bez „Instalacja NIEPELNA", stan kolejki na prawdziwej bazie (172 kawałki,
+5 przebiegów), przebieg próbny cyklu, składnia wszystkich ruszonych skryptów.
