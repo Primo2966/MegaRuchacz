@@ -24,6 +24,9 @@
 #                            kod 1 gdy cokolwiek wystaje - do odpalenia po kazdej
 #                            zmianie zasad, bez czekania na reszte raportu
 #     -Zwiezle               DOKLADNIE JEDNA linia do pokazania przy starcie sesji
+#     -Rozbicie              kilkanascie linii: te same trzy rachunki rozbite na pozycje,
+#                            z paskiem, udzialem i sciezka przy kazdej. Straznik pokazuje
+#                            to RAZ dziennie, przy pierwszej sesji
 #     -Zwykly                bez kolorow (do zapisu wydruku w pliku)
 #     -ZalozZadanie          codzienny raport o 08:15 do <dom>\.claude\wiedza\koszt-ostatni.txt
 #     -UsunZadanie           kasuje to zadanie
@@ -45,6 +48,7 @@ param(
   [string]$Projekt = "",
   [switch]$TylkoSufity,
   [switch]$Zwiezle,
+  [switch]$Rozbicie,
   [switch]$Zwykly,
   [switch]$ZalozZadanie,
   [switch]$UsunZadanie
@@ -193,11 +197,15 @@ function Miara($linie) {
 
 # --- pozycje rachunku --------------------------------------------------------
 
-function Pozycja($nazwa, $znaki, $skad, $rada) {
+function Pozycja($nazwa, $znaki, $skad, $rada, $krotka = "") {
   # Jedna skladowa rachunku: co to jest, ile wazy, skad pochodzi i co zrobic,
-  # gdyby to ona okazala sie najdrozsza.
+  # gdyby to ona okazala sie najdrozsza. $krotka to ta sama pozycja nazwana
+  # w dwoch slowach - do rozbicia pokazywanego raz dziennie przy starcie sesji,
+  # gdzie kazdy znak leci do kontekstu modelu i placi sie za niego.
+  if (-not $krotka) { $krotka = $nazwa }
   return [pscustomobject]@{
     Nazwa   = $nazwa
+    Krotka  = $krotka
     Znaki   = [int]$znaki
     Tokeny  = [int](Tokeny $znaki)
     Skad    = $skad
@@ -934,32 +942,39 @@ $jestCodex = ($agentsTresc -ne $null)
 $kubWiadomosc = @()
 if ($przypCcZnaki -ne $null) {
   $kubWiadomosc += Pozycja "przypomnienie zasad (Claude Code)" $przypCcZnaki $przypCcSkad `
-    "skroc tresc 'additionalContext' w tym pliku - kazde zdanie stad placi sie przy kazdej wiadomosci"
+    "skroc tresc 'additionalContext' w tym pliku - kazde zdanie stad placi sie przy kazdej wiadomosci" `
+    "przypomnienie zasad"
 } elseif (($przypZnaki -ne $null) -and $jestCodex) {
   $kubWiadomosc += Pozycja "przypomnienie zasad (Codex)" $przypZnaki $przypSkad `
-    "skroc tresc 'additionalContext' w tym pliku - kazde zdanie stad placi sie przy kazdej wiadomosci"
+    "skroc tresc 'additionalContext' w tym pliku - kazde zdanie stad placi sie przy kazdej wiadomosci" `
+    "przypomnienie zasad"
 }
 $tokWiadomosc = Policz-Udzialy $kubWiadomosc
 
 $kubSesja = @()
 if ($w.Blok.Znaki -gt 0) {
   $kubSesja += Pozycja "blok zasad MegaRuchacza w CLAUDE.md" $w.Blok.Znaki $plikClaude `
-    "ten blok nalezy do narzedzia - skracaj go w zrodle i wgraj przez wdroz.ps1, nie recznie"
+    "ten blok nalezy do narzedzia - skracaj go w zrodle i wgraj przez wdroz.ps1, nie recznie" `
+    "zasady globalne"
 }
 if ($w.Stala.Znaki -gt 0) {
   $kubSesja += Pozycja "warstwa STALA (Co wiem)" $w.Stala.Znaki $plikClaude `
-    "przenies najdluzsze zestawienie do pliku w $katWiedzy i zostaw tu jedna linie odsylacza - warstwa referencyjna nie kosztuje nic"
+    "przenies najdluzsze zestawienie do pliku w $katWiedzy i zostaw tu jedna linie odsylacza - warstwa referencyjna nie kosztuje nic" `
+    "warstwa stala"
 }
 if ($w.Biezaca.Znaki -gt 0) {
   $kubSesja += Pozycja "warstwa BIEZACA" $w.Biezaca.Znaki $plikClaude `
-    "skasuj wpisy starsze niz $DniWaznosci dni albo przenies te trwale do warstwy stalej"
+    "skasuj wpisy starsze niz $DniWaznosci dni albo przenies te trwale do warstwy stalej" `
+    "warstwa biezaca"
 }
 if ($zasadyCcTresc) {
   $kubSesja += Pozycja "zasady kierownika z hooka (Claude Code)" $zasadyCcTresc.Length $zasadyCcSkad `
-    "to zasady projektu wstrzykiwane hookiem - skracaj je w CLAUDE.md narzedzia i wgraj przez wdroz.ps1"
+    "to zasady projektu wstrzykiwane hookiem - skracaj je w CLAUDE.md narzedzia i wgraj przez wdroz.ps1" `
+    "zasady projektu"
 } elseif ($zasadyWdrozone -and $zasadyTresc) {
   $kubSesja += Pozycja "zasady kierownika z hooka (Codex)" $zasadyTresc.Length $zasadySkad `
-    "to zasady projektu wstrzykiwane hookiem - skracaj je w szablony-codex\zasady-kierownika.md i wgraj przez wdroz.ps1"
+    "to zasady projektu wstrzykiwane hookiem - skracaj je w szablony-codex\zasady-kierownika.md i wgraj przez wdroz.ps1" `
+    "zasady projektu"
 }
 $tokSesja = Policz-Udzialy $kubSesja
 
@@ -1071,6 +1086,95 @@ if ($Zwiezle) {
   }
   Write-Output $linia
   if ($cosUcinane -or $alarmy.Count -gt 0) { exit 1 }
+  exit 0
+}
+
+# --- wypisanie: rozbicie na pozycje (raz dziennie, przy pierwszej sesji) ------
+# Sama suma nie mowi, CO skrocic, gdy zrobi sie drogo - a uzytkownik poprosil
+# wprost, zeby przy kazdej pozycji stalo, gdzie ona siedzi i do czego jest
+# doklejana. Stad trzy kubelki, sciezka przy kazdym i pasek, ktory widac bez
+# czytania liczb. Blok idzie prosto do kontekstu modelu (straznik-zasad.ps1
+# czyta go z pliku podrecznego), wiec kazda zbedna linia placi sie przy kazdej
+# pierwszej sesji dnia - dlatego jest tak krotki, jak sie da.
+
+function Pasek($ile, $max) {
+  if (($null -eq $ile) -or ($ile -le 0) -or ($null -eq $max) -or ($max -le 0)) { return "|" }
+  $dlugosc = [int][math]::Round(20.0 * $ile / $max)
+  if ($dlugosc -lt 1) { return "|" }     # pozycja mala, ale istniejaca - ma byc widoczna
+  return ("#" * $dlugosc)
+}
+
+# Sciezka tak, jak ja widzi czlowiek: katalog domowy jako "~", katalog projektu
+# zdjety w calosci. Pelne sciezki sa w pelnym raporcie i tam ich miejsce.
+function Sciezka-Ludzka($sciezka) {
+  if (-not $sciezka) { return "" }
+  $s = "$sciezka"
+  if ($Projekt -and $s.StartsWith($Projekt, [System.StringComparison]::OrdinalIgnoreCase)) {
+    return $s.Substring($Projekt.Length).TrimStart("\", "/")
+  }
+  if ($s.StartsWith($KatalogDomowy, [System.StringComparison]::OrdinalIgnoreCase)) {
+    return "~" + $s.Substring($KatalogDomowy.Length)
+  }
+  return $s
+}
+
+function Wiersz-Rozbicia($etykieta, $pasek, $liczba, $ogon) {
+  return ("  {0,-20} {1,-20} {2,8}{3}" -f $etykieta, $pasek, $liczba, $ogon)
+}
+
+# Kubelek: naglowek z suma, pozycje malejaco, a sciezki zbiorczo, gdy wszystkie
+# pozycje siedza w jednym pliku (tak jest z CLAUDE.md - trzy warstwy, jeden plik).
+function Kubelek-Rozbicia($naglowek, $pozycje, $razem) {
+  $wynik = @()
+  if (@($pozycje).Count -eq 0) { return $wynik }
+  $wynik += "$naglowek - ~$(Liczba $razem) tokenow"
+  $posortowane = @($pozycje | Sort-Object -Property Tokeny -Descending)
+  $max = $posortowane[0].Tokeny
+  $sciezki = @($pozycje | ForEach-Object { Sciezka-Ludzka $_.Skad } | Select-Object -Unique)
+  $jednaSciezka = ($sciezki.Count -eq 1)
+  foreach ($p in $posortowane) {
+    $udzial = ""
+    if (@($pozycje).Count -gt 1) { $udzial = "{0,5}%" -f $p.Procent }
+    $wynik += Wiersz-Rozbicia $p.Krotka (Pasek $p.Tokeny $max) (Liczba $p.Tokeny) $udzial
+    if (-not $jednaSciezka) { $wynik += ("  {0,-20} {1}" -f "", (Sciezka-Ludzka $p.Skad)) }
+  }
+  if ($jednaSciezka) { $wynik += ("  {0,-20} wszystko w {1}" -f "", $sciezki[0]) }
+  return $wynik
+}
+
+if ($Rozbicie) {
+  $blok = @()
+  $blok += "MegaRuchacz - pamiec i koszty"
+  $blok += Kubelek-Rozbicia "Przy KAZDEJ Twojej wiadomosci" $kubWiadomosc $tokWiadomosc
+  $blok += Kubelek-Rozbicia "RAZ, przy starcie sesji" $kubSesja $tokSesja
+
+  # Trzeci kubelek to inne pieniadze: prawdziwe wolanie modelu, nie doklejony tekst.
+  # Dlatego nie sumuje sie z niczym, a pasek skaluje sie do POPRZEDNIEGO przebiegu -
+  # jedna pozycja nie ma udzialu procentowego, ale porownanie z wczoraj ma sens.
+  if ($cykl -and ($null -ne $cykl.Tokeny)) {
+    $blok += "RAZ NA DOBE - uczenie sie na wczesniejszych rozmowach"
+    $poprzedniCykl = $cykl.Poprzedni
+    $maxCykl = [long]$cykl.Tokeny
+    if ($poprzedniCykl -and ($null -ne $poprzedniCykl.Tokeny) -and ([long]$poprzedniCykl.Tokeny -gt $maxCykl)) {
+      $maxCykl = [long]$poprzedniCykl.Tokeny
+    }
+    $kiedy = Kiedy-Cykl $cykl.Wiek
+    if (-not $kiedy) { $kiedy = "ostatnio" }
+    $zrodloCykl = $cykl.Zrodlo
+    if (-not $zrodloCykl) { $zrodloCykl = "?" }
+    $blok += Wiersz-Rozbicia $kiedy (Pasek $cykl.Tokeny $maxCykl) (Liczba $cykl.Tokeny) "  $zrodloCykl"
+    $szczegoly = @()
+    if ($null -ne $cykl.Wywolania) { $szczegoly += "$(Liczba $cykl.Wywolania) wywolan" }
+    if ($null -ne $cykl.Fakty)     { $szczegoly += "$(Liczba $cykl.Fakty) faktow" }
+    if ($szczegoly.Count -gt 0) { $blok += ("  {0,-20} {1}" -f "", ($szczegoly -join ", ")) }
+    if ($poprzedniCykl -and ($null -ne $poprzedniCykl.Tokeny)) {
+      $blok += Wiersz-Rozbicia "poprzednio" (Pasek $poprzedniCykl.Tokeny $maxCykl) (Liczba $poprzedniCykl.Tokeny) ""
+    }
+    $blok += "  Jedyna pozycja placona prawdziwym wolaniem modelu."
+  }
+
+  $blok += "Pliki w $(Sciezka-Ludzka $katWiedzy) - 0 tokenow, czytane tylko wtedy, gdy temat tego wymaga."
+  foreach ($l in $blok) { Write-Output $l }
   exit 0
 }
 

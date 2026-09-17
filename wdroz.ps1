@@ -429,6 +429,22 @@ function dodajHook(event, plik, opis) {
   zmiana = true;
   console.log("OK  hook " + event + " - " + opis);
 }
+// Przypomnienie przy kazdym enterze. Nie samo "cat" ladunku, tylko krotki skrypt:
+// wypisuje ten sam plik i dokleja jedna linie o cyklu wiedzy, gdy ten pracuje.
+// Nazwa ladunku ZOSTAJE w poleceniu - po niej rozpoznaja ten hook koszt-pamieci.ps1
+// i sufit-ladunku.ps1. "|| cat" ratuje maszyny bez node'a: przypomnienie dojdzie
+// wtedy w calosci, tylko bez linii postepu.
+function dodajPrzypomnienie(opis) {
+  const event = "UserPromptSubmit", plik = "orchestrator-reminder.json";
+  s.hooks[event] = s.hooks[event] || [];
+  if (JSON.stringify(s.hooks[event]).includes(plik)) { console.log("--  hook " + event + " juz jest"); return; }
+  const r = repo.replace(/\\/g, "/");
+  s.hooks[event].push({ hooks: [{ type: "command", shell: "bash", timeout: 5,
+    command: 'node "' + r + '/narzedzia/przypomnienie.js" "$CLAUDE_PROJECT_DIR/.claude/' + plik +
+             '" || cat "$CLAUDE_PROJECT_DIR/.claude/' + plik + '"' }] });
+  zmiana = true;
+  console.log("OK  hook " + event + " - " + opis);
+}
 function dodajLogger(event, arg, opis) {
   s.hooks[event] = s.hooks[event] || [];
   if (JSON.stringify(s.hooks[event]).includes("mr-log.js")) { console.log("--  hook " + event + " juz jest"); return; }
@@ -455,7 +471,7 @@ dodajLogger("SubagentStart", "", "wpis do rejestru przy starcie workera");
 dodajLogger("SubagentStop", " stop", "wpis przy zakonczeniu workera");
 dodajHook("SessionStart", "megaruchacz-sesja.json", "pelne zasady raz na sesje");
 dodajStraznika("straznik zasad i wersji (cichy, gdy wszystko gra)");
-dodajHook("UserPromptSubmit", "orchestrator-reminder.json", "przypomnienie przy kazdym enterze");
+dodajPrzypomnienie("przypomnienie przy kazdym enterze (plus postep cyklu wiedzy)");
 if (zmiana) { fs.writeFileSync(p, JSON.stringify(s, null, 2)); process.exit(0); }
 process.exit(4);
 '@

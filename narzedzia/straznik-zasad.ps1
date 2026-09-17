@@ -125,6 +125,10 @@ $LINII_DZIENNIKA = 200
 # data policzenia i znacznik dnia, w ktorym poszedl pelniejszy meldunek. Osobny
 # plik, bo plik stanu zasad jest przepisywany w calosci przy kazdej zmianie skrotow.
 $plikKosztu = Join-Path $KatalogDomowy ".claude\.megaruchacz-koszt.txt"
+# Rozbicie rachunku na pozycje - kilkanascie linii, wiec osobny plik, a nie klucz
+# w pliku podrecznym (tamten trzyma "klucz: wartosc", po jednej linii na wartosc).
+# Liczy je koszt-pamieci.ps1 -Rozbicie w tle, pokazujemy raz dziennie.
+$plikRozbicia = Join-Path $KatalogDomowy ".claude\.megaruchacz-rozbicie.txt"
 # Liczba starsza niz tyle godzin idzie do przeliczenia w tle (ale pokazujemy ja
 # dalej - stara liczba jest lepsza niz cisza).
 $GODZIN_MIEDZY_KOSZTAMI = 6
@@ -230,15 +234,20 @@ function Wpis-Zmian($plikZmian, $wersja) {
 }
 
 # Plik wersji wdrozenia: proste "klucz: wartosc" w kolejnosci zapisu.
-function Czytaj-Klucze($sciezka) {
+# Ten sam format maja pliki stanu cyklu i wyjscie "wyciagnij-fakty.ps1 -Kolejka",
+# dlatego samo parsowanie jest osobno - czasem czytamy tekst, ktory nie jest plikiem.
+function Klucze-Z-Tekstu($raw) {
   $stan = [ordered]@{}
-  $raw = Czytaj-Tekst $sciezka
   if (-not $raw) { return $stan }
   foreach ($l in ($raw -split '\r?\n')) {
     $m = [regex]::Match($l, '^\s*([a-zA-Z_][a-zA-Z0-9_.]*)\s*:\s*(.*?)\s*$')
     if ($m.Success) { $stan[$m.Groups[1].Value] = $m.Groups[2].Value }
   }
   return $stan
+}
+
+function Czytaj-Klucze($sciezka) {
+  return (Klucze-Z-Tekstu (Czytaj-Tekst $sciezka))
 }
 
 function Zapisz-Klucze($sciezka, $stan) {
@@ -515,6 +524,16 @@ function Zbuduj-Sesje($cel) {
   Zapisz-Tekst (Join-Path $cel "megaruchacz-sesja.json") ($ladunek | ConvertTo-Json -Depth 5 -Compress)
 }
 
+# Polecenie hooka przypomnienia. Nie samo "cat" pliku, tylko krotki skrypt, ktory
+# ten plik wypisze i dolozy jedna linie o cyklu wiedzy, gdy ten akurat pracuje.
+# Nazwa ladunku ZOSTAJE w poleceniu: po niej rozpoznaja ten hook koszt-pamieci.ps1
+# i sufit-ladunku.ps1, szukajac przy nim additionalContextLimit.
+# "|| cat": gdy na maszynie nie ma node'a, przypomnienie ma i tak dojsc - bez linii
+# postepu, ale w calosci. Cisza bylaby tu gorsza niz brak jednego dopisku.
+function Polecenie-Przypomnienia($zrodloUkosniki) {
+  return 'node "' + $zrodloUkosniki + '/narzedzia/przypomnienie.js" "$CLAUDE_PROJECT_DIR/.claude/orchestrator-reminder.json" || cat "$CLAUDE_PROJECT_DIR/.claude/orchestrator-reminder.json"'
+}
+
 # settings.json jest w polowie wlasnoscia uzytkownika - dopisujemy wylacznie
 # brakujace hooki, nigdy nie przepisujemy calego pliku.
 function Napraw-Hooki($cel, $zrodlo, $stempel) {
@@ -529,7 +548,7 @@ function Napraw-Hooki($cel, $zrodlo, $stempel) {
     $doDodania += ,@("SessionStart", 'cat "$CLAUDE_PROJECT_DIR/.claude/megaruchacz-sesja.json" 2>/dev/null || cat .claude/megaruchacz-sesja.json', 5)
   }
   if ($raw -notlike "*orchestrator-reminder.json*") {
-    $doDodania += ,@("UserPromptSubmit", 'cat "$CLAUDE_PROJECT_DIR/.claude/orchestrator-reminder.json" 2>/dev/null || cat .claude/orchestrator-reminder.json', 5)
+    $doDodania += ,@("UserPromptSubmit", (Polecenie-Przypomnienia $r), 5)
   }
   if ($raw -notlike "*mr-log.js*") {
     $doDodania += ,@("SubagentStart", 'node "$CLAUDE_PROJECT_DIR/.claude/mr-log.js"', 5)
@@ -539,7 +558,25 @@ function Napraw-Hooki($cel, $zrodlo, $stempel) {
     $doDodania += ,@("SessionStart", 'powershell -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "' +
       $r + '/narzedzia/straznik-zasad.ps1" -Zrodlo "' + $r + '" -Projekt "$CLAUDE_PROJECT_DIR" || true', 15)
   }
-  if ($doDodania.Count -eq 0) { return $false }
+  # Podmiana STAREGO hooka przypomnienia (samo "cat" pliku) na wywolanie skryptu.
+  # To jedyne miejsce, w ktorym nadpisujemy polecenie juz istniejacego hooka - bez
+  # tego wdrozenia sprzed 2026-09-17 nigdy nie pokazalyby postepu cyklu, bo hook
+  # dopisuje sie wylacznie wtedy, gdy go w ogole nie ma. Ruszamy tylko wpisy, ktore
+  # niosa NASZ plik i nie wolaja jeszcze naszego skryptu.
+  $podmienione = $false
+  if ($s.hooks -and ($s.hooks.PSObject.Properties.Name -contains "UserPromptSubmit")) {
+    foreach ($grupa in @($s.hooks.UserPromptSubmit)) {
+      foreach ($h in @($grupa.hooks)) {
+        if (-not $h) { continue }
+        if ("$($h.command)" -notlike "*orchestrator-reminder.json*") { continue }
+        if ("$($h.command)" -like "*przypomnienie.js*") { continue }
+        $h.command = Polecenie-Przypomnienia $r
+        $podmienione = $true
+      }
+    }
+  }
+
+  if ($doDodania.Count -eq 0 -and -not $podmienione) { return $false }
 
   if (-not ($s.PSObject.Properties.Name -contains "hooks") -or $null -eq $s.hooks) {
     $s | Add-Member -NotePropertyName hooks -NotePropertyValue ([pscustomobject]@{}) -Force
@@ -650,7 +687,36 @@ function Napraw-Hooki-Codex($celCodex, $zrodlo, $projekt, $stempel) {
     $s | Add-Member -NotePropertyName hooks -NotePropertyValue ([pscustomobject]@{}) -Force
   }
 
+  # Jedyny wyjatek od zasady "istniejacych grup nie ruszamy": stare przypomnienie,
+  # ktore samo wypisywalo plik ("cat" / Get-Content). Dzis to samo robi skrypt, ktory
+  # dokleja linie o pracujacym cyklu - i bez tej jednej podmiany zadne wdrozenie
+  # sprzed 2026-09-17 by jej nie zobaczylo. Podmieniamy RAZ: polecenie wskazuje juz
+  # na skrypt, wiec kazda kolejna poprawka dzieje sie w srodku skryptu i nie wymaga
+  # ponownego zatwierdzania hookow.
+  $podmienione = $false
+  $wzorPrzyp = $null
+  foreach ($g in @($szablon.hooks.UserPromptSubmit)) {
+    foreach ($hw in @($g.hooks)) {
+      if ("$($hw.command)" -like "*przypomnienie.js*") { $wzorPrzyp = $hw }
+    }
+  }
+  if ($wzorPrzyp -and ($s.hooks.PSObject.Properties.Name -contains "UserPromptSubmit")) {
+    foreach ($grupa in @($s.hooks.UserPromptSubmit)) {
+      foreach ($h in @($grupa.hooks)) {
+        if (-not $h) { continue }
+        $pol = "" + $h.command + " " + $h.commandWindows
+        if ($pol -notlike "*przypomnienie.json*") { continue }
+        if ($pol -like "*przypomnienie.js*") { continue }
+        $h.command = $wzorPrzyp.command
+        if ($h.PSObject.Properties.Name -contains "commandWindows") { $h.commandWindows = $wzorPrzyp.commandWindows }
+        else { $h | Add-Member -NotePropertyName commandWindows -NotePropertyValue $wzorPrzyp.commandWindows -Force }
+        $podmienione = $true
+      }
+    }
+  }
+
   $dodane = @()
+  if ($podmienione) { $dodane += "UserPromptSubmit" }
   foreach ($zdarzenie in $szablon.hooks.PSObject.Properties.Name) {
     $obecne = @()
     if ($s.hooks.PSObject.Properties.Name -contains $zdarzenie) { $obecne = @($s.hooks.$zdarzenie) }
@@ -699,7 +765,7 @@ function Nanies-Poprawki-Codex($zrodlo, $projekt, $stempel) {
   # pliku znaczylaby, ze uzytkownik czeka na cos, co nigdy nie wystartuje.
   $dodane = Napraw-Hooki-Codex $celCodex $zrodlo $projekt $stempel
   if ($dodane.Count -gt 0) {
-    Mow ("MegaRuchacz: doszedl hook Codeksa (" + (($dodane | Select-Object -Unique) -join ", ") +
+    Mow ("MegaRuchacz: doszedl albo zmienil sie hook Codeksa (" + (($dodane | Select-Object -Unique) -join ", ") +
          ") w .codex\hooks.json - zatwierdz go w Codeksie poleceniem /hooks, inaczej nie wystartuje.")
   }
 
@@ -1088,6 +1154,26 @@ function Policz-Koszt {
   return [ordered]@{ linia = $linia; kod = [int]$kod }
 }
 
+# Rozbicie na pozycje - to samo liczenie, tylko dluzsze wyjscie. Idzie z -Projekt,
+# bo bez niego nie da sie zmierzyc ladunku hooka Claude Code, czyli calego kubelka
+# "przy kazdej wiadomosci". Blok jest wspolny dla maszyny (jak reszta pliku
+# podrecznego): sciezki w nim sa wzgledne, a ladunki w projektach i tak sa te same.
+function Policz-Rozbicie {
+  $skrypt = Join-Path $Zrodlo "narzedzia\koszt-pamieci.ps1"
+  if (-not (Test-Path $skrypt)) { return $null }
+  try {
+    $wy = @(& $skrypt -KatalogDomowy $KatalogDomowy -Projekt $Projekt -Rozbicie 2>$null)
+  } catch { Zanotuj-Wywrotke "liczenie rozbicia rachunku" $_; return $null }
+  $linie = @($wy | ForEach-Object { "$_".TrimEnd() } | Where-Object { $_ -ne "" })
+  if ($linie.Count -lt 2) { return $null }
+  return ($linie -join "`r`n")
+}
+
+function Zapisz-Rozbicie($blok) {
+  if (-not $blok) { return }
+  try { Zapisz-Tekst $plikRozbicia $blok } catch { Zanotuj-Wywrotke "zapis rozbicia rachunku" $_ }
+}
+
 # Zapis do pliku podrecznego. Znacznik dziennego meldunku przezywa przeliczenie -
 # inaczej pelniejszy raport wracalby po kazdym odswiezeniu liczby.
 function Zapisz-Koszt($wynik) {
@@ -1133,9 +1219,10 @@ function Odswiez-Koszt-W-Tle {
 function Zglos-Koszt {
   if ($Tlo) {
     # W tle nikt nie czeka na otwarcie okna, wiec liczymy na miejscu - i przy
-    # okazji odswiezamy liczbe, z ktorej skorzystaja nastepne okna.
+    # okazji odswiezamy liczbe oraz rozbicie, z ktorych skorzystaja nastepne okna.
     $swieze = Policz-Koszt
     if ($swieze) { Zapisz-Koszt $swieze }
+    Zapisz-Rozbicie (Policz-Rozbicie)
   }
 
   $stan = Czytaj-Klucze $plikKosztu
@@ -1347,12 +1434,18 @@ function Zglos-Koszt-Dzienny {
   $stan["pelny"] = $dzis
   try { Zapisz-Klucze $plikKosztu $stan } catch { Zanotuj-Wywrotke "znacznik dziennego rachunku" $_ }
 
+  # Rozbicie na pozycje - to jest ten meldunek, o ktory uzytkownik poprosil: przy
+  # kazdej pozycji ma stac, GDZIE ona siedzi i DO CZEGO jest doklejana, bo sama suma
+  # nie mowi, co skrocic. Gotowy blok lezy w pliku podrecznym (liczy go w tle
+  # koszt-pamieci.ps1 -Rozbicie), wiec otwarcie sesji na nic nie czeka.
+  if (Pokaz-Rozbicie) { return }
+
+  # Rozbicia jeszcze nie ma (pierwsze uruchomienie) - zostaje to, co bylo:
+  # wyciag z dziennego raportu zadania LoreKoszt i osobna linia o koszcie cyklu.
   $plik = Join-Path $KatalogDomowy ".claude\wiedza\koszt-ostatni.txt"
   $skrypt = Join-Path $Zrodlo "narzedzia\koszt-pamieci.ps1"
   if (-not (Test-Path $plik)) {
-    if (Test-Path $skrypt) {
-      Write-Host "  Dziennego rachunku za pamiec nie ma na tej maszynie - zaloz go raz: powershell -File $skrypt -ZalozZadanie"
-    }
+    Write-Host "MegaRuchacz: rozbicie rachunku za pamiec licze wlasnie w tle - bedzie przy nastepnym otwarciu okna."
     # koszt cyklu to osobny plik i osobny rodzaj kosztu - brak jednego rachunku
     # nie ma prawa zabrac drugiego
     try { Zglos-Koszt-Cyklu } catch { Zanotuj-Wywrotke "koszt cyklu wiedzy" $_ }
@@ -1382,6 +1475,115 @@ function Zglos-Koszt-Dzienny {
     Write-Host "    Ten raport ma $dni dni - zadanie LoreKoszt nie chodzi. Zaloz je od nowa: powershell -File $skrypt -ZalozZadanie"
   }
   Write-Host "    Caly rachunek: $plik"
+}
+
+# Gotowy blok rozbicia z pliku podrecznego. Wypisujemy go slowo w slowo i prosimy
+# model, zeby przepisal go uzytkownikowi: wyjscie hooka trafia do KONTEKSTU MODELU,
+# a nie na ekran, wiec bez tej prosby uzytkownik nie zobaczy z tego ani linii.
+# $false = nie ma czego pokazac (pierwsze uruchomienie albo liczenie sie wywrocilo).
+function Pokaz-Rozbicie {
+  $blok = Czytaj-Tekst $plikRozbicia
+  if (-not $blok) { return $false }
+  $wiek = [double]::MaxValue
+  try { $wiek = ([datetime]::Now - (Get-Item $plikRozbicia).LastWriteTime).TotalDays } catch { }
+  Write-Host "MegaRuchacz: przepisz uzytkownikowi ponizszy blok w pierwszej odpowiedzi, bez zmian i bez komentarza."
+  foreach ($l in (($blok -replace "`r`n", "`n") -split "`n")) { Write-Host $l }
+  if ($wiek -gt 7) {
+    Write-Host "    (liczby z $((Get-Item $plikRozbicia).LastWriteTime.ToString('yyyy-MM-dd')) - swiezsze beda po przeliczeniu w tle)"
+  }
+  return $true
+}
+
+# ------------------------------------------------- 4. cykl wiedzy przy pierwszej sesji
+# Cykl wiedzy rusza TUTAJ - przy pierwszej sesji danego dnia, a nie o sztywnej
+# godzinie z Harmonogramu (do 2026-09-17 bylo to zadanie LoreCykl). Warunek jest
+# doslownie taki: data ostatniego przebiegu jest inna niz dzisiejsza. Dni, w ktorych
+# komputer byl wylaczony, po prostu nie istnieja: praca we wtorek, dwa dni wolnego,
+# piatek 15:00 - i cykl bierze wtedy wszystko od wtorku. Drugie i trzecie okno tego
+# samego dnia juz go nie odpala.
+#
+# Sesja NA NIC TU NIE CZEKA: hook ma kilkanascie sekund, a cykl trwa minuty, wiec
+# idzie osobnym, odczepionym procesem (ten sam wzorzec, co Odswiez-Koszt-W-Tle).
+# Jedyny koszt po tej stronie to odczyt stanu kolejki - liczby, bez wolania modelu,
+# zmierzone 0,4 s - i robimy go najwyzej raz na dobe.
+function Ruszaj-Cykl {
+  $skrypt = Join-Path $Zrodlo "narzedzia\cykl-dzienny.ps1"
+  if (-not (Test-Path $skrypt)) { return }
+  # bez modulu pamieci nie ma czego czytac - i nie ma po co budzic procesu
+  if (-not (Test-Path (Join-Path $Zrodlo "lore\pyproject.toml"))) { return }
+
+  $katWiedzy = Join-Path $KatalogDomowy ".claude\wiedza"
+  $dzis = Get-Date -Format 'yyyy-MM-dd'
+  $stanCyklu = Czytaj-Klucze (Join-Path $katWiedzy ".cykl-stan")
+  # "odlozony" znaczy, ze przebiegu w ogole nie bylo (brak sieci, wylogowanie) -
+  # to nie jest dzisiejsza praca, wiec wolno sprobowac jeszcze raz.
+  if (($stanCyklu["data"] -eq $dzis) -and ($stanCyklu["status"] -ne "odlozony")) { return }
+
+  # Drugie okno otwarte minute po pierwszym - cykl juz pracuje, nie dubluj meldunku.
+  # (Przed samym podwojnym przebiegiem broni zamek w cykl-dzienny.ps1.)
+  $postep = Czytaj-Klucze (Join-Path $katWiedzy ".cykl-postep")
+  if ($postep["stan"] -eq "pracuje") {
+    $kiedyPostep = [datetime]::MinValue
+    if ([datetime]::TryParse($postep["czas"], [ref]$kiedyPostep) -and
+        (([datetime]::Now - $kiedyPostep).TotalHours -lt 3)) { return }
+  }
+
+  # Czy jest w ogole co robic. Przebieg probny wylawiania modelu nie wola,
+  # znacznika nie przesuwa i oddaje same liczby.
+  $kawalki = $null
+  $przebiegi = $null
+  $wyciagnij = Join-Path $Zrodlo "narzedzia\wyciagnij-fakty.ps1"
+  if (Test-Path $wyciagnij) {
+    try {
+      $global:LASTEXITCODE = 0
+      # *>&1: wylawianie pisze przez Write-Host, a to w tym samym procesie wyladowaloby
+      # w wyjsciu hooka, czyli w kontekscie modelu. Zbieramy wszystko i czytamy liczby.
+      $wy = (& $wyciagnij -Zrodlo $Zrodlo -Kolejka *>&1 | Out-String)
+      if ($LASTEXITCODE -eq 0) {
+        $k = Klucze-Z-Tekstu $wy
+        if ($k["kolejka.kawalki"]   -match '^\d+$') { $kawalki   = [int]$k["kolejka.kawalki"] }
+        if ($k["kolejka.przebiegi"] -match '^\d+$') { $przebiegi = [int]$k["kolejka.przebiegi"] }
+      }
+    } catch { }   # nie udalo sie zapytac - decyzje podejmuje wtedy sam cykl
+  }
+  # Pusta kolejka to jedyny powod, zeby nie ruszac. Kolejki, ktorej nie umiemy
+  # odczytac, nie udajemy: wtedy cykl idzie i sam powie, co mu przeszkadza.
+  if (($null -ne $kawalki) -and ($kawalki -le 0)) { return }
+
+  $ogon = '-NoProfile -NonInteractive -ExecutionPolicy Bypass -File "' + $skrypt +
+          '" -Zrodlo "' + $Zrodlo + '" -KatalogDomowy "' + $KatalogDomowy + '"'
+  $poszlo = $false
+  try {
+    Start-Process -FilePath "conhost.exe" -ArgumentList ("--headless powershell.exe " + $ogon) `
+      -WindowStyle Hidden -ErrorAction Stop | Out-Null
+    $poszlo = $true
+  } catch { }
+  if (-not $poszlo) {
+    try {
+      Start-Process -FilePath "powershell.exe" -ArgumentList $ogon -WindowStyle Hidden | Out-Null
+      $poszlo = $true
+    } catch { Zanotuj-Wywrotke "start cyklu wiedzy" $_ }
+  }
+  if (-not $poszlo) { return }
+
+  # Jedna linia o tym, co sie wlasnie zaczelo. Ile to kosztowalo, powie meldunek
+  # koncowy przy najblizszej wiadomosci (narzedzia\przypomnienie.js).
+  $skad = "od ostatniego odczytu"
+  $znacznik = Join-Path $katWiedzy ".ostatnie-wyciaganie"
+  if (Test-Path $znacznik) {
+    $tekst = (Czytaj-Tekst $znacznik)
+    $data = [datetime]::MinValue
+    if ($tekst -and [datetime]::TryParse($tekst.Trim(), [Globalization.CultureInfo]::InvariantCulture,
+          [Globalization.DateTimeStyles]::RoundtripKind, [ref]$data)) {
+      $skad = "od $($data.ToLocalTime().ToString('yyyy-MM-dd HH:mm'))"
+    }
+  }
+  $ile = @()
+  if ($null -ne $kawalki)   { $ile += "$kawalki kawalkow rozmow" }
+  if ($null -ne $przebiegi) { $ile += "$przebiegi porcji" }
+  $opisIle = ""
+  if ($ile.Count -gt 0) { $opisIle = " - " + ($ile -join ", ") }
+  Mow "MegaRuchacz: czytam rozmowy ${skad}${opisIle}. Potrwa kilka minut, koszt podam po zakonczeniu."
 }
 
 # ------------------------------------------------------------------ przebieg
@@ -1424,6 +1626,9 @@ try {
   if ($PoliczKoszt) {
     $w = Policz-Koszt
     if ($w) { Zapisz-Koszt $w }
+    # Rozbicie na pozycje liczy sie przy tej samej okazji: to ten sam skrypt,
+    # a blok ma byc gotowy do wypisania, gdy nastanie nowy dzien.
+    Zapisz-Rozbicie (Policz-Rozbicie)
     exit 0
   }
 
@@ -1454,6 +1659,10 @@ try {
     try { Pilnuj-Sufitu-Zawsze } catch { Zanotuj-Wywrotke "pilnowanie sufitu ladunku" $_ }
     try { Pilnuj-Wersji }  catch { Zanotuj-Wywrotke "pilnowanie wersji wdrozenia" $_ }
     try { Zglos-Koszt }    catch { Zanotuj-Wywrotke "rachunek za pamiec" $_ }
+    # Cykl wiedzy takze tutaj: na maszynie z samym Codeksem ten hook jest jedynym,
+    # ktory w ogole chodzi przy starcie sesji. Ze jest w robocie, uzytkownik zobaczy
+    # przy pierwszej wiadomosci - z linii stanu doklejanej przez przypomnienie.js.
+    try { Ruszaj-Cykl }    catch { Zanotuj-Wywrotke "start cyklu wiedzy" $_ }
     # Najpierw dziennik (zbiera tez wywrotki), potem znacznik obecnosci wraz
     # z nimi - w tej kolejnosci, bo potkniecie samego dziennika tez ma sie zapisac.
     Dopisz-Dziennik
@@ -1517,6 +1726,9 @@ try {
   # meldunek raz na dobe zaraz za nim, bo objasnia te sama liczbe.
   try { Zglos-Koszt }        catch { Zanotuj-Wywrotke "rachunek za pamiec" $_ }
   try { Zglos-Koszt-Dzienny } catch { Zanotuj-Wywrotke "dzienny rachunek za pamiec" $_ }
+  # Na samym koncu: cykl wiedzy przy pierwszej sesji dnia. Linia o tym, co sie
+  # zaczelo, ma stac pod rachunkiem, bo to ciag dalszy tej samej sprawy.
+  try { Ruszaj-Cykl }        catch { Zanotuj-Wywrotke "start cyklu wiedzy" $_ }
   Zapisz-Obecnosc (Nazwa-Trybu)
 } catch {
   # Ostatnia siatka. Przebieg i tak konczy sie kodem 0, bo start sesji jest
