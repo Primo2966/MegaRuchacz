@@ -46,7 +46,31 @@ Odpowiednik modulu `workerzy` z Claude Code. Tu lezy sama TRESC - wdraza to
 - `.megaruchacz/zasady-sesja.json` skladaja instalator i straznik (ta sama tresc w dwoch
   miejscach - poprawiac razem): `hookSpecificOutput.additionalContext`,
   krotkie, gdy pelne zasady sa juz w `AGENTS.md`, a pelne, gdy ich tam nie ma
-  (`additionalContextLimit` w `hooks.json` podniesiony do 8000).
+  (`additionalContextLimit` w `hooks.json` podniesiony do 24000).
+
+## Sufit nie ma prawa uciac niczego po cichu
+
+Tekst dluzszy niz `additionalContextLimit` jest ucinany OD KONCA i bez slowa -
+przez tydzien szly tak do Codeksa kadlubki zasad (13 129 znakow przy suficie 8 000),
+a instalator meldowal sukces. Dzis stoja przed tym trzy zapory:
+
+1. **Ostrzezenie na POCZATKU ladunku.** Gdy tresc nie miesci sie w suficie,
+   `wdroz.ps1` dopisuje jej w pierwszej linii `UWAGA: ten tekst ma N znakow,
+   a zmiesci sie M - koniec zostal uciety...`. Ucinany jest koniec, wiec pierwsza
+   linia dociera zawsze - model wie, ze dostal kadlubek, i ma to powiedziec.
+   Gdy ladunek sie miesci, nie dopisujemy ani znaku.
+2. **Wdrozenia, ktore tnie, nie da sie zrobic.** `wdroz.ps1` porownuje kazdy
+   ladunek z sufitem jego hooka i przy przekroczeniu KONCZY SIE BLEDEM zamiast
+   zielonego "Gotowe". Limit czyta z `<projekt>\.codex\hooks.json` (i odpowiednio
+   `.claude\settings.json`) - czyli z pliku, ktory naprawde rzadzi w tej sesji,
+   a nie z szablonu w repo. To samo sprawdzenie powtarza samosprawdzenie na koncu.
+3. **Bramka do odpalenia po kazdej zmianie zasad:**
+   `powershell -File narzedzia\koszt-pamieci.ps1 -TylkoSufity [-Projekt <kat>]`
+   - przechodzi po wszystkich parach (ladunek, sufit) i konczy sie kodem 1, gdy
+   cokolwiek wystaje. Mierzy ZNAKI samej tresci `additionalContext`, dokladnie
+   tak samo jak `wdroz.ps1`.
+
+Dlugosc liczymy w znakach tresci `additionalContext`, bez otoczki JSON-a.
 - `narzedzia/mr-log-codex.js` - skrypt dla `SubagentStart`/`SubagentStop`, dopisuje
   START i KONIEC workera do `<projekt>/.megaruchacz/worklog.md`.
 - `SubagentStart` przyjmuje `matcher` po `agent_type` - tu celowo go nie ma.

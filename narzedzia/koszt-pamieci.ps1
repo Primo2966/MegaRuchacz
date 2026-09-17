@@ -10,6 +10,9 @@
 #     -Zrodlo <kat>          katalog narzedzia (domyslnie katalog nad tym skryptem)
 #     -Projekt <kat>         projekt z wdrozonym Codeksem: mierzymy wtedy ladunki
 #                            hookow, ktore tam naprawde leza, a nie same szablony
+#     -TylkoSufity           SAME sufity: kazda para (ladunek, limit) w jednej linii,
+#                            kod 1 gdy cokolwiek wystaje - do odpalenia po kazdej
+#                            zmianie zasad, bez czekania na reszte raportu
 #     -Zwiezle               DOKLADNIE JEDNA linia do pokazania przy starcie sesji
 #     -Zwykly                bez kolorow (do zapisu wydruku w pliku)
 #     -ZalozZadanie          codzienny raport o 08:15 do <dom>\.claude\wiedza\koszt-ostatni.txt
@@ -29,6 +32,7 @@ param(
   [string]$KatalogDomowy = $HOME,
   [string]$Zrodlo = "",
   [string]$Projekt = "",
+  [switch]$TylkoSufity,
   [switch]$Zwiezle,
   [switch]$Zwykly,
   [switch]$ZalozZadanie,
@@ -542,7 +546,18 @@ if ($ZalozZadanie) { Zaloz-Zadanie $PSCommandPath $KatalogDomowy $plikOstatni }
 
 # zrodla sufitow - kazdy limit czytamy z pliku, ktory go naprawde ustala
 $plikStraznika = Join-Path $Zrodlo "narzedzia\straznik-zasad.ps1"
+# Sufit rzadzi ten, ktory NAPRAWDE lezy w projekcie - szablon w repo mowi tylko,
+# co instalator by tam wpisal. Gdy projekt jest podany i ma wlasny .codex\hooks.json,
+# limity czytamy stamtad; inaczej zostaje szablon.
 $plikHookow    = Join-Path $Zrodlo "szablony-codex\hooks.json"
+$skadHookow    = "szablony-codex\hooks.json"
+if ($Projekt) {
+  $hookiProjektu = Join-Path $Projekt ".codex\hooks.json"
+  if (Test-Path -LiteralPath $hookiProjektu) {
+    $plikHookow = $hookiProjektu
+    $skadHookow = $hookiProjektu
+  }
+}
 $plikZasadWzor = Join-Path $Zrodlo "szablony-codex\zasady-kierownika.md"
 $plikPrzypWzor = Join-Path $Zrodlo "szablony-codex\przypomnienie.json"
 $plikFaktow    = Join-Path $Zrodlo "lore\lore\facts.py"
@@ -644,13 +659,13 @@ $sufity += Sufit ([ordered]@{
   Teraz      = $zasadyZnaki
   Limit      = $limitZasad
   Jednostka  = "znakow"
-  Czyj       = "NASZ - liczba wpisana w szablony-codex\hooks.json, do podniesienia jedna linijka"
-  SkadLimitu = "szablony-codex\hooks.json (additionalContextLimit hooka SessionStart)"
+  Czyj       = "NASZ - liczba wpisana w $skadHookow, do podniesienia jedna linijka"
+  SkadLimitu = "$skadHookow (additionalContextLimit hooka SessionStart)"
   Plik       = $zasadySkad
   Skutek     = "UCINA PO CICHU: Codex dostaje tylko poczatek zasad, konca nikt mu nie pokaze i nikt go nie ostrzeze"
   Ucina      = $true
   Tresc      = $zasadyTresc
-  Uwaga      = (Powod-Braku $zasadyZnaki $limitZasad "nie ma czego mierzyc: brak $plikZasadWzor" "szablony-codex\hooks.json")
+  Uwaga      = (Powod-Braku $zasadyZnaki $limitZasad "nie ma czego mierzyc: brak $plikZasadWzor" $skadHookow)
 })
 
 $sufity += Sufit ([ordered]@{
@@ -659,14 +674,51 @@ $sufity += Sufit ([ordered]@{
   Teraz      = $przypZnaki
   Limit      = $limitPrzyp
   Jednostka  = "znakow"
-  Czyj       = "NASZ - liczba wpisana w szablony-codex\hooks.json, do podniesienia jedna linijka"
-  SkadLimitu = "szablony-codex\hooks.json (additionalContextLimit hooka UserPromptSubmit)"
+  Czyj       = "NASZ - liczba wpisana w $skadHookow, do podniesienia jedna linijka"
+  SkadLimitu = "$skadHookow (additionalContextLimit hooka UserPromptSubmit)"
   Plik       = $przypSkad
   Skutek     = "UCINA PO CICHU: koniec przypomnienia przepada przy kazdej wiadomosci"
   Ucina      = $true
   Tresc      = $przypTresc
-  Uwaga      = (Powod-Braku $przypZnaki $limitPrzyp "nie ma czego mierzyc: brak $plikPrzypWzor" "szablony-codex\hooks.json")
+  Uwaga      = (Powod-Braku $przypZnaki $limitPrzyp "nie ma czego mierzyc: brak $plikPrzypWzor" $skadHookow)
 })
+
+# Ladunki hookow Claude Code - mierzymy je tylko wtedy, gdy podano projekt, bo
+# poza nim nie ma czego mierzyc. Sufitu dla nich w settings.json DZIS NIE MA:
+# obowiazuje wtedy wartosc domyslna Claude Code, ktorej nie znamy - i raport ma
+# to powiedziec wprost, a nie przemilczec.
+if ($Projekt) {
+  $plikUstawien = Join-Path $Projekt ".claude\settings.json"
+  foreach ($paraCC in @(
+      @{ nazwa = "zasady kierownika wstrzykiwane na starcie sesji Claude Code"
+         krotka = "zasady dla Claude Code"; plik = ".claude\megaruchacz-sesja.json"
+         zdarzenie = "SessionStart" },
+      @{ nazwa = "przypomnienie doklejane w Claude Code do kazdej wiadomosci"
+         krotka = "przypomnienie dla Claude Code"; plik = ".claude\orchestrator-reminder.json"
+         zdarzenie = "UserPromptSubmit" })) {
+    $plikCC = Join-Path $Projekt $paraCC.plik
+    if (-not (Test-Path -LiteralPath $plikCC)) { continue }
+    $trescCC = Ladunek-Hooka $plikCC
+    $znakiCC = $null
+    if ($trescCC) { $znakiCC = $trescCC.Length }
+    $limitCC = Limit-Hooka $plikUstawien (Split-Path $paraCC.plik -Leaf)
+    $sufity += Sufit ([ordered]@{
+      Nazwa      = $paraCC.nazwa
+      Krotka     = $paraCC.krotka
+      Teraz      = $znakiCC
+      Limit      = $limitCC
+      Jednostka  = "znakow"
+      Czyj       = "NARZUCONY przez Claude Code, dopoki nie wpiszemy wlasnego additionalContextLimit do settings.json"
+      SkadLimitu = "$plikUstawien (additionalContextLimit hooka $($paraCC.zdarzenie))"
+      Plik       = $plikCC
+      Skutek     = "UCINA PO CICHU: koniec ladunku przepada, gdy przekroczy sufit narzedzia"
+      Ucina      = $true
+      Tresc      = $trescCC
+      Uwaga      = (Powod-Braku $znakiCC $limitCC "nie da sie odczytac ladunku z $plikCC" `
+                    "$plikUstawien - nie ma tam additionalContextLimit, wiec sufitem jest wartosc domyslna Claude Code")
+    })
+  }
+}
 
 # --- wypisanie: tryb zwiezly (DOKLADNIE JEDNA LINIA) -------------------------
 
@@ -698,6 +750,39 @@ if ($Zwiezle) {
   if ($skokKosztu) { $linia = $linia + " (+$zmianaProc% od wczoraj)" }
   Write-Output $linia
   if ($cosUcinane) { exit 1 }
+  exit 0
+}
+
+# --- wypisanie: same sufity (jedno polecenie do odpalenia po zmianie zasad) ---
+# Przechodzi po WSZYSTKICH parach (ladunek, sufit), ktore juz sa policzone wyzej -
+# drugi raz tego nie liczymy. Kod wyjscia 1 przy jakimkolwiek przekroczeniu, zeby
+# dalo sie to wpiac jako bramke. Sufitow z Lore tu nie ma: niczego nie ucinaja
+# przed modelem, a zapytania do bazy trwaja.
+if ($TylkoSufity) {
+  Write-Output "Sufity ladunkow - $(Get-Date -Format 'yyyy-MM-dd HH:mm')"
+  foreach ($s in (Sortuj-Sufity $sufity)) {
+    if (-not $s.Zmierzony) {
+      Write-Output ("  ?     {0} - nie zmierzone: {1}" -f $s.Krotka, $s.Uwaga)
+      continue
+    }
+    if ($s.Przekroczony -and $s.Ucina) {
+      $opisU = "  UCINA {0} - {1} z {2} {3}, przepada {4}; sufit: {5}" -f `
+               $s.Krotka, (Liczba $s.Teraz), (Liczba $s.Limit), $s.Jednostka, (Liczba $s.Strata), $s.SkadLimitu
+      if ($s.Naglowek) { $opisU = $opisU + " (ginie od ""$(Skroc $s.Naglowek 40)"")" }
+      Write-Output $opisU
+    } elseif ($s.Przekroczony) {
+      Write-Output ("  PROG  {0} - {1} z {2} {3}, ale ten sufit niczego nie ucina" -f `
+                    $s.Krotka, (Liczba $s.Teraz), (Liczba $s.Limit), $s.Jednostka)
+    } else {
+      Write-Output ("  ok    {0} - {1} z {2} {3} ({4}% sufitu)" -f `
+                    $s.Krotka, (Liczba $s.Teraz), (Liczba $s.Limit), $s.Jednostka, $s.Procent)
+    }
+  }
+  if ($cosUcinane) {
+    Write-Output "BLAD  cos jest ucinane po cichu - podnies limit we wskazanym pliku albo skroc tresc."
+    exit 1
+  }
+  Write-Output "Nic nie jest ucinane."
   exit 0
 }
 
