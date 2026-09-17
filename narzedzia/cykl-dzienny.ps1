@@ -8,8 +8,14 @@
 #     (znacznik ostatniego przebiegu sie nie przesuwa, wiec material czeka nietkniety),
 #   - nieudany przebieg wraca po $OdstepMin min osobnym zadaniem w harmonogramie,
 #     najwyzej $MaxProb razy dziennie - bez Start-Sleep, ktory ginie przy wylaczeniu maszyny,
-#   - zaleglosc liczona jest w dniach i nadrabiana po $MaxNadrabiania dni na przebieg,
-#     zeby po urlopie nie przepalic calego limitu w piec minut.
+#   - zaleglosc liczy sie w PRZEBIEGACH WYLAWIANIA, nie w dniach kalendarza. Jeden gesty
+#     dzien pracy to kilka przebiegow, wiec "1 dzien zaleglosci" potrafilo znaczyc 133
+#     czekajace kawalki rozmow - i tak wlasnie cykl 2026-09-17 zameldowal "ok" po zabraniu
+#     jednej piatej materialu. Ile naprawde czeka, mowi samo wylawianie (przebieg probny,
+#     bez modelu, 0,4 s); dni sluza juz tylko za punkt wyjscia przy pierwszym uruchomieniu,
+#   - na jedno podejscie idzie najwyzej $MaxNadrabiania przebiegow (ochrona limitu), a po
+#     reszte cykl wraca jeszcze tego samego dnia zadaniem ponawiajacym - zamiast dreptac
+#     po jednej porcji na dobe, gdy material przyrasta szybciej, niz jest nadrabiany.
 #
 # Cykl NIE jest przywiazany do jednego narzedzia AI. Czytanie transkryptow, indeksowanie
 # i weryfikacja to robota na plikach - modelu potrzebuje wylacznie wylawianie faktow.
@@ -34,9 +40,11 @@ param(
 
 $NazwaZadania    = "LoreCykl"
 $NazwaPonawiania = "LoreCyklPonow"
-$MaxProb         = 5    # tyle podejsc na dobe - potem dzien odpuszczamy, material i tak czeka
+$MaxProb         = 5    # tyle podejsc na dobe (razem z doganianiem kolejki) - potem dzien
+                        # odpuszczamy, material i tak czeka nietkniety
 $OdstepMin       = 10   # co tyle minut wraca zadanie ponawiajace
-$MaxNadrabiania  = 5    # gorny limit dni na jeden przebieg (ochrona limitu po dluzszej przerwie)
+$MaxNadrabiania  = 5    # gorny limit przebiegow wylawiania na JEDNO podejscie (ochrona limitu);
+                        # wieksza kolejke cykl bierze na raty, wracajac co $OdstepMin min
 
 $script:Dom       = $null
 $script:Wiedza    = $null
@@ -46,6 +54,9 @@ $script:Znacznik  = $null
 $script:Wyciagnij = $null
 $script:Aktualizuj = $null
 $script:Zostalo   = $null   # ile przebiegow zaleglosci zostalo wg samego wylawiania
+$script:Kawalki   = $null   # ile kawalkow materialu czeka (to samo zrodlo, jednostka po ludzku)
+$script:Czeka     = $null   # ile czekalo PRZED ta praca - do porownania, czy kolejka rosnie
+$script:Mozliwe   = $null   # ile przebiegow cykl zdazy jeszcze wziac do konca doby
 $script:Pominiete = $null   # powod, dla ktorego wylawianie nie poszlo ($null = poszlo)
 
 # ---------------------------------------------------------------- wypisywanie
@@ -100,17 +111,21 @@ function Zapisz-Tekst($sciezka, $tekst) {
 
 # Pliki stanu trzymaja proste "klucz: wartosc" - tak samo jak reszta narzedzia,
 # dzieki czemu straznik-zasad.ps1 czyta podsumowanie tym samym kodem.
-function Czytaj-Klucze($sciezka) {
+function Klucze-Z-Tekstu($raw) {
   $stan = [ordered]@{}
-  if (-not (Test-Path -LiteralPath $sciezka)) { return $stan }
-  $raw = $null
-  try { $raw = [System.IO.File]::ReadAllText($sciezka) } catch { return $stan }
   if (-not $raw) { return $stan }
   foreach ($l in ($raw -split '\r?\n')) {
     $m = [regex]::Match($l, '^\s*([a-zA-Z_][a-zA-Z0-9_.]*)\s*:\s*(.*?)\s*$')
     if ($m.Success) { $stan[$m.Groups[1].Value] = $m.Groups[2].Value }
   }
   return $stan
+}
+
+function Czytaj-Klucze($sciezka) {
+  if (-not (Test-Path -LiteralPath $sciezka)) { return [ordered]@{} }
+  $raw = $null
+  try { $raw = [System.IO.File]::ReadAllText($sciezka) } catch { return [ordered]@{} }
+  return Klucze-Z-Tekstu $raw
 }
 
 function Zapisz-Klucze($sciezka, $stan) {
@@ -125,40 +140,59 @@ function Zapisz-Stan($stan) {
 }
 
 # Podsumowanie czyta straznik przy starcie sesji - stad i klucze, i gotowy opis po ludzku.
-# Zaleglosc przejsciowa i zaleglosc trwala wygladaja identycznie: "czeka X dni".
-# Ta druga znaczy, ze limit na jeden przebieg jest za maly i system NIGDY nie
-# nadgoni - a przez miesiace wyglada normalnie. Jedyne, co je odroznia, to
-# kierunek: czy zaleglosc maleje, czy rosnie. Dlatego porownujemy z poprzednim
-# przebiegiem i mowimy wprost, gdy nie nadazamy.
-function Kierunek-Zaleglosci($zaleglosc) {
-  $poprzednia = $null
-  if (Test-Path $script:Ostatni) {
-    try {
-      $stare = Get-Content $script:Ostatni -Raw | ConvertFrom-Json
-      if ($stare.zaleglosc -match '^\d+$') { $poprzednia = [int]$stare.zaleglosc }
-    } catch { }
+# Zaleglosc przejsciowa i zaleglosc trwala wygladaja identycznie: "czeka X". Ta druga
+# znaczy, ze limit na jeden przebieg jest za maly i system NIGDY nie nadgoni - a przez
+# miesiace wyglada normalnie. Jedyne, co je odroznia, to kierunek: czy kolejka maleje,
+# czy rosnie. Dlatego porownujemy z poprzednim przebiegiem i mowimy wprost, gdy nie nadazamy.
+#
+# UWAGA - dwa bledy, ktore to porownanie unieruchamialy do 2026-09-17:
+#   - poprzednia wartosc czytana byla przez ConvertFrom-Json, a cykl-ostatni.txt to zapis
+#     "klucz: wartosc"; wyjatek ladowal w pustym catch, wiec kierunku NIGDY nie bylo widac,
+#   - zapisywana liczba raz znaczyla dni, raz przebiegi wylawiania - czyli porownanie
+#     jablek z gruszkami. Teraz obie strony to przebiegi, i to pod wlasnym kluczem.
+function Kierunek-Zaleglosci($zostalo) {
+  $poprzednie = $null
+  $stare = Czytaj-Klucze $script:Ostatni
+  if ($stare["przebiegi"] -match '^\d+$') { $poprzednie = [int]$stare["przebiegi"] }
+  if ($null -eq $poprzednie -or $zostalo -le 0) { return "" }
+  if ($zostalo -gt $poprzednie) {
+    return " UWAGA: kolejka ROSNIE ($poprzednie -> $zostalo przebiegow) - material przybywa szybciej, niz jest nadrabiany, i system nie nadgoni sam. Zwieksz MAX_INPUT_CHARS w lore\lore\facts.py albo uruchom recznie: narzedzia\wyciagnij-fakty.ps1 -Nadrabiaj $zostalo"
   }
-  if ($null -eq $poprzednia -or $zaleglosc -le 0) { return "" }
-  if ($zaleglosc -gt $poprzednia) {
-    return " UWAGA: zaleglosc ROSNIE ($poprzednia -> $zaleglosc) - limit na jeden przebieg jest za maly, system nie nadazy sam. Zwieksz MAX_INPUT_CHARS w lore\lore\facts.py albo uruchom z -Nadrabiaj."
-  }
-  if ($zaleglosc -lt $poprzednia) { return " (maleje: $poprzednia -> $zaleglosc, nadrabia sie)" }
+  if ($zostalo -lt $poprzednie) { return " (maleje: $poprzednie -> $zostalo przebiegow, nadrabia sie)" }
   return " (stoi w miejscu od poprzedniego przebiegu - sprawdz, czy cos nie blokuje)"
+}
+
+# Jednostka, ktora cos znaczy dla czlowieka. "dni: 0" przy 133 czekajacych kawalkach
+# rozmowy to komunikat usypiajacy - stad material zawsze w kawalkach, przebiegi obok.
+function Opis-Kolejki($zostalo) {
+  if ($zostalo -le 0) { return "zaleglosci nie ma - material jest przerobiony na biezaco" }
+  $ogon = ""
+  if ($null -ne $script:Kawalki -and $script:Kawalki -gt 0) { $ogon = " ($($script:Kawalki) kawalkow materialu)" }
+  return "czeka jeszcze $zostalo przebiegow wylawiania$ogon"
 }
 
 function Zapisz-Podsumowanie($status, $powod, $nadrobione, $zaleglosc) {
   $kierunek = Kierunek-Zaleglosci $zaleglosc
+  $czeka = Opis-Kolejki $zaleglosc
+  $zdaze = $script:Mozliwe
+  if ($null -eq $zdaze) { $zdaze = 0 }
   $opis = switch ($status) {
-    "ok"         { "cykl przeszedl - nadrobione dni: $nadrobione, czeka jeszcze: $zaleglosc$kierunek" }
-    "odlozony"   { "cykl odlozony ($powod) - czeka jeszcze dni: $zaleglosc$kierunek" }
-    "wyczerpane" { "cykl odpuszczony po $MaxProb probach ($powod) - czeka jeszcze dni: $zaleglosc$kierunek" }
-    default      { "cykl zakonczony stanem '$status' - czeka jeszcze dni: $zaleglosc$kierunek" }
+    "ok"          { "cykl przeszedl - nadrobione przebiegi: $nadrobione, $czeka$kierunek" }
+    "dogania"     { "UWAGA: kolejka nie jest pusta - nadrobione przebiegi: $nadrobione, $czeka; wracam po reszte jeszcze dzis (co $OdstepMin min)$kierunek" }
+    "nie nadaza"  { "UWAGA: cykl NIE NADAZA - nadrobione przebiegi: $nadrobione, $czeka, a do konca doby zdazy najwyzej $zdaze$kierunek" }
+    "odlozony"    { "cykl odlozony ($powod) - $czeka$kierunek" }
+    "wyczerpane"  { "cykl odpuszczony po $MaxProb probach ($powod) - $czeka$kierunek" }
+    default       { "cykl zakonczony stanem '$status' - $czeka$kierunek" }
   }
   $podsumowanie = [ordered]@{
     data       = (Get-Date -Format "yyyy-MM-dd HH:mm")
     status     = $status
     powod      = $powod
     nadrobione = $nadrobione
+    przebiegi  = $zaleglosc
+    kawalki    = $(if ($null -ne $script:Kawalki) { $script:Kawalki } else { "" })
+    # zaleglosc: ta sama liczba pod stara nazwa - straznik-zasad.ps1 czyta ten klucz
+    # i po nim poznaje, czy ma sie odezwac przy starcie sesji
     zaleglosc  = $zaleglosc
     opis       = $opis
   }
@@ -281,6 +315,11 @@ function Rozpoznaj-Powod($tekst, $kod) {
 
 # Ile dni materialu czeka: roznica miedzy znacznikiem ostatniego przebiegu a dzisiaj.
 # Brak albo nieczytelny znacznik = jeden dzien, bo tyle bierze lore w domysle.
+#
+# To jest PUNKT WYJSCIA, nie odpowiedz: dzien w kalendarzu nie odpowiada porcji materialu.
+# 2026-09-17 znacznik wskazywal wczoraj, wiec wychodzil "1 dzien" - a czekaly 133 kawalki
+# rozmow, czyli piec przebiegow. Liczby dni uzywamy wylacznie wtedy, gdy wylawianie nie
+# odpowiedzialo i nie ma zapamietanej liczby przebiegow.
 function Zaleglosc-Dni {
   if (-not (Test-Path -LiteralPath $script:Znacznik)) { return 1 }
   $tekst = ""
@@ -297,14 +336,43 @@ function Zaleglosc-Dni {
 }
 
 # Sam znacznik nie wystarczy do powiedzenia, ile JESZCZE czeka: po cichym weekendzie
-# stoi on kilka dni wstecz, choc do przerobienia nie ma nic. Wylawianie samo pisze,
-# ile przebiegow zostalo ("-Nadrabiaj N"), i to jest jedyna pewna odpowiedz.
-# $null = nie wiadomo (wylawianie w tej probie pominiete) - wtedy liczy sie znacznik.
+# stoi on kilka dni wstecz, choc do przerobienia nie ma nic - a po gestym dniu wskazuje
+# wczoraj, choc czeka piec przebiegow. Jedyne pewne zrodlo to samo wylawianie, i pytamy
+# je wprost o liczby (wyciagnij-fakty.ps1 -Kolejka), zamiast wyczytywac je z tekstu.
+#
+# Przebieg probny modelu nie wola, znacznika nie przesuwa i - zmierzone 2026-09-17 na tej
+# maszynie - trwa 0,4 s. Dlatego pytamy PRZED decyzja, ile wziac, a nie opieramy sie na
+# liczbie sprzed doby. Zwraca @{ przebiegi; kawalki } albo $null, gdy odczyt sie nie udal.
+function Stan-Kolejki {
+  $global:LASTEXITCODE = 0
+  $wyjscie = ""
+  try { $wyjscie = (& $script:Wyciagnij -Zrodlo $script:Zrodlo -Kolejka *>&1 | Out-String) }
+  catch { return $null }
+  if ($LASTEXITCODE -ne 0) { return $null }
+  $klucze = Klucze-Z-Tekstu $wyjscie
+  if ($klucze["kolejka.przebiegi"] -notmatch '^\d+$') { return $null }
+  $kawalki = 0
+  if ($klucze["kolejka.kawalki"] -match '^\d+$') { $kawalki = [int]$klucze["kolejka.kawalki"] }
+  return @{ przebiegi = [int]$klucze["kolejka.przebiegi"]; kawalki = $kawalki }
+}
+
+# Zapas na wypadek, gdyby odczyt kolejki nie wyszedl: wylawianie na koniec pisze po ludzku,
+# ile przebiegow zostalo ("-Nadrabiaj N"). $null = nie wiadomo (wylawianie pominiete).
 function Zostalo-Przebiegow($wyjscie) {
   if (-not $wyjscie) { return $null }
-  $m = [regex]::Match($wyjscie, '(?i)-Nadrabiaj\s+(\d+)')
-  if ($m.Success) { return [int]$m.Groups[1].Value }
+  # przy -Nadrabiaj N takich linii jest kilka, po jednej na przebieg - liczy sie OSTATNIA,
+  # bo tylko ona mowi o kolejce po calej pracy; pierwsza znaczylaby stan sprzed niej
+  $trafienia = [regex]::Matches($wyjscie, '(?i)-Nadrabiaj\s+(\d+)')
+  if ($trafienia.Count -gt 0) { return [int]$trafienia[$trafienia.Count - 1].Groups[1].Value }
   return 0
+}
+
+# Ile czeka w tej chwili, najlepsza znana odpowiedz: po pracy liczba od wylawiania,
+# przed praca stan kolejki z poczatku przebiegu, a w ostatecznosci dni z kalendarza.
+function Ile-Czeka {
+  if ($null -ne $script:Zostalo) { return $script:Zostalo }
+  if ($null -ne $script:Czeka)   { return $script:Czeka }
+  return (Zaleglosc-Dni)
 }
 
 # ---------------------------------------------------------------- zadania w harmonogramie
@@ -466,16 +534,16 @@ function Odloz($stan, $powod, $ponawiaj = $true) {
   $proby = [int]$stan["proby"]
   if (-not $ponawiaj) {
     Wylacz-Ponawianie
-    Zapisz-Podsumowanie "odlozony" $powod 0 (Zaleglosc-Dni)
+    Zapisz-Podsumowanie "odlozony" $powod 0 (Ile-Czeka)
     Ostrzezenie "$powod - material czeka nietkniety, cykl wroci przy nastepnym zalogowaniu"
     exit 0
   }
   if ($proby -ge $MaxProb) {
     Wylacz-Ponawianie
-    Zapisz-Podsumowanie "wyczerpane" $powod 0 (Zaleglosc-Dni)
+    Zapisz-Podsumowanie "wyczerpane" $powod 0 (Ile-Czeka)
     Ostrzezenie "$powod - to byla $proby. proba z $MaxProb, na dzis koniec; material czeka nietkniety"
   } else {
-    Zapisz-Podsumowanie "odlozony" $powod 0 (Zaleglosc-Dni)
+    Zapisz-Podsumowanie "odlozony" $powod 0 (Ile-Czeka)
     Krok "odlozone: $powod (proba $proby z $MaxProb)"
     Wlacz-Ponawianie
   }
@@ -542,8 +610,12 @@ function Uruchom-Cykl {
   $dzis = (Get-Date -Format "yyyy-MM-dd")
   $stan = Czytaj-Klucze $script:PlikStanu
   if ($stan["data"] -ne $dzis) {
-    # nowy dzien - licznik prob startuje od zera, stary powod juz nieaktualny
+    # nowy dzien - licznik prob startuje od zera, stary powod juz nieaktualny.
+    # Zapamietana kolejka przechodzi przez granice doby: material nie znika o polnocy,
+    # a bez niej cykl zaczynalby dzien od arytmetyki na kalendarzu, czyli od "1 dnia".
+    $zapamietane = $stan["zostalo"]
     $stan = [ordered]@{ data = $dzis; proby = "0" }
+    if ($zapamietane) { $stan["zostalo"] = $zapamietane }
   }
 
   if ($stan["status"] -eq "ok") {
@@ -575,24 +647,49 @@ function Uruchom-Cykl {
   # przeszkoda dotyczy WYLAWIANIA, nie calego przebiegu - dlatego nie ma tu Odloz
   $przeszkoda = Znajdz-Przeszkode $narzedzia
 
-  $zaleglosc = Zaleglosc-Dni
-  $nadrabiaj = [math]::Max(1, [math]::Min($zaleglosc, $MaxNadrabiania))
-  if ($zaleglosc -gt $MaxNadrabiania) {
-    Krok "zaleglosc: $zaleglosc dni - biore $nadrabiaj (wiecej na raz przepalaloby limit), reszta jutro"
+  # Ile wziac, decyduje stan kolejki, a nie kalendarz. Kolejnosc zrodel od najpewniejszego:
+  # odpowiedz wylawiania teraz -> liczba zapamietana z poprzedniego przebiegu -> dni.
+  $kolejka = Stan-Kolejki
+  $zKolejki = ($null -ne $kolejka)   # czy liczba "przed" jest w tej samej jednostce, co "po"
+  if ($null -ne $kolejka) {
+    $script:Czeka   = $kolejka["przebiegi"]
+    $script:Kawalki = $kolejka["kawalki"]
+    $skad = "$($script:Kawalki) kawalkow materialu czeka"
+  } elseif ($stan["zostalo"] -match '^\d+$') {
+    $script:Czeka = [int]$stan["zostalo"]
+    $skad = "wg poprzedniego przebiegu - kolejki nie udalo sie odczytac teraz"
   } else {
-    Krok "zaleglosc: $zaleglosc dni - biore $nadrabiaj"
+    $script:Czeka = Zaleglosc-Dni
+    $skad = "wg kalendarza: $($script:Czeka) dni - wylawianie jeszcze nic o kolejce nie powiedzialo"
+  }
+  $czeka = $script:Czeka
+  $nadrabiaj = [math]::Max(1, [math]::Min($czeka, $MaxNadrabiania))
+  # ile cykl zdazy wziac PO tym podejsciu, zanim skoncza sie proby na te dobe - stad
+  # wiadomo, czy jest w ogole szansa nadgonic dzis, czy trzeba to powiedziec wprost
+  $script:Mozliwe = ($MaxProb - $proby) * $MaxNadrabiania
+  if ($czeka -gt $MaxNadrabiania) {
+    Krok "do nadrobienia: $czeka przebiegow ($skad) - biore $nadrabiaj (wiecej na raz przepalaloby limit), po reszte wracam za $OdstepMin min"
+  } else {
+    Krok "do nadrobienia: $czeka przebiegow ($skad) - biore $nadrabiaj"
   }
 
   Wylow-Fakty $stan $nadrabiaj $przeszkoda
   $kodWeryfikacji = Sprawdz-Wiedze
 
-  # nadrobione = o ile przesunal sie znacznik; zostalo = co wylawianie samo zglosilo
-  $nadrobione = $zaleglosc - (Zaleglosc-Dni)
-  if ($nadrobione -lt 0) { $nadrobione = 0 }
-  $poZaleglosc = Zaleglosc-Dni
-  if ($null -ne $script:Zostalo) {
-    $poZaleglosc = $script:Zostalo
+  # Po pracy pytamy kolejke jeszcze raz - to jedyna pewna odpowiedz, ile naprawde zostalo.
+  # Liczba wyczytana z tekstu przebiegu ($script:Zostalo) sluzy juz tylko za zapas.
+  $po = Stan-Kolejki
+  if ($null -ne $po) {
+    $script:Zostalo = $po["przebiegi"]
+    $script:Kawalki = $po["kawalki"]
   }
+  $poZostalo = $czeka
+  if ($null -ne $script:Zostalo) { $poZostalo = $script:Zostalo }
+  $nadrobione = $czeka - $poZostalo
+  if ($nadrobione -lt 0) { $nadrobione = 0 }
+  # stan kolejki zapamietujemy zawsze - nastepny przebieg ma od czego zaczac
+  $stan["zostalo"] = "$poZostalo"
+  if ($null -ne $script:Kawalki) { $stan["kawalki"] = "$($script:Kawalki)" }
 
   if ($kodWeryfikacji -ne 0) {
     # fakty sa juz wylowione i leza w poczekalni - tego zadna powtorka nie cofnie
@@ -605,18 +702,49 @@ function Uruchom-Cykl {
     Odloz $stan $script:Pominiete ($narzedzia.Count -gt 0)
   }
 
+  # Dzien zamykamy dopiero z pusta kolejka. Zostalo cos - to NIE jest "ok": cykl wraca
+  # po reszte jeszcze dzis (zadanie ponawiajace co $OdstepMin min), a gdy kolejka rosnie
+  # albo przerasta to, co zdazy do konca doby, mowi o tym wprost zamiast meldowac sukces.
+  if ($poZostalo -gt 0) {
+    $status = "dogania"
+    # "urosla" porownujemy tylko wtedy, gdy obie liczby pochodza z tego samego zrodla -
+    # przebiegi kontra dni z kalendarza to znowu byloby porownanie jablek z gruszkami
+    $urosla = ($zKolejki -and $null -ne $script:Zostalo -and $poZostalo -gt $czeka)
+    if ($urosla -or $poZostalo -gt $script:Mozliwe) { $status = "nie nadaza" }
+    $stan["status"] = $status
+    $stan["czas"]   = (Get-Date -Format "yyyy-MM-dd HH:mm")
+    $stan.Remove("powod")
+    $stan.Remove("wylowione")    # nastepne podejscie ma znowu wylawiac, nie samo weryfikowac
+    Zapisz-Stan $stan
+    Zapisz-Podsumowanie $status "" $nadrobione $poZostalo
+
+    Naglowek "Podsumowanie"
+    Krok "nadrobione przebiegi: $nadrobione"
+    Krok (Opis-Kolejki $poZostalo)
+    if ($proby -lt $MaxProb) {
+      Wlacz-Ponawianie
+    } else {
+      Wylacz-Ponawianie
+      Ostrzezenie "na dzis koniec prob ($proby z $MaxProb) - reszta kolejki czeka do jutra"
+    }
+    if ($status -eq "nie nadaza") {
+      Ostrzezenie "material przybywa szybciej, niz cykl go bierze - zwieksz MAX_INPUT_CHARS w lore\lore\facts.py albo nadrob recznie: narzedzia\wyciagnij-fakty.ps1 -Nadrabiaj $poZostalo"
+    }
+    Krok "podsumowanie: $($script:Ostatni)"
+    exit 0
+  }
+
   $stan["status"] = "ok"
   $stan["proby"]  = "0"          # dzien zamkniety - licznik czysty
   $stan["czas"]   = (Get-Date -Format "yyyy-MM-dd HH:mm")
   $stan.Remove("powod")
   Zapisz-Stan $stan
   Wylacz-Ponawianie
-  Zapisz-Podsumowanie "ok" "" $nadrobione $poZaleglosc
+  Zapisz-Podsumowanie "ok" "" $nadrobione $poZostalo
 
   Naglowek "Podsumowanie"
-  Krok "nadrobione dni: $nadrobione"
-  if ($poZaleglosc -gt 0) { Krok "czeka jeszcze: $poZaleglosc dni - nadrobi sie przy kolejnych przebiegach" }
-  else                    { Krok "zaleglosci nie ma - material jest przerobiony na biezaco" }
+  Krok "nadrobione przebiegi: $nadrobione"
+  Krok (Opis-Kolejki $poZostalo)
   Krok "podsumowanie: $($script:Ostatni)"
   exit 0
 }
