@@ -12,6 +12,18 @@
             "additionalContextLimit": 8000
           }
         ]
+      },
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "powershell -NoProfile -NonInteractive -ExecutionPolicy Bypass -File \"{{ZRODLO}}/narzedzia/straznik-zasad.ps1\" -Tlo -Zrodlo \"{{ZRODLO}}\" -Projekt \"{{PROJEKT}}\" >/dev/null 2>&1 || true",
+            "commandWindows": "powershell -NoProfile -NonInteractive -ExecutionPolicy Bypass -File \"{{ZRODLO}}/narzedzia/straznik-zasad.ps1\" -Tlo -Zrodlo \"{{ZRODLO}}\" -Projekt \"{{PROJEKT}}\"",
+            "timeout": 300,
+            "async": true,
+            "statusMessage": "MegaRuchacz: samoaktualizacja narzedzia"
+          }
+        ]
       }
     ],
     "UserPromptSubmit": [

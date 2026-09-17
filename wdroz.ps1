@@ -218,6 +218,8 @@ if ($JestCodex) {
   Write-Host "   .codex\agents\*.toml        definicje czterech rol podagentow"
   Write-Host "   .codex\hooks.json           DOPISANE HOOKI Codeksa: zasady na starcie sesji,"
   Write-Host "                               przypomnienie przy kazdym poleceniu, rejestr workerow"
+  Write-Host "                               i samoaktualizacja narzedzia przy starcie sesji"
+  Write-Host "                               (chodzi w tle, nic nie dopisuje do rozmowy)"
   Write-Host "   AGENTS.md w korzeniu projektu   zasady kierownika miedzy znacznikami MegaRuchacz."
   Write-Host "                               Gdy tego pliku nie ma - powstanie nowy (niesledzony"
   Write-Host "                               przez gita). Gdy Twoj AGENTS.md jest sledzony w repo -"
@@ -248,10 +250,11 @@ Write-Host "   miedzy znacznikami <!-- MegaRuchacz:start --> i <!-- MegaRuchacz:
 Write-Host "   Twoje wlasne zapiski zostaja nietkniete, przed zmiana powstaje kopia zapasowa,"
 Write-Host "   a caly blok da sie usunac: narzedzia\wpisz-zasady.ps1 -Usun"
 Write-Host ""
-Write-Host "3) Zadanie w Harmonogramie zadan Windows (MegaRuchaczOdswiez):"
-Write-Host "   co godzine pobiera nowsza wersje narzedzia z gita i pilnuje plikow zasad."
-Write-Host "   Na maszynie bez Claude Code to jedyna droga aktualizacji - hooka, ktory"
-Write-Host "   robi to przy starcie sesji, ma wylacznie Claude Code."
+Write-Host "3) Aktualizacja narzedzia - przy starcie sesji, nie w tle co godzine:"
+Write-Host "   nowsza wersje z gita pobiera straznik zasad, wolany hookiem SessionStart"
+Write-Host "   (Claude Code z .claude\settings.json, Codex z .codex\hooks.json)."
+Write-Host "   Stare zadanie z Harmonogramu (MegaRuchaczOdswiez) instalator ZDEJMUJE -"
+Write-Host "   robilo to samo, tylko co godzine i bez potrzeby."
 Write-Host ""
 Write-Host "4) Moduly - kazdy instaluje sie i aktualizuje osobno:" -ForegroundColor Yellow
 foreach ($m in $Moduly) {
@@ -268,8 +271,10 @@ if (-not $Claude -and -not $JestCodex) {
   Write-Host "   Tryb workerow (rozdawanie zadan, hooki, izolowane kopie repozytorium) stoi na" -ForegroundColor Yellow
   Write-Host "   mechanizmach tych dwoch narzedzi. Tutaj NIE zadziala i instalator nie bedzie" -ForegroundColor Yellow
   Write-Host "   udawal, ze jest inaczej." -ForegroundColor Yellow
-  Write-Host "   Dziala za to: zasady globalne (Codex czyta ~\.codex\AGENTS.md sam, bez hooka)," -ForegroundColor Yellow
-  Write-Host "   odswiezanie narzedzia z Harmonogramu i modul pamieci [pamiec]." -ForegroundColor Yellow
+  Write-Host "   Dziala za to: zasady globalne (Codex czyta ~\.codex\AGENTS.md sam, bez hooka)" -ForegroundColor Yellow
+  Write-Host "   i modul pamieci [pamiec]. Nowsza wersje narzedzia pobiera hook startowy," -ForegroundColor Yellow
+  Write-Host "   wiec bez zadnego z tych dwoch narzedzi trzeba ja podciagac samemu:" -ForegroundColor Yellow
+  Write-Host "   powershell -File $Straznik" -ForegroundColor Yellow
   Write-Host "   Pliki trybu workerow zapisze mimo to - zaczna dzialac, gdy narzedzie sie pojawi." -ForegroundColor Yellow
   Write-Host ""
 } elseif (-not $Claude) {
@@ -649,10 +654,10 @@ foreach ($m in $Moduly) {
   if (-not $wyniki[$m.nazwa].ok) { Write-Host "BLAD  modul [$($m.nazwa)]: $($wyniki[$m.nazwa].czemu)" -ForegroundColor Red }
 }
 
-# Zadanie odswiezajace narzedzie ma stac niezaleznie od modulu pamieci - to
-# jedyna droga aktualizacji tam, gdzie nie ma Claude Code, a [pamiec] wolno
-# odrzucic. Gdy modul wszedl, zadanie zalozyl juz jego instalator; gdy nie -
-# zakladamy je osobno, tym samym instalatorem w trybie -TylkoOdswiezanie.
+# Stare zadanie MegaRuchaczOdswiez z Harmonogramu trzeba ZDJAC - dzis nowsza
+# wersje pobiera straznik wolany hookiem przy starcie sesji, wiec bieganie co
+# godzine w tle jest juz tylko kosztem. Gdy wszedl modul pamieci, sprzatnal je
+# jego instalator; gdy nie - robimy to osobno, w trybie -TylkoOdswiezanie.
 $zadanieJuzJest = $false
 foreach ($m in $Moduly) {
   if ($wybrane[$m.nazwa] -and $m.instalator -like "*instaluj-lore.ps1" -and $wyniki[$m.nazwa].ok) {
@@ -664,7 +669,7 @@ if (-not $zadanieJuzJest) {
   $wynikOdswiezania = Uruchom-Podskrypt (Join-Path $Zrodlo "narzedzia\instaluj-lore.ps1") `
     @{ Zrodlo = $Zrodlo; TylkoOdswiezanie = $true } "instaluj-lore.ps1 -TylkoOdswiezanie"
   if (-not $wynikOdswiezania.ok) {
-    Write-Host "BLAD  zadanie odswiezajace narzedzie: $($wynikOdswiezania.czemu)" -ForegroundColor Red
+    Write-Host "BLAD  sprzatanie starego zadania z Harmonogramu: $($wynikOdswiezania.czemu)" -ForegroundColor Red
   }
 }
 
@@ -891,7 +896,7 @@ if ($JestCodex) {
     try {
       $rawH | ConvertFrom-Json | Out-Null
       $brakH = @()
-      foreach ($zn in @("zasady-sesja.json","przypomnienie.json","mr-log-codex.js")) {
+      foreach ($zn in @("zasady-sesja.json","przypomnienie.json","mr-log-codex.js","straznik-zasad.ps1")) {
         if ($rawH -notlike "*$zn*") { $brakH += $zn }
       }
       if ($brakH.Count -eq 0) { $hookiCodexOk = $true } else { $czemuH = "brak hookow: " + ($brakH -join ", ") }
@@ -907,7 +912,7 @@ if ($JestCodex) {
 
   if ($hookiCodexOk) {
     $brakSciezek = @()
-    $wSrodku = @([regex]::Matches($rawH, '[A-Za-z]:/[^"'']+?\.(?:json|js)') | ForEach-Object { $_.Value } | Sort-Object -Unique)
+    $wSrodku = @([regex]::Matches($rawH, '[A-Za-z]:/[^"'']+?\.(?:json|js|ps1)') | ForEach-Object { $_.Value } | Sort-Object -Unique)
     foreach ($s in $wSrodku) { if (-not (Test-Path $s)) { $brakSciezek += $s } }
     Sprawdz ".codex\hooks.json - sciezki w poleceniach wskazuja na istniejace pliki" `
       ($brakSciezek.Count -eq 0) ("nie ma: " + ($brakSciezek -join ", "))
@@ -963,18 +968,18 @@ if ($JestCodex) {
 
   Nie-Sprawdzono "hooki Codeksa sa ZAPISANE, ale nie wystartuja, dopoki nie zatwierdzisz ich poleceniem /hooks w CLI - bez czlowieka nie da sie tego ani zrobic, ani sprawdzic; zatwierdza sie raz, bo skrot liczy sie z definicji hooka (zdarzenie, matcher, polecenie, timeout, async), a nie z tresci skryptu"
   Nie-Sprawdzono "role z .codex\agents\ i zasady z AGENTS.md potwierdza tylko zapis na dysku - to, ze Codex je wczyta, widac dopiero w nowej sesji"
-  Nie-Sprawdzono "straznik zasad nie odswieza czesci codeksowej - nowsza wersje tych plikow nanosi ponowne uruchomienie wdroz.ps1"
+  Nie-Sprawdzono "poprawki do czesci codeksowej nanosi potem straznik zasad (hook SessionStart), ale samo .codex\hooks.json rusza tylko wtedy, gdy brakuje w nim naszego hooka - i mowi o tym, bo nowy hook trzeba zatwierdzic przez /hooks"
 } else {
   Write-Host "  --    czesc dla Codeksa - pominieta, nie widze go na tej maszynie (wymusic mozna: -WymusCodex)"
 }
 
 Sprawdz "wpisanie zasad globalnych" $wynikZasad.ok $wynikZasad.czemu
 
-# Zadanie odswiezajace zakladalismy tylko wtedy, gdy nie zrobil tego instalator
-# modulu pamieci - inaczej sprawdzil je juz on sam.
+# Stare zadanie zdejmowalismy tylko wtedy, gdy nie zrobil tego instalator
+# modulu pamieci - inaczej sprzatnal je juz on sam.
 if ($null -ne $wynikOdswiezania) {
-  Sprawdz "zadanie odswiezajace narzedzie (MegaRuchaczOdswiez)" $wynikOdswiezania.ok $wynikOdswiezania.czemu
-  Nie-Sprawdzono "zadanie odswiezajace jest w harmonogramie; czy naprawde cos podciagnie, widac dopiero w ~\.claude\.megaruchacz-tlo.log po pierwszym przebiegu"
+  Sprawdz "stare zadanie z Harmonogramu (MegaRuchaczOdswiez) zdjete" $wynikOdswiezania.ok $wynikOdswiezania.czemu
+  Nie-Sprawdzono "czy hook startowy naprawde cos podciagnie, widac dopiero po otwarciu nowej sesji - slad zostaje w ~\.claude\.megaruchacz-tlo.log"
 }
 
 $blokOk = $false
@@ -1014,8 +1019,8 @@ if ($script:Bledy.Count -eq 0) {
   } else {
     Write-Host "Zamknij i otworz swoje narzedzie AI na nowo, zeby zasady weszly w zycie."
     Write-Host "Na tej maszynie NIE dziala tryb workerow - wymaga Claude Code albo Codeksa." -ForegroundColor Yellow
-    Write-Host "Dziala: zasady globalne i odswiezanie narzedzia zadaniem MegaRuchaczOdswiez" -ForegroundColor Yellow
-    Write-Host "z Harmonogramu." -ForegroundColor Yellow
+    Write-Host "Dzialaja zasady globalne. Nowsza wersje narzedzia podciaga hook startowy," -ForegroundColor Yellow
+    Write-Host "a tu go nie ma - rob to sam: powershell -File $Straznik" -ForegroundColor Yellow
   }
   if ($JestCodex) {
     Write-Host ""
