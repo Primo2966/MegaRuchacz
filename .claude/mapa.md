@@ -54,7 +54,7 @@ Dokumentacja zrodlowa: repo `openai/codex/docs/*.md` to same odsylacze; tresc je
 - Trwale zaufanie ma tez postac NIEUDOKUMENTOWANEGO klucza w `config.toml`:
   `[hooks.state.'<sciezka-hooks.json>:<zdarzenie_snake>:<idx>:<idx>']` z polami `enabled = true`
   i `trusted_hash = "sha256:..."`. Nie ma tego w oficjalnym `config-reference`. Algorytm liczenia
-  hasha NIEUDOKUMENTOWANY. Zywy przyklad zapisany programowo przez Orke:
+  hasha USTALONY - patrz sekcja "Odcisk palca zaufania hookow". Zywy przyklad zapisany przez Orke:
   `C:\Users\Primo\AppData\Roaming\orca\codex-runtime-home\home\config.toml`.
 - Wylaczenie calosci: `[features] hooks = false` w `config.toml`.
 - INSTRUKCJE STALE (odpowiednik CLAUDE.md) to `AGENTS.md`. Kolejnosc: (1) globalny katalog domowy
@@ -151,5 +151,35 @@ Dokumentacja zrodlowa: repo `openai/codex/docs/*.md` to same odsylacze; tresc je
 
 - Czy `codex exec --worktree` istnieje i czy dotyczy subagentow - NIEPOTWIERDZONE (brak w docs,
   polecenia `codex` nie ma na tej maszynie, wiec nie da sie sprawdzic `--help`).
-- Algorytm liczenia `trusted_hash` - NIEUDOKUMENTOWANY (juz odnotowane wyzej).
 - Czy subagent moze dostac inny `cwd` niz rodzic - NIEPOTWIERDZONE.
+
+## Odcisk palca zaufania hookow Codeksa (`trusted_hash`) - ROZSTRZYGNIETE 2026-09-17
+
+**Hash liczony jest WYLACZNIE z definicji hooka. Tresc skryptu wskazanego przez `command`
+NIE wchodzi do hasha - edycja skryptu NIE kasuje zaufania.** Zatwierdza sie raz.
+
+- Kod zrodlowy: `openai/codex` -> `codex-rs/hooks/src/engine/discovery.rs`, funkcja `hook_hash`
+  (ok. l.775) + struktura `NormalizedHookIdentity` (l.768). Komentarz nad nia wprost:
+  "Hash a normalized, config-derived identity instead of source text".
+- Sam skrot: `codex-rs/config/src/fingerprint.rs`, `version_for_toml` (l.53) - sha256 z
+  kanonicznego (klucze posortowane, bez spacji) JSON-a, prefiks `sha256:`.
+- Do hasha wchodzi dokladnie: `event_name` (snake_case, np. `session_start`), `matcher`
+  (pominiety gdy pusty) oraz JEDEN znormalizowany handler: `type`, `command`, `timeout`,
+  `async`, opcjonalnie `commandWindows` / `statusMessage` / `additionalContextLimit`.
+  NIE wchodzi: sciezka pliku `hooks.json`, tresc skryptu, indeksy z klucza `[hooks.state]`.
+- Postac hashowanego JSON-a (zweryfikowana):
+  `{"event_name":"session_start","hooks":[{"async":false,"command":"<cmd>","timeout":10,"type":"command"}]}`
+- DOWOD EMPIRYCZNY: odtworzono co do znaku 3 z 8 wartosci `trusted_hash` zapisanych przez Orke w
+  `...\orca\codex-runtime-home\home\config.toml` (session_start, user_prompt_submit, stop).
+  Poboczne potwierdzenie: te 8 hookow ma IDENTYCZNA definicje i ten sam skrypt, a rozne hashe -
+  rozni je wylacznie `event_name`.
+- Definicje: `codex-rs/config/src/hook_config.rs` - `MatcherGroup` (l.154), `HookHandlerConfig`
+  (l.163, enum tagowany polem `type`; warianty `command`, `mcp_tool`, `prompt`, `agent`).
+- Trwalosc przy aktualizacji Codeksa: `trusted_hash` siedzi w `config.toml` uzytkownika, wiec
+  aktualizacja binarki go nie kasuje. Ryzyko jest jedno: zmiana NORMALIZACJI w nowej wersji
+  (inna domyslna wartosc `timeout`, dopisanie nowego pola do handlera). Dlatego w naszym hooku
+  zawsze podawaj `timeout` JAWNIE - hook bez `timeout` dostaje wartosc domyslna dopiero przy
+  normalizacji i jest bardziej podatny na rozjazd hasha.
+- Wniosek wdrozeniowy: samoaktualizacje wolno wpiac w `SessionStart` Codeksa - uzytkownik
+  zatwierdza `/hooks` RAZ, a my mozemy potem dowolnie poprawiac tresc skryptu. Ponownego
+  zatwierdzenia wymaga tylko zmiana samej linii `command` / `timeout` / `matcher`.

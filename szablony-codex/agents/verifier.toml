@@ -1,4 +1,4 @@
-# Worker weryfikujacy - odpowiednik .claude/agents/verifier.md z Claude Code.
+# Worker weryfikujacy - odpowiednik .claude/agents/verifier.md z Claude Code. kierownik-template
 name = "verifier"
 description = "Worker weryfikujacy - sprawdza cudza zmiane: czy dziala, czy nie psuje reszty, czy zgadza sie ze zleceniem. Uzywaj po rundzie implementerow, zanim zamkniesz zadanie."
 sandbox_mode = "read-only"

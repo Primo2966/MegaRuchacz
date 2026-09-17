@@ -1,4 +1,4 @@
-# Zastepca kierownika - odpowiednik .claude/agents/zastepca.md z Claude Code.
+# Zastepca kierownika - odpowiednik .claude/agents/zastepca.md z Claude Code. kierownik-template
 name = "zastepca"
 description = "Zastepca MegaRuchacza - sprawdza spojnosc CALOSCI po serii rownoleglych zmian, nie pojedynczej zmiany. Szuka sprzecznosci miedzy zadaniami, duplikatow, rozjezdzajacego sie nazewnictwa i osieroconych rzeczy. Uruchamiaj w punktach scalenia, nie po kazdym zadaniu."
 sandbox_mode = "read-only"
