@@ -59,6 +59,107 @@ function Polecenie-Hooka($ustawienia, $zdarzenie, $znacznik) {
   return $null
 }
 
+# --- sufity ladunkow hookow --------------------------------------------------
+# Hook wstrzykuje modelowi tresc z pola hookSpecificOutput.additionalContext.
+# Gdy jest dluzsza niz additionalContextLimit, narzedzie ucina KONIEC i nie mowi
+# o tym ani slowa - przez tydzien szly tak do Codeksa kadlubki zasad, a instalator
+# meldowal sukces. Od teraz kazde miejsce, w ktorym cos moze zostac uciete, albo
+# temu zapobiega, albo krzyczy.
+#
+# Mierzymy dokladnie to, czego dotyczy sufit: ZNAKI samej tresci additionalContext,
+# bez otoczki JSON-a - tak samo liczy narzedzia\koszt-pamieci.ps1 (Ladunek-Hooka),
+# zeby obie liczby zawsze mowily to samo.
+
+# Ostrzezenie z poprzedniego przebiegu - rozpoznajemy je, zeby nie wliczac go do
+# pomiaru i nie zostawiac w pliku, ktory juz sie miesci.
+$OstrzezenieUciecia = '^UWAGA: ten tekst ma \d+ znakow, a zmiesci sie \d+[^\r\n]*\r?\n'
+
+function Ostrzezenie-O-Ucieciu($znakow, $limit) {
+  # Ucinany jest KONIEC, wiec jedyne miejsce, ktore na pewno dojdzie do modelu,
+  # to pierwsza linia. Alarm ma stac tam i nigdzie indziej.
+  return "UWAGA: ten tekst ma $znakow znakow, a zmiesci sie $limit - koniec zostal uciety. " +
+         "Powiedz o tym uzytkownikowi i nie zakladaj, ze znasz cale zasady.`n"
+}
+
+# additionalContextLimit hooka rozpoznanego po pliku, ktory ten hook wczytuje.
+# Czytamy z konfiguracji, ktora NAPRAWDE lezy w projekcie - cudzy hooks.json moze
+# miec nasza grupe z innym limitem i to on rzadzi, nie szablon ani kopia w pamieci.
+function Limit-Ladunku($plikKonfiguracji, $fragmentPolecenia) {
+  if (-not $plikKonfiguracji -or -not (Test-Path $plikKonfiguracji)) { return $null }
+  try { $j = (Get-Content $plikKonfiguracji -Raw).TrimStart([char]0xFEFF) | ConvertFrom-Json } catch { return $null }
+  if (-not $j.hooks) { return $null }
+  foreach ($zdarzenie in $j.hooks.PSObject.Properties) {
+    foreach ($grupa in @($zdarzenie.Value)) {
+      foreach ($h in @($grupa.hooks)) {
+        if (-not $h) { continue }
+        if ($h.PSObject.Properties.Name -notcontains "additionalContextLimit") { continue }
+        $polecenie = "" + $h.command + " " + $h.commandWindows
+        if ($polecenie -like "*$fragmentPolecenia*") { return [int]$h.additionalContextLimit }
+      }
+    }
+  }
+  return $null
+}
+
+# Porownuje ladunek z sufitem jego hooka. Przy $naprawiaj = $true dopisuje
+# ostrzezenie na POCZATEK wstrzykiwanej tresci (i zdejmuje je, gdy ladunek znow
+# sie miesci). Samo sprawdzenie niczego nie zapisuje.
+function Pilnuj-Sufitu($plikLadunku, $plikKonfiguracji, $fragmentPolecenia, $skadLimitu, $opis, $naprawiaj) {
+  $w = [pscustomobject]@{ Opis = $opis; Plik = $plikLadunku; Znaki = $null; Limit = $null;
+                          SkadLimitu = $skadLimitu; Przekroczony = $false; Zmierzony = $false; Czemu = "" }
+  if (-not (Test-Path $plikLadunku)) { $w.Czemu = "nie ma pliku $plikLadunku"; return $w }
+  $surowy = $null
+  try { $surowy = (Get-Content $plikLadunku -Raw).TrimStart([char]0xFEFF) } catch { }
+  if (-not $surowy) { $w.Czemu = "nie da sie odczytac $plikLadunku"; return $w }
+  $j = $null
+  try { $j = $surowy | ConvertFrom-Json } catch { $w.Czemu = "$plikLadunku nie jest poprawnym JSON-em"; return $w }
+  if (-not $j.hookSpecificOutput -or -not $j.hookSpecificOutput.additionalContext) {
+    $w.Czemu = "w $plikLadunku nie ma hookSpecificOutput.additionalContext"
+    return $w
+  }
+  $tresc  = [string]$j.hookSpecificOutput.additionalContext
+  $czysta = [regex]::Replace($tresc, $OstrzezenieUciecia, "")
+  $w.Znaki = $czysta.Length
+  $w.Limit = Limit-Ladunku $plikKonfiguracji $fragmentPolecenia
+  if ($null -eq $w.Limit -or $w.Limit -le 0) {
+    $w.Czemu = "w $skadLimitu nie ma additionalContextLimit przy hooku od $fragmentPolecenia - nie wiem, gdzie stoi sufit"
+    return $w
+  }
+  $w.Zmierzony    = $true
+  $w.Przekroczony = ($w.Znaki -gt $w.Limit)
+  $docelowa = $czysta
+  if ($w.Przekroczony) { $docelowa = (Ostrzezenie-O-Ucieciu $w.Znaki $w.Limit) + $czysta }
+  if ($naprawiaj -and $docelowa -ne $tresc) {
+    $j.hookSpecificOutput.additionalContext = $docelowa
+    [System.IO.File]::WriteAllText($plikLadunku, ($j | ConvertTo-Json -Depth 5 -Compress),
+                                   (New-Object System.Text.UTF8Encoding($false)))
+  }
+  return $w
+}
+
+# Konfiguracji, ktora tnie, nie wolno wdrozyc i zameldowac sukcesu. Ladunek
+# zostaje na dysku z ostrzezeniem w pierwszej linii - sesja otwarta przed
+# poprawka ma sie dowiedziec, ze dostala kadlubek - ale wdrozenie konczy sie
+# bledem, a nie zielonym "Gotowe".
+function Przerwij-Przez-Ucinanie($ucinane) {
+  Write-Host ""
+  Write-Host "BLAD  WDROZENIE PRZERWANE - ladunek hooka nie miesci sie w swoim suficie" -ForegroundColor Red
+  foreach ($u in $ucinane) {
+    $strata = [int]$u.Znaki - [int]$u.Limit
+    Write-Host "      $($u.Opis)" -ForegroundColor Red
+    Write-Host "        plik:  $($u.Plik)" -ForegroundColor Red
+    Write-Host "        ma $($u.Znaki) znakow, miesci sie $($u.Limit) - koniec (${strata} znakow) przepadlby w ciszy" -ForegroundColor Red
+    Write-Host "        sufit: $($u.SkadLimitu)" -ForegroundColor Red
+  }
+  Write-Host "      Zrob jedno z dwoch i uruchom wdrozenie ponownie:" -ForegroundColor Red
+  Write-Host "        1) podnies additionalContextLimit tego hooka w pliku podanym wyzej," -ForegroundColor Red
+  Write-Host "           a w szablonie takze w szablony-codex\hooks.json - inaczej wroci;" -ForegroundColor Red
+  Write-Host "        2) albo skroc tresc ladunku tak, zeby zmiescila sie w suficie." -ForegroundColor Red
+  Write-Host "      Ladunek lezy na dysku z ostrzezeniem w pierwszej linii, zeby model nie" -ForegroundColor Red
+  Write-Host "      dostal kadluba w ciszy. Wdrozenia NIE melduje jako udanego." -ForegroundColor Red
+  exit 1
+}
+
 # Sciezka do bash.exe. Claude Code odnajduje basha SAM, niezaleznie od PATH,
 # wiec szukanie wylacznie w PATH dawalo falszywy alarm tam, gdzie Git siedzi poza
 # PATH-em, a hooki dzialaly bez zarzutu. Kolejnosc jak w Znajdz-Uv
@@ -463,6 +564,43 @@ $celMega     = Join-Path $Projekt ".megaruchacz"
 $celHookow   = Join-Path $celCodex "hooks.json"
 $celAgentsMd = Join-Path $Projekt "AGENTS.md"
 
+# Komplet par (ladunek, sufit) - jedno miejsce dla trzech uzyc: gwarancji przy
+# zapisie po stronie Claude Code, tej samej gwarancji po stronie Codeksa
+# i samosprawdzenia na koncu wdrozenia. Sufit czytamy z pliku KONFIGURACJI, ktory
+# lezy w projekcie, bo to on rzadzi w tej sesji.
+$ParyLadunkow = @(
+  @{ czyj = "Claude Code"
+     plik = (Join-Path $Projekt ".claude\megaruchacz-sesja.json")
+     konf = $celSettings; frag = "megaruchacz-sesja.json"; skad = ".claude\settings.json"
+     opis = "zasady kierownika wstrzykiwane na starcie sesji Claude Code" },
+  @{ czyj = "Claude Code"
+     plik = (Join-Path $Projekt ".claude\orchestrator-reminder.json")
+     konf = $celSettings; frag = "orchestrator-reminder.json"; skad = ".claude\settings.json"
+     opis = "przypomnienie doklejane w Claude Code do kazdej wiadomosci" },
+  @{ czyj = "Codex"
+     plik = (Join-Path $celMega "zasady-sesja.json")
+     konf = $celHookow; frag = "zasady-sesja.json"; skad = ".codex\hooks.json"
+     opis = "zasady kierownika wstrzykiwane Codeksowi na starcie sesji" },
+  @{ czyj = "Codex"
+     plik = (Join-Path $celMega "przypomnienie.json")
+     konf = $celHookow; frag = "przypomnienie.json"; skad = ".codex\hooks.json"
+     opis = "przypomnienie doklejane w Codeksie do kazdej wiadomosci" }
+)
+
+# Sprawdza podzbior par i przerywa wdrozenie, gdy ktorykolwiek ladunek wystaje
+# ponad sufit. Kolejnosc jest tu istotna: wolamy to dopiero wtedy, gdy PLIK
+# KONFIGURACJI juz lezy w projekcie - limit z szablonu moglby klamac.
+function Pilnuj-Ladunkow($pary) {
+  $ucinane = @()
+  foreach ($para in $pary) {
+    $w = Pilnuj-Sufitu $para.plik $para.konf $para.frag $para.skad $para.opis $true
+    if ($w.Przekroczony) { $ucinane += $w }
+  }
+  if ($ucinane.Count -gt 0) { Przerwij-Przez-Ucinanie $ucinane }
+}
+
+Pilnuj-Ladunkow @($ParyLadunkow | Where-Object { $_.czyj -eq "Claude Code" })
+
 $budujSesjeCodex = @'
 const fs = require("fs"), dir = process.argv[2], krotkie = process.argv[3] === "krotkie";
 const zasady = fs.readFileSync(dir + "/.megaruchacz/zasady-kierownika.md", "utf8");
@@ -633,6 +771,12 @@ if ($JestCodex) {
     Write-Host "--  ladunki hookow Codeksa i .codex\hooks.json pominiete - nie ma node w PATH"
   }
 
+  # Gwarancja: stad nie wyjdzie ladunek dluzszy niz sufit jego hooka. Sprawdzamy
+  # DOPIERO TERAZ, bo limit ma pochodzic z .codex\hooks.json lezacego w projekcie,
+  # a nie z szablonu - gdy uzytkownik mial juz nasza grupe z innym limitem, rzadzi
+  # jego plik.
+  Pilnuj-Ladunkow @($ParyLadunkow | Where-Object { $_.czyj -eq "Codex" })
+
   Write-Host "UWAGA  hooki Codeksa rusza dopiero po zatwierdzeniu poleceniem /hooks w CLI." -ForegroundColor Yellow
   Write-Host "       Zatwierdzasz raz - skrot liczy sie z definicji hooka, nie z tresci skryptu." -ForegroundColor Yellow
 }
@@ -772,6 +916,29 @@ if (-not $Claude) {
   }
   if ($settingsOk -and -not $hookiOk) { $settingsOk = $false; $czemuSettings = "hookow nie udalo sie dopisac (kod $kod)" }
   Sprawdz ".claude\settings.json - wpisy hookow sa w poprawnym JSON-ie" $settingsOk $czemuSettings
+}
+
+# --- sufity ladunkow: to samo sprawdzenie, co przy zapisie ---
+# Powtarzamy je na plikach, ktore NAPRAWDE leza w projekcie - miedzy zapisem
+# a tym momentem ladunek mogl przepisac ktorys z podskryptow. Tu juz niczego nie
+# poprawiamy: to ma tylko powiedziec prawde o stanie koncowym.
+$bezSufitu = @()
+foreach ($paraL in $ParyLadunkow) {
+  if ($paraL.czyj -eq "Codex" -and -not $JestCodex) { continue }
+  if (-not (Test-Path $paraL.plik)) { continue }   # brak pliku melduja sprawdzenia wyzej
+  $wL = Pilnuj-Sufitu $paraL.plik $paraL.konf $paraL.frag $paraL.skad $paraL.opis $false
+  if ($wL.Zmierzony) {
+    Sprawdz "$($paraL.opis) miesci sie w suficie hooka ($($wL.Znaki) z $($wL.Limit) znakow)" `
+      (-not $wL.Przekroczony) `
+      "koniec zostanie uciety po cichu - podnies additionalContextLimit w $($paraL.skad) albo skroc tresc"
+  } else {
+    Write-Host "  --    sufit dla ladunku: $($paraL.opis) - nie sprawdzony ($($wL.Czemu))"
+    $bezSufitu += "$($paraL.opis) ($($wL.Znaki) znakow)"
+  }
+}
+if ($bezSufitu.Count -gt 0) {
+  Nie-Sprawdzono ("nie wiem, gdzie stoi sufit dla tych ladunkow: " + ($bezSufitu -join "; ") +
+                  " - w ich konfiguracji nie ma additionalContextLimit, wiec obowiazuje wartosc domyslna narzedzia i nikt nie powie, gdy tekst zostanie przyciety")
 }
 
 # --- czy te hooki w ogole da sie URUCHOMIC na tej maszynie ---
