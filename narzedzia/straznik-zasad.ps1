@@ -16,9 +16,11 @@
 #   powershell -NoProfile -File narzedzia\straznik-zasad.ps1 -Moduly
 #       wypisuje rejestr modulow w JSON-ie; z tego korzysta wdroz.ps1
 #   powershell -NoProfile -File narzedzia\straznik-zasad.ps1 -Tlo
-#       tryb bezobslugowy dla Harmonogramu zadan: tylko pobranie nowszej wersji
-#       narzedzia i pilnowanie plikow zasad. Nic nie wypisuje na ekran - slad
-#       zostaje w dzienniku, bo w tle nie ma kto czytac komunikatow.
+#       tryb bezobslugowy - z niego korzysta hook SessionStart Codeksa, bo Codex
+#       nie wciaga wyjscia tego hooka do kontekstu modelu. Robi to samo co
+#       przebieg zwykly (pobranie nowszej wersji narzedzia, pilnowanie plikow
+#       zasad, nanoszenie poprawek na wdrozenie), tylko nic nie wypisuje na
+#       ekran - slad zostaje w dzienniku, bo w tle nie ma kto czytac komunikatow.
 #   -KatalogDomowy  podstawiony katalog domowy - do testow
 
 param(
@@ -295,6 +297,140 @@ function Napraw-Hooki($cel, $zrodlo, $stempel) {
   return $true
 }
 
+# Blok zasad w AGENTS.md - Codex czyta ten plik sam, bez zadnego hooka, wiec
+# nieodswiezony blok znaczy po prostu stare zasady. Ruszamy WYLACZNIE to, co
+# stoi miedzy znacznikami; gdy znacznikow nie ma, nie dopisujemy nic - tak samo
+# ostroznie jak wdroz.ps1, bo to w polowie cudzy plik.
+# Zwraca $true, gdy zasady w AGENTS.md sa - od tego zalezy, czy ladunek hooka
+# ma niesc pelna tresc, czy samo przypomnienie.
+function Odswiez-Agents($projekt, $plikZasad, $stempel) {
+  $plik = Join-Path $projekt "AGENTS.md"
+  $stare = Czytaj-Tekst $plik
+  if (-not $stare) { return $false }
+  $i = $stare.IndexOf($POCZATEK, [System.StringComparison]::Ordinal)
+  $j = $stare.IndexOf($KONIEC, [System.StringComparison]::Ordinal)
+  if ($i -lt 0 -or $j -le $i) { return $false }
+  $tresc = Czytaj-Tekst $plikZasad
+  if (-not $tresc) { return $false }
+  $nowe = $stare.Substring(0, $i) + $POCZATEK + "`r`n" + $tresc.Trim() + "`r`n" + $KONIEC +
+          $stare.Substring($j + $KONIEC.Length)
+  if ($nowe -eq $stare) { return $true }
+  Kopia-Zapasowa $plik $stempel
+  Zapisz-Tekst $plik $nowe
+  return $true
+}
+
+# Ladunek hooka startowego Codeksa - odpowiednik Zbuduj-Sesje, tylko w
+# .megaruchacz\. Pelne zasady leca tylko wtedy, gdy NIE MA ich w AGENTS.md;
+# inaczej samo przypomnienie, bo additionalContext ma wlasny limit i drugi raz
+# tego samego nie wysylamy. Obie tresci musza brzmiec tak samo jak w wdroz.ps1
+# (czesc "4b. Codex CLI") - to jeden komunikat, tylko skladany w dwoch miejscach.
+function Zbuduj-Sesje-Codex($celMega, $krotkie) {
+  $plikZasad = Join-Path $celMega "zasady-kierownika.md"
+  if (-not (Test-Path $plikZasad)) { return }
+  if ($krotkie) {
+    $tresc = "Tryb MegaRuchacz jest wlaczony w tym projekcie: jestes kierownikiem, ktory rozdaje robote podagentom. Pelne zasady masz w AGENTS.md w korzeniu projektu (kopia: .megaruchacz/zasady-kierownika.md) - stosuj je przez cala sesje. Stan pracy: .megaruchacz/worklog.md (rejestr) i .megaruchacz/mapa.md (co gdzie lezy)."
+  } else {
+    $tresc = "Zasady pracy w tym projekcie (tryb MegaRuchacz). Stosuj je przez cala sesje:`n`n" + (Czytaj-Tekst $plikZasad)
+  }
+  $ladunek = [ordered]@{
+    hookSpecificOutput = [ordered]@{
+      hookEventName = "SessionStart"
+      additionalContext = $tresc
+    }
+  }
+  Zapisz-Tekst (Join-Path $celMega "zasady-sesja.json") ($ladunek | ConvertTo-Json -Depth 5 -Compress)
+}
+
+# .codex\hooks.json - tu chodzimy na palcach. Zmiana DEFINICJI hooka (polecenie,
+# timeout, matcher, async) uniewaznia zatwierdzenie z /hooks i zmusza uzytkownika
+# do powtarzania go, wiec grup, ktore juz tam sa, NIE RUSZAMY w ogole - dopisujemy
+# wylacznie brakujace. Swoje poznajemy po "statusMessage", tak samo jak wdroz.ps1.
+# Zwraca liste zdarzen, ktorych grupy doszly - o kazdej trzeba powiedziec wprost.
+function Napraw-Hooki-Codex($celCodex, $zrodlo, $projekt, $stempel) {
+  $surowy = Czytaj-Tekst (Join-Path $zrodlo "szablony-codex\hooks.json")
+  if (-not $surowy) { return @() }
+  $surowy = $surowy.TrimStart([char]0xFEFF).Replace("{{PROJEKT}}", $projekt.Replace("\","/")).Replace("{{ZRODLO}}", $zrodlo.Replace("\","/"))
+  try { $szablon = $surowy | ConvertFrom-Json } catch { return @() }
+  if (-not $szablon.hooks) { return @() }
+
+  $plik = Join-Path $celCodex "hooks.json"
+  $s = [pscustomobject]@{}
+  $raw = Czytaj-Tekst $plik
+  # Cudzy plik, ktory nie jest czystym JSON-em, zostaje nietkniety - tak samo
+  # jak w instalatorze. Lepiej nie dopisac hooka niz zepsuc komus ustawienia.
+  if ($raw) {
+    try { $s = $raw.TrimStart([char]0xFEFF) | ConvertFrom-Json } catch { return @() }
+  }
+  if (-not ($s.PSObject.Properties.Name -contains "hooks") -or $null -eq $s.hooks) {
+    $s | Add-Member -NotePropertyName hooks -NotePropertyValue ([pscustomobject]@{}) -Force
+  }
+
+  $dodane = @()
+  foreach ($zdarzenie in $szablon.hooks.PSObject.Properties.Name) {
+    $obecne = @()
+    if ($s.hooks.PSObject.Properties.Name -contains $zdarzenie) { $obecne = @($s.hooks.$zdarzenie) }
+    foreach ($grupa in @($szablon.hooks.$zdarzenie)) {
+      $znacznik = $grupa.hooks[0].statusMessage
+      if (-not $znacznik) { $znacznik = "MegaRuchacz" }
+      if ($obecne.Count -gt 0 -and (($obecne | ConvertTo-Json -Depth 20 -Compress) -like "*$znacznik*")) { continue }
+      $obecne += $grupa
+      $dodane += $zdarzenie
+    }
+    if ($obecne.Count -eq 0) { continue }
+    if ($s.hooks.PSObject.Properties.Name -contains $zdarzenie) { $s.hooks.$zdarzenie = @($obecne) }
+    else { $s.hooks | Add-Member -NotePropertyName $zdarzenie -NotePropertyValue @($obecne) -Force }
+  }
+  if ($dodane.Count -eq 0) { return @() }
+  Kopia-Zapasowa $plik $stempel
+  Zapisz-Tekst $plik ($s | ConvertTo-Json -Depth 20)
+  return $dodane
+}
+
+# Czesc codeksowa wdrozenia: role w .codex\agents\, zasady i ladunki hookow
+# w .megaruchacz\, blok zasad w AGENTS.md. Nanosimy ja na tych samych zasadach
+# co czesc dla Claude Code - z jednym wyjatkiem, ktory siedzi w Napraw-Hooki-Codex.
+function Nanies-Poprawki-Codex($zrodlo, $projekt, $stempel) {
+  $celCodex = Join-Path $projekt ".codex"
+  $celMega  = Join-Path $projekt ".megaruchacz"
+  # Bez .megaruchacz\ to nie jest wdrozenie dla Codeksa - nie zakladamy go sami.
+  if (-not (Test-Path $celMega)) { return }
+  $szablony = Join-Path $zrodlo "szablony-codex"
+  if (-not (Test-Path $szablony)) { return }
+
+  New-Item -ItemType Directory -Force -Path (Join-Path $celCodex "agents") | Out-Null
+  foreach ($p in @(Get-ChildItem (Join-Path $szablony "agents\*.toml") -ErrorAction SilentlyContinue)) {
+    [void](Odswiez $p.FullName (Join-Path $celCodex "agents\$($p.Name)") $stempel)
+  }
+  $zasadyZmienione = Odswiez (Join-Path $szablony "zasady-kierownika.md") (Join-Path $celMega "zasady-kierownika.md") $stempel
+  [void](Odswiez (Join-Path $szablony "przypomnienie.json") (Join-Path $celMega "przypomnienie.json") $stempel)
+
+  $wAgents = Odswiez-Agents $projekt (Join-Path $celMega "zasady-kierownika.md") $stempel
+  if ($zasadyZmienione -or -not (Test-Path (Join-Path $celMega "zasady-sesja.json"))) {
+    Zbuduj-Sesje-Codex $celMega $wAgents
+  }
+
+  # Nowy hook nie ruszy sam z siebie - zatwierdza go czlowiek. Cicha podmiana
+  # pliku znaczylaby, ze uzytkownik czeka na cos, co nigdy nie wystartuje.
+  $dodane = Napraw-Hooki-Codex $celCodex $zrodlo $projekt $stempel
+  if ($dodane.Count -gt 0) {
+    Mow ("MegaRuchacz: doszedl hook Codeksa (" + (($dodane | Select-Object -Unique) -join ", ") +
+         ") w .codex\hooks.json - zatwierdz go w Codeksie poleceniem /hooks, inaczej nie wystartuje.")
+  }
+
+  # Slad w pliku wersji wdrozenia Codeksa - ten sam format "klucz: wartosc".
+  $plikW = Join-Path $celMega "wersja.txt"
+  if (Test-Path $plikW) {
+    $w = Wersja-Narzedzia (Join-Path $zrodlo "ZMIANY.md")
+    if ($w) {
+      $stanC = Czytaj-Klucze $plikW
+      $stanC["codex.wersja"] = $w
+      $stanC["codex.data"] = (Get-Date -Format 'yyyy-MM-dd HH:mm')
+      Zapisz-Klucze $plikW $stanC
+    }
+  }
+}
+
 # Nanosi poprawki na pliki nalezace do narzedzia. NIE rusza plikow stanu
 # (worklog.md, mapa.md) - to praca uzytkownika.
 function Nanies-Poprawki($zrodlo, $projekt) {
@@ -309,6 +445,12 @@ function Nanies-Poprawki($zrodlo, $projekt) {
   [void](Odswiez (Join-Path $zrodlo ".claude\orchestrator-reminder.json") (Join-Path $cel "orchestrator-reminder.json") $stempel)
   if ($zasadyZmienione -or -not (Test-Path (Join-Path $cel "megaruchacz-sesja.json"))) { Zbuduj-Sesje $cel }
   [void](Napraw-Hooki $cel $zrodlo $stempel)
+
+  # Wdrozenie dla Codeksa idzie z tym samym modulem, wiec odswieza sie razem
+  # z reszta. Osobne try: potkniecie na czesci codeksowej nie ma prawa zabrac
+  # poprawek, ktore juz weszly po stronie Claude Code.
+  try { Nanies-Poprawki-Codex $zrodlo $projekt $stempel }
+  catch { Mow "MegaRuchacz: czesci codeksowej wdrozenia nie udalo sie odswiezyc ($($_.Exception.Message)) - zrobi to ponowne uruchomienie wdroz.ps1." }
 }
 
 # ------------------------------------------------- 0. swiezosc kopii narzedzia
@@ -556,8 +698,8 @@ function Pilnuj-Wersji {
       if ($stan["$k.zaproponowany"] -eq $wZrodla) { continue }
       $stan["$k.zaproponowany"] = $wZrodla
       $zmiana = $true
-      Write-Host "MegaRuchacz: jest modul [$($m.nazwa)] - $($m.opis). Kosztuje: $($m.koszt)."
-      Write-Host "  Wlaczyc: powershell -File $Zrodlo\wdroz.ps1   Odrzucic: powershell -File $PSCommandPath -Odrzuc $($m.nazwa)"
+      Mow "MegaRuchacz: jest modul [$($m.nazwa)] - $($m.opis). Kosztuje: $($m.koszt)."
+      Mow "  Wlaczyc: powershell -File $Zrodlo\wdroz.ps1   Odrzucic: powershell -File $PSCommandPath -Odrzuc $($m.nazwa)"
       continue
     }
 
@@ -569,7 +711,7 @@ function Pilnuj-Wersji {
       if ($stan["$k.zapowiedziane"] -eq $wZrodla) { continue }
       $stan["$k.zapowiedziane"] = $wZrodla
       $zmiana = $true
-      Write-Host "MegaRuchacz: modul [$($m.nazwa)] w wersji $wZrodla lamie zgodnosc z wdrozona $wdrozona - nic nie nanioslem sam, wdroz recznie: powershell -File $Zrodlo\wdroz.ps1 (opis: $plikZmian)"
+      Mow "MegaRuchacz: modul [$($m.nazwa)] w wersji $wZrodla lamie zgodnosc z wdrozona $wdrozona - nic nie nanioslem sam, wdroz recznie: powershell -File $Zrodlo\wdroz.ps1 (opis: $plikZmian)"
       continue
     }
 
@@ -579,26 +721,32 @@ function Pilnuj-Wersji {
       if ($stan["$k.zapowiedziane"] -eq $wZrodla) { continue }
       $stan["$k.zapowiedziane"] = $wZrodla
       $zmiana = $true
-      Write-Host "MegaRuchacz: modul [$($m.nazwa)] ma nowsza wersje $wZrodla (wdrozona $wdrozona) - zastosuj: powershell -File $Zrodlo\$($m.instalator) -Zrodlo $Zrodlo"
+      Mow "MegaRuchacz: modul [$($m.nazwa)] ma nowsza wersje $wZrodla (wdrozona $wdrozona) - zastosuj: powershell -File $Zrodlo\$($m.instalator) -Zrodlo $Zrodlo"
       continue
     }
 
     Nanies-Poprawki $Zrodlo $Projekt
     $stan["$k.wersja"] = $wZrodla
     $stan["$k.data"] = (Get-Date -Format 'yyyy-MM-dd HH:mm')
+    # Czesc codeksowa jedzie razem z modulem, wiec jej stan tez sie przesuwa -
+    # ale tylko tam, gdzie w ogole jest (klucz zaklada wdroz.ps1).
+    if ($stan["codex.wersja"]) {
+      $stan["codex.wersja"] = $wZrodla
+      $stan["codex.data"] = $stan["$k.data"]
+    }
     $zmiana = $true
-    Write-Host "MegaRuchacz: modul [$($m.nazwa)] zaktualizowany $stara -> $wZrodla (co doszlo: $plikZmian)"
+    Mow "MegaRuchacz: modul [$($m.nazwa)] zaktualizowany $stara -> $wZrodla (co doszlo: $plikZmian)"
 
     # Druga cyfra = nowa funkcja. Poprawki weszly, ale funkcji nie wlaczamy sami -
     # potrafi kosztowac miejsce, pobieranie albo dostep do danych.
     if ($nowa.Minor -gt $stara.Minor -and $stan["$k.odrzucone"] -ne $wZrodla) {
       if ($stan["$k.zaproponowane"] -eq $wZrodla) {
-        Write-Host "  Nowa funkcja z $wZrodla nadal niewlaczona - wlacz: powershell -File $Zrodlo\wdroz.ps1 ; odrzuc: powershell -File $PSCommandPath -Odrzuc $($m.nazwa)"
+        Mow "  Nowa funkcja z $wZrodla nadal niewlaczona - wlacz: powershell -File $Zrodlo\wdroz.ps1 ; odrzuc: powershell -File $PSCommandPath -Odrzuc $($m.nazwa)"
       } else {
         $stan["$k.zaproponowane"] = $wZrodla
-        Write-Host "  Wersja $wZrodla przynosi nowa funkcje, ktorej NIE wlaczylem sam (za $plikZmian):"
-        foreach ($l in (Wpis-Zmian $plikZmian $wZrodla | Select-Object -First 4)) { Write-Host "    $l" }
-        Write-Host "  Wlaczyc: powershell -File $Zrodlo\wdroz.ps1   Odrzucic: powershell -File $PSCommandPath -Odrzuc $($m.nazwa)"
+        Mow "  Wersja $wZrodla przynosi nowa funkcje, ktorej NIE wlaczylem sam (za $plikZmian):"
+        foreach ($l in (Wpis-Zmian $plikZmian $wZrodla | Select-Object -First 4)) { Mow "    $l" }
+        Mow "  Wlaczyc: powershell -File $Zrodlo\wdroz.ps1   Odrzucic: powershell -File $PSCommandPath -Odrzuc $($m.nazwa)"
       }
     }
   }
@@ -640,13 +788,17 @@ try {
     exit 0
   }
 
-  # Tryb bezobslugowy - zadanie z Harmonogramu, nikogo nie ma przy klawiaturze.
-  # Robimy tylko to, co ma sens bez czlowieka: pobranie nowszej wersji narzedzia
-  # i utrzymanie plikow zasad. Propozycje modulow, poczekalnia faktow i meldunek
-  # o cyklu sa dla czytajacego - w tle poszlyby w pustke, wiec ich tu nie ma.
+  # Tryb bezobslugowy - na maszynie z samym Codeksem to JEDYNA droga aktualizacji,
+  # bo wola go hook SessionStart. Dlatego robimy tu wszystko, co nanosi zmiany:
+  # pobranie nowszej wersji narzedzia, pliki zasad i poprawki na wdrozenie.
+  # Komunikaty ida przez Mow, wiec propozycje i ostrzezenia nie gina - laduja
+  # w dzienniku, bo tutaj nie ma ekranu, na ktory dalo by sie je wypisac.
+  # Poczekalnia faktow i meldunek o cyklu zostaja poza tym trybem: to prosby
+  # do czlowieka, a nie zmiany na dysku, wiec w dzienniku nikt ich nie przeczyta.
   if ($Tlo) {
     try { Odswiez-Zrodlo } catch { Mow "odswiezanie zrodla wywrocilo sie: $($_.Exception.Message)" }
     try { Pilnuj-Zasad }   catch { Mow "pilnowanie zasad wywrocilo sie: $($_.Exception.Message)" }
+    try { Pilnuj-Wersji }  catch { Mow "pilnowanie wersji wdrozenia wywrocilo sie: $($_.Exception.Message)" }
     Dopisz-Dziennik
     exit 0
   }
