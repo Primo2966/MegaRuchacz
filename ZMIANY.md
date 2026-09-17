@@ -627,3 +627,40 @@ hooków. Wypisane w `szablony-codex\CZYTAJ.md`.
 **Sprawdzone uruchomieniem:** wdrożenie do pustego projektu kończy się kodem 0
 bez „Instalacja NIEPELNA", stan kolejki na prawdziwej bazie (172 kawałki,
 5 przebiegów), przebieg próbny cyklu, składnia wszystkich ruszonych skryptów.
+
+## 0.14.1 — 2026-09-17
+
+**Codex aktualizuje narzędzie przy starcie sesji**
+- Nowy hook `SessionStart` uruchamia strażnika w trybie `-Tlo`: pobiera nowszą
+  wersję z gita i nanosi poprawki. Osobna grupa, nie drugi wpis w istniejącej —
+  scalanie rozpoznaje wpisy po `statusMessage` pierwszego hooka w grupie, więc
+  dołożony obok nigdy nie doszedłby do kogoś, kto ma już wdrożenie.
+- `timeout` jawny, `commandWindows` obowiązkowo, nic nie trafia do kontekstu
+  modelu — to robota w tle, nie meldunek.
+
+**Strażnik odświeża także część codeksową**
+- `Nanies-Poprawki` obejmuje `.codex\agents\`, `.megaruchacz\*`, blok w `AGENTS.md`
+  i ładunki hooków. Wcześniej znał wyłącznie `.claude\`, więc jedyną drogą do
+  nowszej wersji plików Codeksa było ponowne uruchomienie `wdroz.ps1`.
+- `hooks.json` traktowany ostrożnie: strażnik dopisuje wyłącznie BRAKUJĄCE grupy
+  i nigdy nie rusza istniejących, bo zmiana definicji hooka unieważnia
+  zatwierdzenie użytkownika. Gdy coś dopisze, mówi jedną linią, że trzeba
+  powtórzyć `/hooks` — nie po cichu.
+
+**Koniec kłamstwa w ekranie zgody**
+- `wdroz.ps1` w trzech miejscach obiecywał zadanie `MegaRuchaczOdswiez`, które
+  „co godzinę pobiera nowszą wersję". Zadanie zostało usunięte kilka godzin
+  wcześniej, a ekran zgody dalej je zapowiadał.
+
+**README mówi prawdę o obu narzędziach**
+- Obietnica „nie czekasz" była prawdziwa tylko pod Claude Code i stała jako
+  główna zaleta całego projektu. Rozdzielona: pod Claude Code klawiatura wraca
+  w sekundach, pod Codeksem runda idzie równolegle, ale trzeba jej poczekać.
+- Przy okazji wyszły inne nieprawdy: README twierdził, że czytnika transkryptów
+  Codeksa nie ma i że automatycznego wyławiania faktów nie ma (oba istnieją),
+  podawał 18 testów zamiast 131 i twierdził, że serwer MCP rejestruje się
+  wyłącznie dla Claude Code.
+
+**Sprawdzone uruchomieniem:** dwukrotne wdrożenie do tego samego projektu kończy
+się kodem 0 i NIE dubluje wpisów (`SessionStart` ma 2 grupy, nie 4), rejestr
+modułów nadal zwraca poprawny JSON.
