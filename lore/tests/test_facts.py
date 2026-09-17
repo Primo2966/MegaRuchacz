@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import math
 import re
 import subprocess
 from datetime import datetime, timedelta, timezone
@@ -581,3 +582,99 @@ def test_the_dry_run_names_the_tool_it_would_use(waiting_room, unforced, monkeyp
 
     assert r["status"] == "dry-run"
     assert (r["model_available"], r["model_cli"]) == (True, "codex")
+
+
+# ---------------------------------------------------------------- what the day cost
+
+def usage(sent: int = 300, received: int = 60, tokens: int = 120, measured: bool = True,
+          tool: str = "claude") -> facts.Usage:
+    """One counted call, without going anywhere near a real tool."""
+    return facts.Usage(tool, sent, received, tokens, measured)
+
+
+def test_runs_of_the_same_day_add_up(waiting_room):
+    """The cycle goes several times over when it catches up — the user asks what the DAY cost."""
+    facts.record_cost(usage(sent=300, received=60, tokens=120), found=2, day="2026-09-17")
+    facts.record_cost(usage(sent=200, received=40, tokens=80), found=3, day="2026-09-17")
+
+    saved = facts.read_cost()
+
+    assert saved["data"] == "2026-09-17"
+    assert (saved["wywolania"], saved["znaki_wyslane"], saved["znaki_odebrane"]) == ("2", "500", "100")
+    assert (saved["tokeny"], saved["fakty"]) == ("200", "5")
+    assert facts.PREVIOUS + "data" not in saved  # the first day has no yesterday to compare with
+
+
+def test_a_new_day_starts_from_zero_and_keeps_the_previous_one(waiting_room):
+    facts.record_cost(usage(sent=300, received=60, tokens=120), found=2, day="2026-09-16")
+    facts.record_cost(usage(sent=90, received=9, tokens=33), found=1, day="2026-09-17")
+
+    saved = facts.read_cost()
+
+    assert (saved["data"], saved["wywolania"]) == ("2026-09-17", "1")
+    assert (saved["tokeny"], saved["fakty"], saved["znaki_wyslane"]) == ("33", "1", "90")
+    assert (saved["poprzedni.data"], saved["poprzedni.wywolania"]) == ("2026-09-16", "1")
+    assert (saved["poprzedni.tokeny"], saved["poprzedni.fakty"]) == ("120", "2")
+
+
+def test_only_one_day_back_is_kept(waiting_room):
+    """Two columns get shown, so two are stored — a history nobody reads is only weight."""
+    for day in ("2026-09-15", "2026-09-16", "2026-09-17"):
+        facts.record_cost(usage(), found=1, day=day)
+
+    saved = facts.read_cost()
+
+    assert (saved["data"], saved["poprzedni.data"]) == ("2026-09-17", "2026-09-16")
+    assert not [key for key in saved if key.startswith(facts.PREVIOUS + facts.PREVIOUS)]
+
+
+def test_the_tokens_of_a_claude_run_are_the_real_ones(waiting_room, unforced, monkeypatch):
+    """`claude -p --output-format json` reports what it was billed — better than any estimate."""
+    envelope = json.dumps({"type": "result", "result": "- fakt",
+                           "usage": {"input_tokens": 12, "cache_creation_input_tokens": 30000,
+                                     "cache_read_input_tokens": 500, "output_tokens": 88}})
+    monkeypatch.setattr(facts.shutil, "which", installed("claude"))
+    monkeypatch.setattr(facts.subprocess, "run",
+                        lambda argv, **kwargs: subprocess.CompletedProcess(argv, 0, envelope, ""))
+
+    facts.ask_model("material")
+    saved = facts.read_cost()
+
+    assert (saved["narzedzie"], saved["tokeny_zrodlo"], saved["wywolania"]) == ("claude", "pomiar", "1")
+    assert saved["tokeny"] == str(12 + 30000 + 500 + 88)  # the cache counts too: it is billed
+    assert saved["znaki_wyslane"] == str(len(facts.PROMPT) + len("material"))
+
+
+def test_without_a_reported_count_the_tokens_are_marked_as_an_estimate(waiting_room, codex):
+    """Codex prints a session, not an envelope — a guess may be used, but not called a measurement."""
+    facts.ask_model("material")
+    saved = facts.read_cost()
+
+    assert (saved["narzedzie"], saved["tokeny_zrodlo"]) == ("codex", "szacunek")
+    sent, received = int(saved["znaki_wyslane"]), int(saved["znaki_odebrane"])
+    assert int(saved["tokeny"]) == math.ceil((sent + received) / facts.CHARS_PER_TOKEN)
+
+
+def test_one_estimated_call_makes_the_whole_day_an_estimate(waiting_room):
+    facts.record_cost(usage(measured=True), day="2026-09-17")
+    facts.record_cost(usage(measured=False, tool="codex"), day="2026-09-17")
+
+    assert facts.read_cost()["tokeny_zrodlo"] == "szacunek"
+
+
+def test_the_facts_of_a_run_land_in_the_tally(one_chunk):
+    facts.run(ask=sorted_answer(*MIXED), conn=one_chunk.conn)
+
+    assert facts.read_cost()["fakty"] == str(len(MIXED))
+
+
+def test_a_cost_file_that_cannot_be_written_does_not_stop_the_harvest(one_chunk, capsys):
+    """Measuring is not the job: a blocked file costs the numbers, never the facts."""
+    facts.KNOWLEDGE_DIR.mkdir(parents=True, exist_ok=True)
+    (facts.KNOWLEDGE_DIR / facts.COST_NAME).mkdir()  # a directory where the file wants to be
+
+    r = facts.run(ask=sorted_answer(MIXED[1]), conn=one_chunk.conn)
+
+    assert [f.text for f in r["added"]] == [MIXED[1]["tresc"]]
+    assert facts.CANDIDATES_PATH.exists()
+    assert facts.COST_NAME in capsys.readouterr().err  # and it does not vanish quietly either

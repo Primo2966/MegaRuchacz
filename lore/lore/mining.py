@@ -276,6 +276,7 @@ def run(limit: int = DEFAULT_CLUSTERS, dry_run: bool = False, move_marker: bool 
         return out
     out["facts"] = facts.parse_facts(ask(material(taken, chunks)))
     out["added"] = facts.append_facts(out["facts"])
+    facts.record_cost(found=len(out["facts"]))  # same tally as the daily harvest: same tokens paid
     if move_marker and newest:
         facts.write_marker(newest)
         out["marker"] = newest
