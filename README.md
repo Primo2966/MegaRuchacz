@@ -27,7 +27,7 @@ W zestawie jest też **Lore — przeszukiwalna pamięć wszystkich Twoich rozmó
 | `.claude/agents/` | prompty czterech ról: implementer, scout, verifier, zastępca |
 | `szablony-codex/` | to samo dla Codeksa: role, zasady kierownika, hooki |
 | `lore/` | moduł `pamiec` — serwer MCP z przeszukiwalną pamięcią rozmów |
-| `narzedzia/` | instalator pamięci, wpisywanie zasad, strażnik |
+| `narzedzia/` | instalator pamięci, wpisywanie zasad, strażnik, audyt sufitów |
 | `rozszerzenie/` | panel VS Code: lista okien zadaniowych, licznik workerów |
 | `wdroz.ps1` | główny instalator — wdraża wybrane moduły do projektu |
 | `nowe-zadanie.ps1` | zakłada izolowaną kopię repo na jedno zadanie |
@@ -48,7 +48,10 @@ W zestawie jest też **Lore — przeszukiwalna pamięć wszystkich Twoich rozmó
 - **Windows** — instalator jest w PowerShellu. Wersji na Linuksa i maca nie ma
   i na razie nie planujemy; to świadoma decyzja, nie przeoczenie.
 - **git** — izolacja workerów stoi na `git worktree`.
-- **Node.js** — na nim działa mechanizm zapisujący, co robią workerzy.
+- **Node.js** — bez niego instalator **nie zapisze żadnych hooków ani ich
+  ładunków**, ani dla Claude Code, ani dla Codeksa. Odpadają wtedy: zasady
+  wstrzykiwane na starcie sesji, rejestr pracy workerów i cała samoobsługa
+  strażnika. Reszta wdrożenia idzie normalnie, ale to nie jest drobiazg.
 - **Claude Code albo Codex CLI** — wystarczy jedno. Pod Claude Code działa pełny
   tryb (workerzy w tle, hooki, izolowane kopie repozytorium); pod Codeksem pamięć
   działa w całości, a tryb workerów w wersji okrojonej — co dokładnie odpada,
@@ -81,20 +84,22 @@ zasad nadal siedzi w plikach instrukcji. Jeśli ktoś go skasował, nadpisał pl
 albo zmienił konfigurację — wpisuje się z powrotem i dostajesz o tym jedną linię.
 Gdy wszystko się zgadza, nie widzisz nic.
 
-**Nowsza wersja narzędzia przychodzi sama.** Przy starcie sesji — ale nie częściej
-niż **raz na godzinę** — strażnik robi `git fetch` w katalogu, z którego wdrażałeś
-narzędzie, i przewija go do nowszej wersji. Dopiero potem porównuje, czy wdrożenie
-w projekcie nie zostało w tyle. Dzięki temu poprawka wypchnięta na jednej maszynie
-dociera na drugą bez Twojego udziału. Gdy coś się podciągnie, dostajesz **jedną
-linię: z której wersji na którą**.
+**Nowsza wersja narzędzia przychodzi sama.** Przy starcie sesji strażnik robi
+`git fetch` w katalogu, z którego wdrażałeś narzędzie, i przewija go do nowszej
+wersji. Dopiero potem porównuje, czy wdrożenie w projekcie nie zostało w tyle.
+Dzięki temu poprawka wypchnięta na jednej maszynie dociera na drugą bez Twojego
+udziału. Gdy coś się podciągnie, dostajesz **jedną linię: z której wersji na
+którą**. Pod Claude Code do sieci zagląda **nie częściej niż raz na godzinę** —
+start okna nie ma na co czekać. Pod Codeksem robi to **przy każdym starcie
+sesji**, bo tam chodzi w tle i nikt na niego nie czeka.
 
-**Obie te rzeczy robi strażnik, a strażnika woła dziś wyłącznie hook `SessionStart`
-Claude Code.** Zadania okresowego w Harmonogramie zadań Windows **nie ma**:
+**Obie te rzeczy robi strażnik, a wołają go hooki `SessionStart` — Claude Code
+i Codeksa.** Zadania okresowego w Harmonogramie zadań Windows **nie ma**:
 instalator go nie zakłada, a stare `MegaRuchaczOdswiez` ze starszej wersji zdejmuje
-i mówi o tym jedną linią. Na maszynie z samym Codeksem nie dzieje się więc nic
-samo — Codex uruchamia tylko hooki projektu (zasady kierownika, rejestr pracy),
-a nowszą wersję bierzesz tam własnoręcznie: `git pull` w katalogu narzędzia
-i ponowne `wdroz.ps1`.
+i mówi o tym jedną linią. Pod Codeksem strażnik chodzi w tle i robi dokładnie to
+samo: pobiera nowszą wersję, pilnuje zasad, pilnuje sufitów i nanosi poprawki na
+wdrożenie — tyle że melduje do dziennika `~\.claude\.megaruchacz-tlo.log`, a nie
+na ekran. Jedyny warunek: hooki Codeksa trzeba raz zatwierdzić przez `/hooks`.
 
 Wniosek praktyczny: **narzędzie nie zaktualizuje się, dopóki nie otworzysz nowego
 okna**. Sesja, która chodzi od wczoraj, pracuje na wczorajszej wersji.
@@ -125,6 +130,24 @@ w harmonogramie.
 Odmowa nowej funkcji jest zapamiętywana — nie będzie o nią pytać przy każdym
 oknie. **Twoje pliki robocze** (rejestr zadań, mapa projektu) nigdy nie są
 nadpisywane.
+
+**Nic nie ucina się po cichu.** Zasady doklejane do rozmowy mają swoje sufity,
+a tekst ponad sufit narzędzie obcina bez słowa — przepada wtedy koniec zasad.
+Dlatego sprawdzają to i instalator, i strażnik, przy każdym przebiegu, a gdy tekst
+się nie mieści, ostrzeżenie ląduje na jego **początku**: pierwsza linia to jedyne
+miejsce, które na pewno dojdzie do modelu. Przy starcie sesji dostajesz jedną
+linię w rodzaju `pamiec: wiadomosc +207 tokenow, start sesji +2941 tokenow, nic
+nie jest ucinane` — pierwsza liczba to koszt doklejany do **każdej Twojej
+wiadomości**, druga to jednorazowy koszt otwarcia okna. Pełny rachunek, z tabelą
+wszystkich sufitów i wskazaniem, od którego nagłówka zaczyna się ucięta część:
+`powershell -File narzedzia\koszt-pamieci.ps1`.
+
+**Zmierzone 2026-09-17: Claude Code nie ucina wstrzykiwanego tekstu.** Ładunek
+64 636 znaków doszedł w całości — zamiast uciąć, Claude Code zapisał go do pliku
+i powiedział o tym wprost. Dlatego **świadomie nie ustawiamy tam własnego
+limitu**; ucinałby to, co narzędzie przepuszcza. Codex tnie i milczy, więc zapory
+są wyłącznie po jego stronie. To jest pomiar, nie ostrożne założenie — nie ma
+czego „poprawiać na wszelki wypadek".
 
 ## Dwa moduły — bierzesz jeden albo oba
 
@@ -173,8 +196,8 @@ zapytaniem o zgodę** i nie udaje, że wdrożył więcej, niż wdrożył.
 | Co | Na maszynie z samym Codeksem |
 |---|---|
 | zasady globalne | **działa** — Codex sam wczytuje `~/.codex/AGENTS.md` przy każdej sesji, bez żadnego hooka |
-| aktualizacja narzędzia | **nie dzieje się sama** — strażnika woła tylko hook Claude Code; tutaj robisz `git pull` w katalogu narzędzia i ponowne `wdroz.ps1` |
-| pilnowanie, czy zasady nie zniknęły | też nie — skasowany blok wraca dopiero przy ponownym `wdroz.ps1` |
+| aktualizacja narzędzia | **dzieje się sama** — hook `SessionStart` woła strażnika w tle przy każdym starcie sesji (po jednorazowym `/hooks`) |
+| pilnowanie, czy zasady nie zniknęły | **też działa** — ten sam strażnik wpisuje skasowany blok z powrotem, ale mówi o tym w dzienniku, nie na ekranie |
 | `pamiec` (Lore) | **działa w całości** — instalator rejestruje serwer MCP także w Codeksie, a indeks czyta `~\.codex\sessions` |
 | tryb workerów (rozdawanie zadań) | **działa w wersji dla Codeksa** — role w `.codex/agents/`, zasady w `AGENTS.md` projektu, rejestr i mapa w `.megaruchacz/` |
 | praca w tle | **nie ma** — wątek główny czeka na wszystkich podagentów, użytkownik czeka razem z nim |
@@ -190,9 +213,9 @@ Codex nie uruchomi hooka, dopóki człowiek nie zatwierdzi go w CLI poleceniem
 komendy i limitu czasu — a nie treści skryptu, który ta komenda uruchamia.
 Sprawdzone 2026-09-17 w źródłach Codeksa (`hook_hash` w `codex-rs/hooks`)
 i potwierdzone odtworzeniem zapisanych skrótów: nasze późniejsze poprawki
-w skryptach zaufania NIE unieważniają, aktualizacja samego Codeksa też nie.
-Ponownego zatwierdzenia wymagałaby dopiero zmiana samej linii wywołania — dlatego
-trzymamy ją stałą, a limit czasu podajemy jawnie.
+w skryptach zaufania NIE unieważniają. Ponownego zatwierdzenia wymagałaby dopiero
+zmiana samej linii wywołania — dlatego trzymamy ją stałą, a limit czasu podajemy
+jawnie.
 
 Zasady kierownika idą w miarę możliwości przez `AGENTS.md`, który Codex czyta sam,
 bez żadnego hooka. Instalator nie nadpisuje jednak `AGENTS.md` śledzonego w gicie —
@@ -200,8 +223,9 @@ w takim repozytorium zasady wejdą hookiem `SessionStart`, czyli dopiero po
 zatwierdzeniu.
 
 Uwaga na rozmiar: Codex wczytuje `AGENTS.md` **do 32 KiB** — dłuższy plik przycina
-i koniec zasad przepada. Strażnik ostrzega o tym jedną linią, ale chodzi tylko pod
-Claude Code — na maszynie z samym Codeksem musisz pilnować tego sam.
+i koniec zasad przepada. Strażnik ostrzega o tym jedną linią i robi to również pod
+Codeksem, tyle że ostrzeżenie idzie do dziennika `~\.claude\.megaruchacz-tlo.log`,
+a nie na ekran — żeby je zobaczyć, trzeba tam zajrzeć.
 
 ### Dlaczego Claude Desktop nie uciągnie modułu `workerzy`
 
@@ -353,7 +377,7 @@ droga i czytana na żądanie.
 |---|---|
 | co 10 minut | nowe rozmowy trafiają do archiwum wektorowego |
 | przy starcie komputera | przegląd wczorajszych rozmów, wyławianie faktów, przydział warstw |
-| przy starcie sesji (Claude Code) | jedna linia: koszt pamięci i to, co wymaga Twojej uwagi — albo cisza |
+| przy starcie sesji (Claude Code i Codex) | jedna linia: rachunek za pamięć, a gdy coś jest ucinane — alarm |
 | raz w tygodniu | sprawdzenie, czy zapisane fakty nadal się zgadzają |
 
 **Cykl dzienny jest odporny na przerwy.** Sprawdza przed pracą, czy jesteś
@@ -416,9 +440,9 @@ narzędzie, dostaje pusty mechanizm, nie cudzą wiedzę.
 
 Wolimy to napisać, niż udawać, że jest komplet.
 
-- **Pod samym Codeksem nic nie dzieje się samo.** Strażnika woła wyłącznie hook
-  Claude Code, więc ani nowsza wersja, ani skasowany blok zasad, ani pliki
-  w `.codex\` nie wrócą bez ponownego `wdroz.ps1`.
+- **Pod Codeksem strażnik melduje do dziennika, nie na ekran.** Robi wszystko to
+  samo co pod Claude Code, ale żeby zobaczyć, co powiedział, trzeba zajrzeć do
+  `~\.claude\.megaruchacz-tlo.log`.
 - **Rejestr okien dla panelu VS Code prowadzą tylko workerzy Claude Code.**
   Podagenci Codeksa piszą do rejestru pracy, ale w panelu ich nie zobaczysz.
 - **Panel VS Code** ma zaszytą ścieżkę do skryptu i działa tylko przy repozytorium
