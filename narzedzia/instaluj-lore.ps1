@@ -9,7 +9,8 @@
 #   ... -Proba              wypisuje, co by zrobil, i NIE robi nic
 #   ... -TylkoSprawdz       sam test juz zainstalowanego modulu
 #   ... -UsunOdswiezanie    samo sprzatanie: zdejmuje z Harmonogramu stare zadanie
-#                           odswiezajace narzedzie i konczy (nic nie zaklada)
+#                           odswiezajace narzedzie oraz zadania cyklu wiedzy
+#                           (LoreCykl i spolka) i konczy - nic nie zaklada
 
 param(
   [string]$Zrodlo = (Split-Path -Parent $PSScriptRoot),
@@ -30,6 +31,17 @@ $InterwalMin   = 10
 # dzis wylacznie przy starcie sesji (hook narzedzia AI), wiec zadanie okresowe
 # jest zbedne. Nazwa zostaje po to, zeby je zdjac z maszyn, na ktorych powstalo.
 $NazwaZadaniaOdswiez = "MegaRuchaczOdswiez"
+# Zadania cyklu wiedzy, ktore chodzily o sztywnych godzinach. Cykl rusza dzis przy
+# PIERWSZEJ SESJI danego dnia (straznik-zasad.ps1 -> narzedzia\cykl-dzienny.ps1), wiec
+# kazde z nich albo robilo te sama robote drugi raz, albo nie robilo jej wcale -
+# zadanie o 08:15 przy komputerze wlaczanym o 13:00 nie chodzi nigdy. Zdejmujemy je:
+#   LoreCykl, LoreCyklPonow - caly cykl przy zalogowaniu i jego ponawianie co 10 min
+#   LoreFacts  (08:05) - samo wylawianie faktow, czyli krok 1/2 cyklu
+#   LoreWiedza (poniedzialki 08:25) - weryfikacja wiedzy, czyli krok 2/2 cyklu
+# LoreIndex ZOSTAJE: indeksowanie rozmow co 10 minut to nie jest cykl, tylko warunek
+# tego, zeby bylo z czego wylawiac. LoreKoszt tez zostaje - nie wola modelu, a jego
+# raport sluzy za punkt odniesienia dla porownania "koszt urosl o tyle procent".
+$ZadaniaCyklu = @("LoreCykl", "LoreCyklPonow", "LoreFacts", "LoreWiedza")
 $RozmiarModelu = "~465 MB"
 $MinModelMB    = 200   # model wazy ~465 MB; kilka bajtow to przerwane pobranie, nie model
 
@@ -499,6 +511,42 @@ function Usun-Zadanie-Odswiezania {
   Krok "bylo zadanie odswiezania co 60 min - juz niepotrzebne, usuwam"
 }
 
+# To samo sprzatanie, tylko po zadaniach cyklu wiedzy. Brak zadania to normalna
+# sytuacja - na swiezej maszynie nie ma czego zdejmowac i nikt o tym nie musi slyszec.
+function Stare-Zadania-Cyklu {
+  if (-not (Get-Command Get-ScheduledTask -ErrorAction SilentlyContinue)) { return @() }
+  return @($ZadaniaCyklu | Where-Object { Get-ScheduledTask -TaskName $_ -ErrorAction SilentlyContinue })
+}
+
+function Usun-Zadania-Cyklu {
+  $sa = @(Stare-Zadania-Cyklu)
+  if ($sa.Count -eq 0) {
+    if ($Proba) {
+      Naglowek "Stare zadania cyklu wiedzy"
+      Plan "zadnego z zadan $($ZadaniaCyklu -join ', ') nie ma w Harmonogramie - nic do sprzatania"
+      Plan "cykl rusza przy pierwszej sesji dnia (straznik-zasad.ps1), nie o sztywnej godzinie"
+    }
+    return
+  }
+  Naglowek "Stare zadania cyklu wiedzy"
+  if ($Proba) {
+    foreach ($n in $sa) { Plan "Unregister-ScheduledTask $n -Confirm:`$false" }
+    Plan "  cykl rusza dzis przy pierwszej sesji dnia - zadania o sztywnej godzinie sa juz zbedne"
+    return
+  }
+  foreach ($n in $sa) {
+    # -Confirm:$false, bo domyslnie Unregister-ScheduledTask pyta, a instalator
+    # stanalby w miejscu, czekajac na klawisz, ktorego nikt nie wcisnie.
+    Unregister-ScheduledTask -TaskName $n -Confirm:$false -ErrorAction SilentlyContinue
+  }
+  $zostaly = @(Stare-Zadania-Cyklu)
+  if ($zostaly.Count -gt 0) {
+    Ostrzezenie "nie udalo sie zdjac zadan: $($zostaly -join ', ') - usun je recznie z Harmonogramu zadan"
+    return
+  }
+  Krok "zdjete: $($sa -join ', ') - cykl wiedzy rusza teraz przy pierwszej sesji danego dnia"
+}
+
 # ---------------------------------------------------------------- sprawdzenie instalacji
 
 function Uruchom-Uv([string[]]$dalej) {
@@ -816,7 +864,7 @@ Write-Host "Instalator modulu pamieci rozmow Lore"
 if ($Proba)            { Ostrzezenie "TRYB PROBNY - tylko pokazuje plan, niczego nie zmienia" }
 if ($TylkoSprawdz)     { Ostrzezenie "TRYB SPRAWDZANIA - tylko test juz zainstalowanego modulu" }
 $Sprzatanie = $UsunOdswiezanie -or $TylkoOdswiezanie
-if ($Sprzatanie)       { Ostrzezenie "TRYB SPRZATANIA - zdejmuje stare zadanie $NazwaZadaniaOdswiez, pamieci rozmow nie ruszam" }
+if ($Sprzatanie)       { Ostrzezenie "TRYB SPRZATANIA - zdejmuje stare zadania z Harmonogramu (odswiezanie narzedzia i cykl wiedzy), pamieci rozmow nie ruszam" }
 
 $sciezka = Resolve-Path $Zrodlo -ErrorAction SilentlyContinue
 if (-not $sciezka) {
@@ -831,6 +879,7 @@ $script:Lore = Join-Path $Zrodlo "lore"
 # z maszyny, na ktorej modulu pamieci nikt nie chcial - i bez reinstalacji.
 if ($Sprzatanie) {
   Usun-Zadanie-Odswiezania
+  Usun-Zadania-Cyklu
   if ($Proba) {
     Write-Host ""
     Write-Host "TRYB PROBNY - nic nie zostalo zmienione."
@@ -841,7 +890,12 @@ if ($Sprzatanie) {
     Blad "zadanie $NazwaZadaniaOdswiez nadal jest w Harmonogramie - zdejmij je recznie."
     exit 1
   }
-  Write-Host "Gotowe - zadnego zadania odswiezajacego nie ma. Narzedzie aktualizuje sie przy starcie sesji." -ForegroundColor Green
+  $zostalyCykle = @(Stare-Zadania-Cyklu)
+  if ($zostalyCykle.Count -gt 0) {
+    Blad "zadania $($zostalyCykle -join ', ') nadal sa w Harmonogramie - zdejmij je recznie."
+    exit 1
+  }
+  Write-Host "Gotowe - narzedzie aktualizuje sie przy starcie sesji, a cykl wiedzy rusza przy pierwszej sesji dnia." -ForegroundColor Green
   exit 0
 }
 
@@ -853,6 +907,7 @@ if (-not $TylkoSprawdz) {
   Zarejestruj-Mcp
   Zaloz-Zadanie
   Usun-Zadanie-Odswiezania
+  Usun-Zadania-Cyklu
 }
 
 Sprawdz-Instalacje

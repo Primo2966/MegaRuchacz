@@ -43,8 +43,8 @@
         "hooks": [
           {
             "type": "command",
-            "command": "cat \"{{PROJEKT}}/.megaruchacz/przypomnienie.json\"",
-            "commandWindows": "powershell -NoProfile -NonInteractive -Command \"Get-Content -Raw -LiteralPath '{{PROJEKT}}/.megaruchacz/przypomnienie.json'\"",
+            "command": "node \"{{ZRODLO}}/narzedzia/przypomnienie.js\" \"{{PROJEKT}}/.megaruchacz/przypomnienie.json\"",
+            "commandWindows": "node \"{{ZRODLO}}/narzedzia/przypomnienie.js\" \"{{PROJEKT}}/.megaruchacz/przypomnienie.json\"",
             "timeout": 5,
             "statusMessage": "MegaRuchacz: przypomnienie",
             "additionalContextLimit": 1500
