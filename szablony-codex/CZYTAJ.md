@@ -16,6 +16,10 @@ Odpowiednik modulu `workerzy` z Claude Code. Tu lezy sama TRESC - wdraza to
   `UserPromptSubmit`, kopiowany doslownie).
 - `hooks.json` -> `<projekt>/.codex/hooks.json`. Instalator DOKLADA swoje grupy, nie
   nadpisuje cudzych; swoje poznaje po `statusMessage`.
+- **`timeout` w kazdym hooku podajemy JAWNIE i tak ma zostac.** Skrot zaufania Codex
+  liczy z definicji hooka juz po normalizacji, wiec wartosc domyslna tez do niego
+  wchodzi - gdyby zmienila sie w nowszej wersji Codeksa, zatwierdzenie uzytkownika
+  przestaloby pasowac. Jawna liczba trzyma skrot stabilny.
 - Znaczniki: `{{PROJEKT}}` - korzen projektu, `{{ZRODLO}}` - korzen repo MegaRuchacza;
   oba bezwzglednie, ukosniki w przod.
 - Rejestr i mapa celowo w `<projekt>/.megaruchacz/`, NIE w `.codex/` - piaskownica
@@ -47,6 +51,12 @@ Odpowiednik modulu `workerzy` z Claude Code. Tu lezy sama TRESC - wdraza to
 nie dopisze do mapy sam, tylko oddaje blok "Do mapy". Nadpisania rodzica
 (`/permissions`, `--yolo`) biora gore nad plikiem agenta.
 
-**Hooki wymagaja zgody uzytkownika:** hook niezarzadzany nie ruszy, dopoki uzytkownik
-nie zatwierdzi go poleceniem `/hooks`. Codex liczy hash definicji - kazda zmiana
-komendy albo skryptu kasuje zaufanie i trzeba zatwierdzic od nowa.
+**Hooki wymagaja zgody uzytkownika - jednej, nie za kazdym razem:** hook niezarzadzany
+nie ruszy, dopoki uzytkownik nie zatwierdzi go poleceniem `/hooks`. Skrot (`hook_hash`
+w `codex-rs/hooks`, po `NormalizedHookIdentity`) liczy sie WYLACZNIE z definicji hooka:
+zdarzenie, `matcher`, `command`, `timeout`, `async`. Tresc skryptu wskazanego przez
+`command` do skrotu NIE wchodzi - sprawdzone 2026-09-17 w zrodlach Codeksa i potwierdzone
+odtworzeniem trzech zapisanych wartosci `trusted_hash`. Czyli nasze pozniejsze poprawki
+w skryptach zaufania nie uniewazniaja, aktualizacja samego Codeksa tez nie (zatwierdzenie
+lezy w jego `config.toml`). Ponownego zatwierdzenia wymaga wylacznie zmiana samej linii
+wywolania, `timeout`, `matcher` albo `async`.
