@@ -4,11 +4,14 @@
 
 Tryb pracy, w którym agent AI przestaje być wykonawcą, a staje się **kierownikiem**:
 przyjmuje od Ciebie zadanie po zadaniu, rozdaje je workerom pracującym równolegle
-w izolowanych kopiach repozytorium i melduje efekt prostym językiem.
+— pod Claude Code w izolowanych kopiach repozytorium — i melduje efekt prostym
+językiem.
 
-Kluczowa różnica wobec zwykłej pracy z agentem: **nie czekasz**. Rzucasz zadanie,
-dostajesz klawiaturę z powrotem w sekundach i piszesz następne. Roboty pilnuje
-kierownik, nie Ty.
+Kluczowa różnica wobec zwykłej pracy z agentem: zadania lecą równolegle, a pilnuje
+ich kierownik, nie Ty. Pod **Claude Code** dochodzi rzecz najcenniejsza — **nie
+czekasz**: rzucasz zadanie, dostajesz klawiaturę z powrotem w sekundach i piszesz
+następne. Pod **Codeksem** tego nie ma: wątek główny czeka na wszystkich
+podagentów, więc runda idzie naraz, ale klawiaturę odzyskujesz dopiero po niej.
 
 W zestawie jest też **Lore — przeszukiwalna pamięć wszystkich Twoich rozmów** z agentem —
 żeby ustalenie z innego okna sprzed tygodnia nie przepadło.
@@ -22,6 +25,7 @@ W zestawie jest też **Lore — przeszukiwalna pamięć wszystkich Twoich rozmó
 | `CLAUDE.md` | zasady kierownika — serce modułu `workerzy` |
 | `zasady-globalne.md` | zasady wpisywane do plików instrukcji narzędzi AI |
 | `.claude/agents/` | prompty czterech ról: implementer, scout, verifier, zastępca |
+| `szablony-codex/` | to samo dla Codeksa: role, zasady kierownika, hooki |
 | `lore/` | moduł `pamiec` — serwer MCP z przeszukiwalną pamięcią rozmów |
 | `narzedzia/` | instalator pamięci, wpisywanie zasad, strażnik |
 | `rozszerzenie/` | panel VS Code: lista okien zadaniowych, licznik workerów |
@@ -31,9 +35,9 @@ W zestawie jest też **Lore — przeszukiwalna pamięć wszystkich Twoich rozmó
 
 ## Cztery role
 
-- **implementer** — wprowadza konkretną zmianę w wyznaczonych plikach. Pracuje
-  w osobnej kopii repozytorium, więc dwa zadania w tych samych plikach mogą lecieć
-  naprawdę równolegle.
+- **implementer** — wprowadza konkretną zmianę w wyznaczonych plikach. Pod Claude
+  Code pracuje w osobnej kopii repozytorium, więc dwa zadania w tych samych plikach
+  mogą lecieć naprawdę równolegle; pod Codeksem rozłączności pilnuje treść zlecenia.
 - **scout** — rozpoznanie: gdzie co leży. Tylko czyta, niczego nie blokuje.
 - **verifier** — sprawdza pojedynczą zmianę: czy działa i czy nie psuje reszty.
 - **zastępca** — sprawdza, czy **całość** nadal trzyma się kupy po serii
@@ -45,7 +49,10 @@ W zestawie jest też **Lore — przeszukiwalna pamięć wszystkich Twoich rozmó
   i na razie nie planujemy; to świadoma decyzja, nie przeoczenie.
 - **git** — izolacja workerów stoi na `git worktree`.
 - **Node.js** — na nim działa mechanizm zapisujący, co robią workerzy.
-- **Claude Code** — pełny tryb (workerzy, hooki, izolacja) działa tam.
+- **Claude Code albo Codex CLI** — wystarczy jedno. Pod Claude Code działa pełny
+  tryb (workerzy w tle, hooki, izolowane kopie repozytorium); pod Codeksem pamięć
+  działa w całości, a tryb workerów w wersji okrojonej — co dokładnie odpada,
+  mówi tabela „Na maszynie z samym Codeksem".
 - **Python 3.12 + `uv`** — tylko jeśli chcesz Lore, czyli pamięci rozmów.
 
 ## Instalacja
@@ -64,7 +71,8 @@ reszty.
 punkcie. Jeśli coś nie wyszło, mówi wprost co i kończy błędem, zamiast udawać
 sukces.
 
-Po instalacji **zamknij i otwórz Claude Code na nowo**, żeby zasady się załadowały.
+Po instalacji **zamknij i otwórz swoje narzędzie na nowo** — Claude Code albo
+Codeksa — żeby zasady się załadowały.
 
 ### Co się dzieje po instalacji, bez Twojego udziału
 
@@ -80,15 +88,13 @@ w projekcie nie zostało w tyle. Dzięki temu poprawka wypchnięta na jednej mas
 dociera na drugą bez Twojego udziału. Gdy coś się podciągnie, dostajesz **jedną
 linię: z której wersji na którą**.
 
-**Dzieje się to wyłącznie przy starcie sesji** — u Claude Code robi to hook
-`SessionStart`, u Codeksa jego własny hook. Zadania okresowego w Harmonogramie
-zadań Windows **nie ma**: instalator go nie zakłada, a jeśli zastanie stare
-`MegaRuchaczOdswiez` ze starszej wersji, zdejmuje je i mówi o tym jedną linią.
-Zdjąć je osobno, bez pełnej instalacji, można tak:
-
-```powershell
-powershell -ExecutionPolicy Bypass -File <ścieżka>\narzedzia\instaluj-lore.ps1 -UsunOdswiezanie
-```
+**Obie te rzeczy robi strażnik, a strażnika woła dziś wyłącznie hook `SessionStart`
+Claude Code.** Zadania okresowego w Harmonogramie zadań Windows **nie ma**:
+instalator go nie zakłada, a stare `MegaRuchaczOdswiez` ze starszej wersji zdejmuje
+i mówi o tym jedną linią. Na maszynie z samym Codeksem nie dzieje się więc nic
+samo — Codex uruchamia tylko hooki projektu (zasady kierownika, rejestr pracy),
+a nowszą wersję bierzesz tam własnoręcznie: `git pull` w katalogu narzędzia
+i ponowne `wdroz.ps1`.
 
 Wniosek praktyczny: **narzędzie nie zaktualizuje się, dopóki nie otworzysz nowego
 okna**. Sesja, która chodzi od wczoraj, pracuje na wczorajszej wersji.
@@ -127,11 +133,11 @@ i każdy instaluje się osobno. Możesz wziąć sam tryb pracy, samą pamięć, 
 
 ### Moduł `workerzy` — rozdawanie roboty
 
-**Co daje:** agent przestaje być wykonawcą, a staje się kierownikiem. Ty rzucasz
-zadanie i **od razu piszesz następne** — nie czekasz, aż skończy. Zadania lecą
-równolegle, każde w osobnej kopii repozytorium, więc nie wchodzą sobie w pliki.
-Po udanej robocie zmiany same wracają do `main`, a kopie znikają. Ty widzisz
-meldunek po ludzku, nie surowe raporty.
+**Co daje:** agent przestaje być wykonawcą, a staje się kierownikiem. Zadania lecą
+równolegle, po udanej robocie zmiany same wracają do `main`, a Ty widzisz meldunek
+po ludzku, nie surowe raporty. Pod **Claude Code** dochodzą dwie rzeczy, których
+pod samym Codeksem nie ma: rzucasz zadanie i **od razu piszesz następne**, a każdy
+worker siedzi w osobnej kopii repozytorium, więc nie wchodzą sobie w pliki.
 
 **Co kosztuje:** nic. Same pliki tekstowe, działa od razu po instalacji.
 
@@ -154,8 +160,8 @@ i wprost. Nic nie wychodzi poza Twój komputer.
 |---|---|---|
 | **Claude Code** (CLI, wtyczka do IDE) | tak, pełny tryb | tak, instalator sam rejestruje |
 | **Claude Code w Orce** | tak | tak |
-| **Codex w Orce** | tak — workerów odpala Orca | czytnik w przygotowaniu |
-| **Codex sam z siebie** | tak, w wersji dla Codeksa — bez pracy w tle i bez izolowanych kopii repozytorium; hooki wymagają jednorazowego `/hooks` | czytnik w przygotowaniu |
+| **Codex w Orce** | tak — workerów odpala Orca | tak, instalator sam rejestruje |
+| **Codex sam z siebie** | tak, w wersji dla Codeksa — bez pracy w tle i bez izolowanych kopii repozytorium; hooki wymagają jednorazowego `/hooks` | tak, instalator sam rejestruje |
 | **Claude Desktop** (aplikacja) | **nie** | da się, ale ręcznie — patrz niżej |
 | Zwykły GPT, ChatGPT w przeglądarce | nie | nie |
 
@@ -167,9 +173,9 @@ zapytaniem o zgodę** i nie udaje, że wdrożył więcej, niż wdrożył.
 | Co | Na maszynie z samym Codeksem |
 |---|---|
 | zasady globalne | **działa** — Codex sam wczytuje `~/.codex/AGENTS.md` przy każdej sesji, bez żadnego hooka |
-| aktualizacja narzędzia | przy starcie sesji Codeksa, jego własnym hookiem — patrz zastrzeżenie niżej |
-| pilnowanie, czy zasady nie zniknęły | ten sam hook, przy okazji |
-| `pamiec` (Lore) | **działa** — instalator rejestruje serwer MCP także w Codeksie |
+| aktualizacja narzędzia | **nie dzieje się sama** — strażnika woła tylko hook Claude Code; tutaj robisz `git pull` w katalogu narzędzia i ponowne `wdroz.ps1` |
+| pilnowanie, czy zasady nie zniknęły | też nie — skasowany blok wraca dopiero przy ponownym `wdroz.ps1` |
+| `pamiec` (Lore) | **działa w całości** — instalator rejestruje serwer MCP także w Codeksie, a indeks czyta `~\.codex\sessions` |
 | tryb workerów (rozdawanie zadań) | **działa w wersji dla Codeksa** — role w `.codex/agents/`, zasady w `AGENTS.md` projektu, rejestr i mapa w `.megaruchacz/` |
 | praca w tle | **nie ma** — wątek główny czeka na wszystkich podagentów, użytkownik czeka razem z nim |
 | izolowane kopie repozytorium (worktree) | **nie ma** — rozłączności plików pilnuje wyłącznie treść zlecenia i rejestr |
@@ -194,7 +200,8 @@ w takim repozytorium zasady wejdą hookiem `SessionStart`, czyli dopiero po
 zatwierdzeniu.
 
 Uwaga na rozmiar: Codex wczytuje `AGENTS.md` **do 32 KiB** — dłuższy plik przycina
-i koniec zasad przepada. Strażnik mówi o tym jedną linią, gdy plik przekroczy limit.
+i koniec zasad przepada. Strażnik ostrzega o tym jedną linią, ale chodzi tylko pod
+Claude Code — na maszynie z samym Codeksem musisz pilnować tego sam.
 
 ### Dlaczego Claude Desktop nie uciągnie modułu `workerzy`
 
@@ -212,13 +219,13 @@ tam podłączyć, dopisując wpis do jego pliku konfiguracyjnego.
 
 Dwa zastrzeżenia, żeby nie było niespodzianek:
 
-- **Nasz instalator tego nie robi.** Rejestruje Lore wyłącznie dla Claude Code.
-  W Desktopie trzeba dopisać wpis ręcznie.
+- **Nasz instalator tego nie robi.** Rejestruje Lore w Claude Code i w Codeksie
+  CLI. W Desktopie trzeba dopisać wpis ręcznie.
 - **Tego wariantu nie sprawdzaliśmy.** Powinien działać, ale nie ręczymy —
   nie testowaliśmy go u siebie.
 
-Lore indeksuje transkrypty Claude Code, więc w Desktopie przeszukiwałbyś swoją
-historię z Claude Code. To nadal użyteczne, ale warto wiedzieć, czego szukasz.
+Lore indeksuje transkrypty Claude Code i Codeksa, więc w Desktopie przeszukiwałbyś
+historię z tamtych narzędzi, nie z samego Desktopu.
 
 ### Skąd biorą się workerzy — źródło różnic w tabeli
 
@@ -238,9 +245,10 @@ po prostu wykonuje wszystko sam, zamiast rozdawać.
 
 ## Lore — pamięć rozmów
 
-Serwer MCP indeksujący transkrypty do lokalnej bazy z wyszukiwaniem pełnotekstowym
-i semantycznym (zapytanie po niemiecku znajdzie rozmowę po polsku). Baza i model
-zostają **na Twojej maszynie** — nic nie wychodzi na zewnątrz.
+Serwer MCP indeksujący transkrypty — Claude Code i Codeksa — do lokalnej bazy
+z wyszukiwaniem pełnotekstowym i semantycznym (zapytanie po niemiecku znajdzie
+rozmowę po polsku). Baza i model leżą w `~\.lore` (a jeśli baza powstała wcześniej
+w `~\.claude`, zostaje tam) i **nie wychodzą poza Twoją maszynę**.
 
 ### Problem, który to rozwiązuje
 
@@ -345,7 +353,7 @@ droga i czytana na żądanie.
 |---|---|
 | co 10 minut | nowe rozmowy trafiają do archiwum wektorowego |
 | przy starcie komputera | przegląd wczorajszych rozmów, wyławianie faktów, przydział warstw |
-| przy starcie sesji | jedna linia: koszt pamięci i to, co wymaga Twojej uwagi — albo cisza |
+| przy starcie sesji (Claude Code) | jedna linia: koszt pamięci i to, co wymaga Twojej uwagi — albo cisza |
 | raz w tygodniu | sprawdzenie, czy zapisane fakty nadal się zgadzają |
 
 **Cykl dzienny jest odporny na przerwy.** Sprawdza przed pracą, czy jesteś
@@ -374,7 +382,8 @@ agenta, powtarzany w 34 sesjach — to powtarzalna forma, nie powtarzalna wiedza
 #### Co robi poranne wyciąganie faktów
 
 Raz dziennie przeglądane są rozmowy z ostatniej doby i wyłuskiwane z nich trwałe
-fakty. Cztery rzeczy, które trzymają to w ryzach:
+fakty — modelem, który akurat jest na tej maszynie (`claude` albo `codex`).
+Cztery rzeczy, które trzymają to w ryzach:
 
 - **Tylko nowy materiał** od ostatniego przebiegu, nie całe archiwum.
 - **Twardy sufit** na ilość materiału — koszt jest przewidywalny, nie rośnie
@@ -407,13 +416,11 @@ narzędzie, dostaje pusty mechanizm, nie cudzą wiedzę.
 
 Wolimy to napisać, niż udawać, że jest komplet.
 
-- **Czytnik transkryptów Codeksa nie istnieje.** Lore indeksuje dziś wyłącznie
-  rozmowy z Claude Code. Wiadomo, gdzie Codex trzyma swoje (`~/.codex/sessions`),
-  ale bez prawdziwych próbek nie piszemy czytnika na ślepo.
-- **Druga warstwa pamięci jest pusta.** Zamysł jest taki: tania warstwa faktów
-  wczytywana zawsze, plus droga warstwa wyszukiwania po rozmowach. Ta druga
-  działa. Pierwsza ma zrobiony mechanizm i regułę, ale zapełnia się dopiero
-  z użycia — automatycznego wyciągania faktów z archiwum jeszcze nie ma.
+- **Pod samym Codeksem nic nie dzieje się samo.** Strażnika woła wyłącznie hook
+  Claude Code, więc ani nowsza wersja, ani skasowany blok zasad, ani pliki
+  w `.codex\` nie wrócą bez ponownego `wdroz.ps1`.
+- **Rejestr okien dla panelu VS Code prowadzą tylko workerzy Claude Code.**
+  Podagenci Codeksa piszą do rejestru pracy, ale w panelu ich nie zobaczysz.
 - **Panel VS Code** ma zaszytą ścieżkę do skryptu i działa tylko przy repozytorium
   w konkretnej lokalizacji.
 - **Tylko Windows.** Instalator jest w PowerShellu; wersji na Linuksa i maca nie
@@ -421,5 +428,5 @@ Wolimy to napisać, niż udawać, że jest komplet.
 - **Mierzymy na oko.** Reguły w `CLAUDE.md` mają uzasadnienia, ale nie mamy liczb,
   które by potwierdzały, ile faktycznie oszczędzają.
 
-Co jest przetestowane: moduł pamięci ma **18 testów** (`uv run pytest` w `lore/`),
+Co jest przetestowane: moduł pamięci ma **131 testów** (`uv run pytest` w `lore/`),
 a instalator sprawdza sam siebie po każdym wdrożeniu.
