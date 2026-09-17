@@ -137,10 +137,10 @@ Dlatego sprawdzają to i instalator, i strażnik, przy każdym przebiegu, a gdy 
 się nie mieści, ostrzeżenie ląduje na jego **początku**: pierwsza linia to jedyne
 miejsce, które na pewno dojdzie do modelu. Przy starcie sesji dostajesz jedną
 linię w rodzaju `pamiec: wiadomosc +207 tokenow, start sesji +2941 tokenow, nic
-nie jest ucinane` — pierwsza liczba to koszt doklejany do **każdej Twojej
-wiadomości**, druga to jednorazowy koszt otwarcia okna. Pełny rachunek, z tabelą
-wszystkich sufitów i wskazaniem, od którego nagłówka zaczyna się ucięta część:
-`powershell -File narzedzia\koszt-pamieci.ps1`.
+nie jest ucinane` — co znaczą te dwie liczby, mówi „Ile to kosztuje — dwa
+rachunki". Pełny rachunek, z tabelą wszystkich sufitów i wskazaniem, od którego
+nagłówka zaczyna się ucięta część: `powershell -ExecutionPolicy Bypass -File
+narzedzia\koszt-pamieci.ps1`.
 
 **Zmierzone 2026-09-17: Claude Code nie ucina wstrzykiwanego tekstu.** Ładunek
 64 636 znaków doszedł w całości — zamiast uciąć, Claude Code zapisał go do pliku
@@ -289,7 +289,7 @@ jest podzielona na warstwy.
 | Warstwa | Co tam jest | Gdzie fizycznie | Kiedy czytane | Koszt |
 |---|---|---|---|---|
 | **1. Stała** | kim jesteś, czym zajmuje się firma, konwencje | zwykły plik tekstowy | zawsze, przy każdej sesji | mały, ale płacony **za każdym razem** |
-| **2. Bieżąca** | sprawy tego tygodnia, co Cię blokuje | ten sam plik, osobna sekcja | zawsze, **z datą i wygasaniem** | mały, płacony za każdym razem |
+| **2. Bieżąca** | sprawy tego tygodnia, co Cię blokuje | ten sam plik, osobna sekcja | zawsze, **z datą i wygasaniem** | mały, płacony przy każdej sesji |
 | **3. Referencyjna** | tabele, listy numerów, cenniki | osobne pliki tekstowe | **tylko gdy rozmowa tego dotyczy** | zero, dopóki nikt nie sięgnie |
 | **Archiwum rozmów** | wszystko, co kiedykolwiek powiedziałeś agentowi | **baza wektorowa** (Lore) | **tylko gdy agent szuka** | jedno wyszukanie na zadanie |
 
@@ -307,8 +307,8 @@ Dlaczego tabela SKU nie idzie do bazy wektorowej: wyszukiwanie po znaczeniu jest
 tego produktu". Przy tabeli chcesz dokładnej wartości, nie czegoś podobnego
 w znaczeniu. Zwykły plik robi to lepiej, szybciej i bez modelu.
 
-Dwie pierwsze warstwy są malutkie i wczytują się same. Trzecia jest duża i leży
-odłogiem, dopóki nie jest potrzebna. Poniżej każda po kolei.
+Dwie pierwsze warstwy są malutkie i wczytują się same, trzecia leży odłogiem,
+dopóki nie jest potrzebna. Poniżej każda po kolei.
 
 ---
 
@@ -368,6 +368,35 @@ w całości raz na jakiś czas.
 plik istnieje i co w nim jest. Agent sięga po treść dopiero wtedy, gdy rozmowa
 tego dotyczy. To jest cały mechanizm: indeks jest tani i zawsze obecny, zawartość
 droga i czytana na żądanie.
+
+---
+
+### Ile to kosztuje — dwa rachunki
+
+To są różne pieniądze, więc nie sumujemy ich w jedną liczbę.
+
+**Przy KAŻDEJ Twojej wiadomości** doklejane jest krótkie przypomnienie zasad
+pracy — hook `UserPromptSubmit`, ładunek z `.claude\orchestrator-reminder.json`
+(Claude Code) albo `szablony-codex\przypomnienie.json` (Codex). Dziś **619 znaków
+pod Claude Code, 592 pod Codeksem — czyli około 200 tokenów**. I nic poza tym.
+
+**RAZ, przy starcie sesji** wchodzi reszta i siedzi w rozmowie do jej końca: blok
+zasad wpisany do `~\.claude\CLAUDE.md` i `~\.codex\AGENTS.md`, warstwa **stała**,
+warstwa **bieżąca** oraz zasady kierownika — pod Codeksem wstrzykiwane hookiem
+`SessionStart`, pod Claude Code idące przez `CLAUDE.md`. Dziś u autora razem
+**8 820 znaków, czyli około 2 940 tokenów**.
+
+**Warstwa referencyjna — pliki w `wiedza\` — nie kosztuje nic**, dopóki rozmowa
+jej nie dotyczy; agent czyta je na żądanie. To jest sedno podziału: do warstwy
+stałej idzie wyłącznie to, co ma zmieniać zachowanie **bez pytania** (pułapki,
+zakazy, preferencje). Wszystko, co da się sprawdzić dopiero wtedy, gdy temat się
+pojawi, idzie do plików referencyjnych albo do archiwum rozmów.
+
+Obie liczby to **szacunek, nie pomiar tokenizera**: liczymy znaki ładunku
+i dzielimy przez trzy. Prawdziwy rachunek bywa o kilkanaście procent inny —
+chodzi o rząd wielkości i o to, która pozycja jest najdroższa. Widać je na żywo:
+jedną linią przy starcie sesji, a w całości poleceniem
+`powershell -ExecutionPolicy Bypass -File narzedzia\koszt-pamieci.ps1`.
 
 ---
 
