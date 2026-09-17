@@ -1,10 +1,12 @@
-# Straznik - pilnuje trzech rzeczy przy kazdym otwarciu okna:
+# Straznik - pilnuje czterech rzeczy przy kazdym otwarciu okna:
 #   0. czy sam katalog zrodlowy narzedzia nie zostal w tyle za zdalnym repo,
 #   1. czy blok zasad globalnych MegaRuchacza nadal siedzi w ~/.claude/CLAUDE.md,
-#   2. czy wdrozenie w projekcie nie zostalo w tyle za katalogiem zrodlowym.
+#   2. czy wdrozenie w projekcie nie zostalo w tyle za katalogiem zrodlowym,
+#   3. ile kosztuje pamiec agenta i czy cokolwiek jest UCINANE.
 #
 # Wolany przez hook SessionStart, wiec zasada nadrzedna brzmi: gdy wszystko sie
-# zgadza, NIC nie wypisuje i nie robi nic drogiego. Porownania ida po skrocie
+# zgadza, NIC nie wypisuje i nie robi nic drogiego - z jednym wyjatkiem, punktem
+# 3., ktory odzywa sie ZAWSZE, bo uzytkownik poprosil o to wprost. Porownania ida po skrocie
 # tresci i po numerze wersji. Jedyne siegniecie do sieci to krotki "git fetch"
 # w katalogu zrodlowym, najwyzej raz na godzine i z limitem czasu - bez niego
 # punkt 2. porownywalby wdrozenie ze staroscia i zawsze wychodzilo mu, ze gra.
@@ -21,6 +23,10 @@
 #       przebieg zwykly (pobranie nowszej wersji narzedzia, pilnowanie plikow
 #       zasad, nanoszenie poprawek na wdrozenie), tylko nic nie wypisuje na
 #       ekran - slad zostaje w dzienniku, bo w tle nie ma kto czytac komunikatow.
+#   powershell -NoProfile -File narzedzia\straznik-zasad.ps1 -PoliczKoszt
+#       przelicza rachunek za pamiec agenta i zapisuje gotowa linie do pliku
+#       podrecznego; nic nie wypisuje. Straznik startuje to sam, osobnym
+#       procesem, zeby otwarcie okna nie czekalo na liczenie.
 #   -KatalogDomowy  podstawiony katalog domowy - do testow
 
 param(
@@ -29,7 +35,8 @@ param(
   [string]$KatalogDomowy = $HOME,
   [string]$Odrzuc = "",
   [switch]$Moduly,
-  [switch]$Tlo
+  [switch]$Tlo,
+  [switch]$PoliczKoszt
 )
 
 $ErrorActionPreference = "Stop"
@@ -91,6 +98,19 @@ $MINUT_MIEDZY_POBRANIAMI = 60
 # zeby wszystko jego bylo w jednym miejscu.
 $plikDziennika = Join-Path $KatalogDomowy ".claude\.megaruchacz-tlo.log"
 $LINII_DZIENNIKA = 200
+
+# Podreczna liczba za pamiec agenta: gotowa linia, kod (0 = nic nie jest ucinane),
+# data policzenia i znacznik dnia, w ktorym poszedl pelniejszy meldunek. Osobny
+# plik, bo plik stanu zasad jest przepisywany w calosci przy kazdej zmianie skrotow.
+$plikKosztu = Join-Path $KatalogDomowy ".claude\.megaruchacz-koszt.txt"
+# Liczba starsza niz tyle godzin idzie do przeliczenia w tle (ale pokazujemy ja
+# dalej - stara liczba jest lepsza niz cisza).
+$GODZIN_MIEDZY_KOSZTAMI = 6
+# Powyzej tego nie udajemy, ze to dzisiejszy rachunek - mowimy, z kiedy jest.
+$GODZIN_KOSZT_STARY = 30
+# Dlawik na samo startowanie procesu liczacego: dziesiec okien otwartych naraz
+# ma go odpalic raz, a nieudane liczenie nie ma prawa wracac przy kazdym oknie.
+$MINUT_MIEDZY_PROBAMI = 15
 # Codex czyta AGENTS.md do 32 KiB - dluzszy plik przycina, wiec koniec zasad
 # po prostu przepada. Za ten limit nie odpowiadamy, ale mamy o nim powiedziec.
 $LIMIT_AGENTS = 32768
@@ -754,6 +774,181 @@ function Pilnuj-Wersji {
   if ($zmiana) { Zapisz-Klucze $plikWersji $stan }
 }
 
+# ------------------------------------------------ 3. koszt pamieci i ucinanie
+# Warunek postawiony wprost przez uzytkownika: przy KAZDYM otwarciu okna ma
+# widziec, ile kosztuje pamiec agenta, i nic nie ma prawa uciac sie po cichu.
+# Dlatego ta czesc jest jedyna, ktora odzywa sie takze wtedy, gdy wszystko gra.
+#
+# Rachunek liczy osobny skrypt (koszt-pamieci.ps1): siega do bazy Lore i kompiluje
+# sobie typ pomocniczy, wiec trwa zauwazalnie dluzej niz caly reszta straznika,
+# a caly hook ma kilkanascie sekund. Stad podzial: przy starcie okna CZYTAMY
+# gotowa linie z pliku podrecznego, a przeliczenie idzie osobnym procesem, na
+# ktory nikt nie czeka. Liczba sprzed kilku godzin w zupelnosci wystarcza.
+#
+# Umowa ze skryptem: "-Zwiezle" zwraca JEDNA linie, kod wyjscia 0 gdy nic nie
+# jest ucinane, 1 gdy cokolwiek jest. Starsza wersja skryptu potrafi zwrocic co
+# innego - bierzemy wtedy pierwsza niepusta linie i kod, jaki dostaniemy. Nic
+# z tego nie ma prawa wywrocic otwarcia sesji.
+function Policz-Koszt {
+  $skrypt = Join-Path $Zrodlo "narzedzia\koszt-pamieci.ps1"
+  if (-not (Test-Path $skrypt)) { return $null }
+  $kod = 0
+  $wy = @()
+  try {
+    $global:LASTEXITCODE = 0
+    $wy = @(& $skrypt -KatalogDomowy $KatalogDomowy -Zwiezle 2>$null)
+    $kod = $LASTEXITCODE
+  } catch { return $null }
+  $linia = ""
+  foreach ($l in $wy) {
+    $t = "$l".Trim()
+    if ($t) { $linia = $t; break }
+  }
+  if (-not $linia) { return $null }
+  if ($null -eq $kod) { $kod = 0 }
+  return [ordered]@{ linia = $linia; kod = [int]$kod }
+}
+
+# Zapis do pliku podrecznego. Znacznik dziennego meldunku przezywa przeliczenie -
+# inaczej pelniejszy raport wracalby po kazdym odswiezeniu liczby.
+function Zapisz-Koszt($wynik) {
+  $stare = Czytaj-Klucze $plikKosztu
+  $stan = [ordered]@{
+    data  = (Get-Date -Format 'yyyy-MM-dd HH:mm:ss')
+    kod   = $wynik.kod
+    linia = $wynik.linia
+  }
+  if ($stare["pelny"]) { $stan["pelny"] = $stare["pelny"] }
+  if ($stare["proba"]) { $stan["proba"] = $stare["proba"] }
+  try { Zapisz-Klucze $plikKosztu $stan } catch { }
+}
+
+# Odpala liczenie osobnym procesem i NIE czeka na wynik - to jest cala sztuczka,
+# dzieki ktorej start okna kosztuje tyle co odczyt jednego pliku. conhost
+# --headless, zeby nikomu nie mrugnela konsola; gdyby go nie bylo, zwykly
+# powershell w ukrytym oknie.
+function Odswiez-Koszt-W-Tle {
+  $skrypt = Join-Path $Zrodlo "narzedzia\koszt-pamieci.ps1"
+  if (-not (Test-Path $skrypt)) { return }
+
+  # Znacznik proby idzie na dysk PRZED startem - takze wtedy, gdy start sie nie
+  # uda. Liczenie, ktore sie wywraca, ma wracac co kwadrans, a nie co okno.
+  $stan = Czytaj-Klucze $plikKosztu
+  $stan["proba"] = (Get-Date -Format 'yyyy-MM-dd HH:mm:ss')
+  try { Zapisz-Klucze $plikKosztu $stan } catch { }
+
+  $ogon = '-NoProfile -NonInteractive -ExecutionPolicy Bypass -File "' + $PSCommandPath +
+          '" -PoliczKoszt -Zrodlo "' + $Zrodlo + '" -KatalogDomowy "' + $KatalogDomowy + '"'
+  try {
+    Start-Process -FilePath "conhost.exe" -ArgumentList ("--headless powershell.exe " + $ogon) `
+      -WindowStyle Hidden -ErrorAction Stop | Out-Null
+    return
+  } catch { }
+  try { Start-Process -FilePath "powershell.exe" -ArgumentList $ogon -WindowStyle Hidden | Out-Null } catch { }
+}
+
+# Jedna linia o koszcie pamieci - zawsze, niezaleznie od tego, czy cokolwiek
+# innego wymaga uwagi. Gdy cos jest ucinane (kod 1), linia idzie jako wyrozniony
+# alarm, a nie dopisek w cudzym meldunku: po cichu ucinac sie nie ma prawa.
+function Zglos-Koszt {
+  if ($Tlo) {
+    # W tle nikt nie czeka na otwarcie okna, wiec liczymy na miejscu - i przy
+    # okazji odswiezamy liczbe, z ktorej skorzystaja nastepne okna.
+    $swieze = Policz-Koszt
+    if ($swieze) { Zapisz-Koszt $swieze }
+  }
+
+  $stan = Czytaj-Klucze $plikKosztu
+  $linia = $stan["linia"]
+  $kod = 0
+  if ($stan["kod"] -match '^\d+$') { $kod = [int]$stan["kod"] }
+
+  $kiedy = [datetime]::MinValue
+  $godzin = [double]::MaxValue
+  if ([datetime]::TryParse($stan["data"], [ref]$kiedy)) {
+    $godzin = ([datetime]::Now - $kiedy).TotalHours
+  }
+
+  # Kiedy ostatnio w ogole PROBOWALISMY policzyc - stad wiadomo, czy wypada
+  # startowac kolejny proces, czy poprzedni dopiero co poszedl.
+  $probowano = [datetime]::MinValue
+  $odProby = [double]::MaxValue
+  if ([datetime]::TryParse($stan["proba"], [ref]$probowano)) {
+    $odProby = ([datetime]::Now - $probowano).TotalMinutes
+  }
+
+  $trzeba = ($godzin -gt $GODZIN_MIEDZY_KOSZTAMI)
+  if (-not $Tlo -and $trzeba -and $odProby -gt $MINUT_MIEDZY_PROBAMI) { Odswiez-Koszt-W-Tle }
+
+  if (-not $linia) {
+    # Pierwsze uruchomienie: nie ma jeszcze czego pokazac, ale cisza wygladalaby
+    # jak "nic sie nie dzieje", wiec mowimy wprost, ze liczba dopiero powstaje.
+    if ($Tlo) { Notuj "koszt pamieci: nie ma jeszcze policzonej liczby" }
+    else       { Write-Host "MegaRuchacz: rachunek za pamiec agenta licze wlasnie w tle - liczba bedzie przy nastepnym otwarciu okna." }
+    return
+  }
+
+  $ogon = ""
+  if ($godzin -gt $GODZIN_KOSZT_STARY) {
+    $ogon = " (liczba z $(Get-Date $kiedy -Format 'yyyy-MM-dd HH:mm'), swiezsza bedzie za chwile)"
+  }
+
+  if ($kod -ne 0) {
+    Mow "!!! MegaRuchacz: CZESC ZASAD NIE DOCIERA DO AGENTA !!!"
+    Mow "    ${linia}${ogon}"
+    Mow "    Dopoki tego nie skrocisz, agent pracuje bez ucietego kawalka - pelny rachunek: powershell -File $Zrodlo\narzedzia\koszt-pamieci.ps1"
+  } else {
+    Mow "MegaRuchacz: ${linia}${ogon}"
+  }
+}
+
+# Raz na dobe, przy pierwszym otwarciu okna tego dnia, pelniejszy meldunek -
+# uzytkownik chcial byc informowany CODZIENNIE, a nie tylko wtedy, gdy sam
+# zajrzy do pliku. Zrodlem jest raport zadania LoreKoszt z Harmonogramu
+# (<dom>\.claude\wiedza\koszt-ostatni.txt). Gdy tego zadania nie ma albo nie
+# chodzi, mowimy i o tym: cisza wygladalaby jak "wszystko policzone".
+function Zglos-Koszt-Dzienny {
+  $stan = Czytaj-Klucze $plikKosztu
+  $dzis = (Get-Date -Format 'yyyy-MM-dd')
+  if ($stan["pelny"] -eq $dzis) { return }
+  # Znacznik idzie na dysk PRZED wypisaniem - potkniecie ma znaczyc jeden
+  # pominiety meldunek, a nie meldunek przy kazdym oknie do konca dnia.
+  $stan["pelny"] = $dzis
+  try { Zapisz-Klucze $plikKosztu $stan } catch { }
+
+  $plik = Join-Path $KatalogDomowy ".claude\wiedza\koszt-ostatni.txt"
+  $skrypt = Join-Path $Zrodlo "narzedzia\koszt-pamieci.ps1"
+  if (-not (Test-Path $plik)) {
+    if (Test-Path $skrypt) {
+      Write-Host "  Dziennego rachunku za pamiec nie ma na tej maszynie - zaloz go raz: powershell -File $skrypt -ZalozZadanie"
+    }
+    return
+  }
+
+  $dni = [int]([datetime]::Now - (Get-Item $plik).LastWriteTime).TotalDays
+  Write-Host "MegaRuchacz - dzienny rachunek za pamiec (z $((Get-Item $plik).LastWriteTime.ToString('yyyy-MM-dd HH:mm'))):"
+
+  # Z pelnego raportu bierzemy tylko to, co jest liczba albo ostrzezeniem -
+  # reszta to objasnienia, ktore uzytkownik przeczyta w pliku, jesli zechce.
+  $wybrane = @()
+  $raport = Czytaj-Tekst $plik
+  if ($raport) {
+    foreach ($l in (($raport -replace "`r`n", "`n") -split "`n")) {
+      $t = $l.Trim()
+      if (-not $t) { continue }
+      if ($t -like "RAZEM za jedna rozmowe*" -or $t -like "*doklejonych przez dobe*" -or $t -like "UWAGA *") {
+        $wybrane += $t
+      }
+    }
+  }
+  if ($wybrane.Count -eq 0) { $wybrane += "nic nie wymagalo uwagi" }
+  foreach ($t in ($wybrane | Select-Object -First 6)) { Write-Host "    $t" }
+  if ($dni -gt 2) {
+    Write-Host "    Ten raport ma $dni dni - zadanie LoreKoszt nie chodzi. Zaloz je od nowa: powershell -File $skrypt -ZalozZadanie"
+  }
+  Write-Host "    Caly rachunek: $plik"
+}
+
 # ------------------------------------------------------------------ przebieg
 # Cokolwiek by sie tu nie stalo, start sesji ma sie udac - stad kod 0 na koncu.
 try {
@@ -788,6 +983,15 @@ try {
     exit 0
   }
 
+  # Tryb pomocniczy - policz rachunek za pamiec i odloz gotowa linie do pliku
+  # podrecznego. Startuje go straznik sam, osobnym procesem, wiec nikt tu nie
+  # czeka i nikt nie czyta: zadnego wypisywania, zadnych innych sprawdzen.
+  if ($PoliczKoszt) {
+    $w = Policz-Koszt
+    if ($w) { Zapisz-Koszt $w }
+    exit 0
+  }
+
   # Tryb bezobslugowy - na maszynie z samym Codeksem to JEDYNA droga aktualizacji,
   # bo wola go hook SessionStart. Dlatego robimy tu wszystko, co nanosi zmiany:
   # pobranie nowszej wersji narzedzia, pliki zasad i poprawki na wdrozenie.
@@ -795,10 +999,14 @@ try {
   # w dzienniku, bo tutaj nie ma ekranu, na ktory dalo by sie je wypisac.
   # Poczekalnia faktow i meldunek o cyklu zostaja poza tym trybem: to prosby
   # do czlowieka, a nie zmiany na dysku, wiec w dzienniku nikt ich nie przeczyta.
+  # Rachunek za pamiec jest tu wyjatkiem i idzie do dziennika z premedytacja:
+  # jedna linia z data przy kazdym przebiegu to jedyny zapis tego, jak ten koszt
+  # rosnie w czasie - z niego widac trend, ktorego pojedyncze okno nie pokaze.
   if ($Tlo) {
     try { Odswiez-Zrodlo } catch { Mow "odswiezanie zrodla wywrocilo sie: $($_.Exception.Message)" }
     try { Pilnuj-Zasad }   catch { Mow "pilnowanie zasad wywrocilo sie: $($_.Exception.Message)" }
     try { Pilnuj-Wersji }  catch { Mow "pilnowanie wersji wdrozenia wywrocilo sie: $($_.Exception.Message)" }
+    try { Zglos-Koszt }    catch { Mow "rachunek za pamiec wywrocil sie: $($_.Exception.Message)" }
     Dopisz-Dziennik
     exit 0
   }
@@ -816,8 +1024,9 @@ try {
 
   # Jedna linia o dziennym cyklu pamieci (cykl-dzienny.ps1) - i tylko wtedy, gdy cos
   # wymaga uwagi: cykl sie nie udal albo zostala zaleglosc. Przy czystym stanie cisza,
-  # tak jak reszta straznika. Koszt pamieci doliczamy dopiero, gdy linia i tak idzie
-  # na ekran: liczy go osobny skrypt i nie ma za co placic przy kazdym otwarciu okna.
+  # tak jak reszta straznika. O koszcie pamieci nie ma tu ani slowa: to osobna linia,
+  # pokazywana ZAWSZE (patrz Zglos-Koszt), a nie dopisek doklejany do cudzego meldunku
+  # wtedy, gdy akurat cos innego nie gra.
   function Zglos-Cykl {
     $plik = Join-Path $KatalogDomowy ".claude\wiedza\cykl-ostatni.txt"
     if (-not (Test-Path $plik)) { return }        # cyklu na tej maszynie nie ma
@@ -838,13 +1047,7 @@ try {
     if (-not $stan) { $stan = "stan cyklu: $($c['status'])" }
     if ($stare) { $stan = "cykl nie chodzil od $([int]([datetime]::Now - $data).TotalDays) dni - $stan" }
 
-    $koszt = ""
-    $skrypt = Join-Path $Zrodlo "narzedzia\koszt-pamieci.ps1"
-    if (Test-Path $skrypt) {
-      try { $koszt = (& $skrypt -KatalogDomowy $KatalogDomowy -Zwiezle | Select-Object -First 1) } catch { $koszt = "" }
-    }
-    if ($koszt) { Write-Host "MegaRuchacz: $stan. $koszt" }
-    else        { Write-Host "MegaRuchacz: $stan." }
+    Write-Host "MegaRuchacz: $stan."
   }
 
   # Osobne try, zeby potkniecie sie na jednym nie zabralo drugiego.
@@ -855,5 +1058,9 @@ try {
   try { Pilnuj-Wersji }    catch { }
   try { Zglos-Kandydatow } catch { }
   try { Zglos-Cykl }       catch { }
+  # Rachunek za pamiec na koncu, zeby zostal pod reka uzytkownika - a pelniejszy
+  # meldunek raz na dobe zaraz za nim, bo objasnia te sama liczbe.
+  try { Zglos-Koszt }        catch { }
+  try { Zglos-Koszt-Dzienny } catch { }
 } catch { }
 exit 0
