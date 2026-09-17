@@ -1,9 +1,13 @@
 # Audyt sufitow pamieci i zasad. Odpowiada na dwa pytania, ktore nie moga zostac
 # bez odpowiedzi: CZY COS JEST UCINANE PO CICHU i CZY KOSZT ROSNIE NIEZAUWAZENIE.
-# Poza tym rozdziela dwa rachunki, ktore latwo ze soba pomylic: ile tokenow
+# Poza tym rozdziela trzy rachunki, ktore latwo ze soba pomylic: ile tokenow
 # dokleja sie do KAZDEJ wiadomosci (przypomnienie z hooka UserPromptSubmit),
-# a ile wchodzi RAZ, przy starcie sesji (blok zasad + warstwa stala i biezaca).
-# Czysta arytmetyka na plikach - zaden model nie jest wolany.
+# ile wchodzi RAZ, przy starcie sesji (blok zasad + warstwa stala i biezaca),
+# a ile kosztuje RAZ NA DOBE cykl wiedzy - czyli jedyne miejsce w tym narzedziu,
+# w ktorym naprawde wola sie model i wydaje tokeny uzytkownika. Dwa pierwsze to
+# TEKST doklejany do rozmowy, trzeci to PRAWDZIWE WYWOLANIE - i wlasnie dlatego
+# nie sumuja sie w jedna liczbe.
+# Sam ten skrypt modelu nie wola: czysta arytmetyka na plikach.
 #
 # CALY RACHUNEK NA ZADANIE - jedna komenda do wklejenia w terminal:
 #   powershell -ExecutionPolicy Bypass -File C:\dev\claude-worker\narzedzia\koszt-pamieci.ps1
@@ -55,6 +59,9 @@ $GodzinaZadania = "08:15"
 # ~3 znaki na token to przyblizenie dla polszczyzny - patrz adnotacja w raporcie
 $ZnakiNaToken   = 3
 $DniWaznosci    = 14
+# pomiar kosztu cyklu starszy niz tyle dni znaczy, ze cykl przestal chodzic -
+# ta sama liczba, co w straznik-zasad.ps1 przy meldunku o cyklu
+$DniCyklStary   = 2
 $ProgStalej     = 8000
 $ProgBiezacych  = 15
 $ProgPoczekalni = 10
@@ -85,10 +92,23 @@ $ProgWzrostu    = 20
 # $MinPozycjiDoUdzialu - ponizej tylu pozycji w rachunku udzial nic nie mowi
 #   (przy dwoch pozycjach jedna prawie zawsze ma ponad polowe), wiec alarm
 #   o udziale w ogole sie nie odzywa.
+# $AlarmCyklu - koszt cyklu wiedzy za JEDNA dobe. Tu skad wzielo sie 120 000,
+#   bo prog wpisany bez uzasadnienia dwa razy juz po cichu psul dzialanie:
+#     - jeden przebieg wylawiania bierze najwyzej MAX_INPUT_CHARS = 60 000 znakow
+#       materialu (lore\lore\facts.py), czyli ~20 000 tokenow wejscia; z poleceniem
+#       i odpowiedzia modelu liczymy z zapasem ~24 000 tokenow na przebieg,
+#     - na JEDNO podejscie cykl bierze najwyzej $MaxNadrabiania = 5 przebiegow
+#       (narzedzia\cykl-dzienny.ps1), czyli 5 * 24 000 = ~120 000 tokenow.
+#   Tyle wolno kosztowac pelnemu podejsciu i zwyklemu, nawet gestemu dniu pracy.
+#   Powyzej znaczy, ze cykl wracal po kolejne raty ($MaxProb = 5 podejsc na dobe,
+#   gorna granica to ~600 000 tokenow) - czyli goni zaleglosc, ktorej nie dogania,
+#   i to jest ten moment, w ktorym uzytkownik ma sie o tym dowiedziec.
+#   Gdyby ktoras z tych trzech liczb sie zmienila, ten prog trzeba przeliczyc.
 $AlarmNaWiadomosc    = 300
 $AlarmNaSesje        = 5000
 $AlarmUdzialu        = 70
 $MinPozycjiDoUdzialu = 3
+$AlarmCyklu          = 120000
 
 # Przedrostek ladunku hooka startowego Codeksa - MUSI brzmiec tak samo jak
 # w straznik-zasad.ps1 (Zbuduj-Sesje-Codex) i w wdroz.ps1, bo inaczej liczymy
@@ -409,6 +429,101 @@ function Poprzedni-Pomiar($plik) {
   return [pscustomobject]@{ Tokeny = [int]$cyfry; Data = $data }
 }
 
+# --- koszt cyklu wiedzy ------------------------------------------------------
+# Cykl dzienny (narzedzia\cykl-dzienny.ps1) wola model, zeby wylowic fakty
+# z wczorajszych rozmow. To JEDYNE miejsce w calym narzedziu, w ktorym naprawde
+# wydaja sie tokeny uzytkownika - reszta tego raportu to tekst doklejany do
+# rozmowy, a nie wywolanie. Cykl zostawia po sobie plik "klucz: wartosc", w tym
+# samym formacie co pozostale pliki stanu, z liczbami za dzis i za dzien
+# poprzedni (klucze z przedrostkiem "poprzedni.").
+#
+# Braku pliku NIE traktujemy jak awarii: znaczy on tyle, ze cykl ani razu
+# jeszcze nie policzyl kosztu - i tak wlasnie ma to byc napisane w raporcie.
+
+function Klucze-Z-Tekstu($raw) {
+  $stan = @{}
+  if (-not $raw) { return $stan }
+  foreach ($l in ($raw -split '\r?\n')) {
+    $m = [regex]::Match($l, '^\s*([a-zA-Z_][a-zA-Z0-9_.]*)\s*:\s*(.*?)\s*$')
+    if ($m.Success) { $stan[$m.Groups[1].Value] = $m.Groups[2].Value }
+  }
+  return $stan
+}
+
+function Klucz-Tekst($stan, $klucz) {
+  if (-not $stan) { return $null }
+  if (-not $stan.ContainsKey($klucz)) { return $null }
+  $v = ("" + $stan[$klucz]).Trim()
+  if (-not $v) { return $null }
+  return $v
+}
+
+function Klucz-Liczba($stan, $klucz) {
+  # $null zamiast zera przy braku i przy smieciu: zero znaczyloby "nic nie
+  # kosztowalo", a to zupelnie co innego niz "cykl tego nie podal"
+  $v = Klucz-Tekst $stan $klucz
+  if ($null -eq $v) { return $null }
+  $cyfry = ($v -replace '[^\d]', '')
+  if (-not $cyfry) { return $null }
+  return [long]$cyfry
+}
+
+function Lub-Nieznane($n) {
+  if ($null -eq $n) { return "nie wiadomo" }
+  return (Liczba $n)
+}
+
+function Kiedy-Cykl($wiek) {
+  if ($null -eq $wiek) { return "" }
+  if ($wiek -eq 0) { return "dzis" }
+  if ($wiek -eq 1) { return "wczoraj" }
+  return "$wiek dni temu"
+}
+
+function Opis-Zrodla($zrodlo) {
+  if ($zrodlo -eq "pomiar")   { return "Tokeny to POMIAR - liczby pochodza od samego narzedzia AI." }
+  if ($zrodlo -eq "szacunek") { return "Tokeny to SZACUNEK - przeliczone ze znakow, nie zmierzone." }
+  if (-not $zrodlo)           { return "Cykl nie powiedzial, czy to pomiar, czy szacunek - traktuj te liczbe ostroznie." }
+  return "Zrodlo liczby tokenow podane przez cykl: $zrodlo."
+}
+
+function Dzien-Cyklu($stan, $przedrostek) {
+  # Jeden dzien pracy cyklu. $null, gdy pod tym przedrostkiem nie ma nic
+  # sensownego - tak poznajemy, ze poprzedniego dnia po prostu jeszcze nie bylo.
+  $data      = Klucz-Tekst  $stan "${przedrostek}data"
+  $wywolania = Klucz-Liczba $stan "${przedrostek}wywolania"
+  $tokeny    = Klucz-Liczba $stan "${przedrostek}tokeny"
+  if (($null -eq $data) -and ($null -eq $wywolania) -and ($null -eq $tokeny)) { return $null }
+  $wiek = $null
+  if ($data) {
+    try {
+      $d = [datetime]::ParseExact($data, 'yyyy-MM-dd', [Globalization.CultureInfo]::InvariantCulture)
+      $wiek = ([datetime]::Today - $d).Days
+    } catch { $wiek = $null }
+  }
+  return [pscustomobject]@{
+    Data          = $data
+    Wiek          = $wiek
+    Narzedzie     = (Klucz-Tekst  $stan "${przedrostek}narzedzie")
+    Wywolania     = $wywolania
+    ZnakiWyslane  = (Klucz-Liczba $stan "${przedrostek}znaki_wyslane")
+    ZnakiOdebrane = (Klucz-Liczba $stan "${przedrostek}znaki_odebrane")
+    Tokeny        = $tokeny
+    Zrodlo        = (Klucz-Tekst  $stan "${przedrostek}tokeny_zrodlo")
+    Fakty         = (Klucz-Liczba $stan "${przedrostek}fakty")
+  }
+}
+
+function Koszt-Cyklu($plik) {
+  $tekst = Czytaj-Cicho $plik
+  if ($null -eq $tekst) { return $null }
+  $stan = Klucze-Z-Tekstu $tekst
+  $dzis = Dzien-Cyklu $stan ""
+  if ($null -eq $dzis) { return $null }
+  $dzis | Add-Member -NotePropertyName "Poprzedni" -NotePropertyValue (Dzien-Cyklu $stan "poprzedni.")
+  return $dzis
+}
+
 # --- baza Lore ---------------------------------------------------------------
 
 # Odczyt jednej liczby z lore.db bez zadnych zaleznosci: winsqlite3.dll siedzi
@@ -592,6 +707,10 @@ $katWiedzy    = Join-Path $katKlaudii "wiedza"
 $plikKandydat = Join-Path $katWiedzy "kandydaci.md"
 $plikOstatni  = Join-Path $katWiedzy "koszt-ostatni.txt"
 $plikZnacznik = Join-Path $katWiedzy ".ostatnie-wyciaganie"
+# koszt cyklu wiedzy - pisze go sam cykl po wylowieniu faktow; tego pliku moze
+# nie byc i to NIE jest awaria, tylko "cykl jeszcze nie liczyl kosztu"
+$plikCyklKoszt   = Join-Path $katWiedzy ".koszt-cyklu.txt"
+$plikCyklOstatni = Join-Path $katWiedzy "cykl-ostatni.txt"
 $bazaLore     = Join-Path $katKlaudii "lore.db"
 $plikAgents   = Join-Path $KatalogDomowy ".codex\AGENTS.md"
 
@@ -844,6 +963,12 @@ if ($zasadyCcTresc) {
 }
 $tokSesja = Policz-Udzialy $kubSesja
 
+# Trzeci rachunek: cykl wiedzy raz na dobe. NIE doliczamy go do zadnego z dwoch
+# powyzej - to inne pieniadze. Tamte to tekst doklejany do rozmowy, ten to
+# prawdziwe wywolanie modelu, a zsumowana liczba mowilaby, ze tyle kosztuje
+# kazda sesja. $null znaczy "cykl jeszcze nie liczyl kosztu".
+$cykl = Koszt-Cyklu $plikCyklKoszt
+
 # --- wypisanie: tryb zwiezly (DOKLADNIE JEDNA LINIA) -------------------------
 
 $ucinane = @(Sortuj-Sufity @($sufity | Where-Object { $_.Ucina -and $_.Przekroczony }))
@@ -905,6 +1030,21 @@ if ($skokKosztu) {
   $alarmy += Alarm "+$zmianaProc% od poprzedniego pomiaru" `
     ("Start sesji urosl o $zmianaProc% od poprzedniego pomiaru ($(Liczba $poprz.Tokeny) -> $(Liczba $tokSesja) tokenow) - " +
      "sprawdz, co doszlo do $plikClaude.")
+}
+
+# Cykl wiedzy. Jedyny alarm w tym raporcie, ktory mowi o naprawde wydanych
+# tokenach, a nie o doklejonym tekscie - dlatego liczba stoi tu osobno i nie
+# jest z niczym sumowana.
+if ($cykl -and ($null -ne $cykl.Tokeny) -and ([long]$cykl.Tokeny -gt $AlarmCyklu)) {
+  $czymCykl = $cykl.Narzedzie
+  if (-not $czymCykl) { $czymCykl = "nieznanym narzedziem" }
+  $dzienCykl = $cykl.Data
+  if (-not $dzienCykl) { $dzienCykl = "ostatniego dnia" }
+  $alarmy += Alarm "cykl wiedzy $(Liczba $cykl.Tokeny) tokenow (prog $(Liczba $AlarmCyklu))" `
+    ("Cykl wiedzy kosztowal $dzienCykl ~$(Liczba $cykl.Tokeny) tokenow w $(Lub-Nieznane $cykl.Wywolania) wywolaniach ($czymCykl), " +
+     "prog to $(Liczba $AlarmCyklu). To jedyna pozycja w tym raporcie placona prawdziwym wywolaniem modelu. " +
+     "Tyle wychodzi, gdy cykl nadrabia zaleglosc raty po racie - zajrzyj do $plikCyklOstatni. " +
+     "Trwale zbijesz to, zmniejszajac `$MaxNadrabiania albo `$MaxProb w narzedzia\cykl-dzienny.ps1.")
 }
 
 if ($Zwiezle) {
@@ -1053,6 +1193,9 @@ if ($stare.Count -gt 0) {
 if (($kandydaci -ne $null) -and ($kandydaci -gt $ProgPoczekalni)) {
   $ostrzezenia += "W poczekalni czeka $kandydaci faktow (prog $ProgPoczekalni) - zatwierdz je albo odrzuc, bo same sie nie zuzyja."
 }
+if ($cykl -and ($null -ne $cykl.Wiek) -and ($cykl.Wiek -gt $DniCyklStary)) {
+  $ostrzezenia += "Koszt cyklu wiedzy jest z dnia $($cykl.Data), sprzed $($cykl.Wiek) dni - od tego czasu cykl nie wylowil ani jednego faktu, wiec wiedza nie przyrasta."
+}
 
 # --- wypisanie: pelny raport -------------------------------------------------
 
@@ -1189,7 +1332,55 @@ if (-not $poprz) {
 }
 
 Linia ""
-Linia "4. Warstwa referencyjna ($katWiedzy)"
+Linia "4. RAZ NA DOBE - cykl wiedzy (jedyne prawdziwe wolanie modelu)"
+Linia "  Dwa rachunki wyzej to TEKST doklejany do rozmowy. Ten jest innego rodzaju:"
+Linia "  cykl dzienny wola model, zeby przeczytal wczorajsze rozmowy i wylowil z nich"
+Linia "  fakty. Dlatego nie dodajemy go do tamtych - to osobne pieniadze, placone raz"
+Linia "  na dobe, a zsumowane sugerowalyby, ze tyle kosztuje kazda sesja."
+if (-not $cykl) {
+  Linia "  Cykl jeszcze nie liczyl kosztu - nie ma pliku $plikCyklKoszt."
+  Linia "  To normalny stan, nie awaria: liczba pojawi sie po pierwszym przebiegu cyklu,"
+  Linia "  ktory wylowi fakty (narzedzia\cykl-dzienny.ps1)."
+} else {
+  $opisDnia = $cykl.Data
+  if (-not $opisDnia) { $opisDnia = "dzien nieznany" }
+  $kiedyCykl = Kiedy-Cykl $cykl.Wiek
+  if ($kiedyCykl) { $opisDnia = "$opisDnia ($kiedyCykl)" }
+  $czymCyklOpis = $cykl.Narzedzie
+  if (-not $czymCyklOpis) { $czymCyklOpis = "nie wiadomo (cykl tego nie podal)" }
+  Linia ("  Dzien: {0}, narzedzie: {1}" -f $opisDnia, $czymCyklOpis)
+  Linia ("  {0,-38} {1,8}        ~{2,6} tokenow" -f "CYKL WIEDZY RAZEM", "", (Lub-Nieznane $cykl.Tokeny))
+  Linia ("  Wywolan modelu: {0}, wylowionych faktow: {1}" -f `
+         (Lub-Nieznane $cykl.Wywolania), (Lub-Nieznane $cykl.Fakty))
+  Linia ("  Wyslane: {0} znakow, odebrane: {1} znakow" -f `
+         (Lub-Nieznane $cykl.ZnakiWyslane), (Lub-Nieznane $cykl.ZnakiOdebrane))
+  Linia ("  {0}" -f (Opis-Zrodla $cykl.Zrodlo))
+  $poprzCykl = $cykl.Poprzedni
+  if ((-not $poprzCykl) -or ($null -eq $poprzCykl.Tokeny) -or ($null -eq $cykl.Tokeny)) {
+    Linia "  Poprzedniego dnia nie ma z czym porownac - cykl nie podal jego liczb."
+  } else {
+    $roznicaCykl = [long]$cykl.Tokeny - [long]$poprzCykl.Tokeny
+    $procCykl = 0
+    if ([long]$poprzCykl.Tokeny -gt 0) {
+      $procCykl = [int][math]::Round(100.0 * $roznicaCykl / [double]$poprzCykl.Tokeny)
+    }
+    $opisRoznicy = "bez zmian"
+    if ($roznicaCykl -gt 0)     { $opisRoznicy = "+$(Liczba $roznicaCykl), +$procCykl%" }
+    elseif ($roznicaCykl -lt 0) { $opisRoznicy = "$(Liczba $roznicaCykl), $procCykl%" }
+    $dzienPoprz = $poprzCykl.Data
+    if (-not $dzienPoprz) { $dzienPoprz = "dzien nieznany" }
+    Linia ("  Poprzedni dzien ({0}): {1} -> {2} tokenow ({3})" -f `
+           $dzienPoprz, (Liczba $poprzCykl.Tokeny), (Liczba $cykl.Tokeny), $opisRoznicy)
+  }
+  if (($null -ne $cykl.Wiek) -and ($cykl.Wiek -gt $DniCyklStary)) {
+    Linia ("  Ta liczba ma {0} dni - cykl od tego czasu nie liczyl kosztu, czyli najpewniej" -f $cykl.Wiek) "Yellow"
+    Linia "  w ogole nie chodzi. Sprawdz: powershell -File narzedzia\cykl-dzienny.ps1 -Proba" "Yellow"
+  }
+  Linia "  Zapisal to sam cykl: $plikCyklKoszt"
+}
+
+Linia ""
+Linia "5. Warstwa referencyjna ($katWiedzy)"
 if (-not (Test-Path -LiteralPath $katWiedzy)) {
   Linia "  Nie ma tego katalogu - warstwy referencyjnej jeszcze nie ma."
 } else {
@@ -1199,7 +1390,7 @@ if (-not (Test-Path -LiteralPath $katWiedzy)) {
 }
 
 Linia ""
-Linia "5. Poczekalnia ($plikKandydat)"
+Linia "6. Poczekalnia ($plikKandydat)"
 if ($kandydaci -eq $null) {
   Linia "  Nie ma pliku kandydatow - nic nie czeka na decyzje. To normalne."
 } else {
@@ -1207,7 +1398,7 @@ if ($kandydaci -eq $null) {
 }
 
 Linia ""
-Linia "6. Higiena warstwy biezacej (wpis wazny przez $DniWaznosci dni)"
+Linia "7. Higiena warstwy biezacej (wpis wazny przez $DniWaznosci dni)"
 if ((-not $w.Jest) -or (-not $w.MaSekcje)) {
   Linia "  Brak danych - nie ma czego sprawdzac."
 } elseif ($w.Wpisy.Count -eq 0) {
@@ -1220,7 +1411,7 @@ if ((-not $w.Jest) -or (-not $w.MaSekcje)) {
 }
 
 Linia ""
-Linia "7. Inne sufity znalezione w kodzie (stale, wiec nie ma tu czego mierzyc)"
+Linia "8. Inne sufity znalezione w kodzie (stale, wiec nie ma tu czego mierzyc)"
 $inne = @(
   @{ Plik = $plikIndeksu;  Wzor = '(?m)^MAX_TOOL_INPUT\s*=\s*([\d_]+)';     Opis = "opis wywolania narzedzia zapisywany w pamieci Lore jest przycinany do {0} znakow (lore\lore\index.py)" },
   @{ Plik = $plikIndeksu;  Wzor = '(?m)^MAX_TOOL_RESULT\s*=\s*([\d_]+)';    Opis = "wynik narzedzia zapisywany w pamieci Lore jest przycinany do {0} znakow (lore\lore\index.py)" },
@@ -1243,7 +1434,7 @@ if (-not $bylo) {
 }
 
 Linia ""
-Linia "8. Ostrzezenia"
+Linia "9. Ostrzezenia"
 if ($ostrzezenia.Count -eq 0) {
   Linia "  Nic nie wymaga uwagi - nic nie jest ucinane, a pamiec trzyma sie w rozsadnych rozmiarach."
 } else {
@@ -1253,13 +1444,23 @@ if ($ostrzezenia.Count -eq 0) {
 # Podsumowanie: dwie liczby i nic wiecej. Zadnych mnozen - uzytkownik powiedzial
 # wprost, ze po przeliczeniu na dobe czy na sto wiadomosci i tak nic nie wie.
 Linia ""
-Linia "9. Podsumowanie"
+Linia "10. Podsumowanie"
 if ($tokWiadomosc -gt 0) {
   Linia "  Kazda Twoja wiadomosc: +$(Liczba $tokWiadomosc) tokenow."
 } else {
   Linia "  Kazda Twoja wiadomosc: nie umiem zmierzyc - nie znalazlem pliku z przypomnieniem."
 }
 Linia "  Start sesji: +$(Liczba $tokSesja) tokenow, raz."
+# Trzecia liczba stoi osobno i celowo nie jest dodana do dwoch powyzej:
+# tamte to doklejony tekst, ta to prawdziwie wydane tokeny.
+if ($cykl -and ($null -ne $cykl.Tokeny)) {
+  $ogonZrodla = ""
+  if ($cykl.Zrodlo -eq "szacunek") { $ogonZrodla = " (szacunek)" }
+  elseif ($cykl.Zrodlo -eq "pomiar") { $ogonZrodla = " (pomiar)" }
+  Linia "  Cykl wiedzy: ~$(Liczba $cykl.Tokeny) tokenow$ogonZrodla raz na dobe - i to jedyne z tych trzech, co naprawde wola model."
+} else {
+  Linia "  Cykl wiedzy: kosztu jeszcze nie policzyl - liczba pojawi sie po pierwszym przebiegu cyklu."
+}
 $sciezkaSkryptu = $PSCommandPath
 if (-not $sciezkaSkryptu) { $sciezkaSkryptu = Join-Path $Zrodlo "narzedzia\koszt-pamieci.ps1" }
 Linia ""
