@@ -664,3 +664,48 @@ bez „Instalacja NIEPELNA", stan kolejki na prawdziwej bazie (172 kawałki,
 **Sprawdzone uruchomieniem:** dwukrotne wdrożenie do tego samego projektu kończy
 się kodem 0 i NIE dubluje wpisów (`SessionStart` ma 2 grupy, nie 4), rejestr
 modułów nadal zwraca poprawny JSON.
+
+## 0.15.0 — 2026-09-17
+
+Wymaganie użytkownika, dosłownie: *„nie może dojść do sytuacji, gdzie po cichu coś
+się ucina bo sufit, kategorycznie nie może być"* oraz *„nie może być też, że
+zapytanie o godzinę będzie mnie kosztować kilka milionów tokenów"*.
+
+**Audyt sufitów** (`narzedzia\koszt-pamieci.ps1`)
+- Sekcja „co jest ucinane w tej chwili" na samej górze raportu: ile znaków ginie,
+  ile to procent i **od którego nagłówka zaczyna się ucięta część** — żeby było
+  widać, co konkretnie przepada, a nie tylko że przepada.
+- Tabela wszystkich sufitów: wartość, limit, zapas, skutek przekroczenia.
+  Przekroczone i ciasne na górze. Rozróżnienie **sufit NASZ** (do podniesienia
+  jedną linijką) od **narzuconego przez narzędzie** (32 KiB `AGENTS.md` — z tym
+  trzeba żyć), bo bez tego nie wiadomo, czy da się coś zrobić.
+- Limity czytane ze źródeł, nie przepisane. Przepisana liczba zaczyna kłamać przy
+  pierwszej zmianie w pliku źródłowym — ta klasa błędu wyszła dziś trzy razy.
+- Porównanie z poprzednim pomiarem; wzrost powyżej 20% to ostrzeżenie. To jest
+  zabezpieczenie przed drugim scenariuszem: niezauważonym puchnięciem pamięci.
+- Kod wyjścia 1, gdy cokolwiek jest ucinane.
+
+**Koszt widoczny przy każdym starcie sesji** (`narzedzia\straznik-zasad.ps1`)
+- Jedna linia pod Claude Code i pod Codeksem. Przy pierwszym otwarciu danego dnia
+  pełniejszy rachunek z raportu dobowego.
+- Liczba czytana z pliku, nie liczona na żywo — pomiar trwa ponad dwie sekundy,
+  a start sesji nie ma na co czekać. Przeliczenie startuje osobno, w tle.
+- Pod Codeksem osobny hook `SessionStart` podaje tę linię przez
+  `additionalContext` — hook strażnika celowo nic nie wstrzykuje do rozmowy,
+  więc bez tego liczba powstawałaby, ale nikt by jej nie zobaczył.
+
+**Dwa ciche ucinania znalezione i usunięte**
+- Zasady kierownika dla Codeksa: 13 129 znaków przy suficie 8 000 — ginęło 39%
+  tekstu, **i to jego koniec**, od sekcji „Kiedy NIE rozdawać". Czyli reguły
+  o problemach na głębokość, zawodzących workerach i meldowaniu nie docierały
+  do modelu wcale.
+- Przypomnienie doklejane do KAŻDEJ wiadomości: 592 znaki przy suficie 500 —
+  ginęło 16% przy każdym poleceniu.
+- Obie liczby były **nasze**, wpisane bez uzasadnienia. Claude Code trawi
+  14 319 znaków zasad bez żadnego limitu, więc dawanie Codeksowi połowy nie miało
+  podstaw. Podniesione do 24 000 i 1 500, czyli z zapasem — a gdyby pliki do nich
+  dorosły, audyt powie o tym, zamiast ciąć.
+
+**Sprawdzone uruchomieniem:** audyt wykrył oba ucinania przed poprawką i zwraca
+`nic nie jest ucinane` z kodem 0 po niej; linia o koszcie pokazuje się w sesji
+Claude Code i w poprawnym JSON-ie dla Codeksa.
