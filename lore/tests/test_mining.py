@@ -6,6 +6,7 @@ import itertools
 import json
 import sqlite3
 import subprocess
+from pathlib import Path
 
 import numpy as np
 import pytest
@@ -362,6 +363,8 @@ def called(monkeypatch):
 
     def fake_run(argv, **kwargs):
         seen["argv"], seen["stdin"] = argv, kwargs.get("input", "")
+        if "--output-last-message" in argv:  # codex writes its answer to the file, it does not print it
+            Path(argv[argv.index("--output-last-message") + 1]).write_text("odpowiedz", encoding="utf-8")
         return subprocess.CompletedProcess(argv, 0, "odpowiedz", "")
 
     monkeypatch.setattr(facts.subprocess, "run", fake_run)
@@ -381,7 +384,10 @@ def test_with_codex_alone_the_dig_still_has_a_model(unforced, called, monkeypatc
     monkeypatch.setattr(facts.shutil, "which", installed("codex"))
 
     assert mining.ask_model("material") == "odpowiedz"
-    assert called["argv"] == ["/bin/codex", *facts.CODEX_ARGS]
+    # the same command line as the daily harvest, with the temporary answer file filled in
+    answer_file = called["argv"][called["argv"].index("--output-last-message") + 1]
+    assert called["argv"] == ["/bin/codex",
+                              *(answer_file if a == facts.ANSWER_SLOT else a for a in facts.CODEX_ARGS)]
     assert called["stdin"] == f"{mining.PROMPT}\n\nmaterial"  # codex exec takes one prompt
 
 

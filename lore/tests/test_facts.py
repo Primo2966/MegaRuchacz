@@ -4,7 +4,9 @@ from __future__ import annotations
 
 import json
 import re
+import subprocess
 from datetime import datetime, timedelta, timezone
+from pathlib import Path
 
 import pytest
 
@@ -439,11 +441,12 @@ def test_with_claude_alone_the_claude_command_line_is_used(unforced, monkeypatch
     monkeypatch.setattr(facts.shutil, "which", installed("claude"))
 
     cli = facts.find_model_cli()
-    argv, stdin = cli.invocation("instrukcja", "material")
+    argv, stdin = cli.invocation("instrukcja", "material", Path("odpowiedz.txt"))
 
     assert (cli.name, cli.verified) == ("claude", True)
     assert argv[1:] == [*facts.MODEL_ARGS, "instrukcja"]  # the instruction in argv
     assert stdin == "material"  # the material on stdin, where 60 k characters fit
+    assert not cli.answer_in_file()  # claude prints the answer, there is no file to point it at
 
 
 def test_with_codex_alone_the_knowledge_layer_still_has_a_model(unforced, monkeypatch):
@@ -451,12 +454,25 @@ def test_with_codex_alone_the_knowledge_layer_still_has_a_model(unforced, monkey
     monkeypatch.setattr(facts.shutil, "which", installed("codex"))
 
     cli = facts.find_model_cli()
-    argv, stdin = cli.invocation("instrukcja", "material")
+    argv, stdin = cli.invocation("instrukcja", "material", Path("/tmp/odpowiedz.txt"))
 
     assert cli.name == "codex"
-    assert not cli.verified  # this command line was never run here — the code admits it
-    assert argv[1:] == list(facts.CODEX_ARGS)
+    assert cli.verified  # 2026-09-17: the switches come from a real `codex exec --help`
+    assert argv[1:] == [a if a != facts.ANSWER_SLOT else str(Path("/tmp/odpowiedz.txt"))
+                        for a in facts.CODEX_ARGS]
     assert stdin == "instrukcja\n\nmaterial"  # codex exec takes one prompt, so both go together
+
+
+def test_the_codex_command_line_expects_nobody_at_the_console(unforced, monkeypatch):
+    """It runs at 08:05 from the scheduler: no colours in the text, nothing written, nothing asked."""
+    monkeypatch.setattr(facts.shutil, "which", installed("codex"))
+
+    argv, _ = facts.find_model_cli().invocation("instrukcja", "material", Path("odp.txt"))
+
+    assert argv[-1] == "-"  # the prompt comes from stdin, so the material has no size limit
+    for pair in (("--color", "never"), ("-s", "read-only")):
+        assert argv[argv.index(pair[0]) + 1] == pair[1]
+    assert "--output-last-message" in argv and facts.ANSWER_SLOT not in argv
 
 
 def test_claude_wins_when_both_tools_are_installed(unforced, monkeypatch):
@@ -490,6 +506,70 @@ def test_a_forced_tool_that_is_missing_is_not_quietly_replaced(monkeypatch):
     with pytest.raises(facts.ModelMissing) as e:
         facts.find_model_cli()
     assert "codex" in str(e.value)
+
+
+# ---------------------------------------------------------------- the answer coming back
+
+# what `codex exec` really prints: the run of the session, with the answer nowhere to be parsed out
+SESSION_NOISE = """[2026-09-17T08:05:00] OpenAI Codex v0.4.0
+[2026-09-17T08:05:01] thinking: the user wants a list of facts
+[2026-09-17T08:05:03] exec bash -lc 'ls' succeeded in 12ms
+[2026-09-17T08:05:04] tokens used: 4321
+"""
+
+
+@pytest.fixture
+def codex(unforced, monkeypatch):
+    """`codex exec` stood in for: prints the session, writes the answer where it was told to.
+
+    Codex is not installed on this machine, so the command line is checked by substitution — the
+    point is what the file gets read for, not what the real tool answers.
+    """
+    monkeypatch.setattr(facts.shutil, "which", installed("codex"))
+    seen: dict = {"answer": "- Firma użytkownika sprzedaje olejki na eBay.\n"}
+
+    def fake_codex(argv, **kwargs):
+        seen["path"] = Path(argv[argv.index("--output-last-message") + 1])
+        if seen["answer"] is not None:
+            seen["path"].write_text(seen["answer"], encoding="utf-8")
+        return subprocess.CompletedProcess(argv, 0, SESSION_NOISE, "")
+
+    monkeypatch.setattr(facts.subprocess, "run", fake_codex)
+    return seen
+
+
+def test_the_codex_answer_is_read_from_the_file_not_from_the_session(codex):
+    answer = facts.ask_model("material")
+
+    assert answer == "- Firma użytkownika sprzedaje olejki na eBay."
+    assert "thinking" not in answer and "tokens used" not in answer  # the session stays out
+    # and it goes straight into the parser, bullet and all
+    assert [f.text for f in facts.parse_facts(answer)] == ["Firma użytkownika sprzedaje olejki na eBay."]
+
+
+def test_the_temporary_answer_file_does_not_survive_the_call(codex):
+    facts.ask_model("material")
+
+    assert not codex["path"].exists()
+    assert not codex["path"].parent.exists()  # the whole scratch directory goes with it
+
+
+def test_a_codex_run_that_writes_no_answer_is_an_error(codex):
+    codex["answer"] = None  # the file never appears — a silent empty harvest would look like "no facts"
+
+    with pytest.raises(RuntimeError) as e:
+        facts.ask_model("material")
+    assert "--output-last-message" in str(e.value)
+    assert "tokens used: 4321" in str(e.value)  # the tail of the session, to see what went wrong
+    assert not codex["path"].exists()  # and it is cleaned up even when it blows up
+
+
+def test_a_codex_run_that_writes_an_empty_answer_is_an_error(codex):
+    codex["answer"] = "   \n"
+
+    with pytest.raises(RuntimeError) as e:
+        facts.ask_model("material")
+    assert "--output-last-message" in str(e.value)
 
 
 def test_the_dry_run_names_the_tool_it_would_use(waiting_room, unforced, monkeypatch):
