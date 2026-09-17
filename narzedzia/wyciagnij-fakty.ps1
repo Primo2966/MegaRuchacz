@@ -9,6 +9,7 @@
 #   ... -Zrodlo <sciezka>   katalog glowny repozytorium (domyslnie: katalog nad narzedzia\)
 #   ... -Proba              pokazuje, co by zrobil, i NIE zapisuje niczego
 #   ... -Nadrabiaj <N>      do N przebiegow pod rzad; konczy wczesniej, gdy zaleglosci sie skoncza
+#   ... -Kolejka            wypisuje SAME LICZBY o stanie kolejki i konczy; nic nie zapisuje
 #   ... -ZalozZadanie       zaklada zadanie "LoreFacts" w harmonogramie (codziennie 08:05)
 #   ... -UsunZadanie        kasuje to zadanie
 
@@ -16,6 +17,7 @@ param(
   [string]$Zrodlo = (Split-Path -Parent $PSScriptRoot),
   [switch]$Proba,
   [int]$Nadrabiaj = 1,
+  [switch]$Kolejka,
   [switch]$ZalozZadanie,
   [switch]$UsunZadanie
 )
@@ -167,6 +169,28 @@ function Usun-Zadanie {
   exit 0
 }
 
+# ---------------------------------------------------------------- stan kolejki
+
+# Cykl dzienny decyduje na podstawie tych liczb, ile materialu wziac - i dlatego dostaje
+# je jako liczby, a nie jako zdanie do rozszyfrowania. Wyczytywanie ich z tekstu przebiegu
+# ("-Nadrabiaj 4") juz raz zawiodlo: cykl te liczbe czytal, ale uzywal tylko do podsumowania.
+# Przebieg probny nie wola modelu i niczego nie zapisuje (znacznika nie przesuwa), a zmierzony
+# 2026-09-17 trwa 0,4 s - wolno go wiec zrobic PRZED decyzja, ile brac.
+# apostrofy, nie cudzyslowy: kod idzie do pythona jako JEDEN argument, a cudzyslow w
+# argumencie programu natywnego przechodzi przez escapowanie Windowsa - po co ryzykowac
+$KodKolejki = @'
+from lore import facts;r=facts.run(dry_run=True);print('kolejka.status: %s' % r.get('status',''));print('kolejka.kawalki: %d' % (r.get('chunks',0)+r.get('pending',0)));print('kolejka.przebiegi: %d' % ((r.get('runs_left',0)+1) if r.get('chunks',0) else 0))
+'@
+
+function Pokaz-Kolejke {
+  # "+1": runs_left liczy sie od tego, co ZOSTAJE po biezacej porcji, a proba tej porcji
+  # nie zabrala. Pelne domkniecie kolejki to wiec ta porcja plus reszta.
+  & $script:Uv --directory $script:Lore run python -c $KodKolejki
+  $kod = $LASTEXITCODE
+  if ($kod -ne 0) { Blad "nie udalo sie odczytac stanu kolejki (kod $kod)" }
+  exit $kod
+}
+
 # ---------------------------------------------------------------- jeden przebieg
 
 function Wyciagnij-Fakty {
@@ -188,6 +212,7 @@ if ($Nadrabiaj -lt 1) { $Nadrabiaj = 1 }
 
 Sprawdz-Warunki
 
+if ($Kolejka)      { Pokaz-Kolejke }
 if ($UsunZadanie)  { Usun-Zadanie }
 if ($ZalozZadanie) { Zaloz-Zadanie }
 
