@@ -248,3 +248,82 @@ NIE wchodzi do hasha - edycja skryptu NIE kasuje zaufania.** Zatwierdza sie raz.
 - Wniosek wdrozeniowy: samoaktualizacje wolno wpiac w `SessionStart` Codeksa - uzytkownik
   zatwierdza `/hooks` RAZ, a my mozemy potem dowolnie poprawiac tresc skryptu. Ponownego
   zatwierdzenia wymaga tylko zmiana samej linii `command` / `timeout` / `matcher`.
+
+## Orca - wbudowana orkiestracja (rozpoznanie 2026-09-17)
+
+Orca to osobna aplikacja (Electron) instalowana w `C:\Users\Primo\AppData\Local\Programs\orca\`.
+Binarka CLI: `resources\bin\orca.exe` (+ `orca.cmd`). Stan runtime w
+`C:\Users\Primo\AppData\Roaming\orca\` - m.in. `orchestration.db` (SQLite, stan Runow/Taskow/
+Dispatchow), `agent-sessions`, `terminal-history`, `codex-runtime-home`.
+
+- `C:\Users\Primo\.claude\skills\orchestration\SKILL.md` - TYLKO ZAJAWKA (discovery stub).
+  Prawdziwy przewodnik jest w binarce: `orca skills get orchestration` (compact), `--full`
+  (kernel + wszystkie referencje), `--reference references/<plik>.md`.
+- ZRODLO PRZEWODNIKA NA DYSKU, bez uruchamiania Orki:
+  `...\orca\resources\app.asar.unpacked\out\cli\bundled-skill-guides.js` - eksportuje
+  `BUNDLED_SKILL_GUIDES` (tablica 8 skilli, pola `markdown`, `fullMarkdown`, `references`).
+  Skill `orchestration`: kernel 13 KB, `fullMarkdown` 42 KB, 7 referencji: `coordinator-loop`,
+  `worker-contract`, `placement-and-remote`, `messaging-and-gates`, `recovery-and-cleanup`,
+  `low-level-topology`, `legacy-contract-migration`.
+- Kod komend: `...\out\cli\handlers\orchestration\*.js` (worker-launch-handler, gate-handlers,
+  message-*, task-handlers, run-handlers, dispatch-handlers, worker-observation-handlers),
+  specyfikacje w `...\out\cli\specs\orchestration.js` i `orchestration-worker-specs.js`.
+
+### Model pojeciowy Orki
+
+Run (trwala przestrzen nazw + skrzynka koordynatora; NIE planuje i NIE umieszcza workerow)
+-> Task (praca) -> Dispatch (jedna autorytatywna proba wykonania Taska). Autorytet zycia
+workera pochodzi z aktywnego Dispatcha, nie z tytulu terminala ani widocznego panelu.
+
+- Komendy (z `out\cli`): `run-create/run-list/run-show/run-use/run-current`,
+  `task-create/task-list/task-update`, `worker-start/worker-list/worker-show/worker-read/
+  worker-stop/worker-abandon/worker-retain/worker-release`, `check` (z `--wait --types
+  worker_done,escalation,question --timeout-ms`, `--ack`, `--peek`, `--all`, `--terminal`),
+  `send`, `reply`, `ask`, `inbox`, `gate-create/gate-list/gate-resolve`,
+  `coordinator-start/coordinator-stop`, `dispatch --inject`, `reset`, `summary`, `state`.
+- IZOLACJA: `worker-start --worktree current | new-child | new-top-level | id:<repo::sciezka>`,
+  plus `--name`, `--setup run`, `--repo`, `--on <serwer>` (SSH/WSL/zdalny host Orki).
+  Domyslna REKOMENDACJA Orki to `current` - worktree tylko na zyczenie albo przy realnym
+  konflikcie. Workspace moze byc zwyklym FOLDEREM (bez gita).
+- SILNIKI MIESZANE: `--agent claude | codex | cursor | opencode | gemini | droid | grok`
+  (adresy grupowe `@claude`, `@codex`, `@opencode`, `@gemini`, `@droid`, `@grok`, `@cursor`,
+  `@all`, `@idle`, `@worktree:<id>`). `--model <id>` i `--effort` (wymaga `--model`).
+- WIADOMOSCI: dwukierunkowe, trwale, FIFO. Worker pyta blokujaco `ask` (durable question,
+  wznawiane po timeoucie po ID wiadomosci), koordynator odpowiada `reply --id`. Adres
+  `dispatch:<id>` / `run:<id>`. Skrzynka koordynatora odtwarza te sama paczke (do 50
+  wiadomosci) az do `--ack <deliveryId>`.
+- GRAF ZADAN: `task-create --deps <json_array>`, `task-list --ready --brief`. Orca sama
+  przestawia zadanie na `ready`. Workerzy moga rozdawac dalej (zagniezdzanie), ale jest
+  limit glebokosci - blad `nested_worker_depth_exceeded`; nowy Run go NIE resetuje.
+- BRAMKI DECYZYJNE: `gate-create --task --question --options`, `gate-resolve`, `gate-list`.
+- KONTRAKT WORKERA (kernel): dokladnie jeden `worker_done` z obu ID, `--outcome
+  succeeded|failed` i **trzyzdaniowym streszczeniem**; dluzsze tresci przez `--report-path`;
+  `--files-modified`; heartbeat tylko w rytmie z preambuly; po `worker_done` bezczynnosc.
+- KONTRAKT ZLECENIA (`Task-spec contract`): Target, Change, Constraints, Ownership,
+  Observable acceptance.
+- ROZLICZENIE: po kazdym settlement dokladnie jedno z: ponowne uzycie terminala /
+  `worker-retain` / `worker-release`. Tura koordynatora nie moze sie skonczyc, dopoki
+  `worker-list --terminal-state reclaimable` cos zwraca.
+- GDZIE DZIALA: to CLI, wiec model wola je z wnetrza sesji (skill jest w `~/.claude/skills`),
+  a Orca dodatkowo wstrzykuje workerowi preambule z Task ID i Dispatch ID. Stan widac
+  rownolegle w aplikacji Orki.
+
+### Orca a MegaRuchacz - granica
+
+- Orca orkiestruje PROCESY I STAN (trwala baza, cykl zycia workera, placement, poczta,
+  DAG, bramki). MegaRuchacz orkiestruje ZACHOWANIE (wstrzykiwane zasady: kiedy dzielic,
+  kiedy NIE dzielic, mapa projektu, rejestr `worklog.md`, limit raportu, sprzatanie galezi).
+- Pokrycie jest realne w trzech miejscach: limit raportu (Orca: 3 zdania + `--report-path`),
+  samowystarczalne zlecenie (Orca: Task-spec contract) i pytanie blokujace
+  (Orca: `ask`/`reply`, MegaRuchacz: `SendMessage` do `main`).
+- Czego Orca NIE MA: mapy projektu (odpowiednika `.claude/mapa.md`), reguly "kiedy NIE
+  rozdawac" (debugowanie, jedna gleboka zmiana, drobiazg) ani obowiazku commita przed
+  kasowaniem kopii roboczej. `task-list --ready` jest nazwane "external memory", ale to
+  pamiec o ZADANIACH, nie o tym, gdzie co lezy w repo.
+- W repo `claude-worker` jest tylko `narzedzia\orca-ustawienia.js` (przenoszenie sekcji
+  `settings`/`ui` z `orca-data.json` miedzy komputerami) - `wdroz.ps1` ani
+  `straznik-zasad.ps1` NIE wspominaja o Orce i nic dla niej nie wdrazaja.
+- `C:\Users\Primo\.claude\mr\megaruchacz-zasady-orca.md` - ISTNIEJE wariant zasad kierownika
+  pod Orke (rozdawanie przez `orca orchestration run-create` / `task-create` / `worker-start
+  --worktree new-child --agent claude`, odbior przez `check --wait`, plaskie drzewo).
+  NIE jest sledzony w gicie i nie wdraza go instalator - lezy tylko na tej maszynie.
