@@ -29,6 +29,22 @@ def test_closing_the_group_stores_the_glued_pair(environment):
     assert text == "user: Are we moving the indexer?\n\nassistant: I suggest e5-small."
 
 
+def test_a_stored_chunk_knows_when_it_landed_not_only_when_it_was_said(environment):
+    """`ts` is the moment of the conversation, `indexed_at` the moment it entered the database.
+
+    The daily harvest walks the second one — the transcripts are dated in the past and indexing
+    happens whenever the scheduler gets round to it.
+    """
+    p = environment.transcript(("user", "Are we moving the indexer?"), ("assistant", "I suggest e5-small."))
+    environment.index(p)
+    environment.append(p, ("assistant", LONG))
+    environment.index(p)
+
+    rows = environment.conn.execute("SELECT ts, indexed_at FROM chunks ORDER BY id").fetchall()
+    assert rows and all(landed > said for said, landed in rows)
+    assert len({landed for _, landed in rows}) == 1  # one pass, one stamp — the id breaks the ties
+
+
 def test_resuming_adds_data_and_does_not_duplicate(environment):
     p = environment.transcript(("user", "Are we moving the indexer?"), ("assistant", "I suggest e5-small."))
     environment.index(p)

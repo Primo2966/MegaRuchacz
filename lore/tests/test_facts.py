@@ -27,17 +27,29 @@ def waiting_room(tmp_path, monkeypatch, environment):
     knowledge = tmp_path / "wiedza"
     monkeypatch.setattr(facts, "KNOWLEDGE_DIR", knowledge)
     monkeypatch.setattr(facts, "MARKER_PATH", knowledge / ".ostatnie-wyciaganie")
+    monkeypatch.setattr(facts, "MARKER_ID_PATH", knowledge / ".ostatnie-wyciaganie-id")
+    monkeypatch.setattr(facts, "DAY_ZERO_PATH", knowledge / ".dzien-zero")
     monkeypatch.setattr(facts, "CANDIDATES_PATH", knowledge / "kandydaci.md")
     monkeypatch.setattr(facts, "RULES_PATH", tmp_path / "CLAUDE.md")
     monkeypatch.setattr(facts, "DB_PATH", tmp_path / "lore.db")
     return environment
 
 
-def add(environment, ts: str, role: str, text: str, line: int = 1) -> None:
-    environment.conn.execute(
-        "INSERT INTO chunks(project, session, file, line, part, ts, role, text) VALUES (?,?,?,?,?,?,?,?)",
-        ("test-project", "test-session", "test.jsonl", line, 0, ts, role, text),
+def add(environment, ts: str, role: str, text: str, line: int = 1, landed: str | None = None) -> int:
+    """One chunk. `landed` is when it entered the database — by default the moment it was said."""
+    cur = environment.conn.execute(
+        "INSERT INTO chunks(project, session, file, line, part, ts, role, text, indexed_at)"
+        " VALUES (?,?,?,?,?,?,?,?,?)",
+        ("test-project", "test-session", "test.jsonl", line, 0, ts, role, text,
+         ts if landed is None else landed),
     )
+    return cur.lastrowid
+
+
+def set_day_zero(ts: str) -> None:
+    """Draws the day-zero line by hand, so a test can say what happened before and after it."""
+    facts.KNOWLEDGE_DIR.mkdir(parents=True, exist_ok=True)
+    facts.DAY_ZERO_PATH.write_text(ts + "\n", encoding="utf-8")
 
 
 def answers(*lines: str):
@@ -121,8 +133,8 @@ def test_cap_takes_the_oldest_and_leaves_the_rest_as_a_backlog(waiting_room):
 
 
 def test_the_cut_does_not_fall_inside_one_turn(waiting_room):
-    # parts of one turn share a timestamp — cutting between them would lose the tail for good,
-    # because the next run asks for 'ts > marker'
+    # parts of one turn share a timestamp — half a turn read out of context is worth less to the
+    # model, so the cut is pushed back onto the boundary
     for i in range(40):
         add(waiting_room, ago(40 - i // 2), "user", f"{i:03d} " + "x" * 2000, line=i + 1)
     facts.write_marker(ago(48))
@@ -131,7 +143,7 @@ def test_the_cut_does_not_fall_inside_one_turn(waiting_room):
 
     assert len(material.texts) % 2 == 0  # both parts of the last turn are in
     assert material.pending == 40 - len(material.texts)
-    assert material.dropped == 0
+    assert material.missing() == 0  # and what did not fit is waiting, not gone
 
 
 def test_only_the_user_is_harvested(waiting_room):
@@ -155,6 +167,197 @@ def test_only_the_user_is_harvested(waiting_room):
         "pracuje na Windowsie",
         "podzadanie od kierownika",
     ]
+
+
+# ---------------------------------------------------------------- the indexing axis
+
+def test_a_chunk_indexed_after_the_marker_passed_its_date_is_still_read(waiting_room):
+    """The whole point of the axis: `ts` says when it was said, indexing happens ten minutes later.
+
+    With the old 'ts > marker' rule such a chunk fell out of the window the moment it was written
+    and nobody ever heard of it again.
+    """
+    set_day_zero(ago(100))
+    add(waiting_room, ago(5), "user", "pierwsza rozmowa")
+    facts.run(ask=answers(), conn=waiting_room.conn)
+    assert facts.since_marker().stamp == ago(5)
+
+    # the indexer catches up with a turn that was SAID before the marker
+    add(waiting_room, ago(6), "user", "spozniony transkrypt", landed=ago(1))
+    seen = []
+    r = facts.run(ask=recorder(seen), conn=waiting_room.conn)
+
+    assert r["chunks"] == 1 and "spozniony transkrypt" in seen[0]
+
+
+def test_a_chunk_that_lands_behind_the_marker_is_caught_by_its_id_and_reported(waiting_room):
+    """Backdated on both axes — a hand edit, an import. The id is the second door, and the fact
+    that it had to be used is a number the user gets to see."""
+    set_day_zero(ago(100))
+    add(waiting_room, ago(5), "user", "pierwsza rozmowa")
+    facts.run(ask=answers(), conn=waiting_room.conn)
+
+    add(waiting_room, ago(9), "user", "wpisane wstecz, obiema datami")
+    seen = []
+    r = facts.run(ask=recorder(seen), conn=waiting_room.conn)
+
+    assert r["chunks"] == 1 and "wpisane wstecz" in seen[0]
+    assert r["late"] == 1
+    assert facts.read_cost()["spoznione"] == "1"
+
+
+def test_a_cut_inside_one_indexing_pass_leaves_nothing_behind(waiting_room):
+    """One pass writes all of its chunks under a single stamp. Without the id in the marker,
+    everything after the cut would sit below it for ever — this is the same hole, one level down."""
+    set_day_zero(ago(100))
+    for i in range(60):
+        add(waiting_room, ago(60 - i), "user", f"{i:03d} " + "x" * 2000, line=i + 1, landed=ago(1))
+    facts.write_marker(ago(90))
+    seen = []
+
+    results = facts.catch_up(runs=10, ask=recorder(seen), conn=waiting_room.conn)
+
+    assert [n for material in seen for n in numbers(material)] == [f"{i:03d}" for i in range(60)]
+    assert results[-1]["pending"] == 0
+    assert len(seen) > 1  # it really was cut inside the pass
+
+
+def test_a_chunk_with_no_indexing_stamp_is_not_invisible(waiting_room):
+    """Written by an older indexer or by hand: the empty default falls back to its own date instead
+    of dropping out of every window there will ever be."""
+    waiting_room.conn.execute(
+        "INSERT INTO chunks(project, session, file, line, part, ts, role, text)"
+        " VALUES ('p','s','f',1,0,?,'user','kawalek bez znacznika zaindeksowania')", (ago(1),))
+    facts.write_marker(ago(2))
+    set_day_zero(ago(100))
+
+    material = facts.collect(waiting_room.conn, facts.since_marker(), facts.day_zero())
+
+    assert len(material.texts) == 1
+
+
+def test_a_marker_from_before_the_id_existed_does_not_read_the_archive_again(waiting_room):
+    """The upgrade itself: a marker file holding a date and nothing else, and an archive whose rows
+    got `indexed_at = ts` from the migration. The first run after it must read the new material only."""
+    for i in range(30):
+        add(waiting_room, ago(50 + i), "user", f"stara rozmowa numer {i} " * 20, line=i + 1)
+    add(waiting_room, ago(2), "user", "nowa rozmowa po aktualizacji")
+    facts.KNOWLEDGE_DIR.mkdir(parents=True, exist_ok=True)
+    facts.MARKER_PATH.write_text(ago(3) + "\n", encoding="utf-8")  # the old format: a date alone
+    assert not facts.MARKER_ID_PATH.exists()
+    seen = []
+
+    r = facts.run(ask=recorder(seen), conn=waiting_room.conn)
+
+    assert r["chunks"] == 1 and "nowa rozmowa po aktualizacji" in seen[0]
+    assert "stara rozmowa" not in seen[0]
+    assert facts.MARKER_ID_PATH.exists()  # from here on the marker carries the id as well
+
+
+# ---------------------------------------------------------------- day zero
+
+def test_a_fresh_install_does_not_swallow_the_archive_it_found(waiting_room):
+    """Three years of transcripts, pulled into the database within the hour of the install. Day zero
+    is drawn on the first run, and everything indexed before it stays where it is."""
+    for i in range(50):
+        add(waiting_room, ago(24 * 30 * (i + 1)), "user", f"stara rozmowa numer {i} " * 20,
+            line=i + 1, landed=ago(0.2))
+    assert not facts.MARKER_PATH.exists() and not facts.DAY_ZERO_PATH.exists()
+
+    r = facts.run(ask=answers("nic z archiwum nie powinno wyjsc"), conn=waiting_room.conn)
+
+    assert (r["status"], r["chunks"]) == ("no-material", 0)
+    assert not facts.CANDIDATES_PATH.exists()
+    assert r["before_zero"] == 50  # counted and said out loud, not swallowed in silence
+    assert facts.read_cost()["sprzed_dnia_zero"] == "50"
+    assert facts.DAY_ZERO_PATH.exists()
+
+
+def test_day_zero_of_a_running_install_is_the_read_marker_so_the_backlog_survives(waiting_room):
+    """An install that has been harvesting for weeks: drawing the line at "now" would throw away
+    everything still waiting at the marker."""
+    add(waiting_room, ago(3), "user", "wczorajsza rozmowa, jeszcze nieprzeczytana")
+    facts.write_marker(ago(10))
+
+    r = facts.run(ask=answers("Użytkownik pracuje na Windowsie."), conn=waiting_room.conn)
+
+    assert facts.DAY_ZERO_PATH.read_text(encoding="utf-8").strip() == ago(10)
+    assert r["chunks"] == 1
+
+
+def test_day_zero_is_drawn_once_and_then_left_alone(waiting_room):
+    set_day_zero(ago(30))
+
+    assert facts.day_zero() == ago(30)
+    facts.write_marker(ago(1))
+    assert facts.day_zero() == ago(30)  # a marker moving later does not move the line
+
+
+def test_a_chunk_indexed_after_day_zero_counts_even_though_it_was_said_before_it(waiting_room):
+    """The other side of the same coin: old by its date, new to this database."""
+    set_day_zero(ago(5))
+    facts.write_marker(ago(5))
+    add(waiting_room, ago(20), "user", "powiedziane przed instalacja, zaindeksowane po niej",
+        landed=ago(1))
+    seen = []
+
+    r = facts.run(ask=recorder(seen), conn=waiting_room.conn)
+
+    assert r["chunks"] == 1 and "przed instalacja" in seen[0]
+    assert r["before_zero"] == 0
+
+
+# ---------------------------------------------------------------- the controls of one pass
+
+def test_the_run_says_how_much_was_in_range_and_how_much_the_model_saw(waiting_room):
+    set_day_zero(ago(100))
+    add(waiting_room, ago(3), "user", "pierwsza wiadomosc uzytkownika")
+    add(waiting_room, ago(3), "tool", "[tool: Bash] ls -la")
+    add(waiting_room, ago(2), "user", "druga wiadomosc uzytkownika")
+    facts.write_marker(ago(9))
+
+    r = facts.run(ask=answers("Użytkownik pracuje na Windowsie."), conn=waiting_room.conn)
+
+    assert (r["in_range"], r["candidates"], r["chunks"]) == (3, 2, 2)
+    assert (r["missing"], r["late"]) == (0, 0)
+    assert facts.read_cost()["pominiete"] == "0"
+
+
+def test_the_backlog_is_not_counted_as_material_that_went_missing(waiting_room):
+    """A false alarm teaches people to ignore alarms: what waits for the next run is not lost."""
+    backlog(waiting_room, 40)
+    set_day_zero(ago(100))
+
+    r = facts.run(ask=answers(), conn=waiting_room.conn)
+
+    assert r["pending"] > 0 and r["missing"] == 0
+
+
+def test_the_cycle_can_tell_how_many_messages_were_read_and_from_when(waiting_room):
+    """The cycle says "przeczytane X wiadomości z okresu od-do" without paying for a model call."""
+    set_day_zero(ago(100))
+    add(waiting_room, ago(5), "user", "pierwsza wiadomosc")
+    add(waiting_room, ago(3), "user", "druga wiadomosc")
+    facts.write_marker(ago(9))
+
+    facts.run(ask=answers("Użytkownik pracuje na Windowsie."), conn=waiting_room.conn)
+    saved = facts.read_cost()
+
+    assert saved["wiadomosci"] == "2"
+    assert saved["zakres_od"] == facts.ts_to_local(ago(5))
+    assert saved["zakres_do"] == facts.ts_to_local(ago(3))
+
+
+def test_the_messages_of_several_passes_add_up_and_the_range_grows(waiting_room):
+    backlog(waiting_room, 60)
+    set_day_zero(ago(100))
+
+    results = facts.catch_up(runs=10, ask=answers(), conn=waiting_room.conn)
+    saved = facts.read_cost()
+
+    assert saved["wiadomosci"] == str(sum(r["chunks"] for r in results))
+    assert saved["zakres_od"] == facts.ts_to_local(ago(60))  # the oldest of the day
+    assert saved["zakres_do"] == facts.ts_to_local(ago(1))  # and the newest
 
 
 # ---------------------------------------------------------------- the layers
@@ -335,7 +538,7 @@ def test_the_marker_moves_only_after_a_real_run(waiting_room):
     assert not facts.CANDIDATES_PATH.exists()
 
     facts.run(ask=answers("Użytkownik pracuje na Windowsie."), conn=waiting_room.conn)
-    assert facts.since_marker() > before
+    assert facts.since_marker().stamp > before.stamp
 
 
 # ---------------------------------------------------------------- working off a backlog
@@ -347,8 +550,8 @@ def test_the_marker_stops_at_the_last_processed_fragment(waiting_room):
     r = facts.run(ask=recorder(seen), conn=waiting_room.conn)
 
     assert r["pending"] > 0
-    assert facts.since_marker() == ago(40 - r["chunks"] + 1)  # where we got to, not "now"
-    assert facts.since_marker() < ago(0)
+    assert facts.since_marker().stamp == ago(40 - r["chunks"] + 1)  # where we got to, not "now"
+    assert facts.since_marker().stamp < ago(0)
     assert numbers(seen[0])[0] == "000"
 
 

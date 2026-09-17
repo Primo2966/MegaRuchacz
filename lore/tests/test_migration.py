@@ -130,6 +130,60 @@ def test_migration_runs_twice_without_damage(home):
         second.close()
 
 
+def test_the_indexing_stamp_is_added_to_an_existing_database_without_losing_a_row(home):
+    """53 549 chunks of real memory go through this — not one of them may be lost or re-indexed."""
+    _build_legacy(home / "historia.db")
+
+    conn = db.connect()
+    try:
+        assert conn.execute("SELECT count(*) FROM chunks").fetchone()[0] == len(ROWS)
+        assert [r[0] for r in conn.execute("SELECT text FROM chunks ORDER BY id")] == [r[8] for r in ROWS]
+        assert "indexed_at" in {r[1] for r in conn.execute("PRAGMA table_info(chunks)")}
+    finally:
+        conn.close()
+
+
+def test_the_old_rows_keep_their_own_date_instead_of_looking_freshly_added(home):
+    """Stamping them with the moment of the migration would make three years of archive look like
+    it arrived today, and the first harvest after the upgrade would read the whole of it."""
+    _build_legacy(home / "historia.db")
+
+    conn = db.connect()
+    try:
+        assert [r[0] for r in conn.execute("SELECT indexed_at FROM chunks ORDER BY id")] == [TS] * len(ROWS)
+        assert conn.execute("SELECT count(*) FROM chunks WHERE indexed_at <> ts").fetchone()[0] == 0
+    finally:
+        conn.close()
+
+
+def test_adding_the_indexing_stamp_twice_changes_nothing(home):
+    _build_legacy(home / "historia.db")
+
+    first = db.connect()
+    first.close()
+
+    second = db.connect()
+    try:
+        assert db.migrate_indexed_at(second) == 0  # nothing left to fill in
+        assert [r[0] for r in second.execute("SELECT indexed_at FROM chunks ORDER BY id")] == [TS] * len(ROWS)
+    finally:
+        second.close()
+
+
+def test_a_row_written_without_the_stamp_is_filled_in_on_the_next_open(home):
+    """A half-finished insert must not leave a chunk with an empty stamp lying around for ever."""
+    conn = db.connect()
+    conn.execute("INSERT INTO chunks(project, session, file, line, part, ts, role, text) "
+                 "VALUES ('p','s','f',1,0,?,'user','bez znacznika')", (TS,))
+    conn.close()
+
+    again = db.connect()
+    try:
+        assert again.execute("SELECT indexed_at FROM chunks").fetchone()[0] == TS
+    finally:
+        again.close()
+
+
 def test_fresh_database_needs_no_migration(home):
     conn = db.connect()
     try:
