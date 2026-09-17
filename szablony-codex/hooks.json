@@ -9,7 +9,7 @@
             "commandWindows": "powershell -NoProfile -NonInteractive -Command \"Get-Content -Raw -LiteralPath '{{PROJEKT}}/.megaruchacz/zasady-sesja.json'\"",
             "timeout": 10,
             "statusMessage": "MegaRuchacz: zasady kierownika",
-            "additionalContextLimit": 8000
+            "additionalContextLimit": 24000
           }
         ]
       },
@@ -47,7 +47,7 @@
             "commandWindows": "powershell -NoProfile -NonInteractive -Command \"Get-Content -Raw -LiteralPath '{{PROJEKT}}/.megaruchacz/przypomnienie.json'\"",
             "timeout": 5,
             "statusMessage": "MegaRuchacz: przypomnienie",
-            "additionalContextLimit": 500
+            "additionalContextLimit": 1500
           }
         ]
       }
