@@ -1,8 +1,14 @@
 # Audyt sufitow pamieci i zasad. Odpowiada na dwa pytania, ktore nie moga zostac
 # bez odpowiedzi: CZY COS JEST UCINANE PO CICHU i CZY KOSZT ROSNIE NIEZAUWAZENIE.
-# Poza tym liczy, ile znakow dokleja sie do KAZDEJ wiadomosci z warstwy stalej
-# i biezacej, ile to daje przez dobe, i porownuje to z poprzednim pomiarem.
+# Poza tym rozdziela dwa rachunki, ktore latwo ze soba pomylic: ile tokenow
+# dokleja sie do KAZDEJ wiadomosci (przypomnienie z hooka UserPromptSubmit),
+# a ile wchodzi RAZ, przy starcie sesji (blok zasad + warstwa stala i biezaca).
 # Czysta arytmetyka na plikach - zaden model nie jest wolany.
+#
+# CALY RACHUNEK NA ZADANIE - jedna komenda do wklejenia w terminal:
+#   powershell -ExecutionPolicy Bypass -File C:\dev\claude-worker\narzedzia\koszt-pamieci.ps1
+# Wypisuje, ktora pamiec ile kosztuje przy kazdej wiadomosci i przy starcie
+# sesji, pozycja po pozycji. Ta sama komenda jest na koncu kazdego raportu.
 #
 # Uzycie:
 #   powershell -ExecutionPolicy Bypass -File narzedzia\koszt-pamieci.ps1
@@ -18,8 +24,9 @@
 #     -ZalozZadanie          codzienny raport o 08:15 do <dom>\.claude\wiedza\koszt-ostatni.txt
 #     -UsunZadanie           kasuje to zadanie
 #
-# Kod wyjscia: 0 gdy nic nie jest ucinane, 1 gdy cokolwiek jest - zeby dalo sie
-# to podpiac jako sprawdzenie.
+# Kod wyjscia: 0 gdy nic nie jest ucinane i zaden prog alarmowy nie jest
+# przekroczony, 1 gdy cokolwiek z tego zachodzi - zeby dalo sie to podpiac jako
+# sprawdzenie.
 #
 # WARTOSCI SUFITOW CZYTAMY Z PLIKOW, KTORE JE USTALAJA (straznik, hooks.json,
 # facts.py, index.py). Wpisane tu na sztywno zaczelyby klamac przy pierwszej
@@ -57,6 +64,32 @@ $ProgCiasno     = 80
 # wzrost kosztu od poprzedniego pomiaru, ktory ma byc widoczny jako ostrzezenie
 $ProgWzrostu    = 20
 
+# --- progi alarmowe ----------------------------------------------------------
+# TO SA NASZE LICZBY DO ZMIANY, NIE PRAWA NATURY. Zadna z nich nie pochodzi
+# z dokumentacji Claude Code ani Codeksa - dobralismy je tak, zeby alarm odzywal
+# sie rzadko i zawsze wtedy, gdy jest co zrobic. Kazda zmienia sie tutaj, jedna
+# linijka, i nic poza tym plikiem o nich nie wie.
+#
+# $AlarmNaWiadomosc - przypomnienie doklejane do KAZDEJ wiadomosci. Dzisiejsze
+#   ma okolo 200 tokenow, wiec prog to mniej wiecej poltora raza tyle: zmiesci
+#   sie dopisane zdanie, nie zmiesci sie rozrost zasad. Ta pozycja mnozy sie
+#   przez kazde zdanie uzytkownika, wiec ma najciasniejszy prog.
+# $AlarmNaSesje - wszystko, co wchodzi RAZ, przy starcie sesji. Dzisiaj okolo
+#   3 000 tokenow; 5 000 to zapas na rozrost wiedzy o uzytkowniku, ale juz nie
+#   na drugie tyle zasad.
+# $AlarmUdzialu - jedna pozycja zjadajaca wiecej niz tyle procent swojego
+#   rachunku. Nie chodzi o sam rozmiar, tylko o to, ze skracanie czegokolwiek
+#   innego nic nie da. Dzis najdrozsza pozycja (warstwa stala) ma 64%, wiec prog
+#   stoi nad tym, a nie pod: alarm, ktory swieci sie od pierwszego dnia i tak
+#   jak swiecil, przestaje byc alarmem.
+# $MinPozycjiDoUdzialu - ponizej tylu pozycji w rachunku udzial nic nie mowi
+#   (przy dwoch pozycjach jedna prawie zawsze ma ponad polowe), wiec alarm
+#   o udziale w ogole sie nie odzywa.
+$AlarmNaWiadomosc    = 300
+$AlarmNaSesje        = 5000
+$AlarmUdzialu        = 70
+$MinPozycjiDoUdzialu = 3
+
 # Przedrostek ladunku hooka startowego Codeksa - MUSI brzmiec tak samo jak
 # w straznik-zasad.ps1 (Zbuduj-Sesje-Codex) i w wdroz.ps1, bo inaczej liczymy
 # dlugosc czegos, czego nikt nie wysyla.
@@ -74,6 +107,11 @@ function Liczba($n) {
   # separator tysiecy na sztywno spacja: N0 idzie za ustawieniami regionalnymi,
   # a te potrafia wstawic znak, ktory w konsoli wyglada jak smiec
   return ([long]$n).ToString("#,0", [Globalization.CultureInfo]::InvariantCulture).Replace(",", " ")
+}
+
+function Tokeny($znaki) {
+  if ($znaki -eq $null) { return $null }
+  return [int][math]::Ceiling([double]$znaki / $ZnakiNaToken)
 }
 
 function Rozmiar($bajty) {
@@ -131,6 +169,30 @@ function Miara($linie) {
     Znaki  = $znaki
     Tokeny = [int][math]::Ceiling($znaki / $ZnakiNaToken)
   }
+}
+
+# --- pozycje rachunku --------------------------------------------------------
+
+function Pozycja($nazwa, $znaki, $skad, $rada) {
+  # Jedna skladowa rachunku: co to jest, ile wazy, skad pochodzi i co zrobic,
+  # gdyby to ona okazala sie najdrozsza.
+  return [pscustomobject]@{
+    Nazwa   = $nazwa
+    Znaki   = [int]$znaki
+    Tokeny  = [int](Tokeny $znaki)
+    Skad    = $skad
+    Rada    = $rada
+    Procent = 0
+  }
+}
+
+function Policz-Udzialy($pozycje) {
+  $razem = 0
+  foreach ($p in @($pozycje)) { $razem += $p.Tokeny }
+  foreach ($p in @($pozycje)) {
+    if ($razem -gt 0) { $p.Procent = [int][math]::Round(100.0 * $p.Tokeny / $razem) }
+  }
+  return $razem
 }
 
 function Czytaj-Wpisy($linie) {
@@ -404,14 +466,6 @@ function Pytanie-Do-Lore($baza, $sql) {
   }
 }
 
-function Policz-Sesje($baza) {
-  # ile roznych sesji zostawilo slad w ostatniej dobie
-  # ts w tabeli chunks to ISO UTC ("2026-09-11T06:27:15.470Z"), wiec zwykle
-  # porownanie tekstowe z obcieta granica daje poprawny wynik
-  $granica = ([datetime]::UtcNow.AddDays(-1)).ToString("yyyy-MM-ddTHH:mm:ss")
-  return Pytanie-Do-Lore $baza "SELECT count(DISTINCT session) FROM chunks WHERE ts >= '$granica'"
-}
-
 function Kolejka-Lore($baza, $znacznik) {
   # ile znakow wypowiedzi uzytkownika czeka na wyciagniecie faktow - to jest
   # wartosc mierzona przeciw MAX_INPUT_CHARS
@@ -567,9 +621,9 @@ $plikKopania   = Join-Path $Zrodlo "lore\lore\mining.py"
 
 $w = Zmierz-Warstwy $plikClaude
 
+# tylko do linii maszynowej POMIAR - rachunek za start sesji sklada sie nizej
+# z pozycji, bo wchodzi do niego takze to, co nie lezy w CLAUDE.md
 $razemZnakow  = $w.Blok.Znaki + $w.Stala.Znaki + $w.Biezaca.Znaki
-$razemLinii   = $w.Blok.Linie + $w.Stala.Linie + $w.Biezaca.Linie
-$razemTokenow = [int][math]::Ceiling($razemZnakow / $ZnakiNaToken)
 
 # --- sufity: pomiary ---------------------------------------------------------
 
@@ -592,10 +646,11 @@ if ($agentsTresc -ne $null) {
 # czyli ten, ktory dostaje projekt bez zasad w AGENTS.md.
 $zasadyTresc = $null
 $zasadySkad  = $null
+$zasadyWdrozone = $false
 if ($Projekt) {
   $p = Join-Path $Projekt ".megaruchacz\zasady-sesja.json"
   $t = Ladunek-Hooka $p
-  if ($t) { $zasadyTresc = $t; $zasadySkad = $p }
+  if ($t) { $zasadyTresc = $t; $zasadySkad = $p; $zasadyWdrozone = $true }
 }
 if (-not $zasadyTresc) {
   $t = Czytaj-Cicho $plikZasadWzor
@@ -621,6 +676,35 @@ if (-not $przypTresc) {
 }
 $przypZnaki = $null
 if ($przypTresc) { $przypZnaki = $przypTresc.Length }
+
+# To samo przypomnienie po stronie Claude Code - inny plik, ten sam ladunek
+# hooka UserPromptSubmit. Sufitu tu nie ma (Claude Code nie przycina wyjscia
+# hooka), wiec nie jest to sufit, tylko pozycja w rachunku za wiadomosc.
+$przypCcTresc = $null
+$przypCcSkad  = $null
+if ($Projekt) {
+  $p = Join-Path $Projekt ".claude\orchestrator-reminder.json"
+  $t = Ladunek-Hooka $p
+  if ($t) { $przypCcTresc = $t; $przypCcSkad = $p }
+}
+if (-not $przypCcTresc) {
+  $p = Join-Path $Zrodlo ".claude\orchestrator-reminder.json"
+  $t = Ladunek-Hooka $p
+  if ($t) { $przypCcTresc = $t; $przypCcSkad = $p }
+}
+$przypCcZnaki = $null
+if ($przypCcTresc) { $przypCcZnaki = $przypCcTresc.Length }
+
+# Zasady kierownika wstrzykiwane hookiem startowym po stronie Claude Code.
+# Szablonu tu NIE mierzymy: szablon sam z siebie nikomu nic nie wysyla, wiec
+# doliczony do rachunku podawalby koszt, ktorego nikt nie placi.
+$zasadyCcTresc = $null
+$zasadyCcSkad  = $null
+if ($Projekt) {
+  $p = Join-Path $Projekt ".claude\megaruchacz-sesja.json"
+  $t = Ladunek-Hooka $p
+  if ($t) { $zasadyCcTresc = $t; $zasadyCcSkad = $p }
+}
 
 $sufity = @()
 
@@ -720,6 +804,46 @@ if ($Projekt) {
   }
 }
 
+# --- dwa rachunki: za wiadomosc i za start sesji ------------------------------
+# To sa rozne pieniadze i dlatego nie sumuja sie w jedna liczbe. Pierwszy placi
+# sie przy kazdym zdaniu uzytkownika, drugi raz, przy otwarciu sesji.
+# Do rachunku wchodzi tylko to, co na TEJ maszynie naprawde leci - szablon,
+# ktorego nikt nie wysyla, jest wymieniony w raporcie, ale nie jest doliczany.
+
+$jestCodex = ($agentsTresc -ne $null)
+
+$kubWiadomosc = @()
+if ($przypCcZnaki -ne $null) {
+  $kubWiadomosc += Pozycja "przypomnienie zasad (Claude Code)" $przypCcZnaki $przypCcSkad `
+    "skroc tresc 'additionalContext' w tym pliku - kazde zdanie stad placi sie przy kazdej wiadomosci"
+} elseif (($przypZnaki -ne $null) -and $jestCodex) {
+  $kubWiadomosc += Pozycja "przypomnienie zasad (Codex)" $przypZnaki $przypSkad `
+    "skroc tresc 'additionalContext' w tym pliku - kazde zdanie stad placi sie przy kazdej wiadomosci"
+}
+$tokWiadomosc = Policz-Udzialy $kubWiadomosc
+
+$kubSesja = @()
+if ($w.Blok.Znaki -gt 0) {
+  $kubSesja += Pozycja "blok zasad MegaRuchacza w CLAUDE.md" $w.Blok.Znaki $plikClaude `
+    "ten blok nalezy do narzedzia - skracaj go w zrodle i wgraj przez wdroz.ps1, nie recznie"
+}
+if ($w.Stala.Znaki -gt 0) {
+  $kubSesja += Pozycja "warstwa STALA (Co wiem)" $w.Stala.Znaki $plikClaude `
+    "przenies najdluzsze zestawienie do pliku w $katWiedzy i zostaw tu jedna linie odsylacza - warstwa referencyjna nie kosztuje nic"
+}
+if ($w.Biezaca.Znaki -gt 0) {
+  $kubSesja += Pozycja "warstwa BIEZACA" $w.Biezaca.Znaki $plikClaude `
+    "skasuj wpisy starsze niz $DniWaznosci dni albo przenies te trwale do warstwy stalej"
+}
+if ($zasadyCcTresc) {
+  $kubSesja += Pozycja "zasady kierownika z hooka (Claude Code)" $zasadyCcTresc.Length $zasadyCcSkad `
+    "to zasady projektu wstrzykiwane hookiem - skracaj je w CLAUDE.md narzedzia i wgraj przez wdroz.ps1"
+} elseif ($zasadyWdrozone -and $zasadyTresc) {
+  $kubSesja += Pozycja "zasady kierownika z hooka (Codex)" $zasadyTresc.Length $zasadySkad `
+    "to zasady projektu wstrzykiwane hookiem - skracaj je w szablony-codex\zasady-kierownika.md i wgraj przez wdroz.ps1"
+}
+$tokSesja = Policz-Udzialy $kubSesja
+
 # --- wypisanie: tryb zwiezly (DOKLADNIE JEDNA LINIA) -------------------------
 
 $ucinane = @(Sortuj-Sufity @($sufity | Where-Object { $_.Ucina -and $_.Przekroczony }))
@@ -730,26 +854,83 @@ $zmiana     = 0
 $zmianaProc = 0
 $skokKosztu = $false
 if ($poprz -and $poprz.Tokeny -gt 0) {
-  $zmiana     = $razemTokenow - $poprz.Tokeny
+  $zmiana     = $tokSesja - $poprz.Tokeny
   $zmianaProc = [int][math]::Round(100.0 * $zmiana / $poprz.Tokeny)
   if ($zmianaProc -gt $ProgWzrostu) { $skokKosztu = $true }
+}
+
+# --- alarmy ------------------------------------------------------------------
+# Alarm mowi, CO zrobic i z ktorym plikiem - sama liczba nad progiem nikomu
+# jeszcze niczego nie zalatwila. Kazdy alarm podnosi kod wyjscia.
+
+function Najdrozsza($pozycje) {
+  $l = @($pozycje | Sort-Object -Property Tokeny -Descending)
+  if ($l.Count -eq 0) { return $null }
+  return $l[0]
+}
+
+function Alarm($krotko, $pelny) {
+  return [pscustomobject]@{ Krotko = $krotko; Pelny = $pelny }
+}
+
+$alarmy = @()
+
+if ($tokWiadomosc -gt $AlarmNaWiadomosc) {
+  $n = Najdrozsza $kubWiadomosc
+  $alarmy += Alarm "wiadomosc +$tokWiadomosc tokenow (prog $AlarmNaWiadomosc)" `
+    ("Kazda Twoja wiadomosc kosztuje ~$(Liczba $tokWiadomosc) tokenow, prog to $(Liczba $AlarmNaWiadomosc). " +
+     "Najdrozsza pozycja: $($n.Nazwa) - $($n.Rada). Plik: $($n.Skad).")
+}
+
+if ($tokSesja -gt $AlarmNaSesje) {
+  $n = Najdrozsza $kubSesja
+  $alarmy += Alarm "start sesji +$tokSesja tokenow (prog $AlarmNaSesje)" `
+    ("Start sesji kosztuje ~$(Liczba $tokSesja) tokenow, prog to $(Liczba $AlarmNaSesje). " +
+     "Najdrozsza pozycja: $($n.Nazwa) (~$(Liczba $n.Tokeny) tokenow) - $($n.Rada). Plik: $($n.Skad).")
+}
+
+foreach ($k in @(
+  @{ Poz = $kubSesja;     Nazwa = "start sesji" },
+  @{ Poz = $kubWiadomosc; Nazwa = "kazda wiadomosc" }
+)) {
+  if (@($k.Poz).Count -lt $MinPozycjiDoUdzialu) { continue }
+  $n = Najdrozsza $k.Poz
+  if ($n.Procent -le $AlarmUdzialu) { continue }
+  $alarmy += Alarm "$($n.Nazwa) to $($n.Procent)% rachunku za $($k.Nazwa)" `
+    ("Jedna pozycja zjada $($n.Procent)% rachunku za $($k.Nazwa): $($n.Nazwa), ~$(Liczba $n.Tokeny) tokenow. " +
+     "Skracanie czegokolwiek innego nic nie da - $($n.Rada). Plik: $($n.Skad).")
+}
+
+if ($skokKosztu) {
+  $alarmy += Alarm "+$zmianaProc% od poprzedniego pomiaru" `
+    ("Start sesji urosl o $zmianaProc% od poprzedniego pomiaru ($(Liczba $poprz.Tokeny) -> $(Liczba $tokSesja) tokenow) - " +
+     "sprawdz, co doszlo do $plikClaude.")
 }
 
 if ($Zwiezle) {
   # Liczby bez separatora tysiecy: ta linia ma sie zmiescic w jednym wierszu
   # terminala i jest pokazywana przez straznika przy kazdym otwarciu sesji.
+  # Obie liczby, bo sama sesyjna sugerowala, ze tyle placi sie za wiadomosc.
+  if ($tokWiadomosc -gt 0) {
+    $rachunek = "pamiec: wiadomosc +$tokWiadomosc tokenow, start sesji +$tokSesja tokenow"
+  } else {
+    $rachunek = "pamiec: start sesji +$tokSesja tokenow, przypomnienia nie umiem zmierzyc"
+  }
   if ($cosUcinane) {
     $g = $ucinane[0]
     $opis = "UCINANE: $($g.Krotka) -$($g.Strata) $($g.Jednostka)"
     if ($g.Naglowek) { $opis = $opis + " (od ""$(Skroc $g.Naglowek 34)"")" }
     if ($ucinane.Count -gt 1) { $opis = $opis + " i jeszcze $($ucinane.Count - 1)" }
-    $linia = "UWAGA pamiec: ~$razemTokenow tokenow na starcie sesji, $opis"
+    $linia = "UWAGA $rachunek, $opis"
+  } elseif ($alarmy.Count -gt 0) {
+    $opis = "ALARM: $($alarmy[0].Krotko)"
+    if ($alarmy.Count -gt 1) { $opis = $opis + " i jeszcze $($alarmy.Count - 1)" }
+    $linia = "UWAGA $rachunek, $opis"
   } else {
-    $linia = "pamiec: ~$razemTokenow tokenow na starcie sesji, nic nie jest ucinane"
+    $linia = "$rachunek, nic nie jest ucinane"
   }
-  if ($skokKosztu) { $linia = $linia + " (+$zmianaProc% od wczoraj)" }
   Write-Output $linia
-  if ($cosUcinane) { exit 1 }
+  if ($cosUcinane -or $alarmy.Count -gt 0) { exit 1 }
   exit 0
 }
 
@@ -789,7 +970,6 @@ if ($TylkoSufity) {
 # --- pomiary tylko do pelnego raportu ----------------------------------------
 # (zapytania do bazy Lore potrafia chwile trwac, wiec w trybie zwiezlym ich nie ma)
 
-$sesje   = Policz-Sesje $bazaLore
 $kolejka = Kolejka-Lore $bazaLore $plikZnacznik
 $kawalek = Najdluzszy-Kawalek $bazaLore
 
@@ -856,8 +1036,8 @@ $ostrzezenia = @()
 foreach ($s in $ucinane) {
   $ostrzezenia += "UCINANE PO CICHU: $($s.Nazwa) - ginie $(Liczba $s.Strata) $($s.Jednostka) z $(Liczba $s.Teraz). Sufit $($s.SkadLimitu)."
 }
-if ($skokKosztu) {
-  $ostrzezenia += "Koszt jednej wiadomosci urosl o $zmianaProc% od poprzedniego pomiaru ($(Liczba $poprz.Tokeny) -> $(Liczba $razemTokenow) tokenow) - sprawdz, co doszlo do CLAUDE.md."
+foreach ($a in $alarmy) {
+  $ostrzezenia += $a.Pelny
 }
 foreach ($s in $sufity) {
   if ($s.Zmierzony -and (-not $s.Informacyjny) -and (-not $s.Przekroczony) -and ($s.Procent -ge $ProgCiasno)) {
@@ -876,8 +1056,28 @@ if (($kandydaci -ne $null) -and ($kandydaci -gt $ProgPoczekalni)) {
 
 # --- wypisanie: pelny raport -------------------------------------------------
 
-function Wiersz($nazwa, $m) {
-  Linia ("  {0,-26} {1,5} linii, {2,9} znakow, ~{3,7} tokenow" -f $nazwa, (Liczba $m.Linie), (Liczba $m.Znaki), (Liczba $m.Tokeny))
+function Wypisz-Kubelek($pozycje, $razem, $czegoNieMa) {
+  # Pozycje od najdrozszej, bo tylko gorna czesc listy ma znaczenie przy
+  # skracaniu. Drobiazgi ponizej 1% ida w jedna linie "reszta" - wypisane
+  # osobno tylko zaslanialyby to, co naprawde kosztuje.
+  $l = @($pozycje)
+  if ($l.Count -eq 0) {
+    Linia "  $czegoNieMa"
+    return
+  }
+  $reszta = 0
+  $ileReszty = 0
+  foreach ($p in ($l | Sort-Object -Property Tokeny -Descending)) {
+    if ($p.Procent -lt 1) { $reszta += $p.Tokeny; $ileReszty++; continue }
+    Linia ("  {0,-38} {1,8} znakow, ~{2,6} tokenow, {3,3}% tego rachunku" -f `
+           (Skroc $p.Nazwa 38), (Liczba $p.Znaki), (Liczba $p.Tokeny), $p.Procent)
+    Linia ("       z pliku: {0}" -f $p.Skad)
+  }
+  if ($ileReszty -gt 0) {
+    Linia ("  {0,-38} {1,8}        ~{2,6} tokenow, ponizej 1%" -f `
+           "reszta ($ileReszty poz.)", "", (Liczba $reszta))
+  }
+  Linia ("  {0,-38} {1,8}        ~{2,6} tokenow" -f "RAZEM", "", (Liczba $razem))
 }
 
 function Wiersz-Sufitu($s) {
@@ -907,10 +1107,21 @@ Linia "Audyt pamieci i sufitow - $(Get-Date -Format 'yyyy-MM-dd HH:mm')"
 Linia "Katalog: $katKlaudii"
 
 Linia ""
-Linia "0. CO JEST UCINANE W TEJ CHWILI"
-if (-not $cosUcinane) {
-  Linia "  Nic nie jest ucinane - kazdy tekst miesci sie w swoim suficie."
-} else {
+Linia "0. CO WYMAGA UWAGI TERAZ"
+if ((-not $cosUcinane) -and ($alarmy.Count -eq 0)) {
+  Linia "  Nic nie jest ucinane, zaden prog nie jest przekroczony."
+}
+if ($alarmy.Count -gt 0) {
+  foreach ($a in $alarmy) {
+    Linia ("  ALARM: {0}" -f $a.Krotko) "Red"
+    Linia ("    {0}" -f $a.Pelny) "Red"
+  }
+  Linia "  Progi sa nasze - siedza na gorze narzedzia\koszt-pamieci.ps1 i zmienia sie je jedna linijka."
+}
+if ((-not $cosUcinane) -and ($alarmy.Count -gt 0)) {
+  Linia "  Nic za to nie jest ucinane - kazdy tekst miesci sie w swoim suficie."
+}
+if ($cosUcinane) {
   foreach ($s in $ucinane) {
     $procUtraty = 0
     if ([long]$s.Teraz -gt 0) { $procUtraty = [int][math]::Round(100.0 * $s.Strata / [double]$s.Teraz) }
@@ -933,20 +1144,36 @@ Linia "   (!! = przekroczony, ! = zajete ponad $ProgCiasno%; na gorze te najcias
 foreach ($s in (Sortuj-Sufity $sufity)) { Wiersz-Sufitu $s }
 
 Linia ""
-Linia "2. Doklejane do KAZDEJ wiadomosci"
-if (-not $w.Jest) {
-  Linia "  Nie ma pliku $plikClaude - czyli nic stad nie dokleja sie do rozmow."
-} else {
-  Wiersz "blok zasad instalatora" $w.Blok
-  Wiersz "warstwa STALA (Co wiem)" $w.Stala
-  Wiersz "warstwa BIEZACA" $w.Biezaca
-  Linia ("  {0,-26} {1,5} linii, {2,9} znakow, ~{3,7} tokenow" -f "RAZEM na starcie sesji", (Liczba $razemLinii), (Liczba $razemZnakow), (Liczba $razemTokenow))
-  if ($w.Blok.Znaki -eq 0) { Linia "  (bloku zasad MegaRuchacza w tym pliku nie ma)" }
-  if (-not $w.MaSekcje)    { Linia "  (sekcji '## Co wiem' w tym pliku nie ma - warstwa stala i biezaca sa puste)" }
-  Linia "  Tokeny to SZACUNEK, nie pomiar: przyjete ~$ZnakiNaToken znaki na token dla polszczyzny."
+Linia "2. PRZY KAZDEJ Twojej wiadomosci - z czego sie sklada"
+Wypisz-Kubelek $kubWiadomosc $tokWiadomosc `
+  "Nie znalazlem zadnego przypomnienia - przy wiadomosci nie dokleja sie nic."
+if ($przypCcZnaki -ne $null -and $przypZnaki -ne $null) {
+  $ogonCodex = ""
+  if (-not $jestCodex) { $ogonCodex = " - tej maszyny to nie dotyczy, Codeksa tu nie ma" }
+  Linia ("  Pod Codeksem zamiast tego leci ~{0} tokenow z {1}{2}." -f (Liczba (Tokeny $przypZnaki)), $przypSkad, $ogonCodex)
 }
+Linia "  Tylko to jest doklejane przy kazdym Twoim zdaniu. Reszta wchodzi raz, na starcie sesji."
+
+Linia ""
+Linia "3. RAZ, przy starcie sesji - z czego sie sklada"
+if (-not $w.Jest) {
+  Linia "  Nie ma pliku $plikClaude - czyli nic stad nie wchodzi do rozmowy."
+}
+Wypisz-Kubelek $kubSesja $tokSesja `
+  "Nie ma czego mierzyc - ani pamieci w CLAUDE.md, ani zasad wstrzykiwanych hookiem."
+if ($w.Jest -and (-not $w.MaSekcje)) {
+  Linia "  (sekcji '## Co wiem' w tym pliku nie ma - warstwa stala i biezaca sa puste)"
+}
+if ($w.Jest -and ($w.Blok.Znaki -eq 0)) {
+  Linia "  (bloku zasad MegaRuchacza w tym pliku nie ma)"
+}
+if (-not $zasadyCcTresc -and -not $zasadyWdrozone) {
+  Linia "  (zasad wstrzykiwanych hookiem nie doliczam: bez -Projekt widze tylko szablon, a szablon sam z siebie nic nie wysyla)"
+}
+Linia "  To wchodzi do kontekstu raz i siedzi w nim do konca sesji - nie jest wysylane ponownie przy kazdej wiadomosci."
+Linia "  Tokeny to SZACUNEK, nie pomiar: przyjete ~$ZnakiNaToken znaki na token dla polszczyzny."
 # linia maszynowa - z niej czyta poprzedni pomiar nastepny przebieg
-Linia ("  POMIAR tokenow={0} znakow={1}" -f $razemTokenow, $razemZnakow)
+Linia ("  POMIAR tokenow={0} znakow={1}" -f $tokSesja, $razemZnakow)
 if (-not $poprz) {
   Linia "  Poprzedniego pomiaru nie ma ($plikOstatni) - nie ma z czym porownac. Powstanie przy najblizszym dziennym raporcie."
 } else {
@@ -958,25 +1185,7 @@ if (-not $poprz) {
   $kolorZmiany = $null
   if ($skokKosztu) { $kolorZmiany = "Yellow" }
   Linia ("  Poprzedni pomiar ({0}): {1} -> {2} tokenow na starcie sesji ({3})" -f `
-         $dataPoprz, (Liczba $poprz.Tokeny), (Liczba $razemTokenow), $opisZmiany) $kolorZmiany
-  if ($skokKosztu) {
-    Linia "  UWAGA  to wiecej niz $ProgWzrostu% wzrostu - pamiec puchnie i kazda wiadomosc placi za to osobno." "Yellow"
-  }
-}
-
-Linia ""
-Linia "3. Ile to daje przez dobe"
-if (-not $w.Jest) {
-  Linia "  Koszt jednostkowy jest zerowy, wiec nie ma czego mnozyc przez liczbe sesji."
-} elseif (-not $sesje.Ok) {
-  Linia "  Nie da sie policzyc: $($sesje.Powod)."
-  Linia "  Zostaje sam koszt jednostkowy: ~$(Liczba $razemTokenow) tokenow za kazda wiadomosc."
-} elseif ($sesje.Ile -eq 0) {
-  Linia "  W ostatniej dobie nie bylo ani jednej sesji - dzis ta pamiec nic nie kosztowala."
-  Linia "  Koszt jednostkowy: ~$(Liczba $razemTokenow) tokenow za kazda wiadomosc."
-} else {
-  Linia "  Sesji w ostatniej dobie: $($sesje.Ile)"
-  Linia "  $(Liczba $razemTokenow) tokenow x $($sesje.Ile) sesji = ~$(Liczba ($razemTokenow * $sesje.Ile)) tokenow doklejonych przez dobe."
+         $dataPoprz, (Liczba $poprz.Tokeny), (Liczba $tokSesja), $opisZmiany) $kolorZmiany
 }
 
 Linia ""
@@ -1040,6 +1249,22 @@ if ($ostrzezenia.Count -eq 0) {
 } else {
   foreach ($o in $ostrzezenia) { Linia "  UWAGA  $o" "Yellow" }
 }
+
+# Podsumowanie: dwie liczby i nic wiecej. Zadnych mnozen - uzytkownik powiedzial
+# wprost, ze po przeliczeniu na dobe czy na sto wiadomosci i tak nic nie wie.
+Linia ""
+Linia "9. Podsumowanie"
+if ($tokWiadomosc -gt 0) {
+  Linia "  Kazda Twoja wiadomosc: +$(Liczba $tokWiadomosc) tokenow."
+} else {
+  Linia "  Kazda Twoja wiadomosc: nie umiem zmierzyc - nie znalazlem pliku z przypomnieniem."
+}
+Linia "  Start sesji: +$(Liczba $tokSesja) tokenow, raz."
+$sciezkaSkryptu = $PSCommandPath
+if (-not $sciezkaSkryptu) { $sciezkaSkryptu = Join-Path $Zrodlo "narzedzia\koszt-pamieci.ps1" }
+Linia ""
+Linia "Caly ten rachunek na zadanie - jedna komenda do wklejenia w terminal:"
+Linia "  powershell -ExecutionPolicy Bypass -File $sciezkaSkryptu"
 Linia ""
 
 # Kolory ida przez Write-Host, a tego nie lapie ani przekierowanie, ani potok -
@@ -1054,5 +1279,5 @@ foreach ($l in $script:Raport) {
   else { Write-Output $l.Tekst }
 }
 
-if ($cosUcinane) { exit 1 }
+if ($cosUcinane -or $alarmy.Count -gt 0) { exit 1 }
 exit 0

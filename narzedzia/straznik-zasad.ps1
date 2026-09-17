@@ -492,6 +492,19 @@ function Nanies-Poprawki-Codex($zrodlo, $projekt, $stempel) {
 
 # Nanosi poprawki na pliki nalezace do narzedzia. NIE rusza plikow stanu
 # (worklog.md, mapa.md) - to praca uzytkownika.
+
+# Sufit ladunku trzeba sprawdzac przy KAZDYM przebiegu, nie tylko po podbiciu
+# wersji. Sprawdzone 2026-09-17: gdy wersja wdrozenia rowna sie zrodlowej,
+# Pilnuj-Wersji przerywa petle i Nanies-Poprawki wcale nie leci - a sufit da sie
+# zlamac bez zadnej aktualizacji, choćby recznym obnizeniem limitu w hooks.json.
+function Pilnuj-Sufitu-Zawsze {
+  if (-not $Projekt) { return }
+  $celMega  = Join-Path $Projekt '.megaruchacz'
+  $celCodex = Join-Path $Projekt '.codex'
+  if (-not (Test-Path $celMega)) { return }
+  Pilnuj-Sufitu-Sesji-Codex $celMega $celCodex
+}
+
 function Nanies-Poprawki($zrodlo, $projekt) {
   $stempel = Get-Date -Format "yyyyMMdd-HHmmss"
   $cel = Join-Path $projekt ".claude"
@@ -1020,7 +1033,7 @@ function Zglos-Koszt-Dzienny {
     foreach ($l in (($raport -replace "`r`n", "`n") -split "`n")) {
       $t = $l.Trim()
       if (-not $t) { continue }
-      if ($t -like "RAZEM za jedna rozmowe*" -or $t -like "*doklejonych przez dobe*" -or $t -like "UWAGA *") {
+      if ($t -like "Kazda Twoja wiadomosc:*" -or $t -like "Start sesji:*" -or $t -like "UWAGA *") {
         $wybrane += $t
       }
     }
@@ -1097,6 +1110,7 @@ try {
   if ($Tlo) {
     try { Odswiez-Zrodlo } catch { Mow "odswiezanie zrodla wywrocilo sie: $($_.Exception.Message)" }
     try { Pilnuj-Zasad }   catch { Mow "pilnowanie zasad wywrocilo sie: $($_.Exception.Message)" }
+    try { Pilnuj-Sufitu-Zawsze } catch { Mow "pilnowanie sufitu ladunku wywrocilo sie: $($_.Exception.Message)" }
     try { Pilnuj-Wersji }  catch { Mow "pilnowanie wersji wdrozenia wywrocilo sie: $($_.Exception.Message)" }
     try { Zglos-Koszt }    catch { Mow "rachunek za pamiec wywrocil sie: $($_.Exception.Message)" }
     Dopisz-Dziennik
@@ -1147,6 +1161,7 @@ try {
   # wiec ma sens dopiero wtedy, gdy ten katalog jest swiezy.
   try { Odswiez-Zrodlo }   catch { }
   try { Pilnuj-Zasad }     catch { }
+  try { Pilnuj-Sufitu-Zawsze } catch { }
   try { Pilnuj-Wersji }    catch { }
   try { Zglos-Kandydatow } catch { }
   try { Zglos-Cykl }       catch { }
