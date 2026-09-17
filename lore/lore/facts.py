@@ -30,6 +30,7 @@ from .db import CLAUDE_HOME, DB_PATH, connect, log, ts_to_local
 KNOWLEDGE_DIR = CLAUDE_HOME / "wiedza"
 MARKER_PATH = KNOWLEDGE_DIR / ".ostatnie-wyciaganie"
 CANDIDATES_PATH = KNOWLEDGE_DIR / "kandydaci.md"
+COST_NAME = ".koszt-cyklu.txt"  # next to .cykl-stan, in the same 'klucz: wartosc' shape
 RULES_PATH = CLAUDE_HOME / "CLAUDE.md"  # read only — the waiting room is the only thing we write
 CODEX_RULES_PATH = Path.home() / ".codex" / "AGENTS.md"
 
@@ -375,9 +376,133 @@ def ask_model(material: str, instruction: str = PROMPT) -> str:
         if r.returncode != 0:
             raise RuntimeError(f"{cli.name} returned {r.returncode}:"
                                f" {(r.stderr or '').strip()[:200]}")
-        return cli.answer(r.stdout or "", answer_path)
+        answer = cli.answer(r.stdout or "", answer_path)
+        record_cost(Usage.of(cli.name, len(instruction) + len(material), answer, r.stdout or ""))
+        return answer
     finally:
         shutil.rmtree(empty, ignore_errors=True)
+
+
+# ---------------------------------------------------------------- what the day cost
+
+# This call is the only place in the whole tool where the user's tokens are really spent —
+# everything else glues ready-made text together. Unmeasured, that cost grows unnoticed, so every
+# call writes down what it sent, what came back and what it was billed for, and the whole day is
+# added up in one small file beside .cykl-stan; the PowerShell side reads it with the code it
+# already has for its own state files.
+COST_KEYS = ("narzedzie", "wywolania", "znaki_wyslane", "znaki_odebrane", "tokeny",
+             "tokeny_zrodlo", "fakty")
+COUNTED_KEYS = ("wywolania", "znaki_wyslane", "znaki_odebrane", "tokeny", "fakty")  # these add up
+PREVIOUS = "poprzedni."  # yesterday under the same keys, so "wczoraj / dziś" can be shown
+CHARS_PER_TOKEN = 3  # the estimate narzedzia\koszt-pamieci.ps1 uses for Polish — see tokeny_zrodlo
+# `claude -p --output-format json` really carries the numbers it was billed by — checked against
+# a live run on 2026-09-17, not read off documentation. The cache lines count as well: the user
+# pays for them too, and on a 60 k prompt they are most of the bill.
+TOKEN_FIELDS = ("input_tokens", "cache_creation_input_tokens", "cache_read_input_tokens",
+                "output_tokens")
+
+
+def cost_path() -> Path:
+    """Where the tally lands. A function, not a constant: KNOWLEDGE_DIR is redirected in tests."""
+    return KNOWLEDGE_DIR / COST_NAME
+
+
+def measured_tokens(stdout: str) -> int:
+    """The real token count out of the tool's own envelope; 0 when it does not report one.
+
+    Codex prints its session instead of an envelope, so there the answer is 0 and the caller falls
+    back to the character estimate — a number marked as a guess beats a guess dressed as a measurement.
+    """
+    try:
+        usage = json.loads(stdout)["usage"]
+        return sum(int(usage.get(field) or 0) for field in TOKEN_FIELDS)
+    except (AttributeError, KeyError, TypeError, ValueError):
+        return 0
+
+
+@dataclass
+class Usage:
+    """One call to the model, counted: what went in, what came back, what it cost."""
+    tool: str = ""
+    sent: int = 0  # characters of the instruction plus the material
+    received: int = 0
+    tokens: int = 0
+    measured: bool = False  # tokens read off the tool itself, not guessed from the characters
+
+    @classmethod
+    def of(cls, tool: str, sent: int, answer: str, stdout: str) -> "Usage":
+        received = len(answer)
+        tokens = measured_tokens(stdout)
+        if tokens:
+            return cls(tool, sent, received, tokens, True)
+        return cls(tool, sent, received, math.ceil((sent + received) / CHARS_PER_TOKEN))
+
+
+def read_cost() -> dict[str, str]:
+    """The saved pairs. A missing or unreadable file simply means 'nothing counted yet'."""
+    out = {}
+    for line in _lines(cost_path()):
+        key, sep, value = line.partition(":")
+        if sep and key.strip():
+            out[key.strip()] = value.strip()
+    return out
+
+
+def _number(saved: dict[str, str], key: str) -> int:
+    try:
+        return int(saved.get(key) or 0)
+    except ValueError:  # a hand-edited or half-written line is worth 0, not a crash at 08:05
+        return 0
+
+
+def record_cost(usage: Usage | None = None, found: int = 0, day: str | None = None) -> None:
+    """Adds one call — and the facts it brought — to today's tally.
+
+    Runs of the same day add up: the cycle goes several times over when it is catching up on
+    a backlog, and the user asks what the DAY cost. A new day starts from zero and pushes the old
+    numbers under `poprzedni.`, so "wczoraj / dziś" can be put side by side; nothing older is kept,
+    because nothing older is ever shown.
+
+    This is a measurement, not the job: a file that cannot be written must not cost the user the
+    harvest itself. It does not disappear quietly either — the reason goes into the log.
+    """
+    day = day or datetime.now().strftime("%Y-%m-%d")
+    saved = read_cost()
+    new_day = saved.get("data") != day
+    counted = {key: 0 if new_day else _number(saved, key) for key in COUNTED_KEYS}
+    tool = "" if new_day else saved.get("narzedzie", "")
+    source = "" if new_day else saved.get("tokeny_zrodlo", "")
+    if usage is not None:
+        counted["wywolania"] += 1
+        counted["znaki_wyslane"] += usage.sent
+        counted["znaki_odebrane"] += usage.received
+        counted["tokeny"] += usage.tokens
+        tool = usage.tool
+        # one estimated call makes the whole sum an estimate: calling a partly guessed total
+        # a measurement would be a lie in the one place that reports what this costs
+        source = "pomiar" if usage.measured and source in ("", "pomiar") else "szacunek"
+    counted["fakty"] += max(0, found)
+    entry = {"data": day, "narzedzie": tool, "tokeny_zrodlo": source,
+             **{key: str(counted[key]) for key in COUNTED_KEYS}}
+    try:
+        _write_cost(entry, _yesterday(saved, new_day))
+    except OSError as e:
+        log(f"the cost of this run was not written to {COST_NAME}: {e}")
+
+
+def _yesterday(saved: dict[str, str], new_day: bool) -> dict[str, str]:
+    """The block that goes under `poprzedni.`: the day that has just ended, or the one kept so far."""
+    if new_day and saved.get("data"):
+        return {"data": saved["data"], **{key: saved.get(key, "") for key in COST_KEYS}}
+    return {key: saved.get(PREVIOUS + key, "") for key in ("data", *COST_KEYS)}
+
+
+def _write_cost(entry: dict[str, str], previous: dict[str, str]) -> None:
+    KNOWLEDGE_DIR.mkdir(parents=True, exist_ok=True)
+    lines = [f"{key}: {entry[key]}" for key in ("data", *COST_KEYS)]
+    if previous.get("data"):  # skipped on the very first day, when there is no yesterday yet
+        lines += [f"{PREVIOUS}{key}: {previous.get(key, '')}" for key in ("data", *COST_KEYS)]
+    cost_path().write_text("\n".join(lines) + "\n", encoding="utf-8", newline="\n")
 
 
 @dataclass
@@ -559,6 +684,7 @@ def run(dry_run: bool = False, ask=ask_model, conn: sqlite3.Connection | None = 
         return out
     out["facts"] = parse_facts(ask(material.joined()))
     out["added"] = append_facts(out["facts"])
+    record_cost(found=len(out["facts"]))  # the call itself was counted inside ask_model
     write_marker(material.last_ts)  # exactly as far as we got, so the next run picks up from here
     return out
 
