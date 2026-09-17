@@ -583,19 +583,83 @@ if (fs.existsSync(cel)) {
   }
 }
 s.hooks = s.hooks || {};
+
+// Czy polecenie WOLA skrypt przypomnienia, czy tylko wypisuje plik ladunku.
+// Zwykle includes("przypomnienie.js") tego NIE odroznia: nazwa ladunku
+// (przypomnienie.json) zawiera nazwe skryptu jako podciag. Ta sama pulapka
+// siedziala w straznik-zasad.ps1 i przez nia podmiana nie zaszla ani razu.
+const wolaPrzypomnienie = (p) => /przypomnienie\.js(?![A-Za-z0-9])/.test(p || "");
+const polecenieHooka = (h) => (h.command || "") + " " + (h.commandWindows || "");
+
+// Istniejaca grupa zostaje w spokoju poza dwoma wyjatkami - identycznie jak
+// w straznik-zasad.ps1 (Zsynchronizuj-Grupe), bo inaczej usterka naprawiona
+// w szablonie zyje we wdrozeniu do konca swiata:
+//   1. polecenie rozne od szablonowego - to zmiana definicji hooka, wiec
+//      uniewaznia zatwierdzenie z /hooks i trzeba o niej powiedziec,
+//   2. additionalContextLimit nizszy niz szablonowy - podnosimy, nigdy nie
+//      obnizamy; wlasny, wyzszy sufit uzytkownika rzadzi.
+function zsynchronizuj(grupa, wzor) {
+  let polecenie = false, limit = false;
+  const mam = grupa.hooks || [], ich = wzor.hooks || [];
+  for (let i = 0; i < ich.length && i < mam.length; i++) {
+    for (const pole of ["command", "commandWindows"]) {
+      if (ich[i][pole] === undefined || mam[i][pole] === ich[i][pole]) continue;
+      mam[i][pole] = ich[i][pole];
+      polecenie = true;
+    }
+    if (ich[i].additionalContextLimit !== undefined &&
+        (mam[i].additionalContextLimit || 0) < ich[i].additionalContextLimit) {
+      mam[i].additionalContextLimit = ich[i].additionalContextLimit;
+      limit = true;
+    }
+  }
+  return { polecenie, limit };
+}
+
+// Stare przypomnienie, ktore samo wypisywalo plik ladunku - podmieniamy na
+// wywolanie skryptu takze tutaj. Straznik robi to samo przy starcie sesji, ale
+// czlowiek, ktoremu cos nie dziala, uruchamia wdroz.ps1 - i ma prawo, zeby
+// instalator to naprawil, zamiast meldowac "juz jest".
+let wzorPrzyp = null;
+for (const g of szablon.hooks.UserPromptSubmit || []) {
+  for (const h of g.hooks || []) { if (wolaPrzypomnienie(polecenieHooka(h))) wzorPrzyp = h; }
+}
+if (wzorPrzyp) {
+  for (const g of s.hooks.UserPromptSubmit || []) {
+    for (const h of g.hooks || []) {
+      const pol = polecenieHooka(h);
+      if (!pol.includes("przypomnienie.json") || wolaPrzypomnienie(pol)) continue;
+      h.command = wzorPrzyp.command;
+      h.commandWindows = wzorPrzyp.commandWindows;
+      zmiana = true;
+      console.log("OK  hook UserPromptSubmit (Codex) - stare przypomnienie podmienione na skrypt");
+    }
+  }
+}
+
 for (const zdarzenie of Object.keys(szablon.hooks)) {
   s.hooks[zdarzenie] = s.hooks[zdarzenie] || [];
   for (const grupa of szablon.hooks[zdarzenie]) {
     // Znacznik bez cudzyslowow: po JSON.stringify cudzyslowy sa zescapowane,
     // wiec porownywanie calego polecenia nigdy by nie trafilo.
     const znacznik = grupa.hooks[0].statusMessage || "MegaRuchacz";
-    if (JSON.stringify(s.hooks[zdarzenie]).includes(znacznik)) {
-      console.log("--  hook " + zdarzenie + " (Codex) juz jest");
+    const nasza = s.hooks[zdarzenie].find((g) => JSON.stringify(g).includes(znacznik));
+    if (!nasza) {
+      s.hooks[zdarzenie].push(grupa);
+      zmiana = true;
+      console.log("OK  hook " + zdarzenie + " (Codex)");
       continue;
     }
-    s.hooks[zdarzenie].push(grupa);
-    zmiana = true;
-    console.log("OK  hook " + zdarzenie + " (Codex)");
+    const co = zsynchronizuj(nasza, grupa);
+    if (co.polecenie) {
+      zmiana = true;
+      console.log("OK  hook " + zdarzenie + " (Codex) - polecenie odswiezone, zatwierdz je /hooks");
+    }
+    if (co.limit) {
+      zmiana = true;
+      console.log("OK  hook " + zdarzenie + " (Codex) - podniesiony sufit ladunku (bez /hooks)");
+    }
+    if (!co.polecenie && !co.limit) { console.log("--  hook " + zdarzenie + " (Codex) juz jest"); }
   }
 }
 if (zmiana) { fs.writeFileSync(cel, JSON.stringify(s, null, 2)); process.exit(0); }
