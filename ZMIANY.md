@@ -793,3 +793,28 @@ to wyskoczą jakieś błędy? nie będzie cichego niedziałania?"* Odpowiedź br
   i nie powtórzył meldunku tego samego dnia;
 - po wstawieniu sztucznej awarii błąd trafił do stanu, został zameldowany przy
   następnym przebiegu, wyczyszczony, a czwarty przebieg był już milczący.
+
+## 0.16.1 — 2026-09-17
+
+**Opis mówi wreszcie, ile to kosztuje i kiedy.** README opisywał trzy warstwy
+pamięci i zasady ich zapisywania, ale nigdzie nie odpowiadał na najprostsze
+pytanie osoby płacącej za tokeny: co jedzie przy każdej wiadomości, co raz na
+sesję, a co nie kosztuje nic. Użytkownik musiał to wyciągać z rozmowy przez
+kilka wiadomości.
+
+Nowa sekcja „Ile to kosztuje — dwa rachunki" podaje dwie liczby bez mnożeń:
+około 200 tokenów przy każdej wiadomości (przypomnienie z `UserPromptSubmit`)
+i około 2 940 raz przy starcie sesji (blok zasad, warstwa stała, bieżąca,
+zasady kierownika). Plus to, co najważniejsze dla decyzji, gdzie co zapisywać:
+warstwa referencyjna z `wiedza\` nie kosztuje nic, dopóki rozmowa jej nie
+dotyczy — więc do warstwy stałej idzie wyłącznie to, co ma zmieniać zachowanie
+bez pytania.
+
+Obie liczby oznaczone jako **szacunek, nie pomiar tokenizera**.
+
+**Historia oczyszczona z firmowego adresu.** Dwa dzisiejsze commity powstałe
+w kopiach roboczych workerów były podpisane adresem firmowym i przez to
+`jfinvesting` trafił na listę współtwórców na GitHubie. Historia przepisana,
+zawartość plików niezmieniona (sprawdzone porównaniem przed wypchnięciem).
+Wymagało to wymuszonego wypchnięcia — kopie repozytorium na innych maszynach
+trzeba raz wyrównać przez `git reset --hard origin/main`.
