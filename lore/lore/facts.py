@@ -246,18 +246,29 @@ def _align_to_timestamp(material: Material, kept: list[tuple[str, str]], taken: 
 # every caller goes through find_model_cli(). A third tool is one row in MODEL_CLIS, nothing else.
 MODEL_CLI_ENV = "LORE_MODEL_CLI"  # forces one of them by name — for testing and for overriding
 
-# UNVERIFIED: the `codex` row was written without ever running the command. Codex is not installed
-# on the machine this was built on, so neither `codex --help` nor `codex exec --help` could be
-# read. Two things to confirm before a nightly run is trusted to it: that `exec -` really reads the
-# prompt from stdin (the material does not fit in argv), and what _codex_answer has to strip.
-CODEX_ARGS = ("exec", "--skip-git-repo-check", "-")
+# stands in MODEL_CLIS for the file the tool is told to write its answer to — the real path is a
+# temporary one, made per call in ask_model and substituted here at the last moment
+ANSWER_SLOT = "<plik-odpowiedzi>"
+ANSWER_NAME = "odpowiedz.txt"  # inside the scratch directory, so cleaning up is one rmtree
+
+# 2026-09-17: every switch below is confirmed by a real `codex exec --help` printout from a machine
+#   that has Codex. `-` really is "read the prompt from stdin" (the material does not fit in argv)
+#   and --skip-git-repo-check really lets it run outside a repository, which the scratch directory is.
+# --output-last-message: without it stdout carries the whole run of the session, not the answer, and
+#   a transcript of the agent thinking out loud would land in the waiting room as "facts".
+# --color never: no terminal escape codes inside the text we are about to parse.
+# -s read-only: extracting facts is pure text work — it has no business writing or running anything.
+#   It cannot hang either: `codex exec` is the non-interactive mode, so a refused action ends the run
+#   instead of waiting for someone to approve it at a console nobody is sitting at.
+CODEX_ARGS = ("exec", "--skip-git-repo-check", "--color", "never", "-s", "read-only",
+              "--output-last-message", ANSWER_SLOT, "-")
 
 # best first: when both are installed Claude Code wins, because its switches and its JSON envelope
 # are the ones this module was measured against
 MODEL_CLIS = (
-    # name, switches before the prompt, instruction goes on stdin too, command line ever run here
+    # name, switches before the prompt, instruction goes on stdin too, switches read off the tool
     ("claude", MODEL_ARGS, False, True),
-    ("codex", CODEX_ARGS, True, False),
+    ("codex", CODEX_ARGS, True, True),
 )
 
 
@@ -268,32 +279,45 @@ class ModelCLI:
     exe: str
     args: tuple[str, ...]
     prompt_on_stdin: bool
-    verified: bool
+    verified: bool  # its switches were read off the tool itself, not guessed from documentation
 
-    def invocation(self, instruction: str, material: str) -> tuple[list[str], str]:
+    def answer_in_file(self) -> bool:
+        """True when the tool is told to write the answer to a file instead of printing it."""
+        return ANSWER_SLOT in self.args
+
+    def invocation(self, instruction: str, material: str, answer_path: Path) -> tuple[list[str], str]:
         """(argv, stdin) — the 60 k of material never fits in argv, so it always goes on stdin.
 
         Claude Code takes the instruction in argv and reads the material from stdin. Codex `exec`
         wants a single prompt instead, so there the two are glued and handed over together.
         """
+        args = [str(answer_path) if a == ANSWER_SLOT else a for a in self.args]
         if self.prompt_on_stdin:
-            return [self.exe, *self.args], f"{instruction}\n\n{material}"
-        return [self.exe, *self.args, instruction], material
+            return [self.exe, *args], f"{instruction}\n\n{material}"
+        return [self.exe, *args, instruction], material
 
-    def answer(self, stdout: str) -> str:
-        """The answer alone, whatever the tool wrapped it in."""
-        return _codex_answer(stdout) if self.name == "codex" else stdout
+    def answer(self, stdout: str, answer_path: Path) -> str:
+        """The answer alone, from wherever the tool put it."""
+        return _codex_answer(stdout, answer_path) if self.answer_in_file() else stdout
 
 
-def _codex_answer(stdout: str) -> str:
-    """The seam for unwrapping a Codex answer — deliberately a pass-through until it is measured.
+def _codex_answer(stdout: str, answer_path: Path) -> str:
+    """The Codex answer, read from the file --output-last-message was pointed at.
 
-    Claude Code returns the `--output-format json` envelope that parse_facts already reads, and
-    parse_facts falls back to reading plain text line by line, so a bare answer survives untouched.
-    What Codex actually prints around it is unknown here (see CODEX_ARGS); when someone reads it on
-    a machine that has Codex, this one function is the place to strip it.
+    Its stdout is the run of the session — reasoning, tool calls, timings — with the answer somewhere
+    inside; parsing that would carry the agent's own chatter into the waiting room as facts. The file
+    holds the last message and nothing else, so it is read instead of stdout being sifted.
     """
-    return stdout
+    try:
+        answer = answer_path.read_text(encoding="utf-8", errors="replace").strip()
+    except OSError:
+        answer = ""
+    if not answer:
+        tail = " ".join(stdout.split())[-200:]
+        raise RuntimeError(f"codex left no answer in {answer_path.name} (--output-last-message)"
+                           f" — the run ended without a final message; its output ended with:"
+                           f" {tail or '(nothing)'}")
+    return answer
 
 
 def model_clis() -> tuple[ModelCLI, ...]:
@@ -336,20 +360,24 @@ def ask_model(material: str, instruction: str = PROMPT) -> str:
 
     It runs in an empty scratch directory on purpose: started in a repository it answers about
     that code, and started in the knowledge directory it starts tidying the files it finds there.
+    The file a tool may be asked to write its answer to lives in that same directory, so it is swept
+    away with it whatever happens — a clean run, a timeout or a crash.
     """
     cli = find_model_cli()
-    argv, stdin = cli.invocation(instruction, material)
     empty = tempfile.mkdtemp(prefix="lore-facts-")
+    answer_path = Path(empty) / ANSWER_NAME
+    argv, stdin = cli.invocation(instruction, material, answer_path)
     try:
         r = subprocess.run(
             argv, input=stdin, capture_output=True, cwd=empty,
             text=True, encoding="utf-8", errors="replace", timeout=MODEL_TIMEOUT_S,
         )
+        if r.returncode != 0:
+            raise RuntimeError(f"{cli.name} returned {r.returncode}:"
+                               f" {(r.stderr or '').strip()[:200]}")
+        return cli.answer(r.stdout or "", answer_path)
     finally:
         shutil.rmtree(empty, ignore_errors=True)
-    if r.returncode != 0:
-        raise RuntimeError(f"{cli.name} returned {r.returncode}: {(r.stderr or '').strip()[:200]}")
-    return cli.answer(r.stdout or "")
 
 
 @dataclass
