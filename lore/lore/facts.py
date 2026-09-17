@@ -2,9 +2,14 @@
 
 Reads the chunks indexed since the last run, asks a model for the facts together with the layer
 each of them belongs to (durable / current / reference), and drops them into a waiting room
-(~/.claude/wiedza/kandydaci.md), grouped by that layer. Nothing is ever written to the rules
-the agent obeys (~/.claude/CLAUDE.md) — an automaton can carve a nonsense taken out of context
-into stone, so the machine proposes and the human approves.
+(~/.claude/wiedza/kandydaci.md), grouped by that layer. This module never writes into the rules
+the agent obeys — that is lore.verify's job, and it does it by itself, once the fact has been
+checked and found not to contradict anything.
+
+Every fact leaves a trail behind in wiedza/zrodla.md: which conversations it was read out of and
+when. Not next to the fact in the rules, because those are sent with every session and pay for
+every character — here it costs nothing and answers the only question that matters afterwards,
+"where did this come from".
 
 Run: uv --directory C:\\dev\\claude-worker\\lore run python -m lore.facts [--proba] [--nadrabiaj N]
 """
@@ -37,6 +42,7 @@ MARKER_ID_PATH = KNOWLEDGE_DIR / ".ostatnie-wyciaganie-id"
 DAY_ZERO_PATH = KNOWLEDGE_DIR / ".dzien-zero"  # when this machine started learning — see day_zero()
 CANDIDATES_PATH = KNOWLEDGE_DIR / "kandydaci.md"
 COST_NAME = ".koszt-cyklu.txt"  # next to .cykl-stan, in the same 'klucz: wartosc' shape
+SOURCES_NAME = "zrodla.md"  # where every fact came from — written here and by lore.verify
 RULES_PATH = CLAUDE_HOME / "CLAUDE.md"  # read only — the waiting room is the only thing we write
 CODEX_RULES_PATH = Path.home() / ".codex" / "AGENTS.md"
 
@@ -139,17 +145,38 @@ Jeśli nie ma ani jednego takiego faktu — zwróć pustą listę."""
 
 CANDIDATES_HEADER = """# Kandydaci do trwałej wiedzy
 
-Propozycje wyłowione automatycznie z rozmów — jeszcze nic nie znaczą. Odhacz to, co prawdziwe,
-i przenieś do ~/.claude/CLAUDE.md ręcznie; nic stąd nie trafia tam samo.
+Propozycje wyłowione automatycznie z rozmów. Sprawdza je i wpisuje do wiedzy `lore.verify` — sam,
+bez pytania. Tu zostaje tylko to, czego automat nie ma prawa rozstrzygnąć:
+
+- `[!]` odrzucone — podana ścieżka nie istnieje albo wpis nie mieści się w progu warstwy stałej,
+- `[?]` sporne — przeczy temu, co już jest zapisane; którą wersję zostawić, decydujesz Ty,
+- `[x]` odhaczone ręcznie — automat tego nie rusza.
 
 Nawias po dacie mówi, dokąd wpis należy: (stala/podsekcja), (biezaca), (referencyjna:plik.md).
+Skąd się wzięły — w ~/.claude/wiedza/zrodla.md.
+"""
+
+SOURCES_HEADER = """# Skąd się wzięły fakty
+
+Jedna linia na zdarzenie: `data | zdarzenie | szczegóły | treść faktu`. „wyłowiony” mówi, z których
+rozmów fakt pochodzi, „wpisany” — kiedy i do której warstwy trafił.
+
+Żeby znaleźć rozmowę: `lore_search` po treści faktu, zawężony do podanej daty albo sesji.
+Ten plik NIE jest doklejany do rozmów — dlatego trop stoi tu, a nie przy wpisie w wiedzy.
+
 """
 
 _BULLET = re.compile(r"^\s*(?:[-*\u2022]|\d+[.)])\s*")
 # the label in brackets is optional on purpose: entries written before the layers existed are read
-# as the default one instead of dropping out of the duplicate check
-_CANDIDATE_LINE = re.compile(r"^\s*-\s*\[[ xX]\]\s*(?:\[\d{4}-\d{2}-\d{2}\]\s*)?"
+# as the default one instead of dropping out of the duplicate check.
+# '!' and '?' belong in the box as well — lore.verify marks a rejected and a disputed entry that
+# way, and an entry missed here would be harvested again tomorrow as if it were new.
+_CANDIDATE_LINE = re.compile(r"^\s*-\s*\[[ xX!?]\]\s*(?:\[\d{4}-\d{2}-\d{2}\]\s*)?"
                              r"(?:\((stala|biezaca|referencyjna)(?:[/:]([^)]*))?\)\s*)?(.+)$")
+_LEADING_DAY = re.compile(r"^\[\d{4}-\d{2}-\d{2}\]\s*")  # the date a "biezaca" entry carries
+# the reason lore.verify glues to an entry it did not let through — part of the verdict, not of
+# the fact; counted in, the same sentence would look new and be proposed all over again
+_REASON = re.compile(r"\s*\((?:nie znaleziono|sporne|nie mieści się):.*$")
 _PUNCTUATION = re.compile(r"[^\w\s]", re.UNICODE)
 _POLISH = str.maketrans("ąćęłńóśźż", "acelnoszz")
 
@@ -270,12 +297,16 @@ def day_zero() -> str:
 
 # ---------------------------------------------------------------- material for the model
 
+MAX_NAMED_SESSIONS = 3  # beyond that the trail says "and others" — it is a pointer, not an index
+
+
 @dataclass
 class Piece:
     """One row of the window: what it says, when it was said, when it landed, and where it sits."""
     chunk_id: int
     said: str  # `ts` — the moment of the conversation
     landed: str  # `indexed_at` — the moment it entered the database
+    session: str  # the conversation it was read out of — this is what the trail points at
     text: str
 
 
@@ -285,6 +316,7 @@ class Material:
     chars: int = 0
     last_ts: str = ""  # indexing stamp of the last chunk taken — where the marker goes
     last_id: int | None = None  # and its id, so the next run starts exactly here
+    sessions: list[str] = field(default_factory=list)  # the conversations it was read out of
     pending: int = 0  # chunks left for the next runs
     pending_chars: int = 0
     in_range: int = 0  # rows the window matched, every role
@@ -302,6 +334,19 @@ class Material:
 
     def marker(self) -> Marker:
         return Marker(self.last_ts, self.last_id)
+
+    def source(self) -> str:
+        """Where this batch came from, in one line — enough to find the conversation again.
+
+        The window is the CONVERSATION dates, not the indexing ones: somebody asking "where did
+        this come from" months later remembers when it was said, not when the indexer got to it.
+        """
+        if not self.texts:
+            return ""
+        named = self.sessions[:MAX_NAMED_SESSIONS]
+        tail = f" i {len(self.sessions) - len(named)} innych" if len(self.sessions) > len(named) else ""
+        window = f"rozmowy {self.first_said[:10]}..{self.last_said[:10]}"
+        return f"{window} (sesje: {', '.join(named)}{tail})" if named else window
 
     def missing(self) -> int:
         """Candidates that neither went to the model nor wait in the backlog. Always 0 — if it ever
@@ -321,13 +366,13 @@ def collect(conn: sqlite3.Connection, marker: Marker, zero: str = "") -> Materia
     where, args = marker.window()
     floor = f" AND {INDEXED} >= ?" if zero else ""
     rows = conn.execute(
-        f"SELECT id, ts, role, text, {INDEXED} FROM chunks WHERE ({where}){floor}"
+        f"SELECT id, ts, session, role, text, {INDEXED} FROM chunks WHERE ({where}){floor}"
         f" ORDER BY {INDEXED}, id",
         (*args, zero) if zero else args,
     ).fetchall()
     kept = [
-        Piece(cid, ts, landed, f"[{ts_to_local(ts)}] {role}: {text}")
-        for cid, ts, role, text, landed in rows
+        Piece(cid, ts, landed, session, f"[{ts_to_local(ts)}] {role}: {text}")
+        for cid, ts, session, role, text, landed in rows
         if role.split(":")[-1] in HARVESTED_ROLES
     ]
     material = Material(in_range=len(rows), candidates=len(kept))
@@ -352,6 +397,11 @@ def collect(conn: sqlite3.Connection, marker: Marker, zero: str = "") -> Materia
     rest = kept[taken:]
     material.pending = len(rest)
     material.pending_chars = sum(len(p.text) for p in rest)
+    # the other half of the trail: the conversations this batch was read out of. The window it
+    # covers is first_said..last_said, set just above — see Material.source().
+    for piece in kept[:taken]:
+        if piece.session and piece.session not in material.sessions:
+            material.sessions.append(piece.session)
     return material
 
 
@@ -794,7 +844,8 @@ def waiting_facts() -> list[Fact]:
         m = _CANDIDATE_LINE.match(line)
         if not m:
             continue
-        layer, detail, text = m.group(1) or DEFAULT_LAYER, (m.group(2) or "").strip(), m.group(3).strip()
+        layer, detail = m.group(1) or DEFAULT_LAYER, (m.group(2) or "").strip()
+        text = _REASON.sub("", m.group(3)).strip()
         if layer == "referencyjna":
             out.append(Fact(text, layer, file=detail or UNNAMED_FILE))
         else:
@@ -812,16 +863,39 @@ def known_facts() -> set[str]:
     known = {normalize(f.text) for f in waiting_facts()}
     for path in instruction_paths():
         for line in _lines(path):
-            known.add(normalize(_BULLET.sub("", line).strip()))
+            # the date of a "biezaca" entry is not part of the fact: left in, the same sentence
+            # would look new every day and the current layer would fill up with copies of itself
+            known.add(normalize(_LEADING_DAY.sub("", _BULLET.sub("", line).strip())))
     known.discard("")
     return known
 
 
-def append_facts(facts: list[Fact], day: str | None = None) -> list[Fact]:
+def note_sources(facts: list[Fact], source: str, day: str) -> None:
+    """Writes down, for each fresh fact, which conversations it was read out of.
+
+    A separate file on purpose — see the module docstring. It is a record of the job, never
+    a reason to lose the job: a file that cannot be written says so in the log and that is all.
+    """
+    if not source or not facts:
+        return
+    try:
+        KNOWLEDGE_DIR.mkdir(parents=True, exist_ok=True)
+        first_time = not (KNOWLEDGE_DIR / SOURCES_NAME).exists()
+        with open(KNOWLEDGE_DIR / SOURCES_NAME, "a", encoding="utf-8", newline="\n") as f:
+            if first_time:
+                f.write(SOURCES_HEADER)
+            for fact in facts:
+                f.write(f"- {day} | wyłowiony | {fact.label()} | {source} | {fact.text}\n")
+    except OSError as e:
+        log(f"the trail of {len(facts)} facts was not written to {SOURCES_NAME}: {e}")
+
+
+def append_facts(facts: list[Fact], day: str | None = None, source: str = "") -> list[Fact]:
     """Appends the facts nobody knows yet, grouped by layer; returns the ones actually written.
 
-    Grouped, because a human approves a whole shelf at once — fifty entries in one flat list get
-    read by nobody. The date sits in every entry, so the "biezaca" ones can be aged out later.
+    Grouped, because the layer is what decides where lore.verify puts the fact afterwards, and
+    because whatever it hands back to the user reads better sorted than as one flat list. The
+    date sits in every entry — the "biezaca" ones are aged out by it later.
     """
     known = known_facts()
     fresh = []
@@ -848,6 +922,7 @@ def append_facts(facts: list[Fact], day: str | None = None) -> list[Fact]:
                 f.write(f"- [ ] [{day}] ({fact.label()}) {fact.text}\n")
                 if fact.pointer:  # the line that goes into the durable knowledge in its place
                     f.write(f"      odsyłacz: {fact.pointer}\n")
+    note_sources(fresh, source, day)
     return fresh
 
 
@@ -900,7 +975,7 @@ def run(dry_run: bool = False, ask=ask_model, conn: sqlite3.Connection | None = 
         out["model_cli"] = cli.name if cli else ""
         return out
     out["facts"] = parse_facts(ask(material.joined()))
-    out["added"] = append_facts(out["facts"])
+    out["added"] = append_facts(out["facts"], source=material.source())
     record_cost(found=len(out["facts"]), read=read)  # the call was counted inside ask_model
     write_marker(material.marker())  # exactly as far as we got, so the next run picks up from here
     return out
