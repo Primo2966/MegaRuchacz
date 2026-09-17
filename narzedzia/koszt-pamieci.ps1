@@ -250,6 +250,7 @@ function Zmierz-Warstwy($plik) {
   $pusta = Miara @()
   $wynik = [pscustomobject]@{
     Jest     = $false
+    Blad     = $null
     MaSekcje = $false
     Blok     = $pusta
     Stala    = $pusta
@@ -259,7 +260,12 @@ function Zmierz-Warstwy($plik) {
   if (-not (Test-Path -LiteralPath $plik)) { return $wynik }
 
   try { $tekst = Czytaj $plik }
-  catch { return $wynik }
+  catch {
+    # plik JEST, tylko nie da sie go przeczytac - to co innego niz jego brak,
+    # a raport, ktory powie "nie ma pliku", po prostu sklamie
+    $wynik.Blad = "plik $plik jest, ale nie da sie go odczytac ($($_.Exception.Message))"
+    return $wynik
+  }
 
   $wynik.Jest = $true
   $tekst = $tekst -replace "`r`n", "`n"
@@ -388,6 +394,17 @@ function Sufit($pola) {
   $s | Add-Member -NotePropertyName "Przekroczony" -NotePropertyValue $false
   $s | Add-Member -NotePropertyName "Strata"       -NotePropertyValue 0
   $s | Add-Member -NotePropertyName "Naglowek"     -NotePropertyValue $null
+  if (-not $zmierzony -and -not $s.Uwaga) {
+    # Niezmierzony sufit BEZ powodu wypisuje sie jako "nie zmierzone: " i nic
+    # wiecej - czyli cisza w miejscu, w ktorym mial stac powod. Ten dopisek jest
+    # po to, zeby zadna sciezka nie zostawila tej linii pustej.
+    $b = @()
+    if ($null -eq $s.Teraz) { $b += "nie ma czego mierzyc" }
+    if ($null -eq $s.Limit) { $b += "nie umiem odczytac sufitu z $($s.SkadLimitu)" }
+    elseif ([int]$s.Limit -le 0) { $b += "sufit odczytany z $($s.SkadLimitu) to $($s.Limit) - to nie jest zaden limit" }
+    if ($b.Count -eq 0) { $b += "nie umiem powiedziec czego brakuje - to blad w tym skrypcie" }
+    $s.Uwaga = ($b -join "; ")
+  }
   if ($zmierzony) {
     $s.Procent = [int][math]::Round(100.0 * [double]$s.Teraz / [double]$s.Limit)
     $s.Zapas   = 100 - $s.Procent
@@ -748,6 +765,24 @@ $plikKopania   = Join-Path $Zrodlo "lore\lore\mining.py"
 
 $w = Zmierz-Warstwy $plikClaude
 
+# jednym zdaniem: dlaczego z CLAUDE.md nic nie policzylismy. Brak pliku i plik
+# nie do odczytania to dwa rozne powody i wszedzie nizej podajemy ten wlasciwy.
+$powodBrakuClaude = "nie ma pliku $plikClaude"
+if ($w.Blad) { $powodBrakuClaude = $w.Blad }
+
+function Powod-Pustej-Sesji($sciezkaClaude) {
+  # dlaczego rachunek za start sesji wyszedl pusty - zdanie do wypisania zamiast
+  # zera, bo zero czyta sie jak "za darmo", a to znaczy "nie bylo czego policzyc".
+  # Sciezka idzie parametrem, zeby to samo zdanie dalo sie pokazac i pelna
+  # sciezka (raport), i skrocona (rozbicie).
+  if (-not $w.Jest) {
+    if ($w.Blad) { return "plik $sciezkaClaude jest, ale nie da sie go odczytac" }
+    return "nie ma pliku $sciezkaClaude"
+  }
+  if (-not $w.MaSekcje) { return "w $sciezkaClaude nie ma ani bloku zasad, ani sekcji '## Co wiem'" }
+  return "w $sciezkaClaude nie ma nic do policzenia i zaden hook nie wstrzykuje zasad"
+}
+
 # tylko do linii maszynowej POMIAR - rachunek za start sesji sklada sie nizej
 # z pozycji, bo wchodzi do niego takze to, co nie lezy w CLAUDE.md
 $razemZnakow  = $w.Blok.Znaki + $w.Stala.Znaki + $w.Biezaca.Znaki
@@ -846,7 +881,7 @@ $sufity += Sufit ([ordered]@{
   Plik       = $plikClaude
   Skutek     = "nic sie nie ucina: to prog ostrzegawczy, sygnal zeby przeniesc rzadziej potrzebna wiedze do plikow w wiedza\"
   Ucina      = $false
-  Uwaga      = (Powod-Braku $(if ($w.Jest) { $w.Stala.Znaki } else { $null }) $ProgStalej "nie ma pliku $plikClaude" "tego skryptu")
+  Uwaga      = (Powod-Braku $(if ($w.Jest) { $w.Stala.Znaki } else { $null }) $ProgStalej $powodBrakuClaude "tego skryptu")
 })
 
 $sufity += Sufit ([ordered]@{
@@ -907,11 +942,17 @@ if ($Projekt) {
       @{ nazwa = "przypomnienie doklejane w Claude Code do kazdej wiadomosci"
          krotka = "przypomnienie dla Claude Code"; plik = ".claude\orchestrator-reminder.json"
          zdarzenie = "UserPromptSubmit" })) {
+    # Brak ladunku NIE kasuje tu calego wiersza: pominiety wiersz czyta sie jak
+    # "tego sufitu nie ma", a jest wprost przeciwnie - jest, tylko nie wiemy,
+    # ile pod nim siedzi. Idzie wiec jako pozycja bez pomiaru, z powodem.
     $plikCC = Join-Path $Projekt $paraCC.plik
-    if (-not (Test-Path -LiteralPath $plikCC)) { continue }
     $trescCC = Ladunek-Hooka $plikCC
     $znakiCC = $null
     if ($trescCC) { $znakiCC = $trescCC.Length }
+    $brakCC = "nie da sie odczytac ladunku z $plikCC"
+    if (-not (Test-Path -LiteralPath $plikCC)) {
+      $brakCC = "nie ma pliku $plikCC - tego hooka nie ma w tym projekcie (wgrywa go wdroz.ps1)"
+    }
     $limitCC = Limit-Hooka $plikUstawien (Split-Path $paraCC.plik -Leaf)
     $sufity += Sufit ([ordered]@{
       Nazwa      = $paraCC.nazwa
@@ -925,7 +966,7 @@ if ($Projekt) {
       Skutek     = "UCINA PO CICHU: koniec ladunku przepada, gdy przekroczy sufit narzedzia"
       Ucina      = $true
       Tresc      = $trescCC
-      Uwaga      = (Powod-Braku $znakiCC $limitCC "nie da sie odczytac ladunku z $plikCC" `
+      Uwaga      = (Powod-Braku $znakiCC $limitCC $brakCC `
                     "$plikUstawien - nie ma tam additionalContextLimit, wiec sufitem jest wartosc domyslna Claude Code")
     })
   }
@@ -1066,10 +1107,14 @@ if ($Zwiezle) {
   # Liczby bez separatora tysiecy: ta linia ma sie zmiescic w jednym wierszu
   # terminala i jest pokazywana przez straznika przy kazdym otwarciu sesji.
   # Obie liczby, bo sama sesyjna sugerowala, ze tyle placi sie za wiadomosc.
+  # Zero tokenow za start sesji nie znaczy "za darmo", tylko "nie bylo czego
+  # policzyc" - i tak to ma byc napisane, tak samo jak przy przypomnieniu.
+  $czSesja = "start sesji +$tokSesja tokenow"
+  if ($tokSesja -le 0) { $czSesja = "startu sesji nie umiem zmierzyc" }
   if ($tokWiadomosc -gt 0) {
-    $rachunek = "pamiec: wiadomosc +$tokWiadomosc tokenow, start sesji +$tokSesja tokenow"
+    $rachunek = "pamiec: wiadomosc +$tokWiadomosc tokenow, $czSesja"
   } else {
-    $rachunek = "pamiec: start sesji +$tokSesja tokenow, przypomnienia nie umiem zmierzyc"
+    $rachunek = "pamiec: $czSesja, przypomnienia nie umiem zmierzyc"
   }
   if ($cosUcinane) {
     $g = $ucinane[0]
@@ -1122,11 +1167,22 @@ function Wiersz-Rozbicia($etykieta, $pasek, $liczba, $ogon) {
   return ("  {0,-20} {1,-20} {2,8}{3}" -f $etykieta, $pasek, $liczba, $ogon)
 }
 
+# Kubelek, ktorego nie da sie policzyc, MA SIE WYPISAC. Naglowek niesie
+# informacje "taka pozycja w tym rachunku istnieje", a kubelek, ktory znika,
+# czyta sie jak zero - uzytkownik nie ma wtedy szans zauwazyc, ze czegos brakuje.
+# To ten sam wzorzec, co "? nie zmierzone: ..." przy sufitach.
+function Kubelek-Niezmierzony($naglowek, $stan, $powod) {
+  return @("$naglowek - $stan", ("  {0,-20} {1}" -f "", $powod))
+}
+
 # Kubelek: naglowek z suma, pozycje malejaco, a sciezki zbiorczo, gdy wszystkie
 # pozycje siedza w jednym pliku (tak jest z CLAUDE.md - trzy warstwy, jeden plik).
-function Kubelek-Rozbicia($naglowek, $pozycje, $razem) {
+function Kubelek-Rozbicia($naglowek, $pozycje, $razem, $powodBraku) {
+  if (@($pozycje).Count -eq 0) {
+    if (-not $powodBraku) { $powodBraku = "nie umiem powiedziec czego brakuje - to blad w tym skrypcie" }
+    return Kubelek-Niezmierzony $naglowek "nie zmierzone" $powodBraku
+  }
   $wynik = @()
-  if (@($pozycje).Count -eq 0) { return $wynik }
   $wynik += "$naglowek - ~$(Liczba $razem) tokenow"
   $posortowane = @($pozycje | Sort-Object -Property Tokeny -Descending)
   $max = $posortowane[0].Tokeny
@@ -1143,16 +1199,38 @@ function Kubelek-Rozbicia($naglowek, $pozycje, $razem) {
 }
 
 if ($Rozbicie) {
+  # Powody, dla ktorych kubelek moze byc pusty - kazdy nazwany po imieniu, bo
+  # w tym rachunku brak liczby jest osobna wiadomoscia, a nie brakiem wiadomosci.
+  $brakWiadomosc = $null
+  if (@($kubWiadomosc).Count -eq 0) {
+    if (($przypZnaki -ne $null) -and (-not $jestCodex)) {
+      $brakWiadomosc = "nie ma ladunku hooka Claude Code (.claude\orchestrator-reminder.json), a przypomnienie Codeksa tej maszyny nie dotyczy"
+    } else {
+      $brakWiadomosc = "nie ma zadnego gotowego przypomnienia - ani .claude\orchestrator-reminder.json, ani $(Sciezka-Ludzka $plikPrzypWzor)"
+    }
+  }
+  $brakSesja = $null
+  if (@($kubSesja).Count -eq 0) { $brakSesja = Powod-Pustej-Sesji (Sciezka-Ludzka $plikClaude) }
+
   $blok = @()
   $blok += "MegaRuchacz - pamiec i koszty"
-  $blok += Kubelek-Rozbicia "Przy KAZDEJ Twojej wiadomosci" $kubWiadomosc $tokWiadomosc
-  $blok += Kubelek-Rozbicia "RAZ, przy starcie sesji" $kubSesja $tokSesja
+  $blok += Kubelek-Rozbicia "Przy KAZDEJ Twojej wiadomosci" $kubWiadomosc $tokWiadomosc $brakWiadomosc
+  $blok += Kubelek-Rozbicia "RAZ, przy starcie sesji" $kubSesja $tokSesja $brakSesja
 
   # Trzeci kubelek to inne pieniadze: prawdziwe wolanie modelu, nie doklejony tekst.
   # Dlatego nie sumuje sie z niczym, a pasek skaluje sie do POPRZEDNIEGO przebiegu -
   # jedna pozycja nie ma udzialu procentowego, ale porownanie z wczoraj ma sens.
-  if ($cykl -and ($null -ne $cykl.Tokeny)) {
-    $blok += "RAZ NA DOBE - uczenie sie na wczesniejszych rozmowach"
+  # Naglowek stoi tu ZAWSZE, takze bez ani jednej liczby: zniknal 2026-09-17
+  # i przez to rachunek milczal o calym trzecim rodzaju kosztu.
+  $naglowekCyklu = "RAZ NA DOBE - uczenie sie na wczesniejszych rozmowach"
+  if (-not $cykl) {
+    $blok += Kubelek-Niezmierzony $naglowekCyklu "jeszcze nie liczone" `
+      "cykl nie mial okazji sie odpalic (brak $(Sciezka-Ludzka $plikCyklKoszt))"
+  } elseif ($null -eq $cykl.Tokeny) {
+    $blok += Kubelek-Niezmierzony $naglowekCyklu "nie zmierzone" `
+      "cykl chodzil, ale nie podal liczby tokenow ($(Sciezka-Ludzka $plikCyklKoszt))"
+  } else {
+    $blok += $naglowekCyklu
     $poprzedniCykl = $cykl.Poprzedni
     $maxCykl = [long]$cykl.Tokeny
     if ($poprzedniCykl -and ($null -ne $poprzedniCykl.Tokeny) -and ([long]$poprzedniCykl.Tokeny -gt $maxCykl)) {
@@ -1173,7 +1251,12 @@ if ($Rozbicie) {
     $blok += "  Jedyna pozycja placona prawdziwym wolaniem modelu."
   }
 
-  $blok += "Pliki w $(Sciezka-Ludzka $katWiedzy) - 0 tokenow, czytane tylko wtedy, gdy temat tego wymaga."
+  if (Test-Path -LiteralPath $katWiedzy) {
+    $blok += "Pliki w $(Sciezka-Ludzka $katWiedzy) - 0 tokenow, czytane tylko wtedy, gdy temat tego wymaga."
+  } else {
+    # bez tego linia mowila o plikach w katalogu, ktorego nie ma
+    $blok += "Warstwy referencyjnej jeszcze nie ma (brak $(Sciezka-Ludzka $katWiedzy)) - 0 tokenow."
+  }
   foreach ($l in $blok) { Write-Output $l }
   exit 0
 }
@@ -1263,13 +1346,18 @@ $bajtyWiedzy = 0
 foreach ($p in $pliki) { $bajtyWiedzy += $p.Length }
 
 $kandydaci = $null
+$bladKandydatow = $null
 if (Test-Path -LiteralPath $plikKandydat) {
   $kandydaci = 0
   try {
     foreach ($l in @((Czytaj $plikKandydat) -split "`r?`n")) {
       if ($l -match '^\s*-\s*\[\s\]') { $kandydaci++ }
     }
-  } catch { $kandydaci = $null }
+  } catch {
+    # plik jest, ale sie nie czyta - inaczej raport powiedzialby "nie ma pliku"
+    $kandydaci = $null
+    $bladKandydatow = "plik $plikKandydat jest, ale nie da sie go odczytac ($($_.Exception.Message))"
+  }
 }
 
 $stare = @($w.Wpisy | Where-Object { $_.Stary })
@@ -1404,7 +1492,8 @@ Linia "  Tylko to jest doklejane przy kazdym Twoim zdaniu. Reszta wchodzi raz, n
 Linia ""
 Linia "3. RAZ, przy starcie sesji - z czego sie sklada"
 if (-not $w.Jest) {
-  Linia "  Nie ma pliku $plikClaude - czyli nic stad nie wchodzi do rozmowy."
+  if ($w.Blad) { Linia "  $($w.Blad) - nie wiem, co stad wchodzi do rozmowy." "Yellow" }
+  else         { Linia "  Nie ma pliku $plikClaude - czyli nic stad nie wchodzi do rozmowy." }
 }
 Wypisz-Kubelek $kubSesja $tokSesja `
   "Nie ma czego mierzyc - ani pamieci w CLAUDE.md, ani zasad wstrzykiwanych hookiem."
@@ -1422,7 +1511,13 @@ Linia "  Tokeny to SZACUNEK, nie pomiar: przyjete ~$ZnakiNaToken znaki na token 
 # linia maszynowa - z niej czyta poprzedni pomiar nastepny przebieg
 Linia ("  POMIAR tokenow={0} znakow={1}" -f $tokSesja, $razemZnakow)
 if (-not $poprz) {
-  Linia "  Poprzedniego pomiaru nie ma ($plikOstatni) - nie ma z czym porownac. Powstanie przy najblizszym dziennym raporcie."
+  if (Test-Path -LiteralPath $plikOstatni) {
+    # plik jest, ale bez linii POMIAR - "nie ma poprzedniego pomiaru" bylby tu
+    # polprawda, a przyczyna (stary albo uciety raport) zniknelaby bez sladu
+    Linia "  Plik $plikOstatni jest, ale nie ma w nim linii POMIAR ani RAZEM - poprzedniej liczby nie umiem odczytac."
+  } else {
+    Linia "  Poprzedniego pomiaru nie ma ($plikOstatni) - nie ma z czym porownac. Powstanie przy najblizszym dziennym raporcie."
+  }
 } else {
   $dataPoprz = "data nieznana"
   if ($poprz.Data) { $dataPoprz = $poprz.Data.ToString("yyyy-MM-dd HH:mm") }
@@ -1495,7 +1590,9 @@ if (-not (Test-Path -LiteralPath $katWiedzy)) {
 
 Linia ""
 Linia "6. Poczekalnia ($plikKandydat)"
-if ($kandydaci -eq $null) {
+if ($bladKandydatow) {
+  Linia "  $bladKandydatow - nie wiem, ile faktow czeka na decyzje." "Yellow"
+} elseif ($kandydaci -eq $null) {
   Linia "  Nie ma pliku kandydatow - nic nie czeka na decyzje. To normalne."
 } else {
   Linia "  Faktow czeka na zatwierdzenie: $kandydaci"
@@ -1524,14 +1621,25 @@ $inne = @(
   @{ Plik = $plikKopania;  Wzor = '(?m)^MAX_PREVIEW_SNIPPET\s*=\s*([\d_]+)'; Opis = "zajawka w podgladzie znalezisk przycinana do {0} znakow (lore\lore\mining.py)" }
 )
 $bylo = $false
+# sufity, ktorych nie udalo sie odczytac, ida osobna linia - pominiete po cichu
+# wygladalyby tak, jakby ich w kodzie w ogole nie bylo
+$nieodczytane = @()
 foreach ($i in $inne) {
   $v = Limit-Z-Pliku $i.Plik $i.Wzor
-  if ($v -eq $null) { continue }
+  if ($v -eq $null) {
+    $powodI = "nie ma tego pliku"
+    if (Test-Path -LiteralPath $i.Plik) { $powodI = "plik jest, ale nie ma w nim tej stalej" }
+    $nieodczytane += (($i.Opis -f "?") + " - $powodI")
+    continue
+  }
   $bylo = $true
   Linia ("  - " + ($i.Opis -f (Liczba $v)))
 }
+foreach ($n in $nieodczytane) {
+  Linia ("  ? nie zmierzone: " + $n)
+}
 if (-not $bylo) {
-  Linia "  Nie znalazlem zadnego - albo nie ma tu katalogu lore\."
+  Linia "  Nie znalazlem ani jednej liczby - albo nie ma tu katalogu lore\."
 } else {
   Linia "  Te sufity tna tresc, zanim trafi do pamieci albo do wyniku szukania. Nie dotycza"
   Linia "  tego, co dokleja sie do rozmowy, wiec nie licza sie do kosztu wyzej."
@@ -1554,7 +1662,11 @@ if ($tokWiadomosc -gt 0) {
 } else {
   Linia "  Kazda Twoja wiadomosc: nie umiem zmierzyc - nie znalazlem pliku z przypomnieniem."
 }
-Linia "  Start sesji: +$(Liczba $tokSesja) tokenow, raz."
+if ($tokSesja -gt 0) {
+  Linia "  Start sesji: +$(Liczba $tokSesja) tokenow, raz."
+} else {
+  Linia "  Start sesji: nie umiem zmierzyc - $(Powod-Pustej-Sesji $plikClaude)."
+}
 # Trzecia liczba stoi osobno i celowo nie jest dodana do dwoch powyzej:
 # tamte to doklejony tekst, ta to prawdziwie wydane tokeny.
 if ($cykl -and ($null -ne $cykl.Tokeny)) {
