@@ -709,3 +709,44 @@ zapytanie o godzinę będzie mnie kosztować kilka milionów tokenów"*.
 **Sprawdzone uruchomieniem:** audyt wykrył oba ucinania przed poprawką i zwraca
 `nic nie jest ucinane` z kodem 0 po niej; linia o koszcie pokazuje się w sesji
 Claude Code i w poprawnym JSON-ie dla Codeksa.
+
+## 0.15.1 — 2026-09-17
+
+**Zmierzone, nie założone: Claude Code NIE ucina wstrzykiwanego tekstu.**
+Doświadczenie na żywej sesji — ładunek 64 636 znaków ze znacznikami na głębokości
+1k, 2k, 4k, 8k, 16k, 32k i 64k. Dotarły **wszystkie**. Zamiast ucinać, Claude Code
+zapisuje całość do pliku i mówi o tym wprost („Output too large… saved to…"),
+podając podgląd i ścieżkę. Czyli zachowanie, którego wymagamy od własnego kodu,
+ma u siebie od początku — **dlatego świadomie NIE wpisujemy tam własnego sufitu**:
+byłby czystą szkodą, ucinałby to, co narzędzie przepuszcza w całości. Codex tnie
+i milczy, więc zapory zostają wyłącznie po jego stronie.
+
+**Sufit ładunku pilnowany przy KAŻDYM przebiegu strażnika**
+- Sprawdzenie wisiało pod `Pilnuj-Wersji`, a ta przerywa, gdy wersja wdrożenia
+  równa się źródłowej. Sufit da się złamać bez żadnej aktualizacji — choćby
+  ręcznym obniżeniem limitu — i wtedy nikt by nie zareagował. Potwierdzone próbą.
+- Wspólny kod zapór wyjęty do `narzedzia\sufit-ladunku.ps1`, używany przez
+  instalator i strażnika. Dwa różne komunikaty na to samo to proszenie się
+  o rozjazd.
+
+**Ładunek przestał puchnąć przy każdym przebiegu**
+- `Get-Content -Raw` w PowerShell 5.1 czyta w ANSI, więc polskie znaki z pliku
+  UTF-8 wracały jako krzaki, zapis je utrwalał, a plik rósł: 13 763 → 15 415 →
+  i dalej bez końca. Odczyt jest teraz jawnie w UTF-8. Trzy przebiegi pod rząd:
+  ta sama liczba.
+- Morał na przyszłość: **narzędzie, którym mierzysz, potrafi kłamać tak samo jak
+  to, które mierzysz.** Pierwszy pomiar „79 krzaków w ładunku" był fałszywy
+  z dokładnie tego samego powodu co badany błąd — plik był czysty.
+
+**Rachunek w jednostkach użytkownika**
+- Koniec mnożenia przez zmyśloną liczbę sesji na dobę. Podsumowanie to dwie linie:
+  `Kazda Twoja wiadomosc: +207 tokenow.` i `Start sesji: +2 941 tokenow, raz.`
+- Raport rozbity na dwa kubełki (za wiadomość / za start sesji), pozycje
+  posortowane malejąco z udziałem procentowym — widać, co kosztuje najwięcej.
+- Alarmy z progami w jednym nazwanym bloku, z komentarzem, skąd się wzięły i że
+  są do zmiany. Próg udziału ustawiony na 70%, nie 60%, bo przy 60 alarm
+  świeciłby się od pierwszego dnia — uzasadnienie zapisane przy progu.
+
+**Zasada, która wyszła dziś trzy razy z rzędu:** zabezpieczenie, którego nikt nie
+próbował złamać, było martwe. Trzy na trzy. Każda zapora dostaje odtąd próbę
+negatywną, albo nie liczy się za zrobioną.
