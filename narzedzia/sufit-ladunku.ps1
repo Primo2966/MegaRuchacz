@@ -29,7 +29,7 @@ function Ostrzezenie-O-Ucieciu($znakow, $limit) {
 # miec nasza grupe z innym limitem i to on rzadzi, nie szablon ani kopia w pamieci.
 function Limit-Ladunku($plikKonfiguracji, $fragmentPolecenia) {
   if (-not $plikKonfiguracji -or -not (Test-Path $plikKonfiguracji)) { return $null }
-  try { $j = (Get-Content $plikKonfiguracji -Raw).TrimStart([char]0xFEFF) | ConvertFrom-Json } catch { return $null }
+  try { $j = ([System.IO.File]::ReadAllText($plikKonfiguracji, [System.Text.Encoding]::UTF8)).TrimStart([char]0xFEFF) | ConvertFrom-Json } catch { return $null }
   if (-not $j.hooks) { return $null }
   foreach ($zdarzenie in $j.hooks.PSObject.Properties) {
     foreach ($grupa in @($zdarzenie.Value)) {
@@ -52,7 +52,7 @@ function Pilnuj-Sufitu($plikLadunku, $plikKonfiguracji, $fragmentPolecenia, $ska
                           SkadLimitu = $skadLimitu; Przekroczony = $false; Zmierzony = $false; Czemu = "" }
   if (-not (Test-Path $plikLadunku)) { $w.Czemu = "nie ma pliku $plikLadunku"; return $w }
   $surowy = $null
-  try { $surowy = (Get-Content $plikLadunku -Raw).TrimStart([char]0xFEFF) } catch { }
+  try { $surowy = ([System.IO.File]::ReadAllText($plikLadunku, [System.Text.Encoding]::UTF8)).TrimStart([char]0xFEFF) } catch { }
   if (-not $surowy) { $w.Czemu = "nie da sie odczytac $plikLadunku"; return $w }
   $j = $null
   try { $j = $surowy | ConvertFrom-Json } catch { $w.Czemu = "$plikLadunku nie jest poprawnym JSON-em"; return $w }
@@ -72,6 +72,9 @@ function Pilnuj-Sufitu($plikLadunku, $plikKonfiguracji, $fragmentPolecenia, $ska
   $w.Przekroczony = ($w.Znaki -gt $w.Limit)
   $docelowa = $czysta
   if ($w.Przekroczony) { $docelowa = (Ostrzezenie-O-Ucieciu $w.Znaki $w.Limit) + $czysta }
+  # Odczyt MUSI byc jawnie w UTF-8 (wyzej): Get-Content -Raw w PowerShell 5.1
+  # czyta w ANSI, wiec polskie znaki wracaja jako krzaki, zapis je utrwala,
+  # a plik rosnie przy kazdym przebiegu. Sprawdzone 2026-09-17: 13763 -> 15415.
   if ($naprawiaj -and $docelowa -ne $tresc) {
     $j.hookSpecificOutput.additionalContext = $docelowa
     [System.IO.File]::WriteAllText($plikLadunku, ($j | ConvertTo-Json -Depth 5 -Compress),
