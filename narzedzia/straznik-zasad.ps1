@@ -84,6 +84,14 @@ if ($Moduly) {
   exit 0
 }
 
+# Pomiar ladunku hooka, ostrzezenie o ucieciu i czytanie sufitu - ten sam kod,
+# ktorego uzywa wdroz.ps1 (Pilnuj-Sufitu, Limit-Ladunku, Ostrzezenie-O-Ucieciu).
+# Wczytujemy go DOPIERO tu, zeby -Moduly zostalo czystym JSON-em. Gdy pliku nie
+# ma (starsza kopia narzedzia), straznik leci dalej bez pilnowania sufitu - start
+# sesji jest wazniejszy niz to sprawdzenie.
+$plikSufitu = Join-Path $PSScriptRoot "sufit-ladunku.ps1"
+if (Test-Path $plikSufitu) { . $plikSufitu }
+
 $POCZATEK = "<!-- MegaRuchacz:start -->"
 $KONIEC   = "<!-- MegaRuchacz:koniec -->"
 
@@ -368,6 +376,30 @@ function Zbuduj-Sesje-Codex($celMega, $krotkie) {
   Zapisz-Tekst (Join-Path $celMega "zasady-sesja.json") ($ladunek | ConvertTo-Json -Depth 5 -Compress)
 }
 
+# Ten ladunek idzie prosto do modelu, a wszystko ponad additionalContextLimit
+# jest ucinane OD KONCA i bez slowa. Instalator ma prawo odmowic wdrozenia, bo
+# stoi przy nim czlowiek - tutaj chodzi hook startowy, wiec przerwanie zepsuloby
+# start pracy. Zamiast tego robimy to, co wdroz.ps1: wstawiamy identyczne
+# ostrzezenie na POCZATEK tresci (jedyne miejsce, ktore przezyje uciecie)
+# i mowimy o tym jedna linia - w tle znaczy: do dziennika, bo nie ma komu krzyczec.
+# Sprawdzamy przy KAZDYM przebiegu, nie tylko po przebudowie ladunku: sufit moze
+# zjechac w dol sam, gdy ktos poprawi .codex\hooks.json, a zasady zostana te same.
+function Pilnuj-Sufitu-Sesji-Codex($celMega, $celCodex) {
+  $plikLadunku = Join-Path $celMega "zasady-sesja.json"
+  if (-not (Test-Path $plikLadunku)) { return }
+  if (-not (Get-Command Pilnuj-Sufitu -ErrorAction SilentlyContinue)) { return }
+  # $true = poprawiaj plik na dysku; pomiar leci po tresci BEZ ostrzezenia
+  # z poprzedniego przebiegu, wiec liczba nie rosnie przy kazdej aktualizacji.
+  $w = Pilnuj-Sufitu $plikLadunku (Join-Path $celCodex "hooks.json") "zasady-sesja.json" `
+                     ".codex\hooks.json" "zasady kierownika dla Codeksa" $true
+  if (-not $w.Przekroczony) { return }
+  $strata = [int]$w.Znaki - [int]$w.Limit
+  Mow ("MegaRuchacz: zasady dla Codeksa nie mieszcza sie w suficie hooka - maja " +
+       "$($w.Znaki) znakow, a zmiesci sie $($w.Limit), wiec koniec (${strata} znakow) zostanie uciety. " +
+       "Ladunek $plikLadunku ma juz ostrzezenie w pierwszej linii; podnies additionalContextLimit " +
+       "przy hooku od zasady-sesja.json w .codex\hooks.json albo skroc zasady.")
+}
+
 # .codex\hooks.json - tu chodzimy na palcach. Zmiana DEFINICJI hooka (polecenie,
 # timeout, matcher, async) uniewaznia zatwierdzenie z /hooks i zmusza uzytkownika
 # do powtarzania go, wiec grup, ktore juz tam sa, NIE RUSZAMY w ogole - dopisujemy
@@ -435,6 +467,7 @@ function Nanies-Poprawki-Codex($zrodlo, $projekt, $stempel) {
   if ($zasadyZmienione -or -not (Test-Path (Join-Path $celMega "zasady-sesja.json"))) {
     Zbuduj-Sesje-Codex $celMega $wAgents
   }
+  Pilnuj-Sufitu-Sesji-Codex $celMega $celCodex
 
   # Nowy hook nie ruszy sam z siebie - zatwierdza go czlowiek. Cicha podmiana
   # pliku znaczylaby, ze uzytkownik czeka na cos, co nigdy nie wystartuje.
