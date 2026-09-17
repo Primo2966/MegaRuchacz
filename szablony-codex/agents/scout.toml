@@ -1,4 +1,4 @@
-# Worker rozpoznawczy - odpowiednik .claude/agents/scout.md z Claude Code.
+# Worker rozpoznawczy - odpowiednik .claude/agents/scout.md z Claude Code. kierownik-template
 # Nazwa agenta bierze sie z pola "name", nie z nazwy pliku.
 name = "scout"
 description = "Worker do rozpoznania kodu - szuka plikow, symboli, wzorcow i wraca ze zwiezlym raportem. Uzywaj, gdy trzeba ustalic GDZIE cos jest, zanim cokolwiek zmienisz."
