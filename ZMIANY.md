@@ -502,3 +502,34 @@ próbnym przechodzą.
 **Niezweryfikowane:** składnia wywołania Codeksa (`codex exec`) przyjęta
 z dokumentacji — na tej maszynie Codeksa nie ma. Oznaczone w kodzie jako
 `UNVERIFIED`. Do sprawdzenia na maszynie domowej.
+
+## 0.12.1 — 2026-09-17
+
+Potwierdzone na maszynie domowej, gdzie stoi sam Codex, bez Claude Code.
+**Pełna instalacja przeszła: 8 z 8 sprawdzeń, Codex przyjął serwer MCP, handshake
+i `lore_stats` odpowiadają, w sesji Codeksa widać `lore: connected (4 tools)`.**
+Baza: 57 z 57 transkryptów, 2673 kawałki, model 464 MB.
+
+**Wywołanie Codeksa przestaje być zgadywanką**
+- `codex exec --help` z działającej maszyny potwierdził to, co napisaliśmy
+  z dokumentacji: `exec`, prompt ze standardowego wejścia przez `-`
+  i `--skip-git-repo-check` znaczą dokładnie to, co zakładaliśmy. Oznaczenia
+  `UNVERIFIED` zdjęte, z datą potwierdzenia.
+- Ale wyszedł prawdziwy problem, którego dokumentacja nie zdradziłaby bez
+  przeczytania: **bez `--output-last-message` na standardowe wyjście leci cały
+  przebieg sesji**, nie sama odpowiedź — do faktów trafiałby śmietnik. Odpowiedź
+  czytamy teraz z pliku, katalog tymczasowy sprzątany także przy wyjątku.
+  Do tego `--color never` (żeby nie wciągać kodów sterujących terminala)
+  i `-s read-only`, bo wyławianie faktów jest czysto tekstowe.
+- Brak pliku odpowiedzi albo pusty plik to czytelny błąd, nie ciche pustki.
+
+**Instalator nie mówi o narzędziu, którego nie ma**
+- Wykrywanie działało poprawnie, ale ekran zgody i tak twierdził „pamięć rozmów
+  z Claude Code" na maszynie, gdzie Claude Code nie ma. Teraz wymienia to, co
+  faktycznie znalazł — i tak samo zdanie końcowe o restarcie.
+
+**Zgodność wstecz potwierdzona w boju:** na maszynie domowej leżała już baza
+w `~\.claude` (powstała dzień wcześniej). Instalator ją wykrył i zostawił na
+miejscu, zamiast zakładać drugą obok — dokładnie tak, jak miało działać.
+
+131 testów.
