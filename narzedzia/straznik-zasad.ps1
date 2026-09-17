@@ -8,8 +8,9 @@
 # zgadza, NIC nie wypisuje i nie robi nic drogiego - z jednym wyjatkiem, punktem
 # 3., ktory odzywa sie ZAWSZE, bo uzytkownik poprosil o to wprost. Porownania ida po skrocie
 # tresci i po numerze wersji. Jedyne siegniecie do sieci to krotki "git fetch"
-# w katalogu zrodlowym, najwyzej raz na godzine i z limitem czasu - bez niego
-# punkt 2. porownywalby wdrozenie ze staroscia i zawsze wychodzilo mu, ze gra.
+# w katalogu zrodlowym, z limitem czasu i - w przebiegu zwyklym - najwyzej raz
+# na godzine (w trybie -Tlo przy kazdym starcie sesji, patrz Odswiez-Zrodlo);
+# bez niego punkt 2. porownywalby wdrozenie ze staroscia i zawsze wychodzilo mu, ze gra.
 #
 # Uzycie:
 #   powershell -NoProfile -File narzedzia\straznik-zasad.ps1 [-Zrodlo <repo>] [-Projekt <katalog>]
@@ -566,7 +567,8 @@ function Wolaj-Gita([string]$argumenty, [int]$sekundy) {
 function Odswiez-Zrodlo {
   # Do sieci zagladamy nie czesciej niz raz na $MINUT_MIEDZY_POBRANIAMI, osobno
   # dla kazdego katalogu zrodlowego - stad skrot sciezki w kluczu. W tle dlawika
-  # nie ma: tam czestotliwosc ustawia harmonogram, a nie liczba otwartych okien.
+  # nie ma z decyzji uzytkownika: jedynym wolajacym -Tlo jest hook SessionStart
+  # Codeksa, a pobranie ma sie dziac przy KAZDYM starcie sesji, nie raz na godzine.
   $klucz = "z" + (Skrot $Zrodlo.ToLower())
   $stanP = Czytaj-Klucze $plikPobrania
   $kiedy = [datetime]::MinValue
