@@ -818,3 +818,70 @@ w kopiach roboczych workerów były podpisane adresem firmowym i przez to
 zawartość plików niezmieniona (sprawdzone porównaniem przed wypchnięciem).
 Wymagało to wymuszonego wypchnięcia — kopie repozytorium na innych maszynach
 trzeba raz wyrównać przez `git reset --hard origin/main`.
+
+## 0.17.0 — 2026-09-17
+
+Dzień pytań o koszty. Wszystko poniżej wynikło z jednego: *„muszę jasno wiedzieć,
+która warstwa wiedzy jest gdzie doklejana i ile kosztuje"*.
+
+**Rachunek w trzech kubełkach, w jednostkach użytkownika**
+- Przy KAŻDEJ wiadomości: ~207 tokenów (przypomnienie zasad). To nie jest warstwa
+  wiedzy — to instrukcja dla modelu.
+- RAZ przy starcie sesji: ~2 941 tokenów (blok zasad, warstwa stała, bieżąca).
+- RAZ NA DOBĘ: uczenie się na wcześniejszych rozmowach — **jedyna pozycja płacona
+  prawdziwym wywołaniem modelu**. Pod Claude Code liczona pomiarem (koperta
+  `usage`), pod Codeksem szacunkiem, z jawnym oznaczeniem.
+- Żadnych mnożeń przez zmyśloną liczbę sesji na dobę. Przy każdej pozycji stoi,
+  gdzie leży i jaki ma udział; widać, którą warstwę skracać.
+- Widać też, **która warstwa wygasa**: bieżąca jest tymczasowa (14 dni), stała
+  i referencyjna nie wygasają.
+
+**Cykl rusza przy pierwszej sesji dnia, nie o 8:15**
+- Godzina była wzięta znikąd. Warunek brzmi teraz: inna data niż ostatni przebieg
+  ORAZ pierwsze uruchomienie Claude Code albo Codeksa w tym dniu. Wtorek → piątek
+  bierze wszystko od wtorku; dni bez pracy nie istnieją.
+- Zadania `LoreCykl` i `LoreWiedza` usunięte, instalator je zdejmuje.
+- Postęp widać w kolejnych wiadomościach, koszt po zakończeniu.
+
+**Dzień zerowy — nie wolno przeczytać całego archiwum**
+- Przy zmianie na oś „czasu zaindeksowania" groziło, że wszystko wygląda na
+  świeżo dodane i pierwszy przebieg przeczyta trzy lata rozmów jednym strzałem.
+- Jest teraz zapisany moment, przed który wyławianie nigdy nie sięga. Migracja
+  nadaje starym wierszom czas wywiedziony z ich własnej daty, nie moment migracji.
+- **Sprawdzone na kopii prawdziwej bazy**: 54 247 kawałków, migracja 0,6 s, zero
+  strat, pierwszy przebieg wziął 39 kawałków, nie archiwum.
+- Materiał pominięty jako starszy niż dzień zerowy jest liczony i zgłaszany.
+
+**Żadna rozmowa nie wypada z zakresu**
+- Kawałek mógł trafić do bazy PO tym, jak znacznik przeskoczył za jego datę —
+  wtedy nikt by się o nim nie dowiedział. Wybór materiału idzie teraz po czasie
+  zaindeksowania, czyli po tej samej osi, po której rosną dane.
+
+**Koniec ręcznej poczekalni**
+- Fakty wchodzą do wiedzy same. W poczekalni zostają wyłącznie **sporne** —
+  sprzeczne z tym, co już wiemy, z podaniem, czemu przeczą. Automat nie zgaduje,
+  która wersja jest prawdziwa.
+- Każdy fakt niesie trop do źródła (`wiedza\zrodla.md`, osobno — metryka przy
+  każdym wpisie byłaby płacona przy każdej sesji).
+- Kopia zapasowa przed każdą zmianą. Próg warstwy stałej pilnowany: automat nie
+  przekroczy go po cichu.
+- Wykrywanie sprzeczności jest **celowo wąskie** i to zapisane: łapie tę samą tezę
+  z inną wartością albo odwrócone przeczenie, a sprzeczność powiedzianą innymi
+  słowami przepuści. Szersze dawałoby fałszywe alarmy przy każdym doprecyzowaniu.
+
+**Ścieżka Codeksa naprawiona — cztery usterki**
+- Bez `node` użytkownik tracił KOMPLET zasad przy każdej wiadomości i nie widział
+  z tego ani słowa. Dołożone awaryjne wyjście, tak jak pod Claude Code.
+- Podmiana starego hooka nigdy nie zachodziła: warunek szukał `przypomnienie.js`,
+  a stary wpis wołał `przypomnienie.json` — ciąg zawiera się w ciągu.
+- Rozbicie kosztów nie docierało pod Codeksem wcale; teraz dostaje ten sam blok.
+- Licznik mierzył pliki Claude Code nawet na wdrożeniu Codeksa — `AGENTS.md`,
+  czyli realny koszt sesji, nie był liczony.
+- Bufor niesie swój wiek: `(UWAGA: liczby sprzed 9 godzin ... to NIE jest stan na
+  teraz)` zamiast podawania starych danych jako bieżących.
+
+**Zasada projektu: „Cisza jest zakazana"** (`CLAUDE.md`) — pięć konkretów plus
+wymóg próby negatywnej przy każdym zabezpieczeniu. Powód: tego dnia trzy
+zabezpieczenia na trzy okazały się martwe, a każde wyglądało na działające.
+
+198 testów.
