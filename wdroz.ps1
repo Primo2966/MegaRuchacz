@@ -59,6 +59,25 @@ function Polecenie-Hooka($ustawienia, $zdarzenie, $znacznik) {
   return $null
 }
 
+# Sciezka do bash.exe. Claude Code odnajduje basha SAM, niezaleznie od PATH,
+# wiec szukanie wylacznie w PATH dawalo falszywy alarm tam, gdzie Git siedzi poza
+# PATH-em, a hooki dzialaly bez zarzutu. Kolejnosc jak w Znajdz-Uv
+# (narzedzia\instaluj-lore.ps1): najpierw PATH, potem znane miejsca instalacji Gita.
+function Znajdz-Bash {
+  $cmd = Get-Command bash -CommandType Application -ErrorAction SilentlyContinue | Select-Object -First 1
+  if ($cmd) { return $cmd.Source }
+  $kandydaci = @(
+    "C:\dev\tools\git\bin\bash.exe",
+    "$env:ProgramFiles\Git\bin\bash.exe",
+    (Join-Path $env:LOCALAPPDATA "Programs\Git\bin\bash.exe"),
+    "${env:ProgramFiles(x86)}\Git\bin\bash.exe"
+  )
+  foreach ($k in $kandydaci) {
+    if ($k -and (Test-Path $k)) { return (Resolve-Path $k).Path }
+  }
+  return $null
+}
+
 # Odpala polecenie hooka doslownie tak, jak zrobilby to Claude Code: przez bash,
 # z CLAUDE_PROJECT_DIR wskazujacym projekt. Polecenie idzie do pliku, bo
 # cudzyslowy w argumencie "bash -c" gina po drodze w PowerShell 5.1.
@@ -71,7 +90,7 @@ function Odpal-Przez-Bash($polecenie) {
   $env:CLAUDE_PROJECT_DIR = $Projekt
   try {
     $global:LASTEXITCODE = 0
-    $wyjscie = & bash ($tmp -replace "\\", "/") 2>&1 | Out-String
+    $wyjscie = & $script:Bash ($tmp -replace "\\", "/") 2>&1 | Out-String
     return @{ kod = $LASTEXITCODE; tekst = $wyjscie }
   } catch {
     return @{ kod = -1; tekst = $_.Exception.Message }
@@ -141,7 +160,7 @@ if ($Projekt -eq (Resolve-Path $Zrodlo).Path) {
 # dzialaja niezaleznie od niego, wiec te wdrazamy tak czy owak.
 $Claude = Get-Command claude -CommandType Application -ErrorAction SilentlyContinue | Select-Object -First 1
 $Node   = Get-Command node   -CommandType Application -ErrorAction SilentlyContinue | Select-Object -First 1
-$Bash   = Get-Command bash   -CommandType Application -ErrorAction SilentlyContinue | Select-Object -First 1
+$Bash   = Znajdz-Bash   # nie tylko PATH - Claude Code znajduje basha takze poza nim
 
 # Codex ma wlasne hooki i wlasnych podagentow, wiec tryb workerow idzie takze
 # tam - obok Claude Code, nie zamiast. Widzimy go po poleceniu w PATH albo po
@@ -211,8 +230,10 @@ if ($JestCodex) {
   Write-Host "   i AGENTS.md zwykle NIE SA w .gitignore - zobaczysz je w 'git status' jako nowe,"
   Write-Host "   niesledzone pliki. Gdy cos nadpisujemy, kopia zapasowa laduje obok, z data w nazwie."
   Write-Host "   UWAGA: hooki Codeksa NIE URUCHOMIA SIE, dopoki nie zatwierdzisz ich w CLI" -ForegroundColor Yellow
-  Write-Host "   poleceniem /hooks. Codex liczy skrot definicji, wiec po KAZDEJ zmianie tych" -ForegroundColor Yellow
-  Write-Host "   plikow (takze po aktualizacji narzedzia) trzeba zatwierdzic je od nowa." -ForegroundColor Yellow
+  Write-Host "   poleceniem /hooks. Zatwierdza sie je RAZ: Codex liczy skrot z samej DEFINICJI" -ForegroundColor Yellow
+  Write-Host "   hooka (zdarzenie, matcher, polecenie, timeout, async), a nie z tresci skryptu," -ForegroundColor Yellow
+  Write-Host "   ktory to polecenie uruchamia - nasze pozniejsze poprawki w skryptach zaufania" -ForegroundColor Yellow
+  Write-Host "   nie uniewazniaja, aktualizacja samego Codeksa tez nie." -ForegroundColor Yellow
   Write-Host "   Bez tego kroku rejestr milczy i zasady nie wchodza z hooka - nie dlatego," -ForegroundColor Yellow
   Write-Host "   ze wdrozenie zawiodlo." -ForegroundColor Yellow
   Write-Host ""
@@ -449,6 +470,10 @@ fs.writeFileSync(dir + "/.megaruchacz/zasady-sesja.json", JSON.stringify({
 console.log("OK  .megaruchacz\\zasady-sesja.json (zasady na starcie sesji Codeksa)");
 '@
 
+# Grupy hookow bierzemy z szablonu DOSLOWNIE - razem z jawnym "timeout" przy
+# kazdym hooku. Ten timeout ma tam byc i ma zostac: Codex liczy skrot zaufania
+# z definicji hooka juz po normalizacji, a wartosc domyslna moglaby sie zmienic
+# w nowszym Codeksie i uniewaznic zatwierdzenie, ktore uzytkownik juz kliknal.
 $jsCodex = @'
 const fs = require("fs");
 const cel = process.argv[2], szablonP = process.argv[3], projekt = process.argv[4], zrodlo = process.argv[5];
@@ -602,7 +627,7 @@ if ($JestCodex) {
   }
 
   Write-Host "UWAGA  hooki Codeksa rusza dopiero po zatwierdzeniu poleceniem /hooks w CLI." -ForegroundColor Yellow
-  Write-Host "       Codex liczy skrot definicji, wiec powtarzaj to po kazdej zmianie tych plikow." -ForegroundColor Yellow
+  Write-Host "       Zatwierdzasz raz - skrot liczy sie z definicji hooka, nie z tresci skryptu." -ForegroundColor Yellow
 }
 
 # ---------------------------------------------------------- 5. reszta instalacji
@@ -755,8 +780,13 @@ if (-not $Claude) {
 } elseif (-not $ustawienia) {
   Sprawdz "hooki daja sie uruchomic" $false "nie da sie odczytac settings.json, wiec nie mam czego probowac"
 } elseif (-not $Bash) {
-  # kazdy hook MegaRuchacza ma shell "bash" - bez basha nie wykona sie ZADEN
-  Sprawdz "hooki daja sie uruchomic" $false "ten host nie ma bash-a w PATH, a wszystkie nasze hooki sa na bashu - nie wykona sie zaden z nich"
+  # Kazdy hook Claude Code ma shell "bash", wiec bez basha nie mam czym ich
+  # sprobowac. To OSTRZEZENIE, nie blad wdrozenia: pliki sa na miejscu, Claude
+  # Code szuka basha po swojemu, a czesc codeksowa ma "commandWindows" i basha
+  # nie potrzebuje w ogole. Blokowanie calej instalacji byloby tu falszywym alarmem.
+  Write-Host "  UWAGA hooki Claude Code - nie znalazlem bash.exe ani w PATH, ani w typowych" -ForegroundColor Yellow
+  Write-Host "        miejscach instalacji Gita, wiec nie mam czym ich sprobowac" -ForegroundColor Yellow
+  Nie-Sprawdzono "hookow Claude Code nie probowalem uruchomic - nie widze bash.exe na tej maszynie; jesli hooki mimo to dzialaja, Claude Code ma wlasnego basha, a jesli nie - doinstaluj Git for Windows albo dopisz jego bin\ do PATH"
 } else {
   # a) hooki podajace gotowy JSON - odpalamy naprawde i sprawdzamy, co wyszlo
   $ladunki = @(
@@ -886,6 +916,12 @@ if ($JestCodex) {
   # Rejestr - jedyna czesc, ktora da sie sprawdzic dzialaniem. Wolamy skrypt
   # przykladowym zdarzeniem w katalogu probnym w TEMP; do rejestru projektu nie
   # piszemy, bo byl to wpis o workerze, ktorego nigdy nie bylo.
+  #
+  # UWAGA: zdarzenie MUSI trafic na standardowe wejscie node'a - stamtad
+  # mr-log-codex.js bierze rodzaj workera. Potok PowerShella ('$tekst | & node')
+  # tego nie dowozil: node dostawal puste wejscie, dopisywal ogolne "worker",
+  # a sprawdzenie szukajace "scout" meldowalo blad mimo dzialajacego skryptu.
+  # Dlatego wejscie idzie z pliku, przez Start-Process -RedirectStandardInput.
   $skryptLog = Join-Path $Zrodlo "narzedzia\mr-log-codex.js"
   if (-not $Node) {
     Sprawdz "mr-log-codex.js dopisuje worker do rejestru" $false "nie ma node w PATH - hooki rejestru nie maja czym wystartowac"
@@ -894,16 +930,38 @@ if ($JestCodex) {
   } else {
     $proba = Join-Path $env:TEMP "mr-proba-codex-$Stempel"
     New-Item -ItemType Directory -Force -Path $proba | Out-Null
-    $zdarzenie = '{"agent_id":"proba","agent_type":"scout","permission_mode":"read-only"}'
-    $zdarzenie | & node $skryptLog "start" $proba 2>&1 | Out-Null
+    $plikZdarzenia = Join-Path $env:TEMP "mr-proba-zdarzenie-$Stempel.json"
+    [System.IO.File]::WriteAllText($plikZdarzenia,
+      '{"agent_id":"proba","agent_type":"scout","permission_mode":"read-only"}',
+      (New-Object System.Text.UTF8Encoding($false)))
+    $probaWyjscie = Join-Path $env:TEMP "mr-proba-wyjscie-$Stempel.txt"
+    $probaBlad    = Join-Path $env:TEMP "mr-proba-blad-$Stempel.txt"
+    $kodLog = -1
+    try {
+      $procLog = Start-Process -FilePath $Node.Source `
+        -ArgumentList @("`"$skryptLog`"", "start", "`"$proba`"") `
+        -RedirectStandardInput $plikZdarzenia -RedirectStandardOutput $probaWyjscie `
+        -RedirectStandardError $probaBlad -NoNewWindow -Wait -PassThru
+      $kodLog = $procLog.ExitCode
+    } catch { }
     $probaPlik = Join-Path $proba ".megaruchacz\worklog.md"
-    $dopisane = (Test-Path $probaPlik) -and ((Get-Content $probaPlik -Raw) -match "START\s+scout")
+    $trescProby = ""
+    if (Test-Path $probaPlik) { $trescProby = Get-Content $probaPlik -Raw }
+    # Sprawdzamy to, co ten hook ma robic: czy rejestr UROSL o wpis. Rodzaj
+    # workera to juz tylko jakosc wpisu - gdy zdarzenie nie dojdzie na wejscie,
+    # skrypt pisze ogolne "worker". To warte odnotowania, ale nie jest powodem,
+    # zeby oblac cale wdrozenie.
+    $dopisane = ($trescProby -match "START")
     Sprawdz "mr-log-codex.js dopisuje worker do rejestru (uruchomiony naprawde)" $dopisane `
-      "skrypt nie dopisal linii o workerze w katalogu probnym"
+      "skrypt nie dopisal linii o workerze w katalogu probnym (kod $kodLog)"
+    if ($dopisane -and $trescProby -notmatch "START\s+scout") {
+      Nie-Sprawdzono "rejestr dostal wpis, ale bez rodzaju workera - probne zdarzenie nie doszlo na standardowe wejscie skryptu; w realnej pracy podaje je hook Codeksa"
+    }
     Remove-Item $proba -Recurse -Force -ErrorAction SilentlyContinue
+    Remove-Item $plikZdarzenia, $probaWyjscie, $probaBlad -Force -ErrorAction SilentlyContinue
   }
 
-  Nie-Sprawdzono "hooki Codeksa sa ZAPISANE, ale nie wystartuja, dopoki nie zatwierdzisz ich poleceniem /hooks w CLI - bez czlowieka nie da sie tego ani zrobic, ani sprawdzic, a Codex liczy skrot definicji, wiec po kazdej zmianie trzeba to powtorzyc"
+  Nie-Sprawdzono "hooki Codeksa sa ZAPISANE, ale nie wystartuja, dopoki nie zatwierdzisz ich poleceniem /hooks w CLI - bez czlowieka nie da sie tego ani zrobic, ani sprawdzic; zatwierdza sie raz, bo skrot liczy sie z definicji hooka (zdarzenie, matcher, polecenie, timeout, async), a nie z tresci skryptu"
   Nie-Sprawdzono "role z .codex\agents\ i zasady z AGENTS.md potwierdza tylko zapis na dysku - to, ze Codex je wczyta, widac dopiero w nowej sesji"
   Nie-Sprawdzono "straznik zasad nie odswieza czesci codeksowej - nowsza wersje tych plikow nanosi ponowne uruchomienie wdroz.ps1"
 } else {
@@ -965,16 +1023,17 @@ if ($script:Bledy.Count -eq 0) {
     Write-Host "  Wpisz w Codeksie /hooks i zatwierdz hooki MegaRuchacza. Dopoki tego nie" -ForegroundColor Yellow
     Write-Host "  zrobisz, rejestr .megaruchacz\worklog.md zostanie pusty, a zasady i" -ForegroundColor Yellow
     Write-Host "  przypomnienie nie wejda z hooka. To nie znaczy, ze wdrozenie zawiodlo." -ForegroundColor Yellow
-    Write-Host "  Codex liczy skrot definicji hooka: po KAZDEJ zmianie tych plikow - takze" -ForegroundColor Yellow
-    Write-Host "  po aktualizacji narzedzia - zatwierdzenie trzeba powtorzyc." -ForegroundColor Yellow
+    Write-Host "  Zatwierdzasz RAZ. Codex liczy skrot z samej definicji hooka (zdarzenie," -ForegroundColor Yellow
+    Write-Host "  matcher, polecenie, timeout, async), a nie z tresci skryptu - ani nasze" -ForegroundColor Yellow
+    Write-Host "  pozniejsze poprawki, ani aktualizacja Codeksa zaufania nie uniewazniaja." -ForegroundColor Yellow
   }
   exit 0
 } else {
   Write-Host ("Instalacja NIEPELNA - do poprawy: " + ($script:Bledy -join "; ")) -ForegroundColor Red
   Write-Host "Popraw powyzsze i uruchom instalator ponownie, potem zamknij i otworz narzedzie AI na nowo."
   if ($JestCodex) {
-    Write-Host "Pamietaj tez o /hooks w Codeksie - bez zatwierdzenia jego hooki nie ruszaja," -ForegroundColor Yellow
-    Write-Host "a po kazdej zmianie tych plikow zatwierdzenie trzeba powtorzyc." -ForegroundColor Yellow
+    Write-Host "Pamietaj tez o /hooks w Codeksie - bez zatwierdzenia jego hooki nie ruszaja." -ForegroundColor Yellow
+    Write-Host "Zatwierdzasz raz: skrot liczy sie z definicji hooka, nie z tresci skryptu." -ForegroundColor Yellow
   }
   exit 1
 }
