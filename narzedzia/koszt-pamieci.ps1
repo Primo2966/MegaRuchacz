@@ -197,11 +197,14 @@ function Miara($linie) {
 
 # --- pozycje rachunku --------------------------------------------------------
 
-function Pozycja($nazwa, $znaki, $skad, $rada, $krotka = "") {
+function Pozycja($nazwa, $znaki, $skad, $rada, $krotka = "", $uwaga = "") {
   # Jedna skladowa rachunku: co to jest, ile wazy, skad pochodzi i co zrobic,
   # gdyby to ona okazala sie najdrozsza. $krotka to ta sama pozycja nazwana
   # w dwoch slowach - do rozbicia pokazywanego raz dziennie przy starcie sesji,
   # gdzie kazdy znak leci do kontekstu modelu i placi sie za niego.
+  # $uwaga to ogon tego samego wiersza w rozbiciu: czy ta pozycja wygasa. Bez
+  # tego nie widac, ktora warstwa pamieci jest tymczasowa, a ktora rosnie na
+  # zawsze - a to jest pierwsza rzecz, ktora trzeba wiedziec przy skracaniu.
   if (-not $krotka) { $krotka = $nazwa }
   return [pscustomobject]@{
     Nazwa   = $nazwa
@@ -210,8 +213,19 @@ function Pozycja($nazwa, $znaki, $skad, $rada, $krotka = "") {
     Tokeny  = [int](Tokeny $znaki)
     Skad    = $skad
     Rada    = $rada
+    Uwaga   = $uwaga
     Procent = 0
   }
+}
+
+function Ile-Wpisow($n) {
+  # polska odmiana - "2 wpisy", ale "5 wpisow"; ten sam wzorzec, co Ile-Wywolan
+  # w narzedzia\straznik-zasad.ps1
+  $reszta = $n % 10
+  $setka  = $n % 100
+  if ($n -eq 1) { return "1 wpis" }
+  if (($reszta -ge 2) -and ($reszta -le 4) -and (($setka -lt 12) -or ($setka -gt 14))) { return "$n wpisy" }
+  return "$n wpisow"
 }
 
 function Policz-Udzialy($pozycje) {
@@ -802,6 +816,16 @@ if ($agentsTresc -ne $null) {
   try { $agentsBajty = [long](Get-Item -LiteralPath $plikAgents).Length } catch { $agentsBajty = $null }
 }
 
+# KTORE narzedzie naprawde siedzi na tej maszynie. Od tego zalezy, co wchodzi do
+# rachunkow nizej: liczymy to, co NAPRAWDE leci do modelu tutaj, a nie to, co
+# poleci u kogos innego. Codeksa poznajemy po jego pliku instrukcji, Claude Code
+# po plikach, ktore prowadzi sam - katalog ~\.claude zaklada takze MegaRuchacz,
+# wiec sam katalog nie dowodzi niczego (to samo rozroznienie robi
+# narzedzia\straznik-zasad.ps1 w Cisza-Claude-Linia).
+$jestCodex  = ($agentsTresc -ne $null)
+$jestClaude = ((Test-Path -LiteralPath (Join-Path $katKlaudii "history.jsonl")) -or
+               (Test-Path -LiteralPath (Join-Path $KatalogDomowy ".claude.json")))
+
 # Zasady wysylane Codeksowi na starcie sesji. Gdy podano projekt i lezy w nim
 # gotowy ladunek - mierzymy JEGO, bo to jest to, co naprawde leci. Bez projektu
 # mierzymy szablon zlozony tak samo jak sklada go straznik: to wariant pelny,
@@ -849,7 +873,13 @@ if ($Projekt) {
   $t = Ladunek-Hooka $p
   if ($t) { $przypCcTresc = $t; $przypCcSkad = $p }
 }
-if (-not $przypCcTresc) {
+# Kopia z katalogu narzedzia ratuje przebieg bez -Projekt (tak chodzi rachunek
+# pokazywany przy starcie sesji): wdrozenia roznia sie wtedy tylko sciezka.
+# Ale TYLKO na maszynie, na ktorej Claude Code w ogole jest. Bez tego warunku
+# wdrozenie z samym Codeksem dostawalo w rachunku ladunek Claude'a wziety
+# z katalogu narzedzia - liczbe, ktorej nikt nikomu nie wysyla - a pozycja
+# Codeksa nie pokazywala sie nigdy (sprawdzone 2026-09-17).
+if (-not $przypCcTresc -and $jestClaude) {
   $p = Join-Path $Zrodlo ".claude\orchestrator-reminder.json"
   $t = Ladunek-Hooka $p
   if ($t) { $przypCcTresc = $t; $przypCcSkad = $p }
@@ -978,19 +1008,32 @@ if ($Projekt) {
 # Do rachunku wchodzi tylko to, co na TEJ maszynie naprawde leci - szablon,
 # ktorego nikt nie wysyla, jest wymieniony w raporcie, ale nie jest doliczany.
 
-$jestCodex = ($agentsTresc -ne $null)
-
+# Oba narzedzia naraz to nie jest rzadki przypadek, tylko codziennosc tej
+# maszyny - i wtedy placi sie OBA przypomnienia, kazde w swoim oknie. Do
+# 2026-09-17 bylo tu "elseif", wiec pozycja Codeksa nie pokazywala sie nigdy,
+# gdy tylko dalo sie znalezc cokolwiek po stronie Claude Code.
 $kubWiadomosc = @()
 if ($przypCcZnaki -ne $null) {
   $kubWiadomosc += Pozycja "przypomnienie zasad (Claude Code)" $przypCcZnaki $przypCcSkad `
     "skroc tresc 'additionalContext' w tym pliku - kazde zdanie stad placi sie przy kazdej wiadomosci" `
-    "przypomnienie zasad"
-} elseif (($przypZnaki -ne $null) -and $jestCodex) {
+    "przypomnienie Claude"
+}
+if (($przypZnaki -ne $null) -and $jestCodex) {
   $kubWiadomosc += Pozycja "przypomnienie zasad (Codex)" $przypZnaki $przypSkad `
     "skroc tresc 'additionalContext' w tym pliku - kazde zdanie stad placi sie przy kazdej wiadomosci" `
-    "przypomnienie zasad"
+    "przypomnienie Codex"
 }
 $tokWiadomosc = Policz-Udzialy $kubWiadomosc
+
+# Ktora warstwa pamieci jest tymczasowa, a ktora rosnie na zawsze - to widac
+# tylko wtedy, gdy stoi napisane przy pozycji. Warstwa biezaca ma daty waznosci
+# ($DniWaznosci dni, sekcja "Wygasanie" w zasady-globalne.md - sprawdzone
+# 2026-09-17), stala nie wygasa wcale, a referencyjna nie kosztuje, dopoki
+# rozmowa jej nie dotyczy (osobna linia na koncu rozbicia).
+$wpisyBiezace = @($w.Wpisy)
+$wpisyStare   = @($wpisyBiezace | Where-Object { $_.Stary })
+$uwagaBiezaca = "  tymczasowa, $($wpisyBiezace.Count) wpisow"
+if ($wpisyStare.Count -gt 0) { $uwagaBiezaca += ", $($wpisyStare.Count) po terminie" }
 
 $kubSesja = @()
 if ($w.Blok.Znaki -gt 0) {
@@ -1001,21 +1044,44 @@ if ($w.Blok.Znaki -gt 0) {
 if ($w.Stala.Znaki -gt 0) {
   $kubSesja += Pozycja "warstwa STALA (Co wiem)" $w.Stala.Znaki $plikClaude `
     "przenies najdluzsze zestawienie do pliku w $katWiedzy i zostaw tu jedna linie odsylacza - warstwa referencyjna nie kosztuje nic" `
-    "warstwa stala"
+    "warstwa stala" "  nie wygasa"
 }
 if ($w.Biezaca.Znaki -gt 0) {
   $kubSesja += Pozycja "warstwa BIEZACA" $w.Biezaca.Znaki $plikClaude `
     "skasuj wpisy starsze niz $DniWaznosci dni albo przenies te trwale do warstwy stalej" `
-    "warstwa biezaca"
+    "warstwa biezaca" $uwagaBiezaca
 }
+
+# Codex czyta AGENTS.md SAM, bez zadnego hooka - to jego odpowiednik CLAUDE.md
+# i najwiekszy staly koszt jego sesji. Do 2026-09-17 nie bylo go w ZADNYM
+# kubelku: rachunek pod Codeksem pokazywal cudze liczby (pliki Claude Code)
+# i milczal o tym, co naprawde leci do modelu.
+if ($jestCodex) {
+  $kubSesja += Pozycja "instrukcje domowe Codeksa (~\.codex\AGENTS.md)" $agentsTresc.Length $plikAgents `
+    "to odpowiednik CLAUDE.md po stronie Codeksa - skracaj go tak samo, warstwami" `
+    "AGENTS.md domowy"
+  if ($Projekt) {
+    $plikAgentsProjektu = Join-Path $Projekt "AGENTS.md"
+    $agentsProjektu = Czytaj-Cicho $plikAgentsProjektu
+    if ($agentsProjektu) {
+      $kubSesja += Pozycja "AGENTS.md projektu (Codex czyta go sam)" $agentsProjektu.Length $plikAgentsProjektu `
+        "zasady kierownika skracaj w szablony-codex\zasady-kierownika.md i wgraj przez wdroz.ps1" `
+        "AGENTS.md projektu"
+    }
+  }
+}
+# Tak samo jak przy przypomnieniu: gdy stoja oba wdrozenia, placi sie oba
+# ladunki - kazdy w swoim oknie. Pokazujemy je osobno i z nazwy narzedzia,
+# bo skracac trzeba je w dwoch roznych plikach.
 if ($zasadyCcTresc) {
   $kubSesja += Pozycja "zasady kierownika z hooka (Claude Code)" $zasadyCcTresc.Length $zasadyCcSkad `
     "to zasady projektu wstrzykiwane hookiem - skracaj je w CLAUDE.md narzedzia i wgraj przez wdroz.ps1" `
-    "zasady projektu"
-} elseif ($zasadyWdrozone -and $zasadyTresc) {
+    "zasady z hooka (CC)"
+}
+if ($zasadyWdrozone -and $zasadyTresc) {
   $kubSesja += Pozycja "zasady kierownika z hooka (Codex)" $zasadyTresc.Length $zasadySkad `
     "to zasady projektu wstrzykiwane hookiem - skracaj je w szablony-codex\zasady-kierownika.md i wgraj przez wdroz.ps1" `
-    "zasady projektu"
+    "zasady z hooka (Cx)"
 }
 $tokSesja = Policz-Udzialy $kubSesja
 
@@ -1085,7 +1151,7 @@ foreach ($k in @(
 if ($skokKosztu) {
   $alarmy += Alarm "+$zmianaProc% od poprzedniego pomiaru" `
     ("Start sesji urosl o $zmianaProc% od poprzedniego pomiaru ($(Liczba $poprz.Tokeny) -> $(Liczba $tokSesja) tokenow) - " +
-     "sprawdz, co doszlo do $plikClaude.")
+     "sprawdz, co doszlo do $plikClaude albo czy do rachunku nie doszla nowa pozycja (rozbicie nizej wymienia wszystkie).")
 }
 
 # Cykl wiedzy. Jedyny alarm w tym raporcie, ktory mowi o naprawde wydanych
@@ -1191,7 +1257,7 @@ function Kubelek-Rozbicia($naglowek, $pozycje, $razem, $powodBraku) {
   foreach ($p in $posortowane) {
     $udzial = ""
     if (@($pozycje).Count -gt 1) { $udzial = "{0,5}%" -f $p.Procent }
-    $wynik += Wiersz-Rozbicia $p.Krotka (Pasek $p.Tokeny $max) (Liczba $p.Tokeny) $udzial
+    $wynik += Wiersz-Rozbicia $p.Krotka (Pasek $p.Tokeny $max) (Liczba $p.Tokeny) ($udzial + $p.Uwaga)
     if (-not $jednaSciezka) { $wynik += ("  {0,-20} {1}" -f "", (Sciezka-Ludzka $p.Skad)) }
   }
   if ($jednaSciezka) { $wynik += ("  {0,-20} wszystko w {1}" -f "", $sciezki[0]) }
@@ -1216,6 +1282,18 @@ if ($Rozbicie) {
   $blok += "MegaRuchacz - pamiec i koszty"
   $blok += Kubelek-Rozbicia "Przy KAZDEJ Twojej wiadomosci" $kubWiadomosc $tokWiadomosc $brakWiadomosc
   $blok += Kubelek-Rozbicia "RAZ, przy starcie sesji" $kubSesja $tokSesja $brakSesja
+
+  # Przeterminowana wiedza jest gorsza niz jej brak - wyglada na aktualna.
+  # Dlatego nie sama liczba w wierszu, tylko rzecz do zrobienia, wprost.
+  if ($wpisyStare.Count -gt 0) {
+    $blok += ("  {0,-20} {1}" -f "", "Do zrobienia: $(Ile-Wpisow $wpisyStare.Count) starsze niz $DniWaznosci dni - przejrzyj albo odswiez date.")
+  }
+  # Wdrozenie dla Codeksa bez AGENTS.md w projekcie: pozycji nie ma, wiec trzeba
+  # powiedziec DLACZEGO - inaczej czyta sie to jak "zasady nic nie kosztuja".
+  if ($jestCodex -and $Projekt -and (Test-Path -LiteralPath (Join-Path $Projekt ".megaruchacz")) -and
+      -not (Test-Path -LiteralPath (Join-Path $Projekt "AGENTS.md"))) {
+    $blok += ("  {0,-20} {1}" -f "", "AGENTS.md projektu: nie ma go - zasady kierownika ida do Codeksa wylacznie hookiem.")
+  }
 
   # Trzeci kubelek to inne pieniadze: prawdziwe wolanie modelu, nie doklejony tekst.
   # Dlatego nie sumuje sie z niczym, a pasek skaluje sie do POPRZEDNIEGO przebiegu -
@@ -1252,7 +1330,7 @@ if ($Rozbicie) {
   }
 
   if (Test-Path -LiteralPath $katWiedzy) {
-    $blok += "Pliki w $(Sciezka-Ludzka $katWiedzy) - 0 tokenow, czytane tylko wtedy, gdy temat tego wymaga."
+    $blok += "Pliki w $(Sciezka-Ludzka $katWiedzy) - nie wygasaja i kosztuja 0 tokenow, dopoki rozmowa ich nie dotyczy."
   } else {
     # bez tego linia mowila o plikach w katalogu, ktorego nie ma
     $blok += "Warstwy referencyjnej jeszcze nie ma (brak $(Sciezka-Ludzka $katWiedzy)) - 0 tokenow."
@@ -1482,10 +1560,11 @@ Linia ""
 Linia "2. PRZY KAZDEJ Twojej wiadomosci - z czego sie sklada"
 Wypisz-Kubelek $kubWiadomosc $tokWiadomosc `
   "Nie znalazlem zadnego przypomnienia - przy wiadomosci nie dokleja sie nic."
-if ($przypCcZnaki -ne $null -and $przypZnaki -ne $null) {
-  $ogonCodex = ""
-  if (-not $jestCodex) { $ogonCodex = " - tej maszyny to nie dotyczy, Codeksa tu nie ma" }
-  Linia ("  Pod Codeksem zamiast tego leci ~{0} tokenow z {1}{2}." -f (Liczba (Tokeny $przypZnaki)), $przypSkad, $ogonCodex)
+# Gdy Codex JEST, jego przypomnienie stoi juz w kubelku wyzej - powtarzanie go
+# tutaj sugerowaloby, ze to alternatywa, a nie druga pozycja tego samego rachunku.
+if ($przypCcZnaki -ne $null -and $przypZnaki -ne $null -and -not $jestCodex) {
+  Linia ("  Pod Codeksem zamiast tego leci ~{0} tokenow z {1} - tej maszyny to nie dotyczy, Codeksa tu nie ma." -f `
+         (Liczba (Tokeny $przypZnaki)), $przypSkad)
 }
 Linia "  Tylko to jest doklejane przy kazdym Twoim zdaniu. Reszta wchodzi raz, na starcie sesji."
 

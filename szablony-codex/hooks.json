@@ -6,7 +6,7 @@
           {
             "type": "command",
             "command": "cat \"{{PROJEKT}}/.megaruchacz/zasady-sesja.json\"",
-            "commandWindows": "powershell -NoProfile -NonInteractive -Command \"Get-Content -Raw -LiteralPath '{{PROJEKT}}/.megaruchacz/zasady-sesja.json'\"",
+            "commandWindows": "powershell -NoProfile -NonInteractive -Command \"[Console]::OutputEncoding=(New-Object System.Text.UTF8Encoding($false)); [IO.File]::ReadAllText('{{PROJEKT}}/.megaruchacz/zasady-sesja.json')\"",
             "timeout": 10,
             "statusMessage": "MegaRuchacz: zasady kierownika",
             "additionalContextLimit": 24000
@@ -21,7 +21,7 @@
             "commandWindows": "powershell -NoProfile -NonInteractive -ExecutionPolicy Bypass -File \"{{ZRODLO}}/narzedzia/straznik-zasad.ps1\" -KosztCodex -Zrodlo \"{{ZRODLO}}\" -Projekt \"{{PROJEKT}}\"",
             "timeout": 10,
             "statusMessage": "MegaRuchacz: rachunek za pamiec agenta",
-            "additionalContextLimit": 1000
+            "additionalContextLimit": 6000
           }
         ]
       },
@@ -43,8 +43,8 @@
         "hooks": [
           {
             "type": "command",
-            "command": "node \"{{ZRODLO}}/narzedzia/przypomnienie.js\" \"{{PROJEKT}}/.megaruchacz/przypomnienie.json\"",
-            "commandWindows": "node \"{{ZRODLO}}/narzedzia/przypomnienie.js\" \"{{PROJEKT}}/.megaruchacz/przypomnienie.json\"",
+            "command": "node \"{{ZRODLO}}/narzedzia/przypomnienie.js\" \"{{PROJEKT}}/.megaruchacz/przypomnienie.json\" || cat \"{{PROJEKT}}/.megaruchacz/przypomnienie.json\"",
+            "commandWindows": "powershell -NoProfile -NonInteractive -Command \"[Console]::OutputEncoding=(New-Object System.Text.UTF8Encoding($false)); $p='{{PROJEKT}}/.megaruchacz/przypomnienie.json'; $o=$null; try { $o=(node '{{ZRODLO}}/narzedzia/przypomnienie.js' $p) } catch { }; if ((-not $o) -and (Test-Path -LiteralPath $p)) { $o=[IO.File]::ReadAllText($p) }; if ($o) { $o }\"",
             "timeout": 5,
             "statusMessage": "MegaRuchacz: przypomnienie",
             "additionalContextLimit": 1500
@@ -57,8 +57,8 @@
         "hooks": [
           {
             "type": "command",
-            "command": "node \"{{ZRODLO}}/narzedzia/mr-log-codex.js\" start \"{{PROJEKT}}\"",
-            "commandWindows": "node \"{{ZRODLO}}/narzedzia/mr-log-codex.js\" start \"{{PROJEKT}}\"",
+            "command": "node \"{{ZRODLO}}/narzedzia/mr-log-codex.js\" start \"{{PROJEKT}}\" || true",
+            "commandWindows": "powershell -NoProfile -NonInteractive -Command \"[Console]::OutputEncoding=(New-Object System.Text.UTF8Encoding($false)); $we=[Console]::In.ReadToEnd(); try { $we | node '{{ZRODLO}}/narzedzia/mr-log-codex.js' start '{{PROJEKT}}' } catch { }\"",
             "timeout": 5,
             "statusMessage": "MegaRuchacz: wpis do rejestru pracy"
           }
@@ -70,8 +70,8 @@
         "hooks": [
           {
             "type": "command",
-            "command": "node \"{{ZRODLO}}/narzedzia/mr-log-codex.js\" stop \"{{PROJEKT}}\"",
-            "commandWindows": "node \"{{ZRODLO}}/narzedzia/mr-log-codex.js\" stop \"{{PROJEKT}}\"",
+            "command": "node \"{{ZRODLO}}/narzedzia/mr-log-codex.js\" stop \"{{PROJEKT}}\" || echo '{\"continue\":true}'",
+            "commandWindows": "powershell -NoProfile -NonInteractive -Command \"[Console]::OutputEncoding=(New-Object System.Text.UTF8Encoding($false)); $we=[Console]::In.ReadToEnd(); $o=$null; try { $o=($we | node '{{ZRODLO}}/narzedzia/mr-log-codex.js' stop '{{PROJEKT}}') } catch { }; if ($o) { $o } else { @{ continue = $true } | ConvertTo-Json -Compress }\"",
             "timeout": 5,
             "statusMessage": "MegaRuchacz: wpis do rejestru pracy"
           }
