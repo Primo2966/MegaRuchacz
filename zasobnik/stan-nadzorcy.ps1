@@ -824,19 +824,32 @@ function Dzien-Ludzko($data) {
 # Gdy ktorejs nie da sie ustalic, pole Liczba zostaje puste, a w Powod stoi
 # DLACZEGO. Okno pokazuje wtedy "nie wiem" i powod, nigdy zera: zero znaczy
 # "nic nie kosztuje" i byloby najdrozszym rodzajem ciszy w calym narzedziu.
+#
+# PODPISY MOWIA, JAK TO SIE NAPRAWDE PLACI (poprawione 24.09.2026 po pomiarze na
+# prawdziwych transkryptach, opis w .claude\mapa.md, sekcja "Koszt tekstu
+# w kontekscie a pamiec podreczna modelu"). Stary podpis "Otwarcie nowej sesji
+# ... raz" wprowadzal w blad: tekst WCHODZI do rozmowy raz, ale model czyta cala
+# rozmowe przy kazdym swoim kroku (~10 krokow na jedna wiadomosc), tyle ze
+# z bufora, za ulamek zwyklej ceny. To samo z przypomnieniem - zostaje w historii.
+# Podpisy mowia to slowami, BEZ przeliczania: liczby sa te same, co w rachunku.
+#
+# Zdania "pamiec to ok. 1% tego, co model czyta w sesji" tu NIE MA z rozmyslem.
+# Dalo by sie je policzyc z pola usage w transkryptach, ale nie tanio przy
+# otwarciu okna (pojedynczy transkrypt ma do 138 MB), a liczba wpisana na sztywno
+# zaczelaby klamac przy pierwszej zmianie. Gdy powstanie pomiar - tu jest miejsce.
 function Trzy-Liczby($rachunek, $cykl) {
   $naWiadomosc = [pscustomobject]@{
-    Naglowek = "Każda Twoja wiadomość kosztuje"
+    Naglowek = "Każda Twoja wiadomość dokleja"
     Liczba   = $null
-    Opis     = "Przypomnienie zasad doklejane do każdego Twojego zdania."
-    Ogon     = ""
+    Opis     = "Przypomnienie zasad. Model czyta je potem przy każdym swoim kroku, ale z bufora, za ułamek ceny."
+    Ogon     = "i zostają w rozmowie do końca"
     Powod    = ""
   }
   $naSesje = [pscustomobject]@{
-    Naglowek = "Otwarcie nowej sesji"
+    Naglowek = "Na otwarcie sesji wchodzi"
     Liczba   = $null
-    Opis     = "Wiedza o Tobie i o firmie, wczytywana raz na początku rozmowy."
-    Ogon     = ""
+    Opis     = "Wiedza o Tobie i o firmie. Wchodzi raz, ale model czyta ją przy każdym kroku - z bufora, za ułamek ceny."
+    Ogon     = "i zostają w rozmowie do końca"
     Powod    = ""
   }
   $naDobe = [pscustomobject]@{
@@ -885,10 +898,173 @@ function Trzy-Liczby($rachunek, $cykl) {
   return ,@($naWiadomosc, $naSesje, $naDobe)
 }
 
+# ZMIANY W PAMIECI Z OSTATNIEJ NAUKI. Pisze je modul pamieci (lore\lore\verify.py,
+# report_lines) do ~\.claude\wiedza\.wiedza-stan.txt:
+#   data: RRRR-MM-DD                     dzien przebiegu
+#   meldunek: bez zmian                  gdy nic sie nie zmienilo - JEDNA linia
+#   meldunek: zmienilem 1, uspilem 0, obudzilem 0, awansowalem 1 - cofniecie: ...
+#   meldunek: UWAGA: 12 zmian, pokazuje 10 - ...; zmienilem ...   (lista przycieta)
+#   meldunek_1: Z-260924-1 zmienilem: „stare” -> „nowe”
+#   meldunek_2: A-260924-2 awansowalem: „fakt”
+# Tu tylko czytamy - licznik bierzemy z naglowka, bo lista bywa przycieta.
+#
+# Trzy stany i kazdy mowi co innego, bo "nie wiem" to nie "zero":
+#   Wiadomo = $false  -> nie ma pliku albo nie ma w nim meldunku; Powod mowi dlaczego
+#   Ile = 0           -> modul pamieci sam napisal "bez zmian"
+#   Ile > 0           -> Zmiany z identyfikatorami, po ktorych sie cofa
+function Stan-Zmian-Pamieci {
+  $z = [pscustomobject]@{
+    Wiadomo  = $false
+    Dzien    = $null       # dzien przebiegu nauki, z klucza "data"
+    Ile      = $null
+    Zmiany   = @()         # pscustomobject: Id, Tresc (surowa linia meldunku)
+    Naglowek = ""          # surowy naglowek meldunku - do szczegolow, z komenda cofania
+    Powod    = ""
+    Plik     = (Join-Path $script:NadzWiedza ".wiedza-stan.txt")
+  }
+  if (-not (Test-Path $z.Plik)) {
+    $z.Powod = "nauka nie zapisała jeszcze podsumowania na tym komputerze"
+    return $z
+  }
+  $k = Czytaj-Klucze $z.Plik
+  $z.Dzien = Data-Lub-Nic $k["data"]
+  if (-not $k.Contains("meldunek")) {
+    $z.Powod = "ostatnie podsumowanie nauki nie ma listy zmian (zapisała je starsza wersja)"
+    return $z
+  }
+  $z.Naglowek = "$($k['meldunek'])"
+  if ($z.Naglowek -match '^\s*bez zmian\s*$') {
+    $z.Wiadomo = $true
+    $z.Ile = 0
+    return $z
+  }
+
+  # Linie meldunek_N po numerze, nie po kolejnosci w pliku - "meldunek_10"
+  # alfabetycznie stoi przed "meldunek_2".
+  $numery = @()
+  foreach ($klucz in @($k.Keys)) {
+    $m = [regex]::Match($klucz, '^meldunek_(\d+)$')
+    if ($m.Success) { $numery += [int]$m.Groups[1].Value }
+  }
+  foreach ($n in @($numery | Sort-Object)) {
+    $tresc = "$($k["meldunek_$n"])"
+    $id = ""
+    $m = [regex]::Match($tresc, '^\s*([A-Z]-\d{6}-\d+)\b')
+    if ($m.Success) { $id = $m.Groups[1].Value }
+    $z.Zmiany += [pscustomobject]@{ Id = $id; Tresc = $tresc.Trim() }
+  }
+
+  $m = [regex]::Match($z.Naglowek, '^\s*UWAGA:\s*(\d+)\s+zmian')
+  $s = [regex]::Match($z.Naglowek, 'zmienilem\s+(\d+),\s*uspilem\s+(\d+),\s*obudzilem\s+(\d+),\s*awansowalem\s+(\d+)')
+  if ($m.Success) {
+    $z.Ile = [int]$m.Groups[1].Value
+  } elseif ($s.Success) {
+    $z.Ile = [int]$s.Groups[1].Value + [int]$s.Groups[2].Value + [int]$s.Groups[3].Value + [int]$s.Groups[4].Value
+  } elseif ($z.Zmiany.Count -gt 0) {
+    $z.Ile = $z.Zmiany.Count
+  } else {
+    $z.Powod = "meldunek nauki jest nieczytelny: $($z.Naglowek)"
+    return $z
+  }
+  $z.Wiadomo = $true
+  return $z
+}
+
+# Linia meldunku po ludzku: slowa z ogonkami i strzalka zamiast "->".
+# Modul pamieci pisze bez ogonkow, bo to samo idzie do dziennika i do konsoli.
+function Zmiana-Ludzko([string]$tresc) {
+  $t = $tresc
+  $t = $t -replace '^(\s*[A-Z]-\d{6}-\d+\s+)zmienilem:',   '$1zmieniłem:'
+  $t = $t -replace '^(\s*[A-Z]-\d{6}-\d+\s+)uspilem:',     '$1uśpiłem:'
+  $t = $t -replace '^(\s*[A-Z]-\d{6}-\d+\s+)obudzilem:',   '$1obudziłem:'
+  $t = $t -replace '^(\s*[A-Z]-\d{6}-\d+\s+)awansowalem:', '$1przeniosłem do stałej pamięci:'
+  $t = $t -replace '\s->\s', ' → '
+  return $t
+}
+
+# To, co widac w sekcji stanu: jedna linia na wierzchu, pod nia (w oknie
+# schowane pod "pokaz") linie zmian i JEDNO zdanie, jak cofnac - dla czlowieka,
+# nie dla programisty. Cofanie idzie przez rozmowe z Claude'em (lore.verify
+# --cofnij), przycisku "Cofnij" w oknie nie ma i nie ma byc: zmiana pamieci
+# jednym kliknieciem bez potwierdzenia to ryzyko.
+function Opis-Zmian-Pamieci($z) {
+  $o = [pscustomobject]@{ Linia = ""; Zmiany = @(); Porada = ""; Uwaga = $false }
+  if (-not $z) {
+    $o.Linia = "Pamięć: nie wiem, co się w niej zmieniło - nie udało się tego odczytać."
+    $o.Uwaga = $true
+    return $o
+  }
+  $kiedy = "dziś"
+  if ($z.Dzien -and ($z.Dzien.Date -ne [datetime]::Now.Date)) {
+    $kiedy = "przy ostatniej nauce ($(Dzien-Ludzko $z.Dzien))"
+  }
+  if (-not $z.Wiadomo) {
+    $o.Linia = "Pamięć ${kiedy}: nie wiem, co się zmieniło - $($z.Powod)."
+    $o.Uwaga = $true
+    return $o
+  }
+  if ($z.Ile -le 0) {
+    $o.Linia = "Pamięć ${kiedy}: bez zmian."
+    return $o
+  }
+  $o.Linia = "Pamięć ${kiedy}: $($z.Ile) $(Odmiana ([int]$z.Ile) 'zmiana' 'zmiany' 'zmian')."
+  foreach ($x in $z.Zmiany) { $o.Zmiany += (Zmiana-Ludzko $x.Tresc) }
+  if ($z.Zmiany.Count -lt $z.Ile) {
+    $o.Zmiany += "... i jeszcze $($z.Ile - $z.Zmiany.Count) - pełna lista jest w historii zmian pamięci."
+  }
+  $przyklad = $null
+  foreach ($x in $z.Zmiany) { if ($x.Id) { $przyklad = $x.Id; break } }
+  if ($przyklad) {
+    $o.Porada = "Coś się nie zgadza? Powiedz Claude'owi: cofnij zmianę $przyklad"
+  } else {
+    $o.Porada = "Coś się nie zgadza? Powiedz Claude'owi: cofnij dzisiejsze zmiany w pamięci"
+  }
+  return $o
+}
+
+# PRZELICZANIE ARCHIWUM (wymiana modelu wyszukiwania, ~2 h). Format pliku postepu
+# NIE JEST JESZCZE USTALONY - pisze go inny kawalek narzedzia. Dlatego:
+#   - szukamy pliku po wzorcu nazwy w ~\.claude i ~\.lore (bez rekurencji
+#     w glab projects\, bo tam lezy ponad gigabajt transkryptow),
+#   - gdy go nie ma: Plik = $null i okno NIC nie pokazuje,
+#   - gdy jest: Plik ustawiony, ale Zrobione/Wszystkie zostaja puste, dopoki ktos
+#     nie podepnie odczytu formatu TUTAJ. Zgadniety format pokazalby liczby,
+#     ktorych nikt nie zmierzyl. Sciezka idzie do szczegolow, zeby nie byla cisza.
+$WZORCE_PRZELICZANIA = @("*przelicz*", "*migracj*", "*reindex*")
+
+function Postep-Przeliczania {
+  $p = [pscustomobject]@{ Plik = $null; Zrobione = $null; Wszystkie = $null; Powod = "" }
+  $katalogi = @(
+    (Join-Path $script:NadzDom ".claude"),
+    (Join-Path $script:NadzDom ".claude\wiedza"),
+    (Join-Path $script:NadzDom ".lore")
+  )
+  foreach ($kat in $katalogi) {
+    if (-not (Test-Path $kat)) { continue }
+    foreach ($wz in $WZORCE_PRZELICZANIA) {
+      $pliki = @(Get-ChildItem -Path $kat -Filter $wz -File -Force -ErrorAction SilentlyContinue |
+                 Sort-Object LastWriteTime -Descending)
+      if ($pliki.Count -gt 0) {
+        $p.Plik = $pliki[0].FullName
+        # TU PODPIAC odczyt formatu, gdy bedzie znany: ustawic $p.Zrobione i $p.Wszystkie.
+        $p.Powod = "format pliku postępu nie jest jeszcze podpięty do okna"
+        return $p
+      }
+    }
+  }
+  return $p
+}
+
 # STAN JEDNYM RZUTEM OKA - kilka krotkich zdan zamiast akapitow. Zadnych nazw
 # plikow i zadnych sciezek: te sa pod [Szczegoly] i tam jest ich miejsce.
-function Linie-Stanu($wersja, $cykl) {
+function Linie-Stanu($wersja, $cykl, $przeliczanie) {
   $linie = @()
+
+  # Jedna linia i tylko wtedy, gdy postep naprawde odczytalismy - patrz
+  # Postep-Przeliczania. Bez pliku albo bez podpietego formatu: nic.
+  if ($przeliczanie -and ($null -ne $przeliczanie.Zrobione) -and ($null -ne $przeliczanie.Wszystkie)) {
+    $linie += "Przeliczam archiwum: $(Liczba-Ludzka $przeliczanie.Zrobione) z $(Liczba-Ludzka $przeliczanie.Wszystkie)."
+  }
 
   if ($cykl) {
     if ($cykl.Pracuje) {
