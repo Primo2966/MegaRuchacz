@@ -15,7 +15,8 @@ from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
 
-from .db import DB_PATH, PROJECTS_DIR, connect, embed_passages, log, now_iso
+from .db import (DB_PATH, MODELS, NEXT_TABLE, PROJECTS_DIR, active_model, connect, embed_passages, has_table,
+                 log, now_iso)
 from .masking import mask
 
 CHUNK_SIZE = 1500
@@ -433,22 +434,23 @@ def _group_boundary(group_: list[Turn], lines: list[tuple[int, str]], start_line
 
 # ---------------------------------------------------------------- cross-process lock
 
-def _acquire_lock() -> bool:
+def _acquire_lock(path: Path | None = None) -> bool:
+    path = path or LOCK_PATH
     for _ in range(2):
         try:
-            fd = os.open(LOCK_PATH, os.O_CREAT | os.O_EXCL | os.O_WRONLY)
+            fd = os.open(path, os.O_CREAT | os.O_EXCL | os.O_WRONLY)
             os.write(fd, str(os.getpid()).encode())
             os.close(fd)
             return True
         except FileExistsError:
             try:
-                age = time.time() - LOCK_PATH.stat().st_mtime
+                age = time.time() - path.stat().st_mtime
             except FileNotFoundError:
                 continue
             if age > LOCK_STALE_S:
-                log(f"removing a stale lock ({age:.0f}s)")
+                log(f"removing a stale lock {path.name} ({age:.0f}s)")
                 try:
-                    LOCK_PATH.unlink()
+                    path.unlink()
                 except FileNotFoundError:
                     pass
                 continue
@@ -456,16 +458,16 @@ def _acquire_lock() -> bool:
     return False
 
 
-def _refresh_lock() -> None:
+def _refresh_lock(path: Path | None = None) -> None:
     try:
-        os.utime(LOCK_PATH, None)
+        os.utime(path or LOCK_PATH, None)
     except FileNotFoundError:
         pass
 
 
-def _release_lock() -> None:
+def _release_lock(path: Path | None = None) -> None:
     try:
-        LOCK_PATH.unlink()
+        (path or LOCK_PATH).unlink()
     except FileNotFoundError:
         pass
 
@@ -490,6 +492,26 @@ def _delete_file_chunks(conn: sqlite3.Connection, path: str, from_line: int | No
 def _tail_to_close(offset: int, st: os.stat_result) -> bool:
     """File unchanged, but an unwritten group hangs on it that nothing will extend any more."""
     return offset < st.st_size and time.time() - st.st_mtime > TAIL_CLOSING_AGE_S
+
+
+_unknown_warned: set[str | None] = set()
+
+
+def _embed(chunks: list[Chunk], model: str | None):
+    """Vectors for new chunks, or None when the database's model is one this code cannot run.
+
+    None is not silent: the chunk is stored without a vector (full-text search finds it at once),
+    it is said out loud, and `python -m lore.migrate` gives every such chunk a vector.
+    """
+    if not chunks:
+        return None
+    if model not in MODELS:
+        if model not in _unknown_warned:
+            _unknown_warned.add(model)
+            log(f"WARNING: the database's vectors are of an unknown model {model!r} - new chunks are stored "
+                "WITHOUT vectors until `python -m lore.migrate` converts the archive")
+        return None
+    return embed_passages([c.text for c in chunks], model=model)
 
 
 def process_file(conn: sqlite3.Connection, p: Path) -> int:
@@ -537,8 +559,11 @@ def process_file(conn: sqlite3.Connection, p: Path) -> int:
         new_offset, new_line = end_offset, start_line + len(lines)
     chunks = [c for g in groups for c in _chunks_from_group(g, role_prefix)]
 
-    # embeddings are computed outside the transaction (we do not hold a write lock for minutes)
-    emb = embed_passages([c.text for c in chunks]) if chunks else None
+    # embeddings are computed outside the transaction (we do not hold a write lock for minutes),
+    # with the model of the vectors ALREADY in the database — during a conversion that is the old
+    # one (the conversion picks these chunks up by itself), after it the new one
+    model = active_model(conn)
+    emb = _embed(chunks, model)
 
     # one stamp for the whole pass: this is the moment the material entered the database, and the
     # harvest reads it instead of `ts` (the id breaks the ties inside a pass). See lore/facts.py.
@@ -546,6 +571,12 @@ def process_file(conn: sqlite3.Connection, p: Path) -> int:
 
     conn.execute("BEGIN IMMEDIATE")
     try:
+        if active_model(conn) != model:
+            # the conversion switched models while we were embedding: these vectors belong to the
+            # old one and must not land among the new ones — start over with the model there now
+            conn.execute("ROLLBACK")
+            log(f"vector model changed to {active_model(conn)} while indexing {_label(p)} - embedding again")
+            return process_file(conn, p)
         # somebody may have got there before us (another window / the scheduler)
         row2 = conn.execute("SELECT mtime, size, offset FROM files WHERE path=?", (path,)).fetchone()
         if row2 and row2[0] == st.st_mtime and row2[1] == st.st_size and row2[2] >= new_offset:
@@ -563,7 +594,8 @@ def process_file(conn: sqlite3.Connection, p: Path) -> int:
             )
             cid = cur.lastrowid
             conn.execute("INSERT INTO chunks_fts(rowid, text) VALUES (?,?)", (cid, c.text))
-            conn.execute("INSERT INTO vectors(chunk_id, emb) VALUES (?,?)", (cid, emb[i].tobytes()))
+            if emb is not None:
+                conn.execute("INSERT INTO vectors(chunk_id, emb) VALUES (?,?)", (cid, emb[i].tobytes()))
         conn.execute(
             "INSERT INTO files(path, mtime, size, offset, line, project, session) VALUES (?,?,?,?,?,?,?) "
             "ON CONFLICT(path) DO UPDATE SET mtime=excluded.mtime, size=excluded.size, "
@@ -629,14 +661,23 @@ def remask(conn: sqlite3.Connection) -> int:
             changed.append((cid, new))
     if not changed:
         return 0
-    emb = embed_passages([t for _, t in changed])
+    model = active_model(conn)
+    emb = embed_passages([t for _, t in changed], model=model) if model in MODELS else None
     conn.execute("BEGIN IMMEDIATE")
     try:
+        if active_model(conn) != model:
+            conn.execute("ROLLBACK")
+            log("vector model changed during remask - running it again")
+            return remask(conn)
+        building = has_table(conn, NEXT_TABLE)
         for i, (cid, new) in enumerate(changed):
             conn.execute("INSERT INTO chunks_fts(chunks_fts, rowid, text) SELECT 'delete', id, text FROM chunks WHERE id=?", (cid,))
             conn.execute("UPDATE chunks SET text=? WHERE id=?", (new, cid))
             conn.execute("INSERT INTO chunks_fts(rowid, text) VALUES (?,?)", (cid, new))
-            conn.execute("UPDATE vectors SET emb=? WHERE chunk_id=?", (emb[i].tobytes(), cid))
+            if emb is not None:
+                conn.execute("UPDATE vectors SET emb=? WHERE chunk_id=?", (emb[i].tobytes(), cid))
+            if building:  # a new vector of the old text is wrong; the conversion embeds it again
+                conn.execute(f"DELETE FROM {NEXT_TABLE} WHERE chunk_id=?", (cid,))
         conn.execute("COMMIT")
     except Exception:
         conn.execute("ROLLBACK")

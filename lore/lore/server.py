@@ -81,7 +81,9 @@ def lore_reindex() -> dict:
 @mcp.tool()
 def lore_stats() -> dict:
     """Number of indexed sessions and chunks (in total and per project), the date of the last
-    indexing run, the location and size of the database."""
+    indexing run, the location and size of the database, and the state of the vectors: which
+    model they belong to and how far a conversion to the configured model is (with a warning
+    whenever they do not match)."""
     return _search.stats()
 
 
