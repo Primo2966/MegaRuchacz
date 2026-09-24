@@ -83,9 +83,20 @@ SKIPPED_ROLES = frozenset({"tool", "result"})
 # the archive first surfaced the assistant's report boilerplate instead of
 # knowledge. The trade: a fact stated for the first time in a summary is lost,
 # which is a small price for fitting a whole day under the cost cap.
+#
+# EXACTLY "user" — "agent:user" is not the user. In a subagent's transcript the "user" is the main
+# session handing it a job: the manager's brief, written by the model. It used to slip through
+# (only the part after the colon was compared), and on 2026-09-24 briefs were 31% of what the model
+# was paid to read and 88% of the backlog — and every fact taken from them was the model's words
+# ABOUT the user filed as if the user had said them.
 HARVESTED_ROLES = frozenset({"user"})
-# the same rule in SQL, for the counting queries: "user" and "agent:user", nothing else
-HARVESTED_SQL = " OR ".join(f"role = '{r}' OR role LIKE '%:{r}'" for r in sorted(HARVESTED_ROLES))
+# Under the role "user", but not the human: a scheduled task opens its automated run with this tag,
+# and Claude Code writes that prompt into the transcript as if it had been typed. Only the START of
+# a chunk counts — the tag quoted inside a real message is the user talking about it.
+AUTOMATED_PREFIXES = ("<scheduled-task",)
+# the same rule in SQL, for the counting queries: exactly "user", minus the automated prompts
+HARVESTED_SQL = ("(" + " OR ".join(f"role = '{r}'" for r in sorted(HARVESTED_ROLES)) + ")"
+                 + "".join(f" AND ltrim(text) NOT LIKE '{p}%'" for p in AUTOMATED_PREFIXES))
 MIN_FACT_CHARS = 10  # a single word is not a fact
 MODEL_TIMEOUT_S = 300
 
@@ -382,6 +393,11 @@ class Material:
         return max(0, self.candidates - len(self.texts) - self.pending)
 
 
+def said_by_user(role: str, text: str) -> bool:
+    """Whether a chunk is the human speaking — the only thing the harvest and the dig may read."""
+    return role in HARVESTED_ROLES and not text.lstrip().startswith(AUTOMATED_PREFIXES)
+
+
 def collect(conn: sqlite3.Connection, marker: Marker, zero: str = "") -> Material:
     """Chunks the marker has not read yet, OLDEST first up to the cap.
 
@@ -401,7 +417,7 @@ def collect(conn: sqlite3.Connection, marker: Marker, zero: str = "") -> Materia
     kept = [
         Piece(cid, ts, landed, session, f"[{ts_to_local(ts)}] {role}: {text}")
         for cid, ts, session, role, text, landed in rows
-        if role.split(":")[-1] in HARVESTED_ROLES
+        if said_by_user(role, text)
     ]
     material = Material(in_range=len(rows), candidates=len(kept))
     if marker.chunk_id is not None:  # only the id half of the window can bring such a row in
