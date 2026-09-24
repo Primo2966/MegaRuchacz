@@ -27,7 +27,7 @@ from pathlib import Path
 import numpy as np
 
 from . import facts
-from .db import DB_PATH, EMBED_DIM, log, ts_to_local
+from .db import DB_PATH, EMBED_DIM, MODELS, active_model, log, ts_to_local
 
 # e5 keeps even unrelated sentences around 0.7-0.8, so the threshold has to sit well above that:
 # below ~0.85 whole unrelated topics melt into one cluster and the evidence stops meaning anything.
@@ -74,6 +74,9 @@ class Chunk:
 
 def load(conn: sqlite3.Connection) -> tuple[list[Chunk], np.ndarray]:
     """Chunks that have a vector, minus the noise, plus their embedding matrix (rows aligned)."""
+    # the size of the model the vectors belong to — during a conversion that is still the old one
+    spec = MODELS.get(active_model(conn) or "")
+    dim = spec.dim if spec else EMBED_DIM
     rows = conn.execute(
         "SELECT c.id, c.session, c.ts, c.role, c.text, v.emb "
         "FROM chunks c JOIN vectors v ON v.chunk_id = c.id ORDER BY c.id"
@@ -83,12 +86,12 @@ def load(conn: sqlite3.Connection) -> tuple[list[Chunk], np.ndarray]:
         if role.split(":")[-1] not in MINED_ROLES or len(text.strip()) < MIN_CHARS:
             continue
         vec = np.frombuffer(emb, dtype=np.float32)
-        if vec.shape[0] != EMBED_DIM:  # a truncated blob is a reason to skip a row, not to crash
+        if vec.shape[0] != dim:  # a truncated blob (or another model's) is a reason to skip a row, not to crash
             continue
         chunks.append(Chunk(int(cid), session, ts, text))
         vectors.append(vec)
     if not chunks:
-        return [], np.zeros((0, EMBED_DIM), dtype=np.float32)
+        return [], np.zeros((0, dim), dtype=np.float32)
     return chunks, _unit(np.vstack(vectors))
 
 
