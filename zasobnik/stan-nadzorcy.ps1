@@ -1034,7 +1034,7 @@ function Szacunek-Cyklu($cykl) {
     $kiedy = "ostatnim razem"
     if ($cykl.KosztData) { $kiedy = $cykl.KosztData.ToString('dd.MM') }
     $s.Podstawa += ("Jedno wysłanie kosztowało ostatnio ~$(Liczba-Ludzka $s.NaPorcje) tokenów " +
-                    "($kiedy: $(Liczba-Ludzka $cykl.Koszt) tokenów na $($cykl.KosztWywolan) $(Odmiana ([int]$cykl.KosztWywolan) 'wywołanie' 'wywołania' 'wywołań')).")
+                    "(${kiedy}: $(Liczba-Ludzka $cykl.Koszt) tokenów na $($cykl.KosztWywolan) $(Odmiana ([int]$cykl.KosztWywolan) 'wywołanie' 'wywołania' 'wywołań')).")
   } elseif (-not $s.Powod) {
     $s.Powod = "nie ma pomiaru poprzedniego przebiegu, więc nie mam po czym szacować"
   }
