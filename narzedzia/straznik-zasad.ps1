@@ -1331,7 +1331,10 @@ function Uporzadkuj-Hooki($s, $wzory, [bool]$usun) {
         $rodzaj = Rodzaj-Hooka $h
         if (-not $rodzaj) { $noweHooki += ,$h; continue }
         $klucz = "$z|$rodzaj"
-        if ($usun -or $wybrane[$klucz].poz -ne "$gi|$hi") {
+        # "zasady" (cat ...megaruchacz-sesja.json) to w trybie globalnym duplikat:
+        # zasady kierownika ida juz blokiem w ~.claudeCLAUDE.md, wiec ten hook
+        # wstrzykiwal je drugi raz przy kazdej sesji. Sprawdzone 2026-09-24.
+        if ($usun -or $rodzaj -eq "zasady" -or $wybrane[$klucz].poz -ne "$gi|$hi") {
           $wynik.Usuniete += "$z/$rodzaj"
           $zmianaGrupy = $true
           continue
