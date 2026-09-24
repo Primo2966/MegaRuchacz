@@ -24,10 +24,16 @@ $env:LORE_BENCH_DIR = "$env:TEMP\lorebench"      # kopia bazy, wektory, modele -
 # osobny venv, patrz requirements.txt
 python prepare.py                                # kopia bazy (tylko odczyt oryginału) + modele
 python build_set.py                              # spec.jsonl (prywatny) -> queries.jsonl
-python embed_corpus.py mmlw-roberta-base         # pełne przeliczenie archiwum, z pomiarem czasu
+python embed_corpus.py mmlw-roberta-base --subset 16000   # próbka: trafienia + losowe (~35 min)
+#   albo bez --subset: pełne archiwum (~2 h na CPU)
 python embed_corpus.py e5-small --sample 2000    # tempo e5 (wektory e5 bierzemy z bazy produkcyjnej)
+python embed_corpus.py mmlw-roberta-base --sample 2000
 python evaluate.py                               # -> $LORE_BENCH_DIR\results.json
+python evaluate.py --models e5-small --no-rerank --out results-full-e5.json   # e5 na pełnym archiwum
 ```
+
+Gdy któryś model ma wektory tylko dla próbki, `evaluate.py` sam zawęża **wszystkie** warianty
+(łącznie z BM25) do tej samej próbki i to wypisuje — inaczej porównanie byłoby ustawione.
 
 ## Zbiór testowy
 

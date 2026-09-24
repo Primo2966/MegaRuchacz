@@ -143,7 +143,11 @@ def breakdown(qs: list[dict], ranks: list) -> dict:
 def main() -> None:
     ap = argparse.ArgumentParser()
     ap.add_argument("--rerank-top", type=int, default=30)
+    ap.add_argument("--models", nargs="+", default=list(EMBEDDERS), choices=list(EMBEDDERS))
+    ap.add_argument("--no-rerank", action="store_true")
+    ap.add_argument("--out", default="results.json")
     a = ap.parse_args()
+    models = a.models
 
     conn = open_copy()
     qs = load_queries(conn)
@@ -158,7 +162,7 @@ def main() -> None:
         raise SystemExit("our e5 embedding does not reproduce production vectors - variant (a) would be wrong")
 
     matrices, pools, qvecs, qtimes = {}, {}, {}, {}
-    for key in EMBEDDERS:
+    for key in models:
         ids, m, src = load_matrix(conn, key)
         matrices[key] = (ids, m)
         results["models"][key] = {"vectors": src, "chunks_with_vectors": int(len(ids)),
@@ -179,7 +183,7 @@ def main() -> None:
             matrices[key] = (ids[keep], m[keep])
     full_scan = {}
     rng = np.random.default_rng(0)
-    for key in EMBEDDERS:
+    for key in models:
         ids, m = matrices[key]
         pools[key] = Pool(conn, ids)
         # cosine scan at the FULL archive size, whatever sample the ranking used
@@ -209,7 +213,7 @@ def main() -> None:
         fts_lists.append(fts_channel(conn, q, q["text"], set(q["exclude"]), allowed=allowed))
 
     vec_lists, vec_times = {}, {}
-    for key in EMBEDDERS:
+    for key in models:
         ids, m = matrices[key]
         vec_lists[key], vec_times[key] = [], []
         for q, v in zip(qs, qvecs[key]):
@@ -226,7 +230,7 @@ def main() -> None:
             texts[cid] = conn.execute("SELECT text FROM chunks WHERE id=?", (cid,)).fetchone()[0]
         return texts[cid]
 
-    for name, key in DIAGNOSTIC:
+    for name, key in [d for d in DIAGNOSTIC if d[1] is None or d[1] in models]:
         ranks = []
         for i, q in enumerate(qs):
             order = fts_lists[i] if key is None else vec_lists[key][i]
@@ -234,7 +238,7 @@ def main() -> None:
         results["diagnostic"][name] = breakdown(qs, ranks)
 
     rerankers: dict = {}
-    for name, key, rr in VARIANTS:
+    for name, key, rr in [v for v in VARIANTS if v[1] in models and not (v[2] and a.no_rerank)]:
         ranks, lat, rr_times = [], [], []
         if rr and rr not in rerankers:
             rerankers[rr] = CrossEncoder(rr)
@@ -276,12 +280,12 @@ def main() -> None:
     for key, cfg in RERANKERS.items():
         sizes[key] = dir_size(export_dir(cfg["hf"]), "*.onnx")
     results["model_onnx_mb"] = {k: round(v / 1e6) for k, v in sizes.items()}
-    for key in EMBEDDERS:
+    for key in models:
         p = bench_dir() / f"embed-time-{key}.json"
         if p.exists():
             results["models"][key]["embed_time"] = json.loads(p.read_text(encoding="utf-8"))
 
-    out = bench_dir() / "results.json"
+    out = bench_dir() / a.out
     out.write_text(json.dumps(results, ensure_ascii=False, indent=1), encoding="utf-8")
     log(f"written {out}")
 
