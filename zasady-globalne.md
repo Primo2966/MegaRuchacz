@@ -32,61 +32,42 @@ Działa przeszukiwalna pamięć wszystkich rozmów na tej maszynie — narzędzi
 serię. Niebanalne = wymaga zrozumienia projektu, wraca do tematu sprzed dziś albo
 dotyczy decyzji. Nie przy literówce.
 
-Sięgaj też zawsze, gdy:
+Sięgaj też zawsze, gdy użytkownik powołuje się na ustalenie („ustaliliśmy",
+„mówiłem ci kiedyś"), gdy masz zadać pytanie brzmiące jak już zadane albo robić
+rozpoznanie w sprawie wyglądającej na rozstrzygniętą.
 
-- użytkownik powołuje się na ustalenie („ustaliliśmy", „jak w tamtym projekcie",
-  „mówiłem ci kiedyś"),
-- masz zadać pytanie, które brzmi jak już kiedyś zadane,
-- masz uruchomić rozpoznanie w sprawie wyglądającej na rozstrzygniętą.
+**Znalezisko to trop, nie dowód** — także fragmenty „Z ARCHIWUM" doklejane
+automatycznie do wiadomości. W zapisie są pomysły porzucone i decyzje odwrócone.
+Potwierdź w plikach albo u użytkownika, zanim na tym zbudujesz działanie. Mów,
+skąd to masz.
 
-**Znalezisko to trop, nie dowód** — w zapisie są też pomysły porzucone i decyzje
-odwrócone. Potwierdź w plikach albo u użytkownika, zanim na tym zbudujesz
-działanie. Mów, skąd to masz: „to ustalaliśmy wtedy w projekcie X".
+## Wiedza („Co wiem")
 
-## Zapisywanie wiedzy
+Automat raz dziennie wyławia fakty z wiadomości użytkownika i wpisuje je sam,
+bez pytania. Warstwy:
 
-**Gdy użytkownik wyjaśnia coś trwałego, czego nie ma w plikach — sam zaproponuj
-zapis.** Jednym zdaniem, w trakcie. Nie czekaj na „zapamiętaj".
+1. **BIEŻĄCA** — podsekcja „Bieżące", format `- [RRRR-MM-DD] treść`. Tu trafia
+   każdy nowy fakt.
+2. **STAŁA** — reszta „Co wiem". Fakt z bieżącej awansuje sam, gdy padnie w dwóch
+   różnych rozmowach. Wpisy dodane ręcznie są przypięte — nigdy nie zasypiają.
+3. **REFERENCYJNA** — pliki w `wiedza/`, w stałej jedna linia odsyłacza. Czytaj
+   je tylko, gdy rozmowa ich dotyczy.
 
-Trwałe to: kim jest użytkownik i co robi, czym zajmuje się firma i jakim językiem
-mówi o swoich rzeczach, nad czym pracuje i jakie decyzje zapadły, jak chce
-pracować. Nie: stan zadania, chwilowe decyzje, rzeczy wynikające z kodu.
+**Gdy użytkownik wyjaśnia coś trwałego, czego nie ma w plikach, albo tłumaczy coś
+kolejny raz — sam zaproponuj zapis w stałej**, jednym zdaniem. Trwałe: kim jest,
+czym zajmuje się firma i jak mówi o swoich rzeczach, projekty i decyzje, sposób
+pracy. Nie: stan zadania, rzeczy wynikające z kodu.
 
-### Trzy warstwy
+**Sufit stałej: 8 000 znaków.** Blisko sufitu nie dopisuj — przenieś najdłuższe
+zestawienie do `wiedza/`, zostaw odsyłacz i powiedz o tym.
 
-1. **STAŁA** — powyższe. Sekcja „Co wiem" w tym pliku, poza tym blokiem.
-2. **BIEŻĄCA** — sprawy tego tygodnia. Podsekcja „Bieżące", **obowiązkowy format
-   `- [RRRR-MM-DD] treść`**.
-3. **REFERENCYJNA** — tabele, listy, cenniki. Osobne pliki w `wiedza/`. W warstwie
-   stałej zostaje jedna linia: że plik istnieje i co w nim jest. Czytasz go tylko
-   wtedy, gdy rozmowa go dotyczy.
+**Wpis bieżący starszy niż 14 dni jest podejrzany** — nie buduj na nim działania.
+Wpisy automatu znikają same; przy ręcznym zapytaj, czy obowiązuje, i odśwież datę
+albo usuń.
 
-### Sufit warstwy stałej: 8 000 znaków
+**Sprzeczność: wygrywa nowsze.** Gdy użytkownik mówi coś innego niż zapis — popraw
+wpis i powiedz jednym zdaniem, co było. Resztę rozstrzyga automat; stara wersja
+idzie do `wiedza/historia-zmian.md`. Nie pytaj użytkownika o zatwierdzanie faktów.
 
-Warstwa stała jedzie z każdym zapytaniem. Gdy „Co wiem" zbliża się do 8 000
-znaków, **nie dopisuj** — przenieś najdłuższe zestawienie do pliku w `wiedza/`,
-zostaw tu jedną linię odsyłacza i powiedz o tym użytkownikowi. Wiedza może rosnąć
-bez końca, byle w warstwie, która nie jest doklejana.
-
-### Wygasanie
-
-Wpis bieżący **starszy niż 14 dni jest podejrzany**: nie buduj na nim działania
-i nie podawaj jako aktualnego. Gdy jest istotny — zapytaj, czy obowiązuje, i albo
-odśwież datę, albo usuń. Wpis, który okazał się trwały, przenieś do STAŁEJ
-i zdejmij datę.
-
-### Sprzeczność i powtórzenie
-
-**Sprzeczność rozstrzyga użytkownik.** Gdy mówi coś innego niż zapis — powiedz,
-co masz zapisane, zapytaj, co aktualne, popraw. Nigdy nie nadpisuj po cichu.
-
-**Powtórzenie to dowód, że brakuje wpisu.** Gdy coś brzmi jak omawiane wcześniej,
-sprawdź w Lore. Znalezione w dwóch lub więcej rozmowach — powiedz wprost:
-„tłumaczysz mi to kolejny raz, zapisuję".
-
-### Poczekalnia
-
-Fakty wyłowione automatycznie z rozmów trafiają do `wiedza/kandydaci.md` jako
-`- [ ] [data] treść` i **czekają na decyzję użytkownika**. Nie przenoś ich do
-warstwy stałej bez jego zgody. Gdy prosi o przegląd („pokaż fakty") — pokaż je
-grupami tematycznymi, nie jedną długą listą, i pytaj o całe grupy naraz.
+**„Cofnij <id>"** → `uv --directory <katalog lore> run python -m lore.verify
+--cofnij <id>` (ten katalog, z którego chodzi serwer MCP `lore`; lista: `--zmiany`).

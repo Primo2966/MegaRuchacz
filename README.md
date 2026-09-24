@@ -136,7 +136,8 @@ start okna nie ma na co czekać. Pod Codeksem robi to **przy każdym starcie
 sesji**, bo tam chodzi w tle i nikt na niego nie czeka.
 
 **Obie te rzeczy robi strażnik, a wołają go hooki `SessionStart` — Claude Code
-i Codeksa.** Zadania okresowego w Harmonogramie zadań Windows **nie ma**:
+i Codeksa.** Zadania okresowego do aktualizacji w Harmonogramie zadań Windows
+**nie ma** (moduł pamięci ma swoje dwa, oba startują przy zalogowaniu):
 instalator go nie zakłada, a stare `MegaRuchaczOdswiez` ze starszej wersji zdejmuje
 i mówi o tym jedną linią. Pod Codeksem strażnik chodzi w tle i robi dokładnie to
 samo: pobiera nowszą wersję, pilnuje zasad, pilnuje sufitów i nanosi poprawki na
@@ -212,11 +213,13 @@ sobie w pliki.
 **Co daje:** koniec tłumaczenia tego samego w piątym oknie. Agent może przeszukać
 **wszystkie Twoje dotychczasowe rozmowy** — z innych projektów, z zeszłego
 tygodnia, z okna, które dawno zamknąłeś. Szuka po znaczeniu, nie po słowach:
-pytanie po angielsku znajdzie rozmowę po polsku. Do tego sam proponuje zapisanie
-rzeczy, które tłumaczysz po raz kolejny.
+pytanie po angielsku znajdzie rozmowę po polsku. Do tego raz dziennie sam wyławia
+z Twoich wiadomości fakty o Tobie i wpisuje je do wiedzy, którą agent czyta na
+starcie — jak, mówi „Lore — pamięć rozmów".
 
-**Co kosztuje:** ~465 MB jednorazowego pobrania (model), miejsce na bazę (u autora
-170 MB po roku), wymaga Pythona, i — najważniejsze — **daje agentowi dostęp do
+**Co kosztuje:** ~500 MB jednorazowego pobrania (model), miejsce na bazę (u autora
+170 MB po roku), wymaga Pythona, raz dziennie wywołanie modelu na naukę,
+i — najważniejsze — **daje agentowi dostęp do
 treści wszystkich Twoich rozmów na tej maszynie**. Instalator pyta o to osobno
 i wprost. Nic nie wychodzi poza Twój komputer.
 
@@ -344,206 +347,139 @@ po prostu wykonuje wszystko sam, zamiast rozdawać.
 
 ## Lore — pamięć rozmów
 
-Serwer MCP indeksujący transkrypty — Claude Code i Codeksa — do lokalnej bazy
-z wyszukiwaniem pełnotekstowym i semantycznym (zapytanie po niemiecku znajdzie
-rozmowę po polsku). Baza i model leżą w `~\.lore` (a jeśli baza powstała wcześniej
-w `~\.claude`, zostaje tam) i **nie wychodzą poza Twoją maszynę**.
+Agent zapomina wszystko, gdy zamykasz okno. Lore sprawia, że nie tłumaczysz mu tego
+samego od nowa: **zapisuje każdą rozmowę**, **sam uczy się z nich faktów o Tobie**
+i **podsuwa agentowi to, co już kiedyś ustaliliście**. Baza i model leżą na Twoim
+dysku (`~\.lore`, a jeśli baza powstała wcześniej w `~\.claude` — tam) i nie
+wychodzą poza maszynę. Jeden wyjątek: raz dziennie część Twoich wiadomości czyta
+model AI, którego i tak używasz (`claude` albo `codex`) — patrz „Dzień z życia".
 
 Serwer rejestrują trzy narzędzia: Claude Code, Codex CLI i opencode (wpis
 `mcp.lore` w `~/.config/opencode/opencode.json`). **Rozmowy z opencode nie są
 jeszcze indeksowane** — w opencode przeszukujesz historię Claude Code i Codeksa.
 To znany dług, nie przeoczenie.
 
-### Problem, który to rozwiązuje
+### Gdzie co leży — jedna tabela
 
-Tłumaczysz agentowi te same rzeczy w każdym nowym oknie: czym zajmuje się firma,
-co znaczą Wasze oznaczenia, jak chcesz pracować. Za każdym razem od zera.
+„Plik instrukcji" to `~\.claude\CLAUDE.md` (Claude Code, opencode) i `~\.codex\AGENTS.md`
+(Codex), sekcja `## Co wiem` — poza blokiem instalatora. Automat pisze do każdego z nich, który jest na maszynie.
 
-Samo przeszukiwanie rozmów tego nie załatwia, bo **rozmowa to drogi nośnik
-wiedzy**: żeby przypomnieć sobie jedno ustalenie, trzeba przeczytać akapity,
-w których połowa to myślenie na głos i pomysły później odrzucone. Dlatego pamięć
-jest podzielona na warstwy.
-
-### Trzy warstwy
-
-| Warstwa | Co tam jest | Gdzie fizycznie | Kiedy czytane | Koszt |
+| Gdzie | Co tam jest | Kto wpisuje | Kiedy trafia do AI | Wygasa? |
 |---|---|---|---|---|
-| **1. Stała** | kim jesteś, czym zajmuje się firma, konwencje | zwykły plik tekstowy | zawsze, przy każdej sesji | mały, ale płacony **za każdym razem** |
-| **2. Bieżąca** | sprawy tego tygodnia, co Cię blokuje | ten sam plik, osobna sekcja | zawsze, **z datą i wygasaniem** | mały, płacony przy każdej sesji |
-| **3. Referencyjna** | tabele, listy numerów, cenniki | osobne pliki tekstowe | **tylko gdy rozmowa tego dotyczy** | zero, dopóki nikt nie sięgnie |
-| **Archiwum rozmów** | wszystko, co kiedykolwiek powiedziałeś agentowi | **baza wektorowa** (Lore) | **tylko gdy agent szuka** | jedno wyszukanie na zadanie |
+| **Bieżąca** — podsekcja `### Bieżące` pliku instrukcji | świeże fakty, każdy z datą | **automat**, raz dziennie — każdy nowy fakt ląduje najpierw tutaj; możesz dopisać i Ty | na starcie każdej sesji | **tak, po 14 dniach**: wpis automatu znika sam, Twój zostaje, a agent pyta, czy nadal obowiązuje |
+| **Stała** — reszta sekcji `## Co wiem` | kim jesteś, czym zajmuje się firma, jak pracujesz | **Ty** (albo agent na Twoją prośbę) — takie wpisy są **przypięte**; **automat** przenosi tu fakt z bieżącej, gdy padł w **dwóch różnych rozmowach** (najwyżej 3 za jednym razem) | na starcie każdej sesji | przypięte **nigdy**; wpis automatu niepotwierdzony przez **90 dni** zasypia do `wiedza\uspione.md` i wraca przy następnej wzmiance |
+| **Referencyjna** — pliki w `~\.claude\wiedza\` | tabele, listy numerów, cenniki, uśpione fakty, historia zmian | Ty i automat (długie zestawienia; w pliku instrukcji zostaje jedna linia-odsyłacz) | **tylko gdy rozmowa tego dotyczy** — agent sam otwiera plik | nie |
+| **Archiwum** — baza `lore.db` | każda rozmowa słowo w słowo, z myśleniem na głos i pomysłami porzuconymi | automat, co 10 minut | przy każdej Twojej wiadomości automat dokleja 1–2 pasujące fragmenty; poza tym gdy agent sam szuka | nie |
 
-**Warstwa 3 to zwykłe pliki, nie baza wektorowa.** To rozróżnienie jest ważne
-i łatwo je przeoczyć:
+Trzy pierwsze wiersze to **wiedza**: krótkie zdania, które otworzysz i poprawisz
+notatnikiem. Archiwum to **surowiec** — dlatego to, co z niego przychodzi, agent
+traktuje jako trop, nie prawdę. Tabela SKU idzie do pliku referencyjnego, nie do
+archiwum: przy numerze produktu chcesz dokładnej wartości, a nie czegoś „podobnego
+w znaczeniu".
 
-- **Warstwy 1–3 to WIEDZA** — fakty spisane po ludzku, krótkie i sprawdzone.
-  Leżą w plikach tekstowych, które możesz otworzyć i poprawić notatnikiem.
-- **Baza wektorowa to ARCHIWUM ROZMÓW** — surowy zapis tego, co padło, razem
-  z myśleniem na głos i pomysłami później odrzuconymi. Nie jest wiedzą, jest
-  materiałem, z którego wiedza bywa wyciągana.
+### Dzień z życia
 
-Dlaczego tabela SKU nie idzie do bazy wektorowej: wyszukiwanie po znaczeniu jest
-świetne do „o czym my wtedy rozmawialiśmy", a bezużyteczne do „podaj mi numer
-tego produktu". Przy tabeli chcesz dokładnej wartości, nie czegoś podobnego
-w znaczeniu. Zwykły plik robi to lepiej, szybciej i bez modelu.
+1. **Włączasz komputer.** Przy zalogowaniu startują dwie rzeczy z Harmonogramu zadań:
+   ikona **nadzorcy** w zasobniku i indeksowanie, które **co 10 minut** dopisuje nowe
+   rozmowy do archiwum. Żadne zadanie nie chodzi o stałej godzinie.
+2. **Raz dziennie — nauka.** Rusza ją nadzorca (co 15 minut sprawdza, czy dziś już
+   była), a gdy nadzorcy nie ma — pierwsza sesja dnia. Model czyta **tylko wiadomości
+   pisane do agenta** (Twoje i zlecenia, które agent daje podagentom; odpowiedzi
+   agenta i wyniki narzędzi pomija), **tylko od ostatniego czytania** i nigdy sprzed
+   pierwszego przebiegu na tej maszynie („dzień zerowy"). Wyłowione fakty wpisuje do
+   bieżącej. Potem, już bez modelu, porządki: awanse do stałej, sprzeczności,
+   usypianie, wygasanie. **To jedyne miejsce, w którym płacisz za wywołanie modelu.**
+   Brak sieci albo limitu? Nauka się odkłada i próbuje znowu (najwyżej 5 razy
+   dziennie); nic nie przepada, materiał czeka.
+3. **Otwierasz sesję.** Narzędzie wczytuje plik instrukcji: stałą i bieżącą.
+   Referencyjna i archiwum czekają.
+4. **Piszesz wiadomość.** Do każdej doklejane jest krótkie przypomnienie zasad, a gdy
+   archiwum ma coś naprawdę pasującego — 1–2 krótkie fragmenty z innych rozmów,
+   podpisane „trop, nie dowód". Nic pasującego = nic nie doklejone. (Ten hook
+   zakłada `wdroz.ps1`, więc działa w projektach z wdrożonym trybem.)
+5. **Agent potrzebuje tabeli albo starego ustalenia** — otwiera plik z `wiedza\`
+   albo przeszukuje archiwum (`lore_search`).
 
-Dwie pierwsze warstwy są malutkie i wczytują się same, trzecia leży odłogiem,
-dopóki nie jest potrzebna. Poniżej każda po kolei.
+### Gdy fakty sobie przeczą — i jak cofnąć zmianę
 
----
+**Wygrywa nowsze.** Nad wpisem automatu — od razu. Nad przypiętym — dopiero gdy nowa
+wersja padnie w **dwóch różnych rozmowach**; do tego czasu czeka w bieżącej
+z dopiskiem, czemu przeczy (przypięte to często pułapki i zakazy — jednego źle
+zrozumianego zdania nie wolno za nie wstawić). Przegrana wersja nie ginie: idzie do
+`wiedza\historia-zmian.md`. **Nikt Cię o nic nie pyta** — kolejki pytań ani
+poczekalni do klikania już nie ma.
 
-#### Warstwa 1 — STAŁA
+**Każda zmiana w stałej ma numer** — awans, podmiana, uśpienie, obudzenie — a plik
+przed zapisem trafia do kopii w `wiedza\kopie`. Cofasz, mówiąc agentowi `cofnij <numer>`, albo sam:
 
-**Gdzie leży:** sekcja `## Co wiem` w globalnym pliku instrukcji Twojego narzędzia
-(`~/.claude/CLAUDE.md`, a dla Codeksa `~/.codex/AGENTS.md`), poza blokiem
-wstawianym przez instalator — żeby aktualizacje narzędzia nigdy jej nie nadpisały.
+```powershell
+uv --directory <MegaRuchacz>\lore run python -m lore.verify --cofnij <numer>   # albo RRRR-MM-DD: cały dzień
+uv --directory <MegaRuchacz>\lore run python -m lore.verify --zmiany          # lista zmian (z datą: jednego dnia)
+```
 
-**Co tam wchodzi**, w czterech kategoriach:
+Numeru nie mają: wejście świeżego faktu do bieżącej i jego wygaśnięcie — taki wpis
+skasujesz ręcznie albo poczekasz 14 dni. Fakt z nieistniejącą ścieżką w ogóle nie
+wchodzi: zostaje oznaczony w `wiedza\kandydaci.md` (to dziś tylko przechowalnia
+automatu). Awans, który przebiłby **sufit stałej — 8 000 znaków**, nie dochodzi,
+a automat mówi, że zatrzymał go sufit.
 
-- **O Tobie** — czym się zajmujesz, za co odpowiadasz, czego nie chcesz robić,
-  jak wolisz dostawać odpowiedzi. Bez tego agent źle dobiera poziom wyjaśnień.
-- **O firmie** — czym się zajmuje, jak jest zbudowana, **jakim językiem mówi się
-  tam o rzeczach**. To ostatnie jest niedoceniane: jeśli w Twojej branży „zapachy"
-  znaczą asortyment, a nie metaforę, agent musi to wiedzieć, zanim zgadnie źle.
-- **Nad czym pracujesz** — projekty, po co powstają, jakie decyzje już zapadły.
-- **Jak pracujesz** — konwencje, narzędzia, czego nigdy nie ruszać.
+### Ile to kosztuje — uczciwie
 
-**Rozmiar:** rzędu stu linii. Ma się mieścić w kilku tysiącach tokenów, bo jest
-doklejana do każdej rozmowy. Gdy rośnie — znaczy, że część należy do warstwy 3.
+| Kiedy | Ile | Czym płacisz |
+|---|---|---|
+| raz dziennie, nauka | przebieg czyta najwyżej 60 000 znaków (~20 tys. tokenów); zaległość — najwyżej 5 przebiegów za podejście | **prawdziwe wywołanie modelu** |
+| każda wiadomość | przypomnienie ~620 znaków (~200 tokenów) + archiwum najwyżej 450 znaków (~150 tokenów) | tekst doklejony do rozmowy |
+| start sesji | u autora ~8 800 znaków (~2 940 tokenów): zasady, stała, bieżąca | tekst doklejony do rozmowy |
+| pliki referencyjne | 0, dopóki agent ich nie otworzy | — |
 
-**Jak długo żyje:** miesiącami. Zmiana wymaga Twojego potwierdzenia.
+Haczyk, o którym łatwo zapomnieć: **doklejony tekst zostaje w rozmowie do końca**
+i model czyta go przy każdym swoim kroku (~10 kroków na jedną Twoją wiadomość) —
+tyle że z bufora, za ułamek zwykłej ceny. Jednorazowy pomiar autora (2026-09-24,
+jego własne transkrypty): cała pamięć to **ok. 1% tego, co model czyta w sesji**.
+To pomiar jednej maszyny, nie stała.
 
----
-
-#### Warstwa 2 — BIEŻĄCA
-
-**Gdzie leży:** podsekcja `### Bieżące` w tym samym pliku.
-
-**Format jest obowiązkowy:** `- [RRRR-MM-DD] treść`. Bez daty wpis nie ma prawa
-tam trafić, bo data jest jedynym mechanizmem, który chroni przed gniciem.
-
-**Co tam wchodzi:** nad czym siedzisz w tym tygodniu, co czeka na czyjąś decyzję,
-co się zacięło, jaki eksperyment jest w toku.
-
-**Wygasanie:** wpis starszy niż **14 dni** przestaje być traktowany jako prawda.
-Agent nie buduje na nim działania i nie podaje go jako aktualnego stanu rzeczy —
-zamiast tego pyta jednym zdaniem, czy nadal obowiązuje. Wtedy albo odświeża datę,
-albo wpis znika.
-
-**Awans do warstwy 1:** wpis, który przy przeglądzie okazuje się trwały, przenosi
-się do STAŁEJ i traci datę. To naturalna droga — rzeczy zaczynają jako bieżące,
-a okazują się regułą.
-
----
-
-#### Warstwa 3 — REFERENCYJNA
-
-**Gdzie leży:** osobne pliki w katalogu `~/.claude/wiedza/`.
-
-**Co tam wchodzi:** pełne tabele, listy numerów, cenniki, szczegóły integracji —
-wszystko, co jest za długie, żeby doklejać do każdej rozmowy, a bywa potrzebne
-w całości raz na jakiś czas.
-
-**Jak agent o nich wie:** w warstwie 1 zostaje **jedna linia na plik** — że taki
-plik istnieje i co w nim jest. Agent sięga po treść dopiero wtedy, gdy rozmowa
-tego dotyczy. To jest cały mechanizm: indeks jest tani i zawsze obecny, zawartość
-droga i czytana na żądanie.
-
----
-
-### Ile to kosztuje — dwa rachunki
-
-To są różne pieniądze, więc nie sumujemy ich w jedną liczbę.
-
-**Przy KAŻDEJ Twojej wiadomości** doklejane jest krótkie przypomnienie zasad
-pracy — hook `UserPromptSubmit`, ładunek z `.claude\orchestrator-reminder.json`
-(Claude Code) albo `szablony-codex\przypomnienie.json` (Codex). Dziś **619 znaków
-pod Claude Code, 592 pod Codeksem — czyli około 200 tokenów**. I nic poza tym.
-
-**RAZ, przy starcie sesji** wchodzi reszta i siedzi w rozmowie do jej końca: blok
-zasad wpisany do `~\.claude\CLAUDE.md` i `~\.codex\AGENTS.md`, warstwa **stała**,
-warstwa **bieżąca** oraz zasady kierownika — pod Codeksem wstrzykiwane hookiem
-`SessionStart`, pod Claude Code idące przez `CLAUDE.md`. Dziś u autora razem
-**8 820 znaków, czyli około 2 940 tokenów**.
-
-**Warstwa referencyjna — pliki w `wiedza\` — nie kosztuje nic**, dopóki rozmowa
-jej nie dotyczy; agent czyta je na żądanie. To jest sedno podziału: do warstwy
-stałej idzie wyłącznie to, co ma zmieniać zachowanie **bez pytania** (pułapki,
-zakazy, preferencje). Wszystko, co da się sprawdzić dopiero wtedy, gdy temat się
-pojawi, idzie do plików referencyjnych albo do archiwum rozmów.
-
-Obie liczby to **szacunek, nie pomiar tokenizera**: liczymy znaki ładunku
-i dzielimy przez trzy. Prawdziwy rachunek bywa o kilkanaście procent inny —
-chodzi o rząd wielkości i o to, która pozycja jest najdroższa. Widać je na żywo:
-jedną linią przy starcie sesji, a w całości poleceniem
+Tokeny liczymy jako znaki / 3 — szacunek, nie tokenizer. Na żywo: nadzorca, jedna
+linia przy starcie sesji, a w całości
 `powershell -ExecutionPolicy Bypass -File narzedzia\koszt-pamieci.ps1`.
 
----
+### Nadzorca w zasobniku
 
-### Co dzieje się samo, bez Twojego udziału
+Ikona przy zegarze, niezależna od tego, czy otworzyłeś Claude Code — bo mechanizm,
+który milknie razem z tym, czego pilnuje, jest bezużyteczny. W oknie:
 
-| Kiedy | Co się dzieje |
-|---|---|
-| co 10 minut | nowe rozmowy trafiają do archiwum wektorowego |
-| przy starcie komputera | przegląd wczorajszych rozmów, wyławianie faktów, przydział warstw |
-| przy starcie sesji (Claude Code i Codex) | jedna linia: rachunek za pamięć, a gdy coś jest ucinane — alarm |
-| raz w tygodniu | sprawdzenie, czy zapisane fakty nadal się zgadzają |
+- trzy liczby z tabeli wyżej: ile dokleja wiadomość, ile start sesji, ile kosztowała
+  ostatnia nauka;
+- stan nauki: kiedy była, ile materiału czeka;
+- **zmiany w pamięci z numerami do cofnięcia**;
+- postęp przeliczania archiwum na nowy model (patrz niżej);
+- wersja narzędzia i przycisk „Sprawdź i pobierz nowszą wersję";
+- „Przeczytaj zaległe rozmowy" — jedyny przycisk, który wydaje tokeny, więc **najpierw
+  podaje szacunek kosztu i pyta o zgodę** (domyślnie „Nie").
 
-**Cykl dzienny jest odporny na przerwy.** Sprawdza przed pracą, czy jesteś
-zalogowany, czy jest sieć i czy starcza limitu — a gdy czegoś brakuje, **odkłada
-zamiast udawać porażkę**. Ponawia co 10 minut, najwyżej pięć razy dziennie.
-Żaden dzień nie zostaje pominięty: nieudany przebieg nie przesuwa znacznika, więc
-nazajutrz materiału jest po prostu więcej i nadrabia się partiami.
+### Dla chętnych — szczegóły techniczne
 
-### Skąd wiadomo, co warto zapisać
+**Wyszukiwanie.** `lore_search` łączy pełny tekst (BM25) z wyszukiwaniem po znaczeniu:
+polski model `sdadas/mmlw-retrieval-roberta-base` (~500 MB, liczony lokalnie).
+Zmierzony 2026-09-24 na 60 pytaniach z rozmów autora: trafienie w pierwszej
+dziesiątce w 90% pytań wobec 80% poprzedniego `multilingual-e5-small` — lepiej
+także po niemiecku i angielsku (`.claude/raporty/pamiec-test-modeli.md`).
+Automat doklejający fragmenty do wiadomości szuka **samym pełnym tekstem**, bo musi
+się zmieścić w ułamku sekundy — trafia więc tylko przy wspólnych słowach, a próg
+trafności jest ostry: lepiej nic niż szum. Pomija bieżącą rozmowę i nie dokleja
+drugi raz tego samego fragmentu.
 
-Trzy sygnały, każdy inny:
+**Przejście na nowy model.** Świeża instalacja od razu liczy nowym. Starsza baza
+zostaje przy starym, dopóki sam nie uruchomisz przeliczenia — wyszukiwanie nigdy nie
+miesza dwóch modeli: `uv --directory <MegaRuchacz>\lore run python -m lore.migrate`
+(w tle, partiami; przerwane rusza od miejsca, w którym stanęło); postęp: to samo
+z `--status` albo w nadzorcy. Szczegóły w `lore/README.md`.
 
-- **Powiedziałeś to wprost** — agent proponuje zapis w trakcie rozmowy.
-- **Maszyna to potwierdziła** — fakt zawierający ścieżkę, która istnieje, wchodzi
-  do wiedzy bez pytania. Nie ma czego zatwierdzać, skoro to sprawdzalna prawda.
-- **Powtarzałeś to wielokrotnie** — archiwum potrafi znaleźć powtórzenia **bez
-  czytania go modelem**. Fragmenty o tym samym znaczeniu mają bliskie sobie
-  wektory, więc skupisko wypowiedzi z wielu różnych sesji to twardy dowód, że coś
-  tłumaczyłeś w kółko. Model czyta wtedy po jednym przedstawicielu ze skupiska —
-  kilkadziesiąt urywków zamiast dziesiątek tysięcy.
-
-Przy tym trzecim liczą się **wyłącznie Twoje wypowiedzi**. Pierwsze uruchomienie
-na prawdziwym archiwum wypchnęło na szczyt rankingu szablon meldunku samego
-agenta, powtarzany w 34 sesjach — to powtarzalna forma, nie powtarzalna wiedza.
-
-#### Co robi poranne wyciąganie faktów
-
-Raz dziennie przeglądane są rozmowy z ostatniej doby i wyłuskiwane z nich trwałe
-fakty — modelem, który akurat jest na tej maszynie (`claude` albo `codex`).
-Cztery rzeczy, które trzymają to w ryzach:
-
-- **Tylko nowy materiał** od ostatniego przebiegu, nie całe archiwum.
-- **Twardy sufit** na ilość materiału — koszt jest przewidywalny, nie rośnie
-  z gadatliwością dnia.
-- **Wywołania narzędzi są odsiewane** przed wysłaniem — to szum, nie wiedza.
-- **Wynik trafia do poczekalni**, nie do obowiązującej wiedzy. Automat **proponuje**,
-  Ty zatwierdzasz. Bo wyciągnięty z kontekstu „fakt" potrafi być bzdurą, a wpis
-  w warstwie stałej jest traktowany jako prawda.
-
-### Dlaczego wpisy bieżące wygasają
-
-Bo to jest sposób, w jaki taka pamięć gnije. „Produkt X się męczy" jest bezcenne
-w środę i **szkodliwe za miesiąc** — agent zbuduje na tym nieaktualny wniosek
-i poda go jako fakt. Dlatego każdy wpis bieżący ma datę, a po dwóch tygodniach
-bez potwierdzenia przestaje być traktowany jako prawda.
-
-### Jak wiedza tam trafia
-
-- **Agent sam proponuje zapis**, gdy tłumaczysz mu coś trwałego, czego nie ma
-  w plikach. Nie czeka na polecenie „zapamiętaj".
-- **Powtórzenie jest dowodem.** Jeśli to samo pojawia się w kilku wcześniejszych
-  rozmowach, agent to widzi w Lore i mówi wprost: tłumaczysz mi to trzeci raz.
-- **Sprzeczność rozstrzygasz Ty.** Gdy powiesz coś innego niż zapis, agent pyta,
-  co jest aktualne — zamiast cicho nadpisać albo cicho trzymać się starego.
-
-Twoja wiedza zostaje **na Twoim dysku**, poza repozytorium. Kto zainstaluje to
-narzędzie, dostaje pusty mechanizm, nie cudzą wiedzę.
+**Pliki automatu** w `~\.claude\wiedza\`: `kandydaci.md` (przechowalnia wyłowionych
+faktów), `zrodla.md` (z której rozmowy przyszedł każdy fakt — to dowód „dwóch
+rozmów"), `historia-zmian.md`, `uspione.md`, `kopie\`, `.dzien-zero`. Automat
+sprawdza, czy ścieżki podane w faktach istnieją — także w faktach, które już stoją
+w pliku instrukcji. Wiedza zostaje **na Twoim dysku**, poza repozytorium: kto
+zainstaluje narzędzie, dostaje pusty mechanizm, nie cudzą wiedzę.
 
 ## Stan i dług — co jeszcze nie działa
 
@@ -564,5 +500,5 @@ Wolimy to napisać, niż udawać, że jest komplet.
 - **Mierzymy na oko.** Reguły w `CLAUDE.md` mają uzasadnienia, ale nie mamy liczb,
   które by potwierdzały, ile faktycznie oszczędzają.
 
-Co jest przetestowane: moduł pamięci ma **131 testów** (`uv run pytest` w `lore/`),
+Co jest przetestowane: moduł pamięci ma **289 testów** (stan na 2026-09-24) (`uv run pytest` w `lore/`),
 a instalator sprawdza sam siebie po każdym wdrożeniu.
