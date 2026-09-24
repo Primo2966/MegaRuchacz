@@ -327,3 +327,26 @@ workera pochodzi z aktywnego Dispatcha, nie z tytulu terminala ani widocznego pa
   pod Orke (rozdawanie przez `orca orchestration run-create` / `task-create` / `worker-start
   --worktree new-child --agent claude`, odbior przez `check --wait`, plaskie drzewo).
   NIE jest sledzony w gicie i nie wdraza go instalator - lezy tylko na tej maszynie.
+
+## Koszt tekstu w kontekscie a pamiec podreczna modelu (prompt caching) - rozpoznanie 2026-09-24
+
+- Transkrypty Claude Code: `C:\Users\Primo\.claude\projects\<projekt>\<sesja>.jsonl` (glowna sesja),
+  podagenci w podkatalogach `subagents` / pliki `agent-*`. Wiadomosc asystenta: `message.usage` z polami
+  `input_tokens`, `cache_creation_input_tokens`, `cache_read_input_tokens`, `cache_creation.ephemeral_1h_input_tokens`.
+  Jedna odpowiedz modelu bywa zapisana w kilku liniach - liczyc unikalne `message.id`, pomijac model `<synthetic>`.
+- Wstrzykniecia hookow sa w transkrypcie jako linie `type:"attachment"` z `attachment.type = "hook_additional_context"`
+  (`hookName` np. `SessionStart:startup`); CLAUDE.md i warstwy startowe jada w PIERWSZEJ wiadomosci, za promptem systemowym.
+- Claude Code uzywa bufora 1-godzinnego (`ephemeral_1h`, 100% zapisow) - zapis kosztuje 2x zwykle wejscie, odczyt 0.1x
+  (Opus 5 / 4.x), 0.05x (Opus 5.5). Zrodlo: `https://docs.claude.com/en/docs/build-with-claude/prompt-caching.md` (sekcja Pricing).
+- Bufor miedzy sesjami obejmuje tylko prompt systemowy + narzedzia (~20-35 tys. tokenow); CLAUDE.md i warstwy startowe
+  zapisuja sie od nowa w kazdej sesji i potem sa czytane z bufora przy KAZDYM wywolaniu modelu (nie raz na sesje).
+- Tekst wstrzykniety hookiem `UserPromptSubmit` NIE psuje bufora (dokleja sie na koncu); zostaje w historii,
+  wiec kazde przypomnienie jest potem czytane przy kazdym kolejnym wywolaniu.
+- Bufor peka (wszystko po prompcie systemowym zapisywane od nowa) praktycznie zawsze po przerwie > 60 min
+  oraz przy zmianie modelu i kompaktowaniu.
+- Na tej maszynie srednio ~10 wywolan modelu na jedna wiadomosc uzytkownika (petla narzedzi) - "koszt na wiadomosc"
+  trzeba mnozyc przez wywolania, nie przez wiadomosci.
+- `narzedzia/koszt-pamieci.ps1` liczy warstwy startowe jako placone RAZ na sesje (znaki / 3) - bez bufora i bez krotnosci wywolan.
+- Codex/OpenAI: odczyt z bufora 0.1x, zapis 1.25x przez API (GPT-5.6+), w rozliczeniu kredytami Codeksa brak doplaty za zapis;
+  bufor zyje 30 min od ostatniego uzycia. Zrodla: `https://developers.openai.com/api/docs/guides/prompt-caching.md`,
+  `https://developers.openai.com/codex/pricing.md`. Transkryptow Codeksa (`~\.codex\sessions`) na tej maszynie NIE MA.
