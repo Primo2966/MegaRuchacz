@@ -389,7 +389,7 @@ function Zbuduj-Przod($d, $problemy, $czas) {
     $l += ""
   }
   if ($info.Count -gt 0) {
-    $l += "WARTO WIEDZIEĆ   (w oknie: żółta karta z dopiskiem „dla informacji - nic nie trzeba robić”, bez dymka)"
+    $l += "WARTO WIEDZIEĆ   (w oknie: żółta karta z dopiskiem 'dla informacji - nic nie trzeba robić', bez dymka)"
     foreach ($p in $info) {
       $l += "  [i] $($p.Tytul)"
       if ($p.Porada) { $l += "      $($p.Porada)" }

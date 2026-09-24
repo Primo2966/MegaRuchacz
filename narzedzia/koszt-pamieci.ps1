@@ -1510,10 +1510,16 @@ if ($tokSesja -gt $AlarmNaSesje) {
 }
 
 foreach ($k in @(
-  @{ Poz = $kubSesja;     Nazwa = "start sesji" },
-  @{ Poz = $kubWiadomosc; Nazwa = "kazda wiadomosc" }
+  @{ Poz = $kubSesja;     Nazwa = "start sesji";     Prog = $AlarmNaSesje },
+  @{ Poz = $kubWiadomosc; Nazwa = "kazda wiadomosc"; Prog = $AlarmNaWiadomosc }
 )) {
   if (@($k.Poz).Count -lt $MinPozycjiDoUdzialu) { continue }
+  # Udzial liczy sie dopiero przy rachunku ponad progiem calego rachunku:
+  # 24.09.2026 warstwa stala miala 71% z ~2 900 tokenow (prog 5 000) i swiecila
+  # na czerwono, choc skracanie czegokolwiek nie bylo potrzebne. Informacja "co
+  # ciac" ma sens dopiero, gdy caly rachunek jest nad progiem - wczesniej milczy.
+  $suma = 0; foreach ($pz in @($k.Poz)) { $suma += [int]$pz.Tokeny }
+  if ($suma -le $k.Prog) { continue }
   $n = Najdrozsza $k.Poz
   if ($n.Procent -le $AlarmUdzialu) { continue }
   $alarmy += Alarm "$($n.Nazwa) to $($n.Procent)% rachunku za $($k.Nazwa)" `
