@@ -25,6 +25,7 @@ def archive(tmp_path, monkeypatch, environment):
     monkeypatch.setattr(facts, "CANDIDATES_PATH", knowledge / "kandydaci.md")
     monkeypatch.setattr(facts, "RULES_PATH", tmp_path / "CLAUDE.md")
     monkeypatch.setattr(mining, "DB_PATH", tmp_path / "lore.db")
+    facts.start_pass()  # the pass accumulator is module state — no test may inherit another's calls
     return environment
 
 

@@ -716,7 +716,9 @@ def record_cost(usage: Usage | None = None, found: int = 0, day: str | None = No
         # one estimated call makes the whole sum an estimate: calling a partly guessed total
         # a measurement would be a lie in the one place that reports what this costs
         source = "pomiar" if usage.measured and source in ("", "pomiar") else "szacunek"
+        _PASS.add(usage)  # the same call, counted a second time for the history — see record_pass
     counted["fakty"] += max(0, found)
+    _PASS.facts += max(0, found)
     span = {key: "" if new_day else saved.get(key, "") for key in RANGE_KEYS}
     peak = {key: 0 if new_day else _number(saved, key) for key in PEAK_KEYS}
     if read is not None:
@@ -730,6 +732,11 @@ def record_cost(usage: Usage | None = None, found: int = 0, day: str | None = No
         if read.last:
             span["zakres_do"] = max(span["zakres_do"], read.last)
         peak["sprzed_dnia_zero"] = max(peak["sprzed_dnia_zero"], read.before_zero)
+        _PASS.messages += max(0, read.messages)
+        if read.first:
+            _PASS.first = min(_PASS.first or read.first, read.first)
+        if read.last:
+            _PASS.last = max(_PASS.last, read.last)
     entry = {"data": day, "narzedzie": tool, "tokeny_zrodlo": source, **span,
              **{key: str(peak[key]) for key in PEAK_KEYS},
              **{key: str(counted[key]) for key in COUNTED_KEYS}}
@@ -752,6 +759,265 @@ def _write_cost(entry: dict[str, str], previous: dict[str, str]) -> None:
     if previous.get("data"):  # skipped on the very first day, when there is no yesterday yet
         lines += [f"{PREVIOUS}{key}: {previous.get(key, '')}" for key in ("data", *COST_KEYS)]
     cost_path().write_text("\n".join(lines) + "\n", encoding="utf-8", newline="\n")
+
+
+# ---------------------------------------------------------------- the history of what it cost
+
+# .koszt-cyklu.txt answers "what did TODAY cost" and keeps exactly two days, because two days are
+# all the cycle ever shows. The question that comes after a month — "is this growing or shrinking,
+# and what did the whole month cost me" — cannot be answered out of two days, so every pass leaves
+# one line here as well. One line per PASS, not per day: a day of catching up is several passes,
+# and only the per-pass number tells a one-off backlog (312 600 tokens in five calls on 2026-09-24)
+# apart from a new normal.
+JOURNAL_NAME = ".koszt-historia.tsv"
+# Tab separated with a header row: read by eye as columns, loaded by a script without writing a
+# parser — PowerShell with `Import-Csv -Delimiter "`t"`, Python with csv.DictReader. A comment
+# header would have broken both, which is why the summaries live in their own file below.
+JOURNAL_COLUMNS = ("kiedy", "narzedzie", "wywolania", "tokeny", "tokeny_zrodlo", "znaki_wyslane",
+                   "znaki_odebrane", "wiadomosci", "zakres_od", "zakres_do", "fakty")
+JOURNAL_SUMS = ("wywolania", "tokeny", "znaki_wyslane", "znaki_odebrane", "wiadomosci", "fakty")
+# Two limits, because they guard two different things. The days are what the user asks about: more
+# than a year back, so "what did the month cost" and "is this year worse than last" both still have
+# material. The line count is what keeps a catch-up day from blowing the file up — -Nadrabiaj writes
+# one line per pass, so a single day can add dozens; 2000 lines is around a quarter of a megabyte,
+# small enough that the whole journal is read on every pass without anybody noticing.
+JOURNAL_DAYS = 400
+JOURNAL_MAX_ROWS = 2000
+# The summaries go into their OWN file, in the `klucz: wartosc` shape of .koszt-cyklu.txt and
+# .cykl-stan: the PowerShell side already has the code that reads that shape, and showing the last
+# week costs one small file instead of parsing the whole journal every time.
+SUMMARY_NAME = ".koszt-podsumowanie.txt"
+WINDOWS = (7, 30)  # the two spans the user asks in: "this week" and "this month"
+
+
+def journal_path() -> Path:
+    """A function, not a constant — KNOWLEDGE_DIR is redirected in tests, exactly as for the tally."""
+    return KNOWLEDGE_DIR / JOURNAL_NAME
+
+
+def summary_path() -> Path:
+    return KNOWLEDGE_DIR / SUMMARY_NAME
+
+
+@dataclass
+class Pass:
+    """What ONE pass cost, from its first model call to the line it leaves in the journal.
+
+    The daily tally adds passes together; the history keeps them apart. Both are counted from the
+    same `Usage` objects, so the two files can never tell different stories about the same call.
+    """
+    tool: str = ""
+    calls: int = 0
+    sent: int = 0
+    received: int = 0
+    tokens: int = 0
+    measured: bool = True  # stays true only while EVERY call reported numbers of its own
+    facts: int = 0
+    messages: int = 0
+    first: str = ""  # the oldest message handed to the model, 'YYYY-MM-DD HH:MM'
+    last: str = ""
+
+    def add(self, usage: Usage) -> None:
+        self.tool = usage.tool or self.tool
+        self.calls += 1
+        self.sent += usage.sent
+        self.received += usage.received
+        self.tokens += usage.tokens
+        self.measured = self.measured and usage.measured
+
+    def source(self) -> str:
+        """'pomiar' / 'szacunek', and empty while nothing was called: a pass with no calls has no
+        token count to describe, and calling that zero a measurement would be the one lie this
+        file must never tell."""
+        if not self.calls:
+            return ""
+        return "pomiar" if self.measured else "szacunek"
+
+    def row(self, when: str) -> dict[str, str]:
+        return {"kiedy": when, "narzedzie": self.tool, "wywolania": str(self.calls),
+                "tokeny": str(self.tokens), "tokeny_zrodlo": self.source(),
+                "znaki_wyslane": str(self.sent), "znaki_odebrane": str(self.received),
+                "wiadomosci": str(self.messages), "zakres_od": self.first,
+                "zakres_do": self.last, "fakty": str(self.facts)}
+
+
+_PASS = Pass()
+
+
+def start_pass() -> None:
+    """Opens a new pass. catch_up goes round several times inside one process, and without this the
+    second line would carry the first one's calls on top of its own."""
+    global _PASS
+    _PASS = Pass()
+
+
+def record_pass(when: str | None = None) -> None:
+    """Closes the pass: one line into the journal, and the summaries counted again out of it.
+
+    Measuring must never cost the harvest itself, so nothing here is allowed to raise. It is not
+    allowed to go quiet either: a journal that cannot be written says so in the log AND in the
+    summary file, under `nieprawidlowosc`, where whatever shows this to the user will find it.
+    """
+    when = when or datetime.now().strftime("%Y-%m-%d %H:%M")
+    row = _PASS.row(when)
+    start_pass()
+    problem = ""
+    try:
+        rows = append_journal(row)
+    except OSError as e:
+        problem = f"nie udało się dopisać przebiegu {when} do {JOURNAL_NAME}: {e}"
+        log(problem)
+        rows = read_journal()
+    try:
+        # the summary is dated NOW, not by the line just written: its windows say "the last seven
+        # days up to today", and anchoring them on a back-dated pass would move the whole span
+        write_summary(rows, problem=problem)
+    except OSError as e:
+        log(f"the cost summary was not written to {SUMMARY_NAME}: {e}")
+
+
+def append_journal(row: dict[str, str]) -> list[dict[str, str]]:
+    """Adds one line and gives back the whole journal, trimmed.
+
+    Appending is the normal path — the file is rewritten only on the rare pass that pushes it past
+    one of its limits, so the usual cost of the history is one line written at the end of the file.
+    """
+    KNOWLEDGE_DIR.mkdir(parents=True, exist_ok=True)
+    path = journal_path()
+    header = "" if _has_header(path) else "\t".join(JOURNAL_COLUMNS) + "\n"
+    with open(path, "a", encoding="utf-8", newline="\n") as f:
+        f.write(header + _journal_line(row) + "\n")
+    rows = read_journal()
+    kept = trim_journal(rows)
+    if len(kept) != len(rows):
+        _rewrite_journal(kept)
+    return kept
+
+
+def read_journal() -> list[dict[str, str]]:
+    """The journal read back, oldest first. A line that does not fit the columns is skipped rather
+    than guessed at — and it is said out loud, because a silently dropped line is a lost cost."""
+    lines = _lines(journal_path())
+    if lines and lines[0].startswith(JOURNAL_COLUMNS[0]):
+        lines = lines[1:]
+    out = []
+    for line in lines:
+        if not line.strip():
+            continue
+        fields = line.split("\t")
+        if len(fields) != len(JOURNAL_COLUMNS):
+            log(f"{JOURNAL_NAME}: a line with {len(fields)} of {len(JOURNAL_COLUMNS)} columns was"
+                f" skipped — the cost it carried is not counted anywhere: {line[:80]}")
+            continue
+        out.append(dict(zip(JOURNAL_COLUMNS, fields)))
+    return out
+
+
+def trim_journal(rows: list[dict[str, str]], today: str | None = None) -> list[dict[str, str]]:
+    """Both limits at once: nothing older than JOURNAL_DAYS days, and never more than
+    JOURNAL_MAX_ROWS lines — whichever bites first."""
+    cutoff = _days_back(today or datetime.now().strftime("%Y-%m-%d"), JOURNAL_DAYS)
+    kept = [r for r in rows if r.get("kiedy", "")[:10] >= cutoff]
+    return kept[-JOURNAL_MAX_ROWS:]
+
+
+def _has_header(path: Path) -> bool:
+    try:
+        with open(path, "r", encoding="utf-8") as f:
+            return f.readline().startswith(JOURNAL_COLUMNS[0])
+    except OSError:
+        return False  # no file yet, or no file we can read — either way the header has to be written
+
+
+def _journal_line(row: dict[str, str]) -> str:
+    """One row as a line. Tabs and newlines inside a value would move every column after them, so
+    they become spaces before they ever reach the file."""
+    return "\t".join(" ".join(str(row.get(key, "")).split()) for key in JOURNAL_COLUMNS)
+
+
+def _rewrite_journal(rows: list[dict[str, str]]) -> None:
+    body = "\t".join(JOURNAL_COLUMNS) + "\n" + "".join(_journal_line(r) + "\n" for r in rows)
+    journal_path().write_text(body, encoding="utf-8", newline="\n")
+
+
+def _days_back(day: str, days: int) -> str:
+    """'YYYY-MM-DD' minus N days. A stamp that is not a date pushes the cutoff to the beginning of
+    time instead of dropping everything: losing the history to a confused clock is the worse bug."""
+    try:
+        return (datetime.strptime(day[:10], "%Y-%m-%d")
+                - timedelta(days=max(0, days))).strftime("%Y-%m-%d")
+    except ValueError:
+        return ""
+
+
+def write_summary(rows: list[dict[str, str]], problem: str = "", now: str | None = None) -> None:
+    KNOWLEDGE_DIR.mkdir(parents=True, exist_ok=True)
+    now = now or datetime.now().strftime("%Y-%m-%d %H:%M")
+    pairs = summarize(rows, now, problem)
+    summary_path().write_text("".join(f"{key}: {value}\n" for key, value in pairs.items()),
+                              encoding="utf-8", newline="\n")
+
+
+def summarize(rows: list[dict[str, str]], now: str, problem: str = "") -> dict[str, str]:
+    """The journal boiled down to the pairs somebody can show without counting anything again.
+
+    `zaktualizowano` is there so that silence cannot pass for health: a stamp from three days ago
+    on a cycle that runs daily says by itself that something stopped.
+    """
+    out = {"zaktualizowano": now, "przebiegi": str(len(rows)),
+           "najstarszy": rows[0].get("kiedy", "") if rows else "",
+           "najnowszy": rows[-1].get("kiedy", "") if rows else "",
+           "granica_dni": str(JOURNAL_DAYS), "granica_wierszy": str(JOURNAL_MAX_ROWS)}
+    for days in WINDOWS:
+        out.update(_window(rows, days, now[:10]))
+    out["nieprawidlowosc"] = problem or _anomaly(rows)
+    return out
+
+
+def _window(rows: list[dict[str, str]], days: int, today: str) -> dict[str, str]:
+    """One span, summed. Every key carries its span in the name and its first day next to it —
+    a number of tokens without the period it covers says nothing about what anything cost."""
+    prefix = f"dni{days}."
+    since = _days_back(today, days - 1)  # today counts as one of the days
+    inside = [r for r in rows if r.get("kiedy", "")[:10] >= since]
+    out = {prefix + "od": since, prefix + "do": today, prefix + "przebiegi": str(len(inside)),
+           prefix + "tokeny_zrodlo": _window_source(inside)}
+    for key in JOURNAL_SUMS:
+        out[prefix + key] = str(sum(_number(r, key) for r in inside))
+    tokens = sum(_number(r, "tokeny") for r in inside)
+    # tokens are counted in thousands, so a decimal place there would be noise, not precision
+    out[prefix + "tokeny_na_przebieg"] = str(round(tokens / len(inside))) if inside else "0"
+    out[prefix + "wywolania_na_przebieg"] = _average(inside, "wywolania")
+    out[prefix + "fakty_na_przebieg"] = _average(inside, "fakty")
+    return out
+
+
+def _average(rows: list[dict[str, str]], key: str) -> str:
+    """One decimal place: 1.2 calls a pass is a different story from 5.0, and both round to a lie."""
+    if not rows:
+        return "0.0"
+    return f"{sum(_number(r, key) for r in rows) / len(rows):.1f}"
+
+
+def _window_source(rows: list[dict[str, str]]) -> str:
+    """One estimated pass makes the whole span an estimate — the same rule as inside a single day."""
+    sources = {r.get("tokeny_zrodlo", "") for r in rows if _number(r, "wywolania")}
+    if not sources:
+        return ""
+    return "pomiar" if sources == {"pomiar"} else "szacunek"
+
+
+def _anomaly(rows: list[dict[str, str]]) -> str:
+    """An empty journal is only ever normal before the first pass. Once .koszt-cyklu.txt knows of
+    calls that were paid for, an empty history is a fault to be shown, not 'no data yet'."""
+    if rows:
+        return ""
+    saved = read_cost()
+    calls = _number(saved, "wywolania") + _number(saved, PREVIOUS + "wywolania")
+    if not calls:
+        return ""
+    return (f"dziennik {JOURNAL_NAME} jest pusty, a {COST_NAME} zna {calls} wywołań modelu"
+            f" (dzień {saved.get('data', '?')}) — historia przebiegów się nie zapisuje")
 
 
 @dataclass
@@ -941,6 +1207,7 @@ def _empty_run() -> dict:
 
 def run(dry_run: bool = False, ask=ask_model, conn: sqlite3.Connection | None = None) -> dict:
     """One pass: material -> model -> waiting room. Never raises on missing data, only reports it."""
+    start_pass()  # this pass gets its own line in the history — catch_up calls us several times
     marker = since_marker()
     own = conn is None
     if own and not DB_PATH.exists():
@@ -977,6 +1244,10 @@ def run(dry_run: bool = False, ask=ask_model, conn: sqlite3.Connection | None = 
     out["facts"] = parse_facts(ask(material.joined()))
     out["added"] = append_facts(out["facts"], source=material.source())
     record_cost(found=len(out["facts"]), read=read)  # the call was counted inside ask_model
+    # and the same numbers once more, as one line of the history. Only the passes that got this
+    # far leave a line: a pass that found no material called nobody and cost nothing, and a row of
+    # zeros would only pull the averages the user reads down towards nothing.
+    record_pass()
     write_marker(material.marker())  # exactly as far as we got, so the next run picks up from here
     return out
 
