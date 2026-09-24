@@ -246,6 +246,7 @@ def ask_model(text: str) -> str:
 def run(limit: int = DEFAULT_CLUSTERS, dry_run: bool = False, move_marker: bool = False,
         ask=ask_model, conn: sqlite3.Connection | None = None) -> dict:
     """One dig: archive -> clusters -> a handful of representatives -> model -> waiting room."""
+    facts.start_pass()  # a dig is paid for out of the same pocket, so it gets its own line too
     own = conn is None
     if own and not DB_PATH.exists():
         return {"status": "no-database", "chunks": 0, "groups": 0, "clusters": 0, "taken": [],
@@ -284,6 +285,7 @@ def run(limit: int = DEFAULT_CLUSTERS, dry_run: bool = False, move_marker: bool 
     out["facts"] = facts.parse_facts(ask(material(taken, chunks)))
     out["added"] = facts.append_facts(out["facts"])
     facts.record_cost(found=len(out["facts"]))  # same tally as the daily harvest: same tokens paid
+    facts.record_pass()  # and the same history, so a dig never hides inside the daily numbers
     if move_marker and newest.stamp:
         facts.write_marker(newest)
         out["marker"] = newest.stamp

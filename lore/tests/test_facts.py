@@ -32,6 +32,7 @@ def waiting_room(tmp_path, monkeypatch, environment):
     monkeypatch.setattr(facts, "CANDIDATES_PATH", knowledge / "kandydaci.md")
     monkeypatch.setattr(facts, "RULES_PATH", tmp_path / "CLAUDE.md")
     monkeypatch.setattr(facts, "DB_PATH", tmp_path / "lore.db")
+    facts.start_pass()  # the pass accumulator is module state — no test may inherit another's calls
     return environment
 
 
@@ -950,3 +951,165 @@ def test_a_cost_file_that_cannot_be_written_does_not_stop_the_harvest(one_chunk,
     assert [f.text for f in r["added"]] == [MIXED[1]["tresc"]]
     assert facts.CANDIDATES_PATH.exists()
     assert facts.COST_NAME in capsys.readouterr().err  # and it does not vanish quietly either
+
+
+# ---------------------------------------------------------------- the history of what it cost
+
+def pass_line(when: str, tokens: int = 1000, calls: int = 1, found: int = 2, messages: int = 30,
+              measured: bool = True, tool: str = "claude") -> None:
+    """One whole pass written into the journal, without a database and without a model."""
+    facts.start_pass()
+    for _ in range(calls):
+        facts.record_cost(usage(tokens=tokens // max(1, calls), measured=measured, tool=tool),
+                          day=when[:10])
+    facts.record_cost(found=found, day=when[:10],
+                      read=facts.Reading(messages=messages, first=when, last=when))
+    facts.record_pass(when=when)
+
+
+def journal_lines() -> list[str]:
+    return facts.journal_path().read_text(encoding="utf-8").splitlines()
+
+
+def summary() -> dict[str, str]:
+    out = {}
+    for line in facts.summary_path().read_text(encoding="utf-8").splitlines():
+        key, _, value = line.partition(":")
+        out[key.strip()] = value.strip()
+    return out
+
+
+def test_every_pass_leaves_its_own_line(waiting_room):
+    """The point of the journal: a day of catching up is several passes, and the per-pass number is
+    the one that tells a one-off backlog from a new normal."""
+    pass_line("2026-09-17 08:05", tokens=300, found=2, messages=40)
+    pass_line("2026-09-17 08:12", tokens=700, found=3, messages=50)
+
+    lines = journal_lines()
+
+    assert lines[0] == "\t".join(facts.JOURNAL_COLUMNS)  # a header, so Import-Csv can read it
+    assert len(lines) == 3
+    rows = facts.read_journal()
+    assert [r["kiedy"] for r in rows] == ["2026-09-17 08:05", "2026-09-17 08:12"]
+    assert [r["tokeny"] for r in rows] == ["300", "700"]
+    assert [r["fakty"] for r in rows] == ["2", "3"]
+    assert [r["wiadomosci"] for r in rows] == ["40", "50"]
+    assert [r["narzedzie"] for r in rows] == ["claude", "claude"]
+    assert [r["zakres_od"] for r in rows] == ["2026-09-17 08:05", "2026-09-17 08:12"]
+
+
+def test_a_pass_of_several_calls_is_still_one_line(waiting_room):
+    pass_line("2026-09-17 08:05", tokens=900, calls=3, found=4)
+
+    rows = facts.read_journal()
+
+    assert len(rows) == 1
+    assert (rows[0]["wywolania"], rows[0]["tokeny"], rows[0]["fakty"]) == ("3", "900", "4")
+
+
+def test_a_guessed_call_marks_the_whole_pass_as_an_estimate(waiting_room):
+    pass_line("2026-09-17 08:05", measured=False, tool="codex")
+
+    assert facts.read_journal()[0]["tokeny_zrodlo"] == "szacunek"
+
+
+def test_the_journal_forgets_what_is_older_than_the_day_limit(waiting_room):
+    old = (datetime.now() - timedelta(days=facts.JOURNAL_DAYS + 5)).strftime("%Y-%m-%d %H:%M")
+    edge = (datetime.now() - timedelta(days=facts.JOURNAL_DAYS - 1)).strftime("%Y-%m-%d %H:%M")
+    pass_line(old)
+    pass_line(edge)
+    pass_line(datetime.now().strftime("%Y-%m-%d %H:%M"))
+
+    kept = [r["kiedy"] for r in facts.read_journal()]
+
+    assert old not in kept
+    assert edge in kept  # the limit cuts at the day, it does not round the whole span away
+
+
+def test_the_journal_never_grows_past_its_line_limit(waiting_room, monkeypatch):
+    """A day of catching up writes one line a pass — the cap is what keeps that from running away."""
+    monkeypatch.setattr(facts, "JOURNAL_MAX_ROWS", 3)
+    for minute in range(5):
+        pass_line(f"2026-09-17 08:0{minute}", tokens=100 * minute)
+
+    rows = facts.read_journal()
+
+    assert len(rows) == 3
+    assert [r["kiedy"] for r in rows] == ["2026-09-17 08:02", "2026-09-17 08:03", "2026-09-17 08:04"]
+    assert journal_lines()[0] == "\t".join(facts.JOURNAL_COLUMNS)  # the rewrite keeps the header
+
+
+def test_the_summaries_add_up_seven_and_thirty_days(waiting_room):
+    """Written down so that showing the week costs one small file, not the whole journal."""
+    today = datetime.now()
+    for days, tokens in ((0, 1000), (3, 2000), (10, 4000), (40, 8000)):
+        pass_line((today - timedelta(days=days)).strftime("%Y-%m-%d %H:%M"), tokens=tokens, found=1)
+
+    s = summary()
+
+    assert (s["dni7.tokeny"], s["dni7.przebiegi"]) == ("3000", "2")
+    assert (s["dni30.tokeny"], s["dni30.przebiegi"]) == ("7000", "3")
+    assert s["dni7.tokeny_na_przebieg"] == "1500"
+    assert s["dni30.fakty_na_przebieg"] == "1.0"
+    assert s["dni30.wywolania_na_przebieg"] == "1.0"
+    assert s["dni7.od"] == (today - timedelta(days=6)).strftime("%Y-%m-%d")  # the period, by the number
+    assert (s["przebiegi"], s["nieprawidlowosc"]) == ("4", "")
+
+
+def test_one_guessed_pass_makes_the_whole_window_an_estimate(waiting_room):
+    now = datetime.now().strftime("%Y-%m-%d %H:%M")
+    pass_line(now, measured=True)
+    pass_line(now, measured=False, tool="codex")
+
+    assert summary()["dni7.tokeny_zrodlo"] == "szacunek"
+
+
+def test_a_journal_that_cannot_be_written_does_not_stop_the_harvest(one_chunk, capsys):
+    """The same rule as for the tally: a blocked file costs the numbers, never the facts."""
+    facts.KNOWLEDGE_DIR.mkdir(parents=True, exist_ok=True)
+    facts.journal_path().mkdir()  # a directory where the file wants to be
+
+    r = facts.run(ask=sorted_answer(MIXED[1]), conn=one_chunk.conn)
+
+    assert [f.text for f in r["added"]] == [MIXED[1]["tresc"]]
+    assert facts.JOURNAL_NAME in capsys.readouterr().err
+    assert facts.JOURNAL_NAME in summary()["nieprawidlowosc"]  # and the trail outlives the console
+
+
+def test_an_empty_journal_after_calls_already_paid_for_is_a_fault(waiting_room):
+    """'Nothing yet' and 'the history stopped recording' must not look the same."""
+    facts.record_cost(usage(), found=1, day="2026-09-17")
+    facts.write_summary(facts.read_journal(), now="2026-09-17 09:00")
+
+    assert "pusty" in summary()["nieprawidlowosc"]
+
+
+def test_an_empty_journal_before_the_first_call_is_not_a_fault(waiting_room):
+    """A false alarm teaches people to ignore alarms — an unused machine is not a broken one."""
+    facts.write_summary(facts.read_journal(), now="2026-09-17 09:00")
+
+    assert summary()["nieprawidlowosc"] == ""
+
+
+def test_a_damaged_line_is_skipped_out_loud(waiting_room, capsys):
+    pass_line("2026-09-17 08:05")
+    with open(facts.journal_path(), "a", encoding="utf-8", newline="\n") as f:
+        f.write("2026-09-17 08:30\tclaude\n")
+
+    rows = facts.read_journal()
+
+    assert len(rows) == 1
+    assert facts.JOURNAL_NAME in capsys.readouterr().err
+
+
+def test_a_run_leaves_a_line_of_history_and_the_old_tally_untouched(one_chunk):
+    """The journal is an addition: narzedzia\\koszt-pamieci.ps1 still reads .koszt-cyklu.txt."""
+    facts.run(ask=sorted_answer(*MIXED), conn=one_chunk.conn)
+
+    saved = facts.read_cost()
+    rows = facts.read_journal()
+
+    assert set(saved) == {"data", *facts.COST_KEYS}  # exactly the old keys, nothing added
+    assert saved["fakty"] == str(len(MIXED))
+    assert len(rows) == 1
+    assert (rows[0]["fakty"], rows[0]["wiadomosci"]) == (str(len(MIXED)), "1")
