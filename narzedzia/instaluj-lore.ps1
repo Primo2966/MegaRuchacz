@@ -42,8 +42,14 @@ $NazwaZadaniaOdswiez = "MegaRuchaczOdswiez"
 # tego, zeby bylo z czego wylawiac. LoreKoszt tez zostaje - nie wola modelu, a jego
 # raport sluzy za punkt odniesienia dla porownania "koszt urosl o tyle procent".
 $ZadaniaCyklu = @("LoreCykl", "LoreCyklPonow", "LoreFacts", "LoreWiedza")
-$RozmiarModelu = "~465 MB"
-$MinModelMB    = 200   # model wazy ~465 MB; kilka bajtow to przerwane pobranie, nie model
+# Model wyszukiwania po sensie: sdadas/mmlw-retrieval-roberta-base (768 wym.) od 2026-09-24,
+# wczesniej multilingual-e5-small (384 wym., ~465 MB). Nazwa i wymiar siedza w lore\lore\db.py.
+$RozmiarModelu = "~496 MB"
+$MinModelMB    = 200   # model wazy ~496 MB; kilka bajtow to przerwane pobranie, nie model
+# Przeliczenie calego archiwum na nowy model (lore.migrate) - szacunek z dnia zmiany
+# modelu (2026-09-24) dla archiwum rzedu kilkudziesieciu tysiecy fragmentow; mniejsze
+# archiwum idzie szybciej. Rzeczywisty postep i prognoze pisze lore.migration.json.
+$CzasPrzeliczania = "~2-4 h"
 
 # Katalog danych Lore - liczony tak samo jak w lore\db.py: zmienna srodowiskowa ma
 # pierwszenstwo (dzieki temu test idzie na katalogu tymczasowym, a nie na prawdziwej
@@ -62,6 +68,7 @@ $script:Lore   = $null
 $script:Baza   = Join-Path $script:Dom "lore.db"
 $script:Modele = Join-Path $script:Dom "lore_models"
 $script:Kroki  = @()   # wyniki sprawdzen do koncowego podsumowania
+$script:PrzeliczanieRuszylo = $false
 $script:Niepelne = @() # rzeczy, ktorych sprawdzenie NIE obejmuje - do podsumowania
 
 # ---------------------------------------------------------------- wypisywanie
@@ -229,8 +236,17 @@ function Ekran-Zgody {
   # maszynie wzmianka o nieznanym zadaniu tylko by mieszala.
   $stareZadanie = ""
   if (Jest-Stare-Odswiezanie) {
-    $stareZadanie = "  5. Zadanie ""$NazwaZadaniaOdswiez"" ze starszej instalacji zostanie USUNIETE`n" +
+    $stareZadanie = "  6. Zadanie ""$NazwaZadaniaOdswiez"" ze starszej instalacji zostanie USUNIETE`n" +
                     "     - narzedzie aktualizuje sie dzis przy starcie sesji, nie z Harmonogramu.`n"
+  }
+
+  # Istniejaca baza = archiwum policzone starszym modelem (albo w trakcie przeliczania).
+  # Mowimy o tym tylko tam, gdzie baza jest - na swiezej maszynie nie ma czego przeliczac.
+  $przeliczanie = ""
+  if (Test-Path $script:Baza) {
+    $przeliczanie = "        Baza juz tu jest: jesli archiwum policzono starszym modelem, zostanie`n" +
+                    "        PRZELICZONE W TLE na nowy ($CzasPrzeliczania, obnizony priorytet procesu;`n" +
+                    "        wyszukiwanie dziala przez caly czas na starych wektorach).`n"
   }
 
   Naglowek "Co zaraz stanie sie na tym komputerze"
@@ -240,9 +256,10 @@ function Ekran-Zgody {
   1. Powstanie LOKALNA baza SQLite z wyszukiwaniem pelnotekstowym i semantycznym
      (znajduje po sensie zdania, nie tylko po doslownym slowie).
         baza  : $($script:Baza)
-  2. Przy pierwszym uruchomieniu pobierze sie z internetu model jezykowy, $RozmiarModelu.
+  2. Przy pierwszym uruchomieniu pobierze sie z internetu model jezykowy, $RozmiarModelu
+     (sdadas/mmlw-retrieval-roberta-base).
         model : $($script:Modele)
-  3. Serwer MCP o nazwie "$NazwaMcp" zostanie zarejestrowany wszedzie tam, gdzie
+$przeliczanie  3. Serwer MCP o nazwie "$NazwaMcp" zostanie zarejestrowany wszedzie tam, gdzie
      widze narzedzie, ktore go przyjmie:
 $lista
      UWAGA: od tej chwili agent AI ma dostep do TRESCI wszystkich Twoich rozmow
@@ -250,6 +267,10 @@ $lista
   4. Powstanie jedno zadanie w Harmonogramie zadan Windows, startujace razem
      z Twoim zalogowaniem:
         "$NazwaZadania" - odswieza indeks rozmow co $InterwalMin minut
+  5. Powstanie drugie zadanie w Harmonogramie, tez przy zalogowaniu (30 s pozniej):
+        "MegaRuchaczNadzorca" - nadzorca z ikona w zasobniku obok zegara. Pilnuje
+        rachunku za pamiec, cyklu wiedzy i alarmow takze wtedy, gdy nie otwierasz
+        zadnego okna. Wystartuje od razu; zdjac: zasobnik\zainstaluj-zasobnik.ps1 -Usun
 $stareZadanie
   Nic nie wychodzi poza ta maszyne: baza, model i samo wyszukiwanie dzialaja lokalnie,
   bez zewnetrznych API. Jedynym ruchem w sieci jest jednorazowe pobranie modelu.
@@ -708,6 +729,123 @@ function Sprawdz-Model {
   }
 }
 
+# Stan wektorow w bazie - czy sa policzone modelem, na ktory Lore jest ustawione.
+# Nazwy stanow z lore\lore\db.py (vector_status): ok | incomplete | migration_needed |
+# migrating | unknown_model. Zwraca .Stan (albo $null, gdy nie dalo sie odczytac),
+# .Ostrzezenie i .Tekst (surowe wyjscie na wypadek bledu).
+function Stan-Wektorow {
+  # POSTEP: stan pliku postepu przeliczania (running/done/...) i czy proces naprawde
+  # zyje - "running" ze stalym znacznikiem to przeliczanie, ktore padlo.
+  $kodPy = "from lore.db import connect, vector_status; s = vector_status(connect()); " +
+           "print('WEKTORY', s['state']); print(s.get('warning','')); p = s.get('progress') or {}; " +
+           "print('POSTEP', p.get('state','brak'), 'padl' if p.get('stale') else 'zyje', p.get('percent','?'))"
+  $w = Uruchom-Uv @("python", "-c", $kodPy)
+  $linie = @($w.Tekst -split "`r?`n")
+  $stan = $null
+  $ostrz = ""
+  for ($i = 0; $i -lt $linie.Count; $i++) {
+    $m = [regex]::Match($linie[$i], '^WEKTORY (\S+)')
+    if ($m.Success) {
+      $stan = $m.Groups[1].Value
+      if ($i + 1 -lt $linie.Count) { $ostrz = $linie[$i + 1].Trim() }
+      break
+    }
+  }
+  $mp = [regex]::Match($w.Tekst, '(?m)^POSTEP (\S+) (\S+) (\S+)')
+  $trwa = $mp.Success -and $mp.Groups[1].Value -eq "running" -and $mp.Groups[2].Value -eq "zyje"
+  $procent = if ($mp.Success) { $mp.Groups[3].Value } else { "?" }
+  if ($w.Kod -ne 0) { $stan = $null }
+  # db.py podaje polecenie z miejscem na katalog - podstawiamy prawdziwy.
+  $ostrz = $ostrz.Replace("<lore>", $script:Lore)
+  return [pscustomobject]@{ Stan = $stan; Ostrzezenie = $ostrz; Trwa = $trwa; Procent = $procent; Tekst = $w.Tekst }
+}
+
+function Polecenie-Przeliczania {
+  return "uv --directory $($script:Lore) run python -m lore.migrate"
+}
+
+# Archiwum policzone starym modelem przeliczamy w tle - ekran zgody to zapowiada.
+# lore.migrate sam obniza sobie priorytet, trzyma blokade (drugi proces odchodzi bez
+# szkody ze stanem "busy") i po przerwaniu rusza od miejsca, w ktorym stanal - wiec
+# start przy stanie "migrating" (przeliczanie przerwane albo wlasnie trwa) jest bezpieczny.
+# Wyjscie procesu laduje w pliku obok bazy, postep i prognoza - w lore.migration.json.
+function Uruchom-Przeliczanie {
+  if ($Proba) {
+    Plan "gdy archiwum jest policzone starym modelem: $(Polecenie-Przeliczania) - w tle, bez okna"
+    return
+  }
+  $s = Stan-Wektorow
+  if ($s.Stan -ne "migration_needed" -and $s.Stan -ne "migrating") { return }
+  Naglowek "Przeliczanie archiwum na nowy model"
+  if ($s.Trwa) {
+    Krok "przeliczanie juz trwa ($($s.Procent)%) - drugiego nie startuje"
+    return
+  }
+  $log = Join-Path $script:Dom "lore.migrate.log"
+  $logWyjscia = Join-Path $script:Dom "lore.migrate.out.log"
+  try {
+    Start-Process -FilePath $script:Uv -ArgumentList @("--directory", "`"$($script:Lore)`"", "run", "python", "-m", "lore.migrate") `
+      -WindowStyle Hidden -RedirectStandardError $log -RedirectStandardOutput $logWyjscia -ErrorAction Stop | Out-Null
+    $script:PrzeliczanieRuszylo = $true
+    Krok "ruszylo w tle ($CzasPrzeliczania, obnizony priorytet) - wyszukiwanie dziala dalej na starych wektorach"
+    Krok "postep: $(Join-Path $script:Dom 'lore.migration.json'), dziennik: $log"
+  } catch {
+    Ostrzezenie "nie udalo sie uruchomic przeliczania w tle: $($_.Exception.Message)"
+    Krok "uruchom recznie: $(Polecenie-Przeliczania)"
+  }
+}
+
+# ok = OK. migration_needed / migrating = ostrzezenie, nie blad: przeliczanie trwa
+# godzinami, a wyszukiwanie dziala przez ten czas na starych wektorach - czerwone
+# "instalacja NIE jest kompletna" w tym momencie byloby falszywym alarmem.
+# Kazdy inny stan (incomplete, unknown_model, nieczytelny) = blad z trescia z db.py.
+function Sprawdz-Wektory {
+  $s = Stan-Wektorow
+  if (-not $s.Stan) {
+    Zapisz-Wynik "wektory w bazie" $false "nie udalo sie odczytac stanu: $(Ostatnia-Linia $s.Tekst)"
+    return
+  }
+  switch ($s.Stan) {
+    "ok" { Zapisz-Wynik "wektory w bazie" $true "policzone modelem, na ktory Lore jest ustawione" }
+    { $_ -eq "migration_needed" -or $_ -eq "migrating" } {
+      if ($script:PrzeliczanieRuszylo -and -not $s.Trwa) {
+        # proces wystartowal przed chwila i moze jeszcze nie zapisal pierwszego postepu
+        Ostrzezenie "wektory w bazie: $($s.Stan) - przeliczanie na nowy model ruszylo przed chwila w tle ($CzasPrzeliczania); do konca wyszukiwanie po sensie idzie starym modelem"
+      } elseif ($s.Trwa) {
+        Ostrzezenie "wektory w bazie: $($s.Stan) - archiwum jest przeliczane na nowy model ($($s.Procent)%, razem $CzasPrzeliczania); do konca wyszukiwanie po sensie idzie starym modelem"
+      } else {
+        Ostrzezenie "wektory w bazie: $($s.Stan) - archiwum trzeba przeliczyc na nowy model, a przeliczanie TERAZ NIE IDZIE; do tego czasu wyszukiwanie po sensie idzie starym modelem"
+      }
+      Krok "polecenie (wznawia od miejsca, w ktorym stanelo): $(Polecenie-Przeliczania)"
+      Nie-Sprawdzono "przeliczanie archiwum na nowy model nie jest skonczone (stan: $($s.Stan)) - wyszukiwanie po sensie przejdzie na nowy model dopiero po jego koncu"
+    }
+    default { Zapisz-Wynik "wektory w bazie" $false "stan $($s.Stan): $($s.Ostrzezenie)" }
+  }
+}
+
+# Nadzorca w zasobniku - sam instalator nadzorcy wie najlepiej, jak go sprawdzic
+# (zadanie w Harmonogramie + proces). Kod 0 = jest i chodzi.
+function Sprawdz-Nadzorce {
+  $skrypt = Join-Path $Zrodlo "zasobnik\zainstaluj-zasobnik.ps1"
+  if (-not (Test-Path $skrypt)) {
+    Zapisz-Wynik "nadzorca w zasobniku" $false "nie ma ${skrypt}"
+    return
+  }
+  try {
+    $global:LASTEXITCODE = 0
+    & $skrypt -Zrodlo $Zrodlo -TylkoSprawdz
+    $kodN = $LASTEXITCODE
+  } catch {
+    Zapisz-Wynik "nadzorca w zasobniku" $false "sprawdzenie wywrocilo sie: $($_.Exception.Message)"
+    return
+  }
+  if ($kodN -eq 0) {
+    Zapisz-Wynik "nadzorca w zasobniku" $true "zadanie MegaRuchaczNadzorca jest w Harmonogramie, proces chodzi"
+  } else {
+    Zapisz-Wynik "nadzorca w zasobniku" $false "zadanie albo proces nie stoi (szczegoly wyzej) - uruchom: powershell -ExecutionPolicy Bypass -File $skrypt"
+  }
+}
+
 function Sprawdz-Baze {
   # liczby prosto z bazy - connect() zaklada schemat i jest idempotentne
   # UWAGA: cudzyslowy podwojne wewnatrz argumentu gina przy przekazywaniu do
@@ -919,6 +1057,7 @@ function Sprawdz-Instalacje {
     Plan "Get-ScheduledTask $NazwaZadania - czy zadanie istnieje i nie jest wylaczone"
     Plan "uv --directory $($script:Lore) run python -m lore.index   (jeden przebieg indeksowania)"
     Plan "policzenie wektora modelem i rozmiar katalogu $($script:Modele) (min. $MinModelMB MB)"
+    Plan "stan wektorow: uv --directory $($script:Lore) run python -c vector_status(connect())  (ok / przeliczanie trwa / blad)"
     Plan "odczyt z bazy: ile plikow i kawalkow wobec liczby widocznych transkryptow ($($script:Baza))"
     if ($script:Claude) { Plan "claude mcp list - czy wpis $NazwaMcp jest w konfiguracji Claude Code" }
     else                { Plan "Claude Code - pominiete, nie ma go na tej maszynie" }
@@ -928,6 +1067,7 @@ function Sprawdz-Instalacje {
     if ($script:OpencodeJest) { Plan "czy w $($script:OpencodeCfg) jest wpis mcp.$NazwaMcp" }
     else                      { Plan "opencode - pominiete, nie ma go na tej maszynie" }
     Plan "handshake JSON-RPC z serwerem ${NazwaMcp}: initialize + tools/list + lore_stats"
+    Plan "zasobnik\zainstaluj-zasobnik.ps1 -TylkoSprawdz - czy zadanie MegaRuchaczNadzorca jest i czy nadzorca chodzi"
     return
   }
   Sprawdz-Testy
@@ -935,9 +1075,11 @@ function Sprawdz-Instalacje {
   Sprawdz-Zadanie
   Sprawdz-Indeksowanie
   Sprawdz-Model
+  Sprawdz-Wektory
   Sprawdz-Baze
   Sprawdz-Mcp-Wpis
   Sprawdz-Mcp-Dziala
+  Sprawdz-Nadzorce
 }
 
 function Podsumowanie {
@@ -1016,6 +1158,7 @@ if (-not $TylkoSprawdz) {
   Zarejestruj-Mcp
   Zaloz-Zadanie
   Zaloz-Nadzorce
+  Uruchom-Przeliczanie
   Usun-Zadanie-Odswiezania
   Usun-Zadania-Cyklu
 }
