@@ -1039,6 +1039,26 @@ function Postep-Przeliczania {
     (Join-Path $script:NadzDom ".claude\wiedza"),
     (Join-Path $script:NadzDom ".lore")
   )
+  # Plik postepu przeliczania archiwum na nowy model (lore\lore\migrate.py):
+  # ~\.claude\lore.migration.json - pola state, done, total, eta_min.
+  # Pokazujemy tylko gdy przeliczanie trwa; po skonczeniu linia znika sama.
+  $mig = Join-Path $script:NadzDom ".claude\lore.migration.json"
+  if (Test-Path $mig) {
+    $p.Plik = $mig
+    try {
+      $j = [System.IO.File]::ReadAllText($mig, [System.Text.Encoding]::UTF8) | ConvertFrom-Json
+      if ($j.state -eq "running" -and $null -ne $j.done -and $null -ne $j.total) {
+        $p.Zrobione = [int]$j.done
+        $p.Wszystkie = [int]$j.total
+        if ($null -ne $j.eta_min) { $p.Powod = "zostalo ok. $([int]$j.eta_min) min" }
+      } else {
+        $p.Powod = "przeliczanie nie trwa (stan: $($j.state))"
+      }
+    } catch {
+      $p.Powod = "nie umiem odczytac pliku postepu: $($_.Exception.Message)"
+    }
+    return $p
+  }
   foreach ($kat in $katalogi) {
     if (-not (Test-Path $kat)) { continue }
     foreach ($wz in $WZORCE_PRZELICZANIA) {
