@@ -598,6 +598,111 @@ def test_a_fact_already_standing_in_the_rules_is_not_proposed(waiting_room):
     assert not facts.CANDIDATES_PATH.exists()
 
 
+# ---------------------------------------------------------------- repetition: the evidence for promotion
+
+def said_in(environment, session: str, ts: str, text: str = "cokolwiek") -> None:
+    """One user chunk of the given conversation."""
+    environment.conn.execute(
+        "INSERT INTO chunks(project, session, file, line, part, ts, role, text, indexed_at)"
+        " VALUES (?,?,?,?,?,?,?,?,?)",
+        ("test-project", session, f"{session}.jsonl", 1, 0, ts, "user", text, ts))
+
+
+def test_the_trail_names_every_conversation_of_the_batch(waiting_room):
+    """The readable part stops at MAX_NAMED_SESSIONS; the evidence needs all of them."""
+    names = [f"rozmowa-{n}" for n in range(facts.MAX_NAMED_SESSIONS + 2)]
+    for n, name in enumerate(names):
+        said_in(waiting_room, name, ago(5 - n * 0.1))
+    facts.write_marker(ago(6))
+
+    facts.run(ask=answers("Użytkownik pracuje na Windowsie."), conn=waiting_room.conn)
+
+    line = [x for x in trail(facts.KNOWLEDGE_DIR).splitlines() if "| wyłowiony |" in x][0]
+    assert "i 2 innych" in line  # the readable pointer is unchanged
+    assert f"| {facts.SESSIONS_FIELD} {' '.join(names)} |" in line
+
+
+def test_a_fact_heard_again_leaves_a_sighting_but_no_second_entry(waiting_room):
+    said_in(waiting_room, "rozmowa-a", ago(5))
+    facts.write_marker(ago(6))
+    facts.run(ask=answers("Użytkownik pracuje na Windowsie."), conn=waiting_room.conn)
+    said_in(waiting_room, "rozmowa-b", ago(1))
+
+    r = facts.run(ask=answers("Użytkownik pracuje na Windowsie."), conn=waiting_room.conn)
+
+    assert r["added"] == []
+    assert entries(facts.CANDIDATES_PATH) == ["Użytkownik pracuje na Windowsie."]
+    again = [x for x in trail(facts.KNOWLEDGE_DIR).splitlines() if "| wyłowiony ponownie |" in x]
+    assert len(again) == 1 and f"{facts.SESSIONS_FIELD} rozmowa-b |" in again[0]
+
+
+def test_a_fact_repeated_inside_one_answer_is_one_sighting(waiting_room):
+    said_in(waiting_room, "rozmowa-a", ago(1))
+    facts.write_marker(ago(2))
+
+    facts.run(ask=answers("Użytkownik pracuje na Windowsie.", "Użytkownik pracuje na Windowsie!"),
+              conn=waiting_room.conn)
+
+    assert trail(facts.KNOWLEDGE_DIR).count("Użytkownik pracuje na Windowsie") == 1
+
+
+PIPELINE_RULES = """# Ustalenia
+
+## Co wiem
+
+### O użytkowniku
+
+- Nie jest programistą.
+
+### Bieżące
+
+_(pusto)_
+
+### Dane referencyjne
+
+_(pusto)_
+"""
+
+
+def test_harvest_and_verification_together_promote_only_after_a_second_conversation(
+        waiting_room, tmp_path, monkeypatch):
+    """The whole way, with a stand-in model: once -> current; again in the SAME conversation ->
+    still current; in ANOTHER conversation -> durable, and gone from the current layer."""
+    from lore import verify
+    monkeypatch.setattr(facts, "CODEX_RULES_PATH", tmp_path / "brak-codexa" / "AGENTS.md")
+    monkeypatch.setattr(verify, "KNOWLEDGE_DIR", facts.KNOWLEDGE_DIR)
+    monkeypatch.setattr(verify, "CANDIDATES_PATH", facts.CANDIDATES_PATH)
+    monkeypatch.setattr(verify, "BACKUP_DIR", facts.KNOWLEDGE_DIR / "kopie")
+    monkeypatch.setattr(verify, "INSTRUCTION_PATHS", (facts.RULES_PATH,))
+    facts.RULES_PATH.write_text(PIPELINE_RULES, encoding="utf-8")
+    fact = "Użytkownik pracuje na dwóch maszynach, biurowej i domowej."
+    model = sorted_answer({"tresc": fact, "warstwa": "stala", "podsekcja": "uzytkownik"})
+
+    def durable() -> str:
+        return facts.RULES_PATH.read_text(encoding="utf-8").split("### Bieżące")[0]
+
+    def current() -> str:
+        return facts.RULES_PATH.read_text(encoding="utf-8").split("### Bieżące")[1]
+
+    said_in(waiting_room, "rozmowa-pierwsza", ago(5))
+    facts.write_marker(ago(6))
+    facts.run(ask=model, conn=waiting_room.conn)
+    verify.run()
+    assert fact in current() and fact not in durable()
+
+    said_in(waiting_room, "rozmowa-pierwsza", ago(3))  # the same conversation, a later batch
+    facts.run(ask=model, conn=waiting_room.conn)
+    assert verify.run()["promoted"] == []
+    assert fact in current() and fact not in durable()
+
+    said_in(waiting_room, "rozmowa-druga", ago(1))
+    facts.run(ask=model, conn=waiting_room.conn)
+    r = verify.run()
+
+    assert r["promoted"] == [fact]
+    assert f"- {fact}" in durable() and fact not in current()
+
+
 def test_the_marker_moves_only_after_a_real_run(waiting_room):
     add(waiting_room, ago(1), "user", "cokolwiek")
     facts.write_marker(ago(2))

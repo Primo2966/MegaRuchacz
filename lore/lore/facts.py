@@ -11,6 +11,12 @@ when. Not next to the fact in the rules, because those are sent with every sessi
 every character — here it costs nothing and answers the only question that matters afterwards,
 "where did this come from".
 
+A fact the model hands back AGAIN (already waiting, already written down) is not proposed twice,
+but its sighting still goes to the trail, with the full list of conversations of the batch. That
+repetition is the evidence lore.verify needs before it lets a fact into the durable layer: a fact
+heard in two different conversations has earned it, a fact heard once only lives in the current
+layer until it ages out.
+
 Run: uv --directory C:\\dev\\claude-worker\\lore run python -m lore.facts [--proba] [--nadrabiaj N]
 """
 
@@ -43,6 +49,12 @@ DAY_ZERO_PATH = KNOWLEDGE_DIR / ".dzien-zero"  # when this machine started learn
 CANDIDATES_PATH = KNOWLEDGE_DIR / "kandydaci.md"
 COST_NAME = ".koszt-cyklu.txt"  # next to .cykl-stan, in the same 'klucz: wartosc' shape
 SOURCES_NAME = "zrodla.md"  # where every fact came from — written here and by lore.verify
+# The events of the trail lore.verify reads back — one name each, so the two modules cannot drift.
+SIGHTED = "wyłowiony"  # the first time a fact came out of the conversations
+SIGHTED_AGAIN = "wyłowiony ponownie"  # the same fact once more — the evidence for promotion
+# The field holding EVERY conversation of the batch. The readable source next to it names only
+# the first MAX_NAMED_SESSIONS; "i 2 innych" cannot tell whether two sightings share a conversation.
+SESSIONS_FIELD = "sesje:"
 RULES_PATH = CLAUDE_HOME / "CLAUDE.md"  # read only — the waiting room is the only thing we write
 CODEX_RULES_PATH = Path.home() / ".codex" / "AGENTS.md"
 
@@ -145,10 +157,11 @@ Jeśli nie ma ani jednego takiego faktu — zwróć pustą listę."""
 
 CANDIDATES_HEADER = """# Kandydaci do trwałej wiedzy
 
-Propozycje wyłowione automatycznie z rozmów. Sprawdza je i wpisuje do wiedzy `lore.verify` — sam,
-bez pytania. Tu zostaje tylko to, czego automat nie ma prawa rozstrzygnąć:
+Propozycje wyłowione automatycznie z rozmów. Sprawdza je `lore.verify` — sam, bez pytania — i wpisuje
+do warstwy bieżącej (wygasa po 14 dniach). Do stałej fakt przechodzi dopiero wtedy, gdy padł w co
+najmniej dwóch różnych rozmowach. Tu zostaje tylko to, czego automat nie ma prawa rozstrzygnąć:
 
-- `[!]` odrzucone — podana ścieżka nie istnieje albo wpis nie mieści się w progu warstwy stałej,
+- `[!]` odrzucone — podana ścieżka nie istnieje,
 - `[?]` sporne — przeczy temu, co już jest zapisane; którą wersję zostawić, decydujesz Ty,
 - `[x]` odhaczone ręcznie — automat tego nie rusza.
 
@@ -159,7 +172,9 @@ Skąd się wzięły — w ~/.claude/wiedza/zrodla.md.
 SOURCES_HEADER = """# Skąd się wzięły fakty
 
 Jedna linia na zdarzenie: `data | zdarzenie | szczegóły | treść faktu`. „wyłowiony” mówi, z których
-rozmów fakt pochodzi, „wpisany” — kiedy i do której warstwy trafił.
+rozmów fakt pochodzi („sesje:” — komplet identyfikatorów), „wyłowiony ponownie” — że padł znowu,
+„wpisany” — kiedy trafił do warstwy bieżącej, „awansowany” — kiedy przeszedł do stałej, bo padł
+w co najmniej dwóch różnych rozmowach, „wygasł” — kiedy zniknął z bieżącej po 14 dniach.
 
 Żeby znaleźć rozmowę: `lore_search` po treści faktu, zawężony do podanej daty albo sesji.
 Ten plik NIE jest doklejany do rozmów — dlatego trop stoi tu, a nie przy wpisie w wiedzy.
@@ -1136,14 +1151,18 @@ def known_facts() -> set[str]:
     return known
 
 
-def note_sources(facts: list[Fact], source: str, day: str) -> None:
-    """Writes down, for each fresh fact, which conversations it was read out of.
+def note_sources(facts: list[Fact], source: str, day: str, sessions: list[str] | tuple = (),
+                 event: str = SIGHTED) -> None:
+    """Writes down, for each fact, which conversations it was read out of.
 
     A separate file on purpose — see the module docstring. It is a record of the job, never
     a reason to lose the job: a file that cannot be written says so in the log and that is all.
+    `sessions` is the complete list of the batch; '-' when it is not known (lore.verify then
+    counts the sighting as no evidence of a second conversation, which is the safe side).
     """
     if not source or not facts:
         return
+    ids = " ".join(sessions) or "-"
     try:
         KNOWLEDGE_DIR.mkdir(parents=True, exist_ok=True)
         first_time = not (KNOWLEDGE_DIR / SOURCES_NAME).exists()
@@ -1151,29 +1170,35 @@ def note_sources(facts: list[Fact], source: str, day: str) -> None:
             if first_time:
                 f.write(SOURCES_HEADER)
             for fact in facts:
-                f.write(f"- {day} | wyłowiony | {fact.label()} | {source} | {fact.text}\n")
+                f.write(f"- {day} | {event} | {fact.label()} | {source} | {SESSIONS_FIELD} {ids}"
+                        f" | {fact.text}\n")
     except OSError as e:
         log(f"the trail of {len(facts)} facts was not written to {SOURCES_NAME}: {e}")
 
 
-def append_facts(facts: list[Fact], day: str | None = None, source: str = "") -> list[Fact]:
+def append_facts(facts: list[Fact], day: str | None = None, source: str = "",
+                 sessions: list[str] | tuple = ()) -> list[Fact]:
     """Appends the facts nobody knows yet, grouped by layer; returns the ones actually written.
 
     Grouped, because the layer is what decides where lore.verify puts the fact afterwards, and
     because whatever it hands back to the user reads better sorted than as one flat list. The
     date sits in every entry — the "biezaca" ones are aged out by it later.
+
+    A fact that is already known is not written again, but its sighting goes to the trail: that
+    it came up once more, in which conversations, is exactly what promotes it later.
     """
     known = known_facts()
-    fresh = []
+    fresh, again, seen = [], [], set()
     for fact in facts:
         key = normalize(fact.text)
-        if not key or key in known:
-            continue
-        known.add(key)  # the model likes to repeat itself inside one answer as well
-        fresh.append(fact)
+        if not key or key in seen:
+            continue  # the model likes to repeat itself inside one answer as well — one sighting
+        seen.add(key)
+        (again if key in known else fresh).append(fact)
+    day = day or datetime.now().strftime("%Y-%m-%d")
+    note_sources(again, source, day, sessions, event=SIGHTED_AGAIN)
     if not fresh:
         return []
-    day = day or datetime.now().strftime("%Y-%m-%d")
     KNOWLEDGE_DIR.mkdir(parents=True, exist_ok=True)
     first_time = not CANDIDATES_PATH.exists()
     with open(CANDIDATES_PATH, "a", encoding="utf-8", newline="\n") as f:
@@ -1188,7 +1213,7 @@ def append_facts(facts: list[Fact], day: str | None = None, source: str = "") ->
                 f.write(f"- [ ] [{day}] ({fact.label()}) {fact.text}\n")
                 if fact.pointer:  # the line that goes into the durable knowledge in its place
                     f.write(f"      odsyłacz: {fact.pointer}\n")
-    note_sources(fresh, source, day)
+    note_sources(fresh, source, day, sessions)
     return fresh
 
 
@@ -1242,7 +1267,7 @@ def run(dry_run: bool = False, ask=ask_model, conn: sqlite3.Connection | None = 
         out["model_cli"] = cli.name if cli else ""
         return out
     out["facts"] = parse_facts(ask(material.joined()))
-    out["added"] = append_facts(out["facts"], source=material.source())
+    out["added"] = append_facts(out["facts"], source=material.source(), sessions=material.sessions)
     record_cost(found=len(out["facts"]), read=read)  # the call was counted inside ask_model
     # and the same numbers once more, as one line of the history. Only the passes that got this
     # far leave a line: a pass that found no material called nobody and cost nothing, and a row of
@@ -1295,6 +1320,10 @@ def _report(r: dict) -> None:
         log(f"dry run — nothing written; model tool: {r['model_cli'] or 'NONE in PATH'}")
     else:
         log(f"facts from the model: {len(r['facts'])}, new in {CANDIDATES_PATH}: {len(r['added'])}")
+        again = {normalize(f.text) for f in r["facts"]} - {normalize(f.text) for f in r["added"]}
+        again.discard("")
+        if again:  # not new, but not lost either — the repetition is what promotes a fact later
+            log(f"heard again (only a sighting in {SOURCES_NAME}): {len(again)}")
         for fact in r["added"]:
             log(f"  + ({fact.label()}) {fact.text}")
     if r["pending"]:

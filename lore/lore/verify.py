@@ -3,16 +3,26 @@
 The waiting room (~/.claude/wiedza/kandydaci.md) used to be a queue to click through, and by the
 morning of 2026-09-17 it held ninety entries nobody had read: a review that never happens is not
 a safeguard, it is a pile. So a fact does NOT wait for a human any more — it goes in by itself,
-into the layer its label names, and the user is told afterwards what arrived.
+and the user is told afterwards what arrived.
 
-Three things stop a fact on the way in, and each of them says so out loud:
+But it goes in ONLY to the current layer ("### Bieżące", dated), never straight into the durable
+one. Letting every harvested fact into the durable layer was tried for a week (2026-09-17..24):
+one run pushed what every session starts with from ~2 941 to ~4 946 tokens (+68%) with sixty facts
+at once, and memory rewritten by a model over and over first improves and then degrades, at times
+below having no memory at all (arXiv 2605.12978). The current layer ages out after 14 days, so
+a wrong fact disappears by itself. A fact is PROMOTED to the durable layer only once it has been
+heard in at least two different conversations (the trail in wiedza/zrodla.md says which), and
+only a few per run — see MAX_PROMOTIONS.
+
+Two things stop a fact on the way in, and each of them says so out loud:
 
 * a claim that can be checked and does NOT hold (a path that is not there) — rejected, stays flagged,
 * a claim that CONTRADICTS something already written down — the one case a machine must not settle,
   because it would have to guess which version is true; it stays, marked as disputed, quoting the
-  entry it clashes with,
-* a durable fact that would push the "## Co wiem" section over its 8 000 character ceiling — it
-  stays, and the run says the ceiling is what stopped it. Crossing that line quietly is forbidden.
+  entry it clashes with.
+
+A promotion that would push the durable layer over its 8 000 character ceiling does not happen —
+the fact stays in the current layer and the run says the ceiling is what stopped it.
 
 The same check runs over the facts already standing in the instruction files — a directory moved
 without a word makes a rule silently false, and nothing but a check will ever notice.
@@ -38,7 +48,8 @@ from datetime import datetime
 from pathlib import Path
 
 from .db import CLAUDE_HOME, log
-from .facts import SOURCES_HEADER, SOURCES_NAME, normalize
+from .facts import (SESSIONS_FIELD, SIGHTED, SIGHTED_AGAIN, SOURCES_HEADER, SOURCES_NAME,
+                    normalize)
 
 KNOWLEDGE_DIR = CLAUDE_HOME / "wiedza"
 CANDIDATES_PATH = KNOWLEDGE_DIR / "kandydaci.md"
@@ -75,6 +86,24 @@ REFERENCE_SUBSECTION = "### Dane referencyjne"
 # depend on parsing a PowerShell script, and a number that drifts apart is caught by
 # test_the_ceiling_matches_the_cost_script.
 STABLE_LIMIT = 8000
+
+# How long an entry of the current layer lives: the same 14 days as $DniWaznosci in
+# narzedzia\koszt-pamieci.ps1 and "Wygasanie" in the global rules. Past that, an entry the automaton
+# wrote itself is taken out by itself — that is what makes letting a fact in on ONE conversation's
+# word safe. An entry the user wrote by hand is only counted: throwing it away is his call.
+CURRENT_DAYS = 14
+# "Repetition is the evidence": heard in this many DIFFERENT conversations, a fact has earned the
+# durable layer. Two, because one is exactly the case that went wrong — a single conversation's
+# passing remark became a rule for every session that followed.
+MIN_CONVERSATIONS = 2
+# At most this many promotions per run; the most repeated go first, the rest wait in the current
+# layer for the next run (and the run says so). Why 3: an entry of the durable layer is ~110
+# characters on average (measured on the real file 2026-09-24: 49 entries, 5 410 characters), so
+# three are ~330 characters, ~110 tokens at the 3 characters per token koszt-pamieci.ps1 uses —
+# about 4% of the ~2 941 tokens every session started with before the jump. The jump itself was
+# sixty facts, +68%, in one run. At three a day the growth is small enough to be read in the
+# summary of each run, and still quick enough that a fact heard twice waits days, not weeks.
+MAX_PROMOTIONS = 3
 CURRENT_HEADING_RE = re.compile(r"^###\s+Bie")  # written both with and without the Polish tail
 SUBHEADING_RE = re.compile(r"^#{1,3}\s")
 
@@ -323,28 +352,23 @@ class Candidate:
 
     @property
     def heading(self) -> str:
-        if self.layer == "biezaca":
-            return CURRENT_SUBSECTION
-        if self.layer == "referencyjna":
-            return REFERENCE_SUBSECTION
-        return STABLE_SUBSECTIONS.get(self.detail) or subsection_for(self.text)
+        """Always the current layer, whatever the label says — the label only decides where the
+        fact goes IF it is promoted later (see promotion_heading)."""
+        return CURRENT_SUBSECTION
 
     @property
-    def entry(self) -> str:
-        """What actually stands in the file — the durable layer keeps the sentence, the current
-        layer carries its date (the ageing rule in CLAUDE.md reads it), the reference layer only
-        leaves a pointer behind."""
-        if self.layer == "biezaca":
-            return f"[{self.day}] {self.text}" if self.day else self.text
+    def shown(self) -> str:
+        """The sentence that stands in the file — the reference layer only leaves a pointer behind,
+        the listing itself goes to wiedza/<plik>."""
         if self.layer == "referencyjna":
             return self.pointer or f"Szczegóły w ~/.claude/wiedza/{self.detail}"
         return self.text
 
-    @property
-    def costs_stable(self) -> bool:
-        """Whether it lands in the layer that ships with every session — the one with a ceiling.
-        "biezaca" does not: narzedzia\\koszt-pamieci.ps1 counts that subsection separately."""
-        return self.layer != "biezaca"
+    def entry(self, today: str) -> str:
+        """What actually stands in the current layer: the sentence with its date, which the ageing
+        reads. An entry without a harvest date gets the day it was written — undated, it would
+        never expire."""
+        return f"[{self.day or today}] {self.shown}"
 
 
 @dataclass
@@ -353,7 +377,6 @@ class Reviewed:
     approved: list[Candidate] = field(default_factory=list)  # they go into the knowledge, by themselves
     suspicious: list[tuple[str, list[str]]] = field(default_factory=list)  # a claim that does not hold
     disputed: list[tuple[str, str]] = field(default_factory=list)  # (fact, the entry it contradicts)
-    over_limit: list[str] = field(default_factory=list)  # the durable layer has no room left
     waiting: int = 0  # still there, with nobody but the user able to decide
 
 
@@ -371,18 +394,16 @@ def _read_candidate(m: re.Match) -> Candidate:
     return Candidate(text, layer, detail, m.group("day") or "")
 
 
-def review_candidates(lines: list[str], exists=None, standing: list[str] | None = None,
-                      room: int | None = None) -> Reviewed:
-    """Empties the waiting room: everything that is not rejected, disputed or over the ceiling goes.
+def review_candidates(lines: list[str], exists=None, standing: list[str] | None = None) -> Reviewed:
+    """Empties the waiting room: everything that is not rejected or disputed goes.
 
-    `standing` are the facts already written down (they decide the contradictions), `room` is how
-    many characters the durable layer still has before the ceiling — None means "not measured",
-    which happens only when there is no file to write to anyway.
+    `standing` are the facts already written down (they decide the contradictions). There is no
+    ceiling to check here any more: what goes, goes to the current layer, which ages out by itself;
+    the ceiling of the durable layer is checked where something is promoted into it.
     """
     exists = exists or path_exists
     standing = list(standing or [])
     out = Reviewed()
-    left = room
     pending: Candidate | None = None  # the entry the next "odsyłacz:" line belongs to
     for line in lines:
         pointer = _POINTER_LINE.match(line)
@@ -412,17 +433,6 @@ def review_candidates(lines: list[str], exists=None, standing: list[str] | None 
                                           f" \u201e{_quote(clash)}\u201d)"))
             out.waiting += 1
             continue
-        cost = len(f"- {candidate.entry}") + 1 if candidate.costs_stable else 0
-        if left is not None and cost > left:
-            # the ceiling stops it, and it says so — a fact quietly dropped here would be a fact
-            # the user believes was written down
-            out.over_limit.append(candidate.text)
-            out.lines.append(_flag(m, "!", f"{candidate.text} (nie mieści się: warstwa stała"
-                                           f" ma próg {STABLE_LIMIT} znaków)"))
-            out.waiting += 1
-            continue
-        if left is not None:
-            left -= cost
         out.approved.append(candidate)
         standing.append(candidate.text)  # two candidates of one run can contradict each other too
         pending = candidate  # its "odsyłacz:" line, if any, comes next and leaves with it
@@ -658,19 +668,258 @@ class FileResult:
     path: Path
     stale: list[tuple[str, list[str]]] = field(default_factory=list)
     healed: list[str] = field(default_factory=list)
-    added: list[str] = field(default_factory=list)
+    added: list[str] = field(default_factory=list)  # new facts, written into the current layer
+    promoted: list[str] = field(default_factory=list)  # moved from the current layer to the durable
+    expired: list[str] = field(default_factory=list)  # taken out of the current layer by their age
     changed: bool = False
     backup: str | None = None
     note: str | None = None  # set when the file has no "## Co wiem" — nothing was written
 
 
-def update_file(path: Path, approved: list[Candidate], exists=None, day: str | None = None,
-                dry_run: bool = False) -> FileResult:
-    """Audits what stands in one file and adds the approved facts it does not know yet.
+# ---------------------------------------------------------------- the two layers of "## Co wiem"
 
-    Each fact lands in the layer its label names: the durable one in the subsection it belongs to,
-    the current one under "### Bieżące" with its date, the reference one as a single pointer line
-    (the listing itself goes to wiedza/<plik>, written once by the run).
+_DAY = re.compile(r"^\[(\d{4}-\d{2}-\d{2})\]")
+
+
+def fact_key(text: str) -> tuple[str, tuple[str, ...]]:
+    """'The same fact', decided without a model — a model call on every run is a cost every day.
+
+    The skeleton the contradiction check uses: the wording with the values taken out, plus the
+    values (paths, numbers, negations). A contradiction is the same wording with ANOTHER claim;
+    a repetition is the same wording with the SAME claim — so both halves have to be equal.
+    Deliberately narrow: one fact said in other words is NOT recognised as a repetition. The price
+    of that is small and known — such a fact just stays in the current layer and ages out; a wrong
+    promotion would instead ride along with every session for months.
+    """
+    return skeleton(_LEADING_DAY.sub("", text.strip()))
+
+
+def _layers(lines: list[str]) -> tuple[list[str], list[tuple[str, str]]]:
+    """The entries of '## Co wiem' split in two: the durable ones, and (day, sentence) of the
+    current ones — the day is '' when the entry carries none."""
+    bounds = section_bounds(lines)
+    if bounds is None:
+        return [], []
+    body = lines[bounds[0]:bounds[1]]
+    current = _subsection_bounds(body, CURRENT_HEADING_RE)
+    if current is None:
+        return [b.text for b in bullets(body) if b.text], []
+    durable = body[:current[0]] + body[current[1]:]
+    now = []
+    for b in bullets(body[current[0]:current[1]]):
+        m = _DAY.match(b.text)
+        now.append((m.group(1) if m else "", _LEADING_DAY.sub("", b.text)))
+    return [b.text for b in bullets(durable) if b.text], now
+
+
+def _drop_current(body: list[str], keys: set) -> tuple[list[str], list[str]]:
+    """Takes the entries with these keys out of "### Bieżące" — nowhere else; returns the new
+    body and the sentences that went. An emptied subsection gets its placeholder back."""
+    bounds = _subsection_bounds(body, CURRENT_HEADING_RE)
+    if bounds is None or not keys:
+        return list(body), []
+    start, end = bounds
+    part = body[start:end]
+    gone = []
+    for b in reversed(bullets(part)):  # from the end, so the indexes above stay valid
+        if fact_key(b.text) in keys:
+            gone.append(_LEADING_DAY.sub("", b.text))
+            del part[b.start:b.end]
+    if gone and not bullets(part):
+        while len(part) > 1 and not part[-1].strip():
+            part.pop()
+        part += ["", EMPTY_MARKER, ""]
+    gone.reverse()
+    return body[:start] + part + body[end:], gone
+
+
+# ---------------------------------------------------------------- repetition is the evidence
+
+WRITTEN, PROMOTED, EXPIRED = "wpisany", "awansowany", "wygasł"  # the events this module writes
+_OLD_SESSIONS = re.compile(r"\(sesje:\s*([^)]*)\)")
+_POINTER_NOTE = re.compile(r";\s*odsyłacz:\s*(.+)$")
+
+
+@dataclass
+class Sighting:
+    """One time the harvest brought a fact out of the conversations — one line of the trail."""
+    day: str
+    label: str  # 'stala/firma', 'biezaca', 'referencyjna:plik.md' — what the model called it
+    sessions: frozenset[str] | None  # the conversations of that batch; None = not known in full
+    text: str
+
+
+@dataclass
+class Trail:
+    """What wiedza/zrodla.md knows, read back for the two decisions: promote, and let expire."""
+    sightings: dict = field(default_factory=dict)  # fact key -> [Sighting], oldest first
+    written: set = field(default_factory=set)  # keys of entries the automaton put into "Bieżące"
+    pointers: dict = field(default_factory=dict)  # key of a pointer line -> key of its listing
+
+    def evidence(self, key) -> list[Sighting]:
+        """The sightings behind an entry — for a reference pointer, those of its listing."""
+        return self.sightings.get(self.pointers.get(key, key), [])
+
+
+def _sessions(raw: str) -> frozenset[str] | None:
+    ids = raw[len(SESSIONS_FIELD):].split()
+    return frozenset(ids) if ids and ids != ["-"] else None
+
+
+def _old_sessions(source: str) -> frozenset[str] | None:
+    """The sessions of a line written before the full list existed — only when it names them all:
+    'i 2 innych' hides exactly the ones that could be shared with another sighting."""
+    m = _OLD_SESSIONS.search(source)
+    if not m or " innych" in m.group(1):
+        return None
+    return frozenset(s.strip() for s in m.group(1).split(",") if s.strip()) or None
+
+
+def read_trail() -> Trail:
+    """The trail parsed; a line it cannot read is skipped — no evidence is the safe side here."""
+    out = Trail()
+    raw = _read(KNOWLEDGE_DIR / SOURCES_NAME)
+    for line in (raw or "").splitlines():
+        if not line.startswith("- "):
+            continue
+        parts = line[2:].split(" | ", 5)
+        if len(parts) < 5:
+            continue
+        day, event = parts[0].strip(), parts[1].strip()
+        if event in (SIGHTED, SIGHTED_AGAIN):
+            if len(parts) == 6 and parts[4].startswith(SESSIONS_FIELD):
+                sessions, text = _sessions(parts[4]), parts[5]
+            else:  # the format from before the full list of sessions
+                sessions, text = _old_sessions(parts[3]), " | ".join(parts[4:])
+            out.sightings.setdefault(fact_key(text), []).append(
+                Sighting(day, parts[2].strip(), sessions, text.strip()))
+        elif event == WRITTEN and parts[2].strip().startswith("biezaca"):
+            text = " | ".join(parts[4:])
+            out.written.add(fact_key(text))
+            pointer = _POINTER_NOTE.search(parts[3])
+            if pointer:
+                out.written.add(fact_key(pointer.group(1)))
+                out.pointers[fact_key(pointer.group(1))] = fact_key(text)
+    return out
+
+
+def conversations(sightings: list[Sighting]) -> int:
+    """In how many DIFFERENT conversations a fact was heard, counted on the safe side.
+
+    The model reads a whole batch and does not say which conversation a fact came from, so a
+    sighting is tied to the set of conversations of its batch. Two sightings count as two
+    conversations only when their sets share nothing: one conversation often spans two batches
+    (the real trail of 2026-09-24 has exactly that — one session, two days, two batches), and a
+    fact repeated inside it is one conversation's word, not two. Greedy, smallest sets first: at
+    worst it counts too few, which costs a promotion, never a wrong one.
+    """
+    taken: set[str] = set()
+    count = 0
+    for group in sorted((s.sessions for s in sightings if s.sessions), key=len):
+        if taken.isdisjoint(group):
+            taken |= group
+            count += 1
+    return count
+
+
+@dataclass
+class Promotion:
+    text: str  # the sentence as it stands in the current layer, without its date
+    heading: str  # where it goes in the durable layer
+    conversations: int
+    first_seen: str
+
+    @property
+    def key(self) -> tuple:
+        return fact_key(self.text)
+
+
+def promotion_heading(text: str, label: str) -> str:
+    if label.startswith("referencyjna"):
+        return REFERENCE_SUBSECTION
+    if label.startswith("stala/"):
+        return STABLE_SUBSECTIONS.get(label[len("stala/"):]) or subsection_for(text)
+    return subsection_for(text)
+
+
+@dataclass
+class Promotions:
+    chosen: list[Promotion] = field(default_factory=list)
+    deferred: list[Promotion] = field(default_factory=list)  # earned it, over MAX_PROMOTIONS
+    over_limit: list[Promotion] = field(default_factory=list)  # earned it, no room under the ceiling
+
+
+def choose_promotions(current: list[str], trail: Trail, durable: set,
+                      room: int | None) -> Promotions:
+    """Which entries of the current layer move to the durable one in this run.
+
+    `current` — the sentences of the current layer, this run's newcomers included; `durable` — the
+    keys already standing in the durable layer (nothing there is moved or doubled — this is not
+    a migration backwards); `room` — characters left under the ceiling, None when not measured.
+
+    A fact the model itself labelled "biezaca" is not promoted however often it comes back: it said
+    the thing changes in days, and the durable layer never ages out.
+    """
+    earned, seen = [], set()
+    for text in current:
+        key = fact_key(text)
+        if key in seen or key in durable:
+            continue
+        seen.add(key)
+        sightings = trail.evidence(key)
+        heard = conversations(sightings)
+        if heard < MIN_CONVERSATIONS or sightings[-1].label.startswith("biezaca"):
+            continue
+        earned.append(Promotion(text, promotion_heading(text, sightings[-1].label), heard,
+                                min(s.day for s in sightings)))
+    earned.sort(key=lambda p: (-p.conversations, p.first_seen))  # the most repeated first
+    out, left = Promotions(), room
+    for p in earned:
+        if len(out.chosen) >= MAX_PROMOTIONS:
+            out.deferred.append(p)
+            continue
+        cost = len(f"- {p.text}") + 1
+        if left is not None and cost > left:
+            # the ceiling stops it, and says so — it stays in the current layer meanwhile
+            out.over_limit.append(p)
+            continue
+        if left is not None:
+            left -= cost
+        out.chosen.append(p)
+    return out
+
+
+def _age(day: str, today: str) -> int | None:
+    try:
+        return (datetime.strptime(today, "%Y-%m-%d") - datetime.strptime(day, "%Y-%m-%d")).days
+    except ValueError:
+        return None
+
+
+def expiring(current: list[tuple[str, str]], trail: Trail, today: str,
+             keep: set) -> tuple[dict, list[str]]:
+    """Entries of the current layer past CURRENT_DAYS: {key: sentence} of those the automaton
+    wrote (they go), and the sentences of those the user wrote himself (only counted — the global
+    rules tell the agent to ask him about them, deleting is not the automaton's call)."""
+    leaving, own = {}, []
+    for day, text in current:
+        age = _age(day, today)
+        key = fact_key(text)
+        if age is None or age <= CURRENT_DAYS or key in keep:
+            continue
+        if key in trail.written:
+            leaving[key] = text
+        else:
+            own.append(text)
+    return leaving, own
+
+
+def update_file(path: Path, approved: list[Candidate], exists=None, day: str | None = None,
+                dry_run: bool = False, promoted: list[Promotion] | tuple = (),
+                leaving: set | frozenset = frozenset()) -> FileResult:
+    """Audits what stands in one file, then: the promoted facts leave the current layer for the
+    durable one, the expired ones leave the current layer, and the approved facts it does not know
+    yet come into the current layer with their date — never anywhere else.
     """
     raw = _read(path)
     lines = (raw or "").splitlines()
@@ -679,17 +928,31 @@ def update_file(path: Path, approved: list[Candidate], exists=None, day: str | N
         return FileResult(path, note=f"no '{KNOWLEDGE_HEADING}' section in {path}"
                                      " — nothing approved automatically")
     start, end = bounds
+    today = day or datetime.now().strftime("%Y-%m-%d")
     audited = audit_rules(lines[start:end], exists, day)
-    body = audited.body
-    known = facts_in(lines)
     out = FileResult(path, stale=audited.stale, healed=audited.healed)
+    moving = {p.key for p in promoted}
+    body, gone = _drop_current(audited.body, moving | set(leaving))
+    gone_keys = {fact_key(text) for text in gone}
+    out.expired = [text for text in gone if fact_key(text) not in moving]
+    known = facts_in(lines[:start] + body + lines[end:])
+    for p in promoted:
+        key = normalize(p.text)
+        if key and key not in known:
+            known.add(key)
+            body = insert_fact(body, p.text, p.heading)
+            out.promoted.append(p.text)
+        elif p.key in gone_keys:  # already durable here — only its copy in the current layer went
+            out.promoted.append(p.text)
     for candidate in approved:
-        entry = candidate.entry
+        if fact_key(candidate.shown) in moving:
+            continue  # heard twice already — it goes straight to the durable layer, above
+        entry = candidate.entry(today)
         key = normalize(_LEADING_DAY.sub("", entry))
         if not key or key in known:
             continue  # already written down here, possibly in other words than the waiting room used
         known.add(key)
-        body = insert_fact(body, entry, candidate.heading)
+        body = insert_fact(body, entry, CURRENT_SUBSECTION)
         out.added.append(candidate.text)
     out.changed = body != lines[start:end]
     if dry_run or not out.changed:
@@ -738,18 +1001,10 @@ def write_reference(candidate: Candidate, day: str | None = None) -> str | None:
 # is sent with every single session and has an 8 000 character ceiling, so a dozen characters of
 # provenance per entry would be paid for over and over again, by a user who looks at it once
 # a month. In the knowledge stands the fact; where it came from is one grep away.
+# The same file is what the promotion reads back (read_trail) — the trail is also the evidence.
 
 
-def note_source(candidate: Candidate, files: list[Path], day: str) -> None:
-    """One line: when it was written down, where it went, and which day it was harvested from.
-
-    With that day and the wording of the fact, lore_search finds the conversation it came out of —
-    which is the whole question the user was asking: "where did this come from".
-    """
-    where = ", ".join(path.name for path in files) or "-"
-    origin = f"wyłowiony {candidate.day}" if candidate.day else "wyłowiony kiedyś (wpis bez daty)"
-    layer = f"{candidate.layer}/{candidate.detail}" if candidate.detail else candidate.layer
-    line = f"- {day} | wpisany | {layer} -> {where} | {origin} | {candidate.text}\n"
+def _note(line: str, what: str) -> None:
     try:
         KNOWLEDGE_DIR.mkdir(parents=True, exist_ok=True)
         first_time = not (KNOWLEDGE_DIR / SOURCES_NAME).exists()
@@ -758,29 +1013,72 @@ def note_source(candidate: Candidate, files: list[Path], day: str) -> None:
                 f.write(SOURCES_HEADER)
             f.write(line)
     except OSError as e:  # the trail is a record of the job, never a reason to lose the job
-        log(f"the trail of '{candidate.text[:40]}' was not written to {SOURCES_NAME}: {e}")
+        log(f"the trail of '{what[:40]}' was not written to {SOURCES_NAME}: {e}")
+
+
+def _where(files: list[Path]) -> str:
+    return ", ".join(path.name for path in files) or "-"
+
+
+def note_source(candidate: Candidate, files: list[Path], day: str) -> None:
+    """One line: when it was written into the current layer, where, and which day it was harvested.
+
+    With that day and the wording of the fact, lore_search finds the conversation it came out of —
+    which is the whole question the user was asking: "where did this come from". The label the
+    harvest gave it stays in the line; for a listing, so does the pointer that stands for it — that
+    is how a pointer in the current layer is tied back to the sightings of its listing.
+    """
+    origin = f"wyłowiony {candidate.day}" if candidate.day else "wyłowiony kiedyś (wpis bez daty)"
+    label = f"{candidate.layer}/{candidate.detail}" if candidate.detail else candidate.layer
+    origin += f" jako {label}"
+    if candidate.layer == "referencyjna":
+        origin += f"; odsyłacz: {candidate.shown.replace('|', '/')}"
+    _note(f"- {day} | {WRITTEN} | biezaca -> {_where(files)} | {origin} | {candidate.text}\n",
+          candidate.text)
+
+
+def note_promotion(p: Promotion, files: list[Path], day: str) -> None:
+    where = p.heading.lstrip("# ").strip()
+    _note(f"- {day} | {PROMOTED} | stala: {where} -> {_where(files)} | z {p.conversations} rozmów,"
+          f" pierwszy raz {p.first_seen} | {p.text}\n", p.text)
+
+
+def note_expiry(text: str, written: str, files: list[Path], day: str) -> None:
+    _note(f"- {day} | {EXPIRED} | biezaca -> {_where(files)} | wpis z {written or '?'},"
+          f" starszy niz {CURRENT_DAYS} dni | {text}\n", text)
 
 
 # ---------------------------------------------------------------- the report of the run
 
 def _state(r: dict, day: str) -> dict[str, str]:
-    """The run in 'klucz: wartosc' pairs — what the cycle shows the user in one line."""
-    added = r["added"]
-    facts = {fact for facts in added.values() for fact in facts}
-    layers = r["layers"]
+    """The run in 'klucz: wartosc' pairs — what the cycle shows the user in one line.
+
+    The first keys keep their old names, narzedzia\\aktualizuj-wiedze.ps1 reads them: "stala" is
+    now what was PROMOTED, "biezaca" what came in. The keys after them say the same plainly, plus
+    what the new rule adds: what aged out, what waits for a promotion.
+    """
+    entered, promoted = len(r["entered"]), len(r["promoted"])
     return {
         "data": day,
         "przebieg": r["status"],
-        "dopisane": str(len(facts)),
-        "stala": str(layers.get("stala", 0)),
-        "biezaca": str(layers.get("biezaca", 0)),
-        "referencyjna": str(layers.get("referencyjna", 0)),
+        "dopisane": str(entered + promoted),
+        "stala": str(promoted),
+        "biezaca": str(entered),
+        "referencyjna": str(len(r["references"])),
+        "weszlo_do_biezacej": str(entered),
+        "awansowane_do_stalej": str(promoted),
         "odrzucone": str(len(r["suspicious"])),
         "sporne": str(len(r["disputed"])),
+        "wygasle": str(len(r["expired"])),
+        # earned a promotion, but the run already took MAX_PROMOTIONS — they stay in the current
+        # layer and go first next time
+        "awans_odlozony_limitem": str(len(r["deferred"])),
+        "wstrzymane_progiem": str(len(r["over_limit"])),
+        # older than CURRENT_DAYS, written by the user himself — left for him to decide
+        "stare_reczne_w_biezacej": str(len(r["own_old"])),
         # how far the contradiction check could reach at all — it compares against these entries
         # and nothing else, so a small number here means a small guarantee
         "porownane_wpisy": str(r["compared"]),
-        "wstrzymane_progiem": str(len(r["over_limit"])),
         "czeka": str(r["waiting"]),
         "prog_stalej": f"{r['stable_chars']}/{STABLE_LIMIT}",
         "przestaly_sie_potwierdzac": str(len(r["stale"])),
@@ -798,16 +1096,24 @@ def _reason(r: dict) -> str:
     """
     if r.get("note"):
         return r["note"]
-    added = len({fact for facts in r["added"].values() for fact in facts})
-    if added:
-        return f"dopisano {added} faktow"
+    entered, promoted = len(r["entered"]), len(r["promoted"])
+    tail = []
+    if r["deferred"]:
+        tail.append(f"{len(r['deferred'])} czeka na awans (limit {MAX_PROMOTIONS} na przebieg)")
+    if r["over_limit"]:
+        tail.append(f"{len(r['over_limit'])} wstrzymane progiem warstwy stalej")
+    if r["expired"]:
+        tail.append(f"wygaslo {len(r['expired'])} z biezacej")
+    if entered or promoted:
+        head = (f"dopisano {entered + promoted} faktow (do biezacej {entered},"
+                f" awans do stalej {promoted})")
+        return "; ".join([head] + tail)
     held = []
     if r["suspicious"]:
         held.append(f"{len(r['suspicious'])} odrzucone (nie ma podanych sciezek)")
     if r["disputed"]:
         held.append(f"{len(r['disputed'])} sporne - czekaja na decyzje uzytkownika")
-    if r["over_limit"]:
-        held.append(f"{len(r['over_limit'])} wstrzymane progiem warstwy stalej")
+    held += tail
     if held:
         return "nic nie doszlo: " + ", ".join(held)
     if r["waiting"]:
@@ -828,46 +1134,62 @@ def write_state(r: dict, day: str) -> None:
 # ---------------------------------------------------------------- the whole run
 
 def run(dry_run: bool = False, exists=None, day: str | None = None) -> dict:
-    """One pass: waiting room -> every instruction file, plus an audit of what already stands there."""
+    """One pass: waiting room -> the current layer of every instruction file, the facts heard in two
+    conversations -> the durable layer, the old ones out, plus an audit of what stands there."""
     exists = exists or path_exists
     today = day or datetime.now().strftime("%Y-%m-%d")
     out = {"status": "dry-run" if dry_run else "ok", "approved": [], "suspicious": [],
-           "disputed": [], "over_limit": [], "waiting": 0, "stale": [], "healed": [],
-           "backups": [], "files": [], "added": {}, "layers": {}, "references": [],
-           "stable_chars": 0, "compared": 0, "powod": ""}
+           "disputed": [], "over_limit": [], "deferred": [], "waiting": 0, "stale": [],
+           "healed": [], "backups": [], "files": [], "added": {}, "entered": [], "promoted": [],
+           "expired": [], "own_old": [], "references": [], "stable_chars": 0, "compared": 0,
+           "powod": ""}
     files = instruction_files()
     out["files"] = [str(path) for path in files]
     contents = {path: (_read(path) or "").splitlines() for path in files}
 
-    # what already stands in the files decides two things: what a new fact may contradict, and how
-    # much room the durable layer still has. Measured BEFORE anything is written.
+    # what already stands in the files decides three things: what a new fact may contradict, what
+    # is already durable, and how much room the durable layer still has. Measured BEFORE writing.
     standing: list[str] = []
+    durable: set = set()
+    current: list[tuple[str, str]] = []
     for lines in contents.values():
         _merge(standing, standing_facts(lines))
+        stable, now = _layers(lines)
+        durable |= {fact_key(text) for text in stable}
+        _merge(current, now, key=lambda item: fact_key(item[1]))
     out["compared"] = len(standing)
     out["stable_chars"] = max((stable_chars(lines) for lines in contents.values()), default=0)
     room = min((room_for_facts(lines) for lines in contents.values()), default=None)
 
     raw_candidates = _read(CANDIDATES_PATH)
-    reviewed = review_candidates((raw_candidates or "").splitlines(), exists, standing, room)
+    reviewed = review_candidates((raw_candidates or "").splitlines(), exists, standing)
     out["approved"] = [c.text for c in reviewed.approved]
     out["suspicious"] = list(reviewed.suspicious)
     out["disputed"] = list(reviewed.disputed)
-    out["over_limit"] = list(reviewed.over_limit)
     out["waiting"] = reviewed.waiting
 
-    results = [update_file(path, reviewed.approved, exists, today, dry_run) for path in files]
+    trail = read_trail()
+    for c in reviewed.approved:  # a newcomer's pointer stands for its listing, as in note_source
+        if c.layer == "referencyjna":
+            trail.pointers[fact_key(c.shown)] = fact_key(c.text)
+    chosen = choose_promotions([text for _, text in current] + [c.shown for c in reviewed.approved],
+                               trail, durable, room)
+    out["deferred"] = [p.text for p in chosen.deferred]
+    out["over_limit"] = [p.text for p in chosen.over_limit]
+    leaving, out["own_old"] = expiring(current, trail, today, {p.key for p in chosen.chosen})
+
+    results = [update_file(path, reviewed.approved, exists, today, dry_run, chosen.chosen,
+                           set(leaving)) for path in files]
     for r in results:
         _merge(out["stale"], r.stale, key=lambda item: item[0])
         _merge(out["healed"], r.healed)
+        _merge(out["entered"], r.added)
+        _merge(out["promoted"], r.promoted)
+        _merge(out["expired"], r.expired)
         if r.added:
             out["added"][str(r.path)] = r.added
         if r.backup:
             out["backups"].append(r.backup)
-    written = {fact for facts in out["added"].values() for fact in facts}
-    for candidate in reviewed.approved:
-        if candidate.text in written:
-            out["layers"][candidate.layer] = out["layers"].get(candidate.layer, 0) + 1
     if not any(r.note is None for r in results):
         # nowhere to put them — the facts stay in the waiting room instead of quietly disappearing
         out["approved"] = []
@@ -888,8 +1210,14 @@ def run(dry_run: bool = False, exists=None, day: str | None = None) -> dict:
             target = write_reference(candidate, day)
             if target:
                 out["references"].append(target)
-        if candidate.text in written:
+        if candidate.text in out["entered"]:
             note_source(candidate, files, today)
+    for p in chosen.chosen:
+        if p.text in out["promoted"]:
+            note_promotion(p, files, today)
+    written_on = {fact_key(text): d for d, text in current}
+    for text in out["expired"]:
+        note_expiry(text, written_on.get(fact_key(text), ""), files, today)
     if raw_candidates is not None and reviewed.lines != raw_candidates.splitlines():
         _write(CANDIDATES_PATH, reviewed.lines, _newline(raw_candidates))
     write_state(out, today)
@@ -916,7 +1244,9 @@ def _report(r: dict) -> None:
         log(r["note"])
     head = "dry run — nothing written; " if r["status"] == "dry-run" else ""
     log(f"{head}instruction files: {len(r['files'])},"
-        f" written by themselves: {len(r['approved'])},"
+        f" into the current layer: {len(r['entered'])},"
+        f" promoted to the durable layer: {len(r['promoted'])},"
+        f" expired: {len(r['expired'])},"
         f" rejected: {len(r['suspicious'])},"
         f" disputed — for the user to settle: {len(r['disputed'])},"
         f" standing facts that stopped checking out: {len(r['stale'])}")
@@ -926,12 +1256,21 @@ def _report(r: dict) -> None:
         log(f"  -> {path}: {len(r['added'].get(path, []))} new")
     for fact in r["approved"]:
         log(f"  + {fact}")
+    for fact in r["promoted"]:
+        log(f"  ^ {fact}  (awans: padł w co najmniej {MIN_CONVERSATIONS} różnych rozmowach)")
+    for fact in r["deferred"]:
+        log(f"  ^? {fact}  (zasłużył na awans, czeka: limit {MAX_PROMOTIONS} na przebieg)")
+    for fact in r["expired"]:
+        log(f"  - {fact}  (wygasł: starszy niż {CURRENT_DAYS} dni)")
+    for fact in r["own_old"]:
+        log(f"  - ? {fact}  (starszy niż {CURRENT_DAYS} dni, wpisany ręcznie — decyzja użytkownika)")
     for fact, missing in r["suspicious"]:
         log(f"  ? {fact}  (nie znaleziono: {', '.join(missing)})")
     for fact, entry in r["disputed"]:
         log(f"  <> {fact}  (sporne: przeczy wpisowi „{_quote(entry)}”)")
     for fact in r["over_limit"]:
-        log(f"  = {fact}  (nie mieści się w progu {STABLE_LIMIT} znaków warstwy stałej)")
+        log(f"  = {fact}  (awans wstrzymany: nie mieści się w progu {STABLE_LIMIT} znaków"
+            f" warstwy stałej)")
     for fact, missing in r["stale"]:
         log(f"  ! {fact}  (nie ma: {', '.join(missing)})")
     for fact in r["healed"]:
