@@ -4,6 +4,23 @@ Każda zmiana wypychana na gita dostaje tu wpis. Numer rośnie wg zasady:
 pierwsza cyfra — przebudowa łamiąca zgodność, druga — nowa funkcja,
 trzecia — poprawka.
 
+## 0.20.0 — 2026-09-24
+
+- **Nauka czyta tylko najsilniejszy sygnał.** Z Twoich wiadomości bierze wyłącznie
+  poprawki („nie tak”, „mówiłem”), rzeczy powtórzone w innej rozmowie i „zapamiętaj”
+  — plus koniec odpowiedzi, na którą reagujesz. Próba na ostatnim tygodniu: 28
+  wiadomości zamiast 66, materiał 11 tys. znaków zamiast 64 tys. Stare zaległości
+  puszczone — nauka zaczyna od teraz.
+- **Pomiar skuteczności nauki**: `~\.claude\wiedza\.nauka-skutecznosc.txt` — ile
+  wybrała, ile faktów wpisała i ile z nich przetrwało 14 dni.
+- **Nowe okno nadzorcy**: przełącznik Przegląd/Szczegóły, karty kosztów, wykres
+  kosztu nauki z 30 dni, sumy 7/30 dni i koszt zwykłego dnia.
+- **Alarmy mówią, za co i za jaki okres.** Nadrabianie zaległości to żółta informacja,
+  nie czerwony alarm. Czerwony próg zwykłego dnia nauki: 350 000 tokenów (zmierzone:
+  ~62 500 na jedno wywołanie modelu). Alarm „jedna pozycja to X% rachunku” odzywa
+  się tylko, gdy cały rachunek przekracza swój próg — wcześniej świecił bez powodu.
+- **Bez podwójnych hooków**: przypomnienie i zasady wchodzą raz, nie dwa.
+
 ## 0.19.0 — 2026-09-24
 
 - **Instalacja GLOBALNA: `narzedzia\instaluj-globalnie.ps1`.** Jedna komenda dla
