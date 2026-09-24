@@ -163,11 +163,54 @@ def test_only_the_user_is_harvested(waiting_room):
 
     material = facts.collect(waiting_room.conn, facts.since_marker())
 
-    # "agent:user" counts too: the suffix is what names the speaker
+    assert [t.split(": ", 1)[1] for t in material.texts] == ["pracuje na Windowsie"]
+
+
+def test_a_brief_to_a_subagent_is_not_the_user(waiting_room):
+    """The break-in attempt: "agent:user" is the manager's brief, written by the model.
+
+    It used to pass because only the part after the colon was compared — the model then read the
+    briefs at the user's expense and filed what it had written about the user as the user's words.
+    """
+    set_day_zero(ago(100))
+    add(waiting_room, ago(3), "agent:user", "Raport koncowy: maksymalnie 5 linii, zero narracji")
+    add(waiting_room, ago(2), "user", "wystawiam olejki na eBayu")
+    add(waiting_room, ago(1), "agent:user", "Jestes workerem wykonawczym, rob tylko to, co w zleceniu")
+    seen = []
+
+    r = facts.run(ask=recorder(seen), conn=waiting_room.conn)
+
+    assert r["chunks"] == 1 and r["candidates"] == 1 and r["missing"] == 0
+    assert "wystawiam olejki na eBayu" in seen[0]
+    assert "Raport koncowy" not in seen[0] and "workerem" not in seen[0]
+
+
+def test_a_scheduled_task_prompt_is_not_the_user(waiting_room):
+    """Claude Code writes a scheduled task's automated prompt under the role "user" — not the human."""
+    add(waiting_room, ago(2), "user", '<scheduled-task name="sprzedaz">\nThis is an automated run')
+    add(waiting_room, ago(1), "user", "zapachy maja numery, nie nazwy")
+    add(waiting_room, ago(1), "user", 'mowie o tagu <scheduled-task name="x"> w srodku zdania')
+    facts.write_marker(ago(3))
+
+    material = facts.collect(waiting_room.conn, facts.since_marker())
+
     assert [t.split(": ", 1)[1] for t in material.texts] == [
-        "pracuje na Windowsie",
-        "podzadanie od kierownika",
+        "zapachy maja numery, nie nazwy",
+        'mowie o tagu <scheduled-task name="x"> w srodku zdania',
     ]
+
+
+def test_what_day_zero_holds_back_is_counted_by_the_same_rule(waiting_room):
+    """The count in SQL and the filter in Python have to agree, or the number the user sees lies."""
+    set_day_zero(ago(10))
+    add(waiting_room, ago(20), "user", "sprzed dnia zero")
+    add(waiting_room, ago(20), "agent:user", "zlecenie sprzed dnia zero")
+    add(waiting_room, ago(20), "user", "<scheduled-task name=\"a\">")
+    add(waiting_room, ago(1), "user", "po dniu zero")
+
+    r = facts.run(ask=answers(), conn=waiting_room.conn)
+
+    assert r["before_zero"] == 1
 
 
 # ---------------------------------------------------------------- the indexing axis

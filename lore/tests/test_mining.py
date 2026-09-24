@@ -189,6 +189,23 @@ def test_tool_calls_and_their_output_are_not_clustered(archive):
     assert mining.load(archive.conn)[0] == []
 
 
+def test_briefs_to_subagents_are_not_mined_but_the_user_is(archive):
+    """The break-in attempt: a brief repeats in every window by design ("raport: 5 linii"), so under
+    the role "agent:user" it would top the ranking as the thing the user explains over and over."""
+    brief, own = direction(14), direction(15)
+    for i in range(4):
+        add(archive, long_text(f"zlecenie {i}"), f"okno-{i}", stamp(), near(brief, seed=1400 + i),
+            role="agent:user")
+    for i in range(3):
+        add(archive, long_text(f"zapachy {i}"), f"okno-{i}", stamp(), near(own, seed=1500 + i))
+        add(archive, '<scheduled-task name="raport">' + long_text(f"automat {i}"), f"okno-{i}", stamp(),
+            near(brief, seed=1550 + i))
+
+    chunks = mining.load(archive.conn)[0]
+
+    assert sorted(c.text for c in chunks) == sorted(long_text(f"zapachy {i}") for i in range(3))
+
+
 def test_short_chunks_are_not_clustered(archive):
     base = direction(12)
     for i in range(4):

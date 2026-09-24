@@ -42,6 +42,9 @@ MIN_CHARS = 80
 # "yes, safe to push, the run came out clean" — repeated across 34 sessions because
 # the assistant writes status the same way every time. That is a repeated FORM, not
 # repeated knowledge. What the user had to explain over and over is what we are after.
+# EXACTLY "user": "agent:user" is the manager's brief to a subagent, and briefs repeat the same
+# boilerplate in every window by design — the dig would crown them the user's most repeated words.
+# The automated prompts that sit under "user" are dropped the same way as in the daily harvest.
 MINED_ROLES = ("user",)
 DEFAULT_CLUSTERS = 60  # how many representatives the model gets to read
 PREVIEW = 10  # clusters listed in the dry run, so the quality can be judged before paying anything
@@ -83,7 +86,8 @@ def load(conn: sqlite3.Connection) -> tuple[list[Chunk], np.ndarray]:
     ).fetchall()
     chunks, vectors = [], []
     for cid, session, ts, role, text, emb in rows:
-        if role.split(":")[-1] not in MINED_ROLES or len(text.strip()) < MIN_CHARS:
+        if role not in MINED_ROLES or text.lstrip().startswith(facts.AUTOMATED_PREFIXES) \
+                or len(text.strip()) < MIN_CHARS:
             continue
         vec = np.frombuffer(emb, dtype=np.float32)
         if vec.shape[0] != dim:  # a truncated blob (or another model's) is a reason to skip a row, not to crash
