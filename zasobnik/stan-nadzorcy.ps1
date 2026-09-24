@@ -1,4 +1,4 @@
-# Odczyt stanu dla nadzorcy w zasobniku - CALA arytmetyka i wszystkie wywolania
+﻿# Odczyt stanu dla nadzorcy w zasobniku - CALA arytmetyka i wszystkie wywolania
 # skryptow siedza tutaj, a zasobnik\nadzorca.ps1 robi z tego okno i powiadomienia.
 # Rozdzial jest z premedytacja: okna nie da sie uruchomic bez pulpitu, a ten plik
 # przechodzi w calosci bez GUI (nadzorca.ps1 -Raz), wiec da sie go naprawde sprawdzic.
@@ -413,6 +413,8 @@ function Stan-Cyklu([bool]$zKolejka) {
     Koszt      = $null     # tokeny ostatniego przebiegu
     KosztData  = $null
     KosztOpis  = $null
+    KosztWywolan = $null   # ile wywolan modelu zlozylo sie na ten koszt - z tego
+                           # i tylko z tego liczy sie szacunek przed przyciskiem
     Powody     = @()       # czego nie dalo sie odczytac i dlaczego
   }
 
@@ -441,6 +443,7 @@ function Stan-Cyklu([bool]$zKolejka) {
     $k = Czytaj-Klucze $plikKosztu
     $c.KosztData = Data-Lub-Nic $k["data"]
     if ($k["tokeny"] -match '^\d+$') { $c.Koszt = [long]$k["tokeny"] }
+    if ($k["wywolania"] -match '^\d+$') { $c.KosztWywolan = [int]$k["wywolania"] }
     $czesci = @()
     if ($k["wywolania"] -match '^\d+$') { $czesci += "$($k['wywolania']) wywolan $($k['narzedzie'])" }
     if ($k["fakty"] -match '^\d+$')     { $czesci += "$($k['fakty']) faktow" }
@@ -697,24 +700,29 @@ function Wywrotki-Straznika {
 function Zbierz-Alarmy($cykl, $rachunek) {
   $alarmy = @()
 
-  # 1. Cykl wiedzy stoi. Prog: doba - taki jest jego rytm pracy.
+  # TRESC ALARMU PISZEMY PO POLSKU Z OGONKAMI I BEZ ZARGONU, bo trafia prosto
+  # na wierzch okna, do sekcji "co wymaga uwagi". Zdania z komendami i sciezkami
+  # sa CELOWO osobnymi zdaniami: Porada-Ludzka odsiewa je z okna, a caly tekst
+  # i tak zostaje w szczegolach i w dzienniku, wiec nic nie ginie.
+
+  # 1. Nauka z rozmow stoi. Prog: doba - taki jest jej rytm pracy.
   $godzin = Godzin-Od-Cyklu $cykl
   if ($null -eq $godzin) {
-    $alarmy += Alarm "cykl" "MegaRuchacz: cykl wiedzy nie skonczyl ani razu" (
-      "Nie ma zapisu ani jednego zakonczonego przebiegu cyklu wiedzy, wiec nic sie nie uczy z rozmow. " +
-      "Kliknij ikone MegaRuchacza w zasobniku i wybierz 'Uruchom cykl teraz'. " +
+    $alarmy += Alarm "cykl" "MegaRuchacz: nauka z rozmów nie przeszła ani razu" (
+      "Nie ma zapisu ani jednego zakończonego przebiegu, więc MegaRuchacz niczego się jeszcze nie nauczył z Twoich rozmów. " +
+      "Kliknij ikonę MegaRuchacza i użyj przycisku [Przeczytaj zaległe rozmowy] - pokaże koszt i zapyta o zgodę. " +
       "Jesli to nie pomoze, sprawdz recznie: powershell -ExecutionPolicy Bypass -File " +
       "$($script:NadzZrodlo)\narzedzia\cykl-dzienny.ps1 -Proba")
   } elseif ($godzin -gt $GODZIN_CYKL_STOI) {
     $dni = [int]($godzin / 24)
-    $ile = if ($dni -ge 1) { "${dni} dni" } else { "${godzin} godzin" }
+    $ile = if ($dni -ge 1) { "${dni} $(Odmiana $dni 'dnia' 'dni' 'dni')" } else { "${godzin} $(Odmiana $godzin 'godziny' 'godzin' 'godzin')" }
     $czeka = ""
-    if ($null -ne $cykl.Kawalki)       { $czeka = " Czeka $($cykl.Kawalki) kawalkow rozmow." }
-    elseif ($null -ne $cykl.Zaleglosc) { $czeka = " Zaleglosc: $($cykl.Zaleglosc) przebiegow." }
-    $alarmy += Alarm "cykl" "MegaRuchacz: cykl wiedzy stoi od ${ile}" (
-      "Ostatni przebieg: $($cykl.Data.ToString('yyyy-MM-dd HH:mm')).${czeka} " +
-      "Kliknij ikone MegaRuchacza w zasobniku i wybierz 'Uruchom cykl teraz'. " +
-      "Jesli cykl nie rusza, sprawdz co go blokuje: powershell -ExecutionPolicy Bypass -File " +
+    if ($null -ne $cykl.Kawalki)       { $czeka = " Czeka $(Liczba-Ludzka $cykl.Kawalki) $(Odmiana ([int]$cykl.Kawalki) 'fragment rozmów' 'fragmenty rozmów' 'fragmentów rozmów')." }
+    elseif ($null -ne $cykl.Zaleglosc) { $czeka = " Zaległość: $($cykl.Zaleglosc) $(Odmiana ([int]$cykl.Zaleglosc) 'porcja' 'porcje' 'porcji')." }
+    $alarmy += Alarm "cykl" "MegaRuchacz: nauka z rozmów stoi od ${ile}" (
+      "Ostatnio przeszła $(Kiedy-Ludzko $cykl.Data).${czeka} " +
+      "Kliknij ikonę MegaRuchacza i użyj przycisku [Przeczytaj zaległe rozmowy] - pokaże koszt i zapyta o zgodę. " +
+      "Jesli to nie rusza, sprawdz co blokuje: powershell -ExecutionPolicy Bypass -File " +
       "$($script:NadzZrodlo)\narzedzia\cykl-dzienny.ps1 -Proba")
   }
 
@@ -722,21 +730,22 @@ function Zbierz-Alarmy($cykl, $rachunek) {
   # z koszt-pamieci.ps1 -Zwiezle; rozroznia je slowo w tej samej linii.
   if ($rachunek.Kod -eq 1 -and $rachunek.Linia) {
     if ($rachunek.Linia -match 'UCINANE') {
-      $alarmy += Alarm "ucinane" "MegaRuchacz: cos jest ucinane po cichu" (
-        "$($rachunek.Linia) " +
-        "Skrocony tekst nie dochodzi do modelu, a nikt o tym nie mowi. " +
-        "Kliknij ikone MegaRuchacza - rozbicie pokaze, ktora pozycja nie miesci sie w sufcie. " +
-        "Najczesciej pomaga skrocenie sekcji 'Co wiem' w $($script:NadzDom)\.claude\CLAUDE.md.")
+      $alarmy += Alarm "ucinane" "MegaRuchacz: część tekstu jest ucinana po cichu" (
+        "Skrócony tekst nie dochodzi do modelu, a nikt o tym nie mówi. " +
+        "Kliknij ikonę MegaRuchacza i rozwiń [Szczegóły] - tam widać, która pozycja nie mieści się w limicie. " +
+        "Najczęściej pomaga skrócenie sekcji 'Co wiem' w Twoim pliku z wiedzą. " +
+        "Rachunek mowi: $($rachunek.Linia). " +
+        "Plik do skrocenia: $($script:NadzDom)\.claude\CLAUDE.md")
     } else {
-      $alarmy += Alarm "koszt" "MegaRuchacz: rachunek za pamiec nad progiem" (
-        "$($rachunek.Linia) " +
-        "Kliknij ikone MegaRuchacza - rozbicie pokaze, ktora pozycja urosla i gdzie ona siedzi. " +
-        "Progi i ich uzasadnienie sa w $($script:NadzZrodlo)\narzedzia\koszt-pamieci.ps1.")
+      $alarmy += Alarm "koszt" "MegaRuchacz: pamięć kosztuje więcej, niż powinna" (
+        "Kliknij ikonę MegaRuchacza i rozwiń [Szczegóły] - tam widać, która pozycja urosła. " +
+        "Rachunek mowi: $($rachunek.Linia). " +
+        "Progi i ich uzasadnienie sa w $($script:NadzZrodlo)\narzedzia\koszt-pamieci.ps1")
     }
   } elseif ($rachunek.Powod) {
-    $alarmy += Alarm "rachunek" "MegaRuchacz: nie umiem policzyc rachunku" (
-      "$($rachunek.Powod) " +
-      "Dopoki to trwa, nikt nie wie, ile kosztuje pamiec ani czy cos jest ucinane. " +
+    $alarmy += Alarm "rachunek" "MegaRuchacz: nie umiem policzyć, ile kosztuje pamięć" (
+      "Dopóki to trwa, nikt nie wie, ile kosztuje pamięć ani czy coś jest ucinane. " +
+      "Powod: $($rachunek.Powod). " +
       "Sprawdz recznie: powershell -ExecutionPolicy Bypass -File " +
       "$($script:NadzZrodlo)\narzedzia\koszt-pamieci.ps1 -Rozbicie")
   }
@@ -746,12 +755,292 @@ function Zbierz-Alarmy($cykl, $rachunek) {
   if ($wyw.Count -gt 0) {
     $ogon = ""
     if ($wyw.Count -gt 1) { $ogon = " (i jeszcze $($wyw.Count - 1))" }
-    $alarmy += Alarm "wywrotka" "MegaRuchacz: straznik sie wywrocil" (
-      "$($wyw[0])${ogon}. " +
-      "Komplet siedzi w $($script:NadzDom)\.claude\.megaruchacz-straznik.txt (klucze blad.*) " +
-      "i w $($script:NadzDom)\.claude\.megaruchacz-tlo.log. " +
-      "Kliknij ikone MegaRuchacza i wybierz [Aktualizuj] - straznik przejdzie jeszcze raz i powie, czy to sie powtarza.")
+    $alarmy += Alarm "wywrotka" "MegaRuchacz: aktualizacja w tle się wywróciła" (
+      "Coś poszło nie tak przy przebiegu, którego nikt nie oglądał. " +
+      "Kliknij ikonę MegaRuchacza i użyj przycisku [Pobierz nowszą wersję] - przejdzie jeszcze raz i powie, czy to się powtarza. " +
+      "Blad: $($wyw[0])${ogon}. " +
+      "Komplet w $($script:NadzDom)\.claude\.megaruchacz-straznik.txt (klucze blad.*) " +
+      "oraz w $($script:NadzDom)\.claude\.megaruchacz-tlo.log")
   }
 
   return ,$alarmy
+}
+
+# ====================================================== jezyk, ktorym mowi czlowiek
+#
+# Wszystko ponizej sluzy WYLACZNIE prezentacji. Bierze liczby, ktore juz sa
+# policzone wyzej, i ubiera je w zdania, ktorych uzywa uzytkownik. Ani jedna
+# z tych funkcji nie liczy kosztu drugi raz: rachunek liczy
+# narzedzia\koszt-pamieci.ps1, kolejke narzedzia\wyciagnij-fakty.ps1 -Kolejka,
+# koszt cyklu zapisuje samo wylawianie. Jedyna arytmetyka, ktora powstaje tutaj,
+# to SZACUNEK przed przyciskiem (Szacunek-Cyklu) - i on mnozy wylacznie liczby
+# ZMIERZONE, zadnej stalej z powietrza.
+#
+# Teksty w tej sekcji maja polskie znaki i tak ma byc: ida do okna, nie do kodu.
+# Plik jest zapisany w UTF-8 ZE ZNACZNIKIEM BOM - bez niego PowerShell 5.1 czyta
+# go jako ANSI i zamiast "koszt rozmow" wychodza krzaki. To bylo juz dwa razy.
+
+# Odmiana przez liczbe. Bez niej okno pisze "1 fragmentow" i od razu wyglada
+# na zrobione byle jak - a ma byc tym, czemu uzytkownik ufa.
+function Odmiana([int]$n, [string]$jeden, [string]$kilka, [string]$wiele) {
+  if ($n -eq 1) { return $jeden }
+  $ost = $n % 10
+  $dwie = $n % 100
+  if (($ost -ge 2) -and ($ost -le 4) -and (($dwie -lt 12) -or ($dwie -gt 14))) { return $kilka }
+  return $wiele
+}
+
+# "dzis o 09:42" zamiast "2026-09-24 09:42". Data w formacie maszynowym zmusza
+# czlowieka do liczenia w glowie, a okno ma odpowiadac w trzy sekundy.
+function Kiedy-Ludzko($data) {
+  if (-not $data) { return $null }
+  $dzis = [datetime]::Now.Date
+  if ($data.Date -eq $dzis)             { return "dziś o $($data.ToString('HH:mm'))" }
+  if ($data.Date -eq $dzis.AddDays(-1)) { return "wczoraj o $($data.ToString('HH:mm'))" }
+  $dni = [int]($dzis - $data.Date).TotalDays
+  return "$($data.ToString('dd.MM')), $dni $(Odmiana $dni 'dzień' 'dni' 'dni') temu"
+}
+
+# To samo, ale SAM DZIEN. Osobna funkcja, bo .koszt-cyklu.txt zapisuje sama date
+# bez godziny - "dzis o 00:00" brzmialoby jak pomiar z polnocy, czyli jak liczba,
+# ktorej nikt nie zmierzyl.
+function Dzien-Ludzko($data) {
+  if (-not $data) { return $null }
+  $dzis = [datetime]::Now.Date
+  if ($data.Date -eq $dzis)             { return "dziś" }
+  if ($data.Date -eq $dzis.AddDays(-1)) { return "wczoraj" }
+  return $data.ToString('dd.MM')
+}
+
+# TRZY LICZBY NA WIERZCHU OKNA.
+#
+# Pierwsze dwie wyjmujemy z JEDNEJ linii, ktora wypisuje
+# narzedzia\koszt-pamieci.ps1 -Zwiezle (mamy ja juz w $rachunek.Linia, zebrana
+# przy odswiezaniu). Trzecia to koszt ostatniego przebiegu nauki, czyli to, co
+# samo wylawianie zapisalo w .koszt-cyklu.txt. Nic tu nie jest liczone na nowo -
+# to sa TE SAME liczby, ktore stoja w rozbiciu pod [Szczegoly], tylko wyjete
+# na wierzch i opisane zdaniem.
+#
+# Gdy ktorejs nie da sie ustalic, pole Liczba zostaje puste, a w Powod stoi
+# DLACZEGO. Okno pokazuje wtedy "nie wiem" i powod, nigdy zera: zero znaczy
+# "nic nie kosztuje" i byloby najdrozszym rodzajem ciszy w calym narzedziu.
+function Trzy-Liczby($rachunek, $cykl) {
+  $naWiadomosc = [pscustomobject]@{
+    Naglowek = "Każda Twoja wiadomość kosztuje"
+    Liczba   = $null
+    Opis     = "Przypomnienie zasad doklejane do każdego Twojego zdania."
+    Ogon     = ""
+    Powod    = ""
+  }
+  $naSesje = [pscustomobject]@{
+    Naglowek = "Otwarcie nowej sesji"
+    Liczba   = $null
+    Opis     = "Wiedza o Tobie i o firmie, wczytywana raz na początku rozmowy."
+    Ogon     = ""
+    Powod    = ""
+  }
+  $naDobe = [pscustomobject]@{
+    Naglowek = "Raz dziennie, nauka z rozmów"
+    Liczba   = $null
+    Opis     = "Jedyne miejsce, w którym naprawdę płacisz za wywołanie modelu - reszta to doklejony tekst."
+    Ogon     = ""
+    Powod    = ""
+  }
+
+  if (-not $rachunek -or -not $rachunek.Linia) {
+    $powod = "nie udało się policzyć rachunku"
+    if ($rachunek -and $rachunek.Powod) { $powod = $rachunek.Powod }
+    $naWiadomosc.Powod = $powod
+    $naSesje.Powod     = $powod
+  } else {
+    $l = $rachunek.Linia
+    $m = [regex]::Match($l, 'wiadomosc\s*\+(\d+)\s*tokenow')
+    if ($m.Success) { $naWiadomosc.Liczba = [long]$m.Groups[1].Value }
+    elseif ($l -match 'przypomnienia nie umiem zmierzyc') {
+      $naWiadomosc.Powod = "rachunek nie znalazł gotowego przypomnienia, więc nie ma czego zmierzyć"
+    } else {
+      $naWiadomosc.Powod = "w odpowiedzi rachunku nie ma tej liczby: $l"
+    }
+
+    $m = [regex]::Match($l, 'start sesji\s*\+(\d+)\s*tokenow')
+    if ($m.Success) { $naSesje.Liczba = [long]$m.Groups[1].Value }
+    elseif ($l -match 'startu sesji nie umiem zmierzyc') {
+      $naSesje.Powod = "rachunek nie umie zmierzyć tego, co wchodzi na starcie sesji"
+    } else {
+      $naSesje.Powod = "w odpowiedzi rachunku nie ma tej liczby: $l"
+    }
+  }
+
+  if ($cykl -and ($null -ne $cykl.Koszt)) {
+    $naDobe.Liczba = [long]$cykl.Koszt
+    $kiedy = Dzien-Ludzko $cykl.KosztData
+    if ($kiedy) { $naDobe.Ogon = "ostatnio $kiedy" } else { $naDobe.Ogon = "przy ostatnim przebiegu" }
+  } else {
+    $naDobe.Powod = "nauka z rozmów nie policzyła jeszcze ani razu swojego kosztu"
+    if ($cykl) {
+      foreach ($p in $cykl.Powody) { if ("$p" -match 'koszt') { $naDobe.Powod = $p } }
+    }
+  }
+
+  return ,@($naWiadomosc, $naSesje, $naDobe)
+}
+
+# STAN JEDNYM RZUTEM OKA - kilka krotkich zdan zamiast akapitow. Zadnych nazw
+# plikow i zadnych sciezek: te sa pod [Szczegoly] i tam jest ich miejsce.
+function Linie-Stanu($wersja, $cykl) {
+  $linie = @()
+
+  if ($cykl) {
+    if ($cykl.Pracuje) {
+      $linie += "Nauka z rozmów: właśnie trwa."
+    } elseif ($cykl.Data) {
+      $linie += "Nauka z rozmów: ostatnio $(Kiedy-Ludzko $cykl.Data)."
+    } else {
+      $linie += "Nauka z rozmów: jeszcze ani razu na tym komputerze."
+    }
+
+    if ($null -ne $cykl.Kawalki) {
+      if ($cykl.Kawalki -le 0) {
+        $linie += "Do przeczytania: nic nie czeka, wszystkie rozmowy są przerobione."
+      } else {
+        $linie += "Do przeczytania: $(Liczba-Ludzka $cykl.Kawalki) $(Odmiana ([int]$cykl.Kawalki) 'fragment rozmów' 'fragmenty rozmów' 'fragmentów rozmów')."
+      }
+    } elseif ($null -ne $cykl.Zaleglosc) {
+      $linie += "Do przeczytania: na żywo nie policzone; przy ostatnim podsumowaniu zostawało $(Liczba-Ludzka $cykl.Zaleglosc) $(Odmiana ([int]$cykl.Zaleglosc) 'porcja' 'porcje' 'porcji')."
+    } else {
+      $linie += "Do przeczytania: nie wiem, nie dało się sprawdzić kolejki."
+    }
+  } else {
+    $linie += "Nauka z rozmów: nie wiem, nie udało się odczytać jej stanu."
+  }
+
+  if ($wersja) {
+    $w = "nieznana"
+    if ($wersja.Lokalna) { $w = $wersja.Lokalna }
+    if ($null -eq $wersja.Nowsza) {
+      $powod = $wersja.Powod
+      if (-not $powod) { $powod = "nie ustaliłem powodu - to samo w sobie jest usterką" }
+      $linie += "Wersja narzędzia: $w. Czy jest coś nowszego - nie wiem ($powod)."
+    } elseif ($wersja.Nowsza -le 0) {
+      $linie += "Wersja narzędzia: $w, nic nowszego nie czeka."
+    } else {
+      $linie += "Wersja narzędzia: $w. Czeka $($wersja.Nowsza) $(Odmiana ([int]$wersja.Nowsza) 'nowsza zmiana' 'nowsze zmiany' 'nowszych zmian') - pobierze je przycisk na dole."
+    }
+  } else {
+    $linie += "Wersja narzędzia: nie wiem, nie udało się jej odczytać."
+  }
+
+  return ,$linie
+}
+
+# Czerwony czy zolty. PROG Z UZASADNIENIEM, nie kolor z powietrza:
+#   CZERWONY - cos jest zepsute albo kosztuje i jest konkretna rzecz do zrobienia
+#              (nauka stoi, tekst jest ucinany, rachunek nad progiem, straznik sie wywrocil);
+#   ZOLTY    - czegos NIE WIEMY i trzeba to sprawdzic, ale nic sie jeszcze nie pali.
+# Wszystko inne zostaje neutralne. Tecza uczy ignorowania kolorow.
+function Waga-Alarmu([string]$temat) {
+  if ($temat -eq "rachunek") { return "uwaga" }
+  return "pilne"
+}
+
+# Porada bez zargonu: zdania z komendami i sciezkami zostaja w [Szczegoly],
+# na wierzchu stoi to, co uzytkownik moze zrobic sam. NIC NIE GINIE - pelna tresc
+# alarmu jest zawsze w szczegolach, a gdyby po odsianiu nie zostalo ani jedno
+# zdanie, oddajemy oryginal. Lepiej zargon niz pusta ramka.
+function Porada-Ludzka([string]$tresc) {
+  if (-not $tresc) { return "" }
+  $ludzkie = @()
+  $odsiane = 0
+  foreach ($z in [regex]::Split($tresc, '(?<=\.)\s+')) {
+    $t = "$z".Trim()
+    if (-not $t) { continue }
+    if ($t -match 'powershell\s+-ExecutionPolicy') { $odsiane++; continue }
+    if ($t -match '\.ps1|\.log|\.db|\.txt|\.json|\\\.claude\\|\\narzedzia\\') { $odsiane++; continue }
+    $ludzkie += $t
+  }
+  if ($ludzkie.Count -eq 0) { return $tresc }
+  # Odsianie ma byc WIDOCZNE. Inaczej uzytkownik nie wie, ze jest ciag dalszy,
+  # i nigdy go nie otworzy - a to jest dokladnie cicha strata tresci.
+  if ($odsiane -gt 0) { $ludzkie += "Dokładna ścieżka i komenda są w szczegółach." }
+  return ($ludzkie -join " ")
+}
+
+# Gorny limit porcji na JEDNO podejscie czytamy z pliku, ktory go USTALA.
+# Wpisany tutaj na sztywno zaczalby klamac przy pierwszej zmianie cyklu - ta sama
+# zasada, co przy sufitach w narzedzia\koszt-pamieci.ps1. $null znaczy
+# "nie odczytalem" i wolajacy MA to powiedziec, a nie zgadnac.
+function Max-Nadrabiania {
+  $raw = Czytaj-Tekst (Join-Path $script:NadzZrodlo "narzedzia\cykl-dzienny.ps1")
+  if (-not $raw) { return $null }
+  $m = [regex]::Match($raw, '(?m)^\$MaxNadrabiania\s*=\s*(\d+)')
+  if (-not $m.Success) { return $null }
+  return [int]$m.Groups[1].Value
+}
+
+# SZACUNEK KOSZTU PRZED KLIKNIECIEM. Powstal dlatego, ze przycisk "Uruchom cykl"
+# wydal 24.09.2026 jednym kliknieciem 312 609 tokenow, nie uprzedzajac o niczym.
+#
+# Skad ta liczba: (ile porcji pojdzie w tym podejsciu) x (ile kosztowalo jedno
+# wyslanie przy POPRZEDNIM przebiegu). Oba czynniki sa ZMIERZONE - pierwszy liczy
+# narzedzia\wyciagnij-fakty.ps1 -Kolejka (przebieg probny, bez wolania modelu,
+# ~0,4 s), drugi stoi w .koszt-cyklu.txt, zapisany przez samo wylawianie. Zadnej
+# stalej "tyle to mniej wiecej kosztuje" tu nie ma i nie ma byc.
+#
+# Gdy ktoregos czynnika brakuje, Tokeny zostaja puste, a w Powod stoi dlaczego.
+# Okno mowi wtedy wprost "NIE WIEM, ile to bedzie kosztowac" i dalej pyta o zgode
+# z podswietlonym "Nie" - koszt zgadniety bylby gorszy niz zaden.
+function Szacunek-Cyklu($cykl) {
+  $s = [pscustomobject]@{
+    Tokeny   = $null      # szacunek calego podejscia
+    NaPorcje = $null      # ile kosztowalo jedno wyslanie ostatnim razem
+    Porcje   = $null      # ile porcji pojdzie TERAZ
+    WKolejce = $null      # ile porcji czeka w sumie
+    Kawalki  = $null
+    Podstawa = @()        # zdania mowiace, z czego ta liczba wyszla
+    Powod    = ""         # dlaczego nie umiem podac liczby
+  }
+  if (-not $cykl) {
+    $s.Powod = "nie mam danych o kolejce ani o poprzednim przebiegu"
+    return $s
+  }
+  $s.Kawalki  = $cykl.Kawalki
+  $s.WKolejce = $cykl.Przebiegi
+
+  if ($null -eq $cykl.Przebiegi) {
+    $s.Powod = "nie dało się sprawdzić, ile rozmów czeka w kolejce"
+  } elseif ($cykl.Przebiegi -le 0) {
+    $s.Porcje = 0
+    $s.Tokeny = 0
+    $s.Podstawa += "Kolejka jest pusta - nie ma zaległych rozmów do przeczytania."
+    return $s
+  } else {
+    $max = Max-Nadrabiania
+    $s.Porcje = $cykl.Przebiegi
+    $ile = "nieznaną liczbę fragmentów"
+    if ($null -ne $cykl.Kawalki) {
+      $ile = "$(Liczba-Ludzka $cykl.Kawalki) $(Odmiana ([int]$cykl.Kawalki) 'fragment' 'fragmenty' 'fragmentów')"
+    }
+    $s.Podstawa += "Czeka $ile rozmów, czyli $($cykl.Przebiegi) $(Odmiana ([int]$cykl.Przebiegi) 'porcja' 'porcje' 'porcji') do wysłania."
+    if ($null -eq $max) {
+      $s.Podstawa += "Nie odczytałem, ile porcji bierze jedno podejście - liczę tak, jakby poszły wszystkie naraz."
+    } elseif ($cykl.Przebiegi -gt $max) {
+      $s.Porcje = $max
+      $s.Podstawa += "Jedno podejście bierze najwyżej $max $(Odmiana ([int]$max) 'porcję' 'porcje' 'porcji') - reszta poczeka do następnego razu."
+    }
+  }
+
+  if (($null -ne $cykl.Koszt) -and ($null -ne $cykl.KosztWywolan) -and ($cykl.KosztWywolan -gt 0)) {
+    $s.NaPorcje = [long][math]::Round([double]$cykl.Koszt / [double]$cykl.KosztWywolan)
+    $kiedy = "ostatnim razem"
+    if ($cykl.KosztData) { $kiedy = $cykl.KosztData.ToString('dd.MM') }
+    $s.Podstawa += ("Jedno wysłanie kosztowało ostatnio ~$(Liczba-Ludzka $s.NaPorcje) tokenów " +
+                    "($kiedy: $(Liczba-Ludzka $cykl.Koszt) tokenów na $($cykl.KosztWywolan) $(Odmiana ([int]$cykl.KosztWywolan) 'wywołanie' 'wywołania' 'wywołań')).")
+  } elseif (-not $s.Powod) {
+    $s.Powod = "nie ma pomiaru poprzedniego przebiegu, więc nie mam po czym szacować"
+  }
+
+  if (($null -ne $s.Porcje) -and ($null -ne $s.NaPorcje)) {
+    $s.Tokeny = [long]($s.Porcje * $s.NaPorcje)
+  }
+  return $s
 }

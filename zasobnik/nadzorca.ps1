@@ -1,4 +1,4 @@
-# Nadzorca MegaRuchacza - ikona w zasobniku Windows.
+﻿# Nadzorca MegaRuchacza - ikona w zasobniku Windows.
 #
 # PO CO TO ISTNIEJE. Do 0.17.0 rachunek za pamiec, start cyklu wiedzy i ALARM
 # O CISZY wisialy w calosci na hookach SessionStart. Gdy hook nie odpalal,
@@ -19,6 +19,38 @@
 # "conhost.exe --headless powershell.exe -WindowStyle Hidden" - ta sama sztuczka,
 # ktorej uzywa juz narzedzia\straznik-zasad.ps1.
 #
+# --------------------------------------------------------------------------
+# UKLAD OKNA - przepisany 24.09.2026, bo poprzedni sypal wszystkim naraz.
+#
+# Uzytkownik nie jest programista i powiedzial wprost: "pelno informacji w ryj
+# mam rzuconych, nie wiem na co patrzec". Stare okno pokazywalo jednym krojem
+# i jedna waga: wersje, stan gita, rozbicie kosztow z paskami, stan cyklu,
+# kolejke, alarmy i sciezki do plikow .ps1. Stad cztery decyzje:
+#
+# 1. TRZY LICZBY NA WIERZCHU, duze, kazda z jednym zdaniem CZYM JEST (nie
+#    z czego sie sklada). To sa te same liczby, ktore stoja w rozbiciu - tylko
+#    wyjete na wierzch. Rozbicie, paski i sciezki ida pod [Szczegoly].
+# 2. SEKCJA ROZWIJANA, a nie zakladki. Zakladka z nazwa w rodzaju "Rozbicie"
+#    wisialaby na wierzchu zawsze i zapraszala do klikania w zargon; przycisk
+#    "Pokaz szczegoly" jest schowany dopoty, dopoki ktos go nie chce, a okno
+#    w stanie normalnym miesci sie na ekranie bez przewijania.
+# 3. SEKCJA PROBLEMOW ZNIKA, gdy problemow nie ma - nie zostawia pustej ramki.
+#    Gdy jest problem, stoi jako pierwsza, na kolorowym tle, z porada bez zargonu.
+# 4. KAZDY PRZYCISK MOWI, CO ZROBI, a ten jeden, ktory wydaje tokeny, ma szacunek
+#    kosztu w samej etykiecie i pyta o zgode. 24.09.2026 jedno kliknieciem
+#    "Uruchom cykl teraz" poszlo 312 609 tokenow bez slowa ostrzezenia.
+#
+# PRZYCISKU [ODSWIEZ] NIE MA I NIE MA GO BYC. Istnial tylko dlatego, ze okno
+# nie odswiezalo sie samo - byl obejsciem braku, nie funkcja. Dzis okno przelicza
+# sie przy kazdym otwarciu i przy kazdym przebiegu dozoru; recznemu sprawdzeniu
+# zostala pozycja w menu ikony, dla tego, kto wlasnie cos poprawil i chce
+# zobaczyc skutek natychmiast.
+#
+# POLSKIE ZNAKI. Kod i komentarze sa bez ogonkow, ale teksty widoczne w oknie
+# maja je miec. Dlatego ten plik ORAZ stan-nadzorcy.ps1 sa zapisane w UTF-8
+# ZE ZNACZNIKIEM BOM: bez BOM-u PowerShell 5.1 czyta plik jako ANSI i w oknie
+# wychodza krzaki. To sie w tym projekcie zdarzylo juz dwa razy.
+#
 # Uzycie:
 #   powershell -ExecutionPolicy Bypass -File zasobnik\nadzorca.ps1
 #     -Zrodlo <kat>         katalog glowny narzedzia (domyslnie: katalog nad zasobnik\)
@@ -29,8 +61,17 @@
 #                           wszystko wypisuje na ekran. Tego trybu uzywa sprawdzenie
 #                           i proba negatywna - okna nie da sie sprawdzic bez pulpitu
 #     -Raport               sam wydruk okna na ekran, bez dozoru i bez alarmow
-#     -Proba                nie startuje cyklu i nic nie zapisuje (laczy sie z -Raz)
+#     -Proba                nie startuje cyklu i nic nie zapisuje
 #     -Cicho                nie pokazuje dymkow, sam wydruk (tylko z -Raz)
+#
+# Do OGLADANIA okna bez ryzyka wydania choc jednego tokena:
+#   powershell -ExecutionPolicy Bypass -File zasobnik\nadzorca.ps1 -Pokaz -Proba
+# "-Proba" zatrzymuje Ruszaj-Cykl na sucho, wiec ani dozor, ani przycisk nie
+# uruchomia prawdziwego czytania rozmow.
+#
+# Proba negatywna sekcji problemow - podstawiamy pusty katalog domowy, w ktorym
+# nic nigdy nie chodzilo, wiec alarmy musza sie odezwac:
+#   powershell -ExecutionPolicy Bypass -File zasobnik\nadzorca.ps1 -Raport -Proba -KatalogDomowy C:\Temp\pusty
 #
 # Kod wyjscia w trybie -Raz: 0 gdy nie bylo alarmow, 1 gdy byl choc jeden.
 
@@ -93,7 +134,7 @@ function Ikona-Nadzorcy {
   return [System.Drawing.SystemIcons]::Application
 }
 
-# ------------------------------------------------------------------ raport okna
+# ------------------------------------------------------------- zbieranie danych
 
 # Cztery rzeczy ze zlecenia, w kolejnosci od najczesciej ogladanej: rachunek,
 # cykl, wersja, alarmy - plus slad samego nadzorcy, bo on tez ma nie milczec
@@ -117,36 +158,219 @@ function Zbierz-Wszystko([bool]$zSieci, [bool]$zKolejka) {
   return $d
 }
 
-function Zbuduj-Raport($d, [string[]]$wywrotkiNadzorcy) {
+# ------------------------------------------------------- co wymaga uwagi TERAZ
+
+function Problem([string]$waga, [string]$tytul, [string]$porada, [string]$pelne) {
+  return [pscustomobject]@{ Waga = $waga; Tytul = $tytul; Porada = $porada; Pelne = $pelne }
+}
+
+# Tytuly alarmow zaczynaja sie od "MegaRuchacz: ", bo ida takze na dymek, gdzie
+# trzeba powiedziec, kto wola. W oknie MegaRuchacza ten przedrostek jest szumem.
+function Bez-Przedrostka([string]$tytul) {
+  if (-not $tytul) { return "" }
+  return ($tytul -replace '^\s*MegaRuchacz\s*:\s*', '')
+}
+
+# JEDNA lista spraw wymagajacych uwagi - ta sama dla okna i dla wydruku -Raport,
+# zeby nie dalo sie ich rozjechac. Pusta lista znaczy "nic sie nie pali" i wtedy
+# w oknie ta sekcja W OGOLE NIE ISTNIEJE, a nie stoi pusta.
+#
+# Cisza jest zakazana, wiec na liscie sa nie tylko alarmy, ale tez KAZDY powod,
+# dla ktorego liczby moga byc niepelne: nieudane odswiezenie, brak rachunku albo
+# stanu cyklu, wywrotka z poprzedniego przebiegu. Stare liczby pokazane jako
+# biezace byly przez tydzien najdrozszym bledem tego narzedzia.
+function Zbierz-Problemy($d, $wywrotki, [string]$blad, $czasDanych) {
+  $lista = @()
+
+  if ($blad) {
+    $ogon = "Nie mam żadnych świeżych liczb do pokazania."
+    if ($czasDanych) { $ogon = "Liczby niżej są sprzed $($czasDanych.ToString('HH:mm')) i mogą być nieaktualne." }
+    $lista += Problem "uwaga" "Nie udało się przeliczyć liczb" $ogon $blad
+  }
+
+  if ($d) {
+    foreach ($a in @($d.Alarmy)) {
+      $lista += Problem (Waga-Alarmu $a.Temat) (Bez-Przedrostka $a.Tytul) (Porada-Ludzka $a.Tresc) $a.Tresc
+    }
+    if ((-not $d.Rachunek) -or (-not $d.Cykl)) {
+      $lista += Problem "uwaga" "Nie wszystko udało się odczytać" (
+        "Część liczb w tym oknie może być niepełna, a alarmów w ogóle nie policzyłem. " +
+        "Rozwiń szczegóły - tam stoi, czego zabrakło.") ""
+    }
+  } else {
+    $lista += Problem "uwaga" "Nie mam jeszcze żadnych liczb" (
+      "Nic się nie policzyło. Rozwiń szczegóły albo zajrzyj do dziennika nadzorcy.") ""
+  }
+
+  if (@($wywrotki).Count -gt 0) {
+    $lista += Problem "uwaga" "Przy poprzednim przebiegu coś się nie udało" (
+      "MegaRuchacz potknął się w tle. Pełna treść jest w szczegółach.") ((@($wywrotki)) -join " | ")
+  }
+
+  # Czerwone przed zoltymi: pierwsza rzecz na ekranie ma byc ta, ktora naprawde
+  # czegos wymaga, a nie ta, ktorej akurat nie wiemy.
+  $lista = @($lista | Sort-Object -Property @{ Expression = { if ($_.Waga -eq "pilne") { 0 } else { 1 } } })
+  return ,$lista
+}
+
+# ------------------------------------------------------------- napisy przyciskow
+
+# Napisy powstaja TUTAJ, w jednym miejscu, i ten sam tekst widzi uzytkownik
+# w oknie oraz w wydruku -Raport. Gdyby powstawaly osobno, wydruk mowilby
+# o przycisku, ktorego w oknie nie ma - a tak wlasnie zaczyna sie nieufnosc
+# do narzedzia.
+#
+# Etykieta przycisku, ktory wydaje tokeny, NIESIE SZACUNEK KOSZTU. Uzytkownik ma
+# zobaczyc liczbe zanim kliknie, a nie dowiedziec sie o niej z rachunku nazajutrz.
+function Napisy-Przyciskow($d) {
+  $n = [pscustomobject]@{
+    Aktualizuj     = "Sprawdź i pobierz nowszą wersję MegaRuchacza"
+    AktualizujOpis = "Nie kosztuje nic. Zagląda na serwer po poprawki i nanosi je."
+    Cykl           = "Przeczytaj zaległe rozmowy"
+    CyklOpis       = "Wysyła zaległe rozmowy do modelu, żeby się z nich uczył. Zapyta o zgodę."
+    CyklWlaczony   = $true
+    Szacunek       = $null
+  }
+
+  if ($d -and $d.Wersja -and ($null -ne $d.Wersja.Nowsza) -and ($d.Wersja.Nowsza -gt 0)) {
+    $n.Aktualizuj = "Pobierz nowszą wersję MegaRuchacza ($($d.Wersja.Nowsza) do pobrania)"
+  }
+
+  $s = $null
+  if ($d) {
+    try { $s = Szacunek-Cyklu $d.Cykl }
+    catch { Zanotuj-Wywrotke "szacunek kosztu czytania rozmow" $_ }
+  }
+  $n.Szacunek = $s
+
+  if ($d -and $d.Cykl -and $d.Cykl.Pracuje) {
+    # Drugi przebieg w tej samej chwili nic nie da, a kosztowalby drugi raz.
+    $n.CyklWlaczony = $false
+    $n.CyklOpis = "Wyłączone: czytanie rozmów właśnie trwa. Liczby odświeżą się same, gdy skończy."
+  } elseif (-not $s) {
+    $n.Cykl = "Przeczytaj zaległe rozmowy (koszt: nie wiem)"
+    $n.CyklOpis = "Nie mam danych, żeby oszacować koszt. Przed startem i tak zapyta o zgodę."
+  } elseif (($null -ne $s.Porcje) -and ($s.Porcje -le 0)) {
+    $n.CyklWlaczony = $false
+    $n.CyklOpis = "Wyłączone: nic nie czeka, wszystkie rozmowy są już przeczytane."
+  } elseif ($null -ne $s.Tokeny) {
+    $n.Cykl = "Przeczytaj zaległe rozmowy (~$(Liczba-Ludzka $s.Tokeny) tokenów)"
+    $n.CyklOpis = "Tyle mniej więcej wyda to jedno kliknięcie. Zapyta o zgodę i pokaże, skąd ta liczba."
+  } else {
+    $n.Cykl = "Przeczytaj zaległe rozmowy (koszt: nie wiem)"
+    $n.CyklOpis = "Nie umiem oszacować kosztu: $($s.Powod). Przed startem zapyta o zgodę."
+  }
+  return $n
+}
+
+# ----------------------------------------------------------- wydruk tego, co widac
+
+# Przod okna jako tekst: dokladnie te sekcje i w tej samej kolejnosci, co
+# w oknie. Ten wydruk jest jedynym sposobem sprawdzenia ukladu bez pulpitu.
+function Zbuduj-Przod($d, $problemy, $czas) {
   $l = @()
-  $l += "MegaRuchacz - nadzorca w zasobniku"
+  $l += "MegaRuchacz - nadzorca"
+  $stempel = "przed chwilą"
+  if ($czas) { $stempel = $czas.ToString('yyyy-MM-dd HH:mm:ss') }
+  $l += "liczby sprawdzone: $stempel  (okno przelicza je samo przy każdym otwarciu i co $Minut min)"
+  $l += ""
+
+  if (@($problemy).Count -eq 0) {
+    $l += "CO WYMAGA UWAGI"
+    $l += "  nic - w oknie tej sekcji wtedy w ogóle nie ma i nie zajmuje miejsca"
+  } else {
+    $l += "CO WYMAGA UWAGI   (w oknie stoi jako PIERWSZE, na kolorowym tle)"
+    foreach ($p in $problemy) {
+      $znak = "[?]"
+      if ($p.Waga -eq "pilne") { $znak = "[!]" }
+      $l += "  $znak $($p.Tytul)"
+      if ($p.Porada) { $l += "      $($p.Porada)" }
+    }
+  }
+  $l += ""
+
+  $l += "ILE TO KOSZTUJE"
+  $r = $null; $c = $null
+  if ($d) { $r = $d.Rachunek; $c = $d.Cykl }
+  # Bez @() wokol wywolania - te funkcje koncza sie na "return ,$lista", wiec
+  # owiniecie ich w @() daje tablice z jedna tablica w srodku (pulapka opisana
+  # w naglowku stan-nadzorcy.ps1). Owijac wolno zmienne, nie wywolania.
+  $trzy = @()
+  try { $trzy = Trzy-Liczby $r $c }
+  catch { Zanotuj-Wywrotke "trzy liczby do wydruku" $_; $l += "  NIE UDALO SIE ZLOZYC - szczegoly w dzienniku nadzorcy" }
+  foreach ($t in $trzy) {
+    $l += "  $($t.Naglowek)"
+    if ($null -ne $t.Liczba) {
+      $ogon = ""
+      if ($t.Ogon) { $ogon = "   ($($t.Ogon))" }
+      $l += "      ~$(Liczba-Ludzka $t.Liczba) tokenów$ogon"
+    } else {
+      $l += "      nie wiem - $($t.Powod)"
+    }
+    $l += "      $($t.Opis)"
+  }
+  $l += ""
+
+  $l += "STAN"
+  if (@($problemy).Count -eq 0) { $l += "  Wszystko gra - nic nie wymaga Twojej uwagi." }
+  $linie = @()
+  if ($d) {
+    try { $linie = Linie-Stanu $d.Wersja $d.Cykl }
+    catch { Zanotuj-Wywrotke "linie stanu do wydruku" $_; $l += "  NIE UDALO SIE ZLOZYC - szczegoly w dzienniku nadzorcy" }
+  }
+  foreach ($x in $linie) { $l += "  $x" }
+  $l += ""
+
+  $l += "PRZYCISKI W OKNIE - co się stanie po kliknięciu"
+  $n = Napisy-Przyciskow $d
+  $l += "  [$($n.Aktualizuj)]"
+  $l += "      $($n.AktualizujOpis)"
+  $wl = ""
+  if (-not $n.CyklWlaczony) { $wl = "  (przycisk nieaktywny)" }
+  $l += "  [$($n.Cykl)]$wl"
+  $l += "      $($n.CyklOpis)"
+  if ($n.Szacunek) { foreach ($z in $n.Szacunek.Podstawa) { $l += "      $z" } }
+  $l += "  [Pokaż szczegóły - z czego to się składa i gdzie to leży]"
+  $l += "      Rozwija sekcję niżej. Nic nie uruchamia i nic nie kosztuje."
+  $l += "  [Zamknij okno]"
+  $l += "      Okno znika, ikona w zasobniku zostaje i pilnuje dalej."
+  return ,$l
+}
+
+# Szczegoly: wszystko to, co w starym oknie lezalo na wierzchu. Tu jest ich
+# miejsce - pod przyciskiem, dla tego, kto ich szuka.
+function Zbuduj-Szczegoly($d, $wywrotkiNadzorcy, $rozbicie) {
+  $l = @()
+  $l += "SZCZEGÓŁY   (w oknie schowane pod przyciskiem [Pokaż szczegóły])"
   $l += "zebrane $(Get-Date -Format 'yyyy-MM-dd HH:mm:ss')"
   $l += "narzedzie      : $Zrodlo"
   $l += "katalog domowy : $KatalogDomowy"
   $l += ""
 
   $l += "== WERSJA NARZEDZIA =="
-  if ($d.Wersja) { $l += Opis-Wersji $d.Wersja }
+  if ($d -and $d.Wersja) { $l += Opis-Wersji $d.Wersja }
   else { $l += "  NIE UDALO SIE USTALIC - szczegoly w dzienniku nadzorcy" }
   $l += ""
 
-  $l += "== RACHUNEK ZA PAMIEC =="
+  $l += "== RACHUNEK ZA PAMIEC, POZYCJA PO POZYCJI =="
   $l += "   (liczy narzedzia\koszt-pamieci.ps1 -Rozbicie - to ten sam wydruk, nie druga kopia)"
-  try { $l += Rachunek-Rozbicie }
-  catch { Zanotuj-Wywrotke "rachunek za pamiec (rozbicie)" $_; $l += "  NIE UDALO SIE POLICZYC - szczegoly w dzienniku nadzorcy" }
+  if ($null -ne $rozbicie) { $l += @($rozbicie) }
+  else { $l += "  jeszcze nie policzone" }
   $l += ""
 
-  $l += "== CYKL WIEDZY =="
-  if ($d.Cykl) { $l += Opis-Cyklu $d.Cykl }
+  $l += "== NAUKA Z ROZMOW (cykl wiedzy) =="
+  if ($d -and $d.Cykl) { $l += Opis-Cyklu $d.Cykl }
   else { $l += "  NIE UDALO SIE ODCZYTAC - szczegoly w dzienniku nadzorcy" }
   $l += ""
 
-  $l += "== ALARMY =="
-  if (@($d.Alarmy).Count -eq 0) {
-    if ($d.Cykl -and $d.Rachunek) { $l += "  nic nie wymaga uwagi" }
+  $l += "== ALARMY, PELNA TRESC RAZEM Z KOMENDAMI =="
+  $alarmy = @()
+  if ($d) { $alarmy = @($d.Alarmy) }
+  if ($alarmy.Count -eq 0) {
+    if ($d -and $d.Cykl -and $d.Rachunek) { $l += "  nic nie wymaga uwagi" }
     else { $l += "  NIE WIADOMO - brakuje danych, wiec alarmow nie policzylem" }
   } else {
-    foreach ($a in $d.Alarmy) {
+    foreach ($a in $alarmy) {
       $l += "  [$($a.Temat)] $($a.Tytul)"
       $l += "      $($a.Tresc)"
     }
@@ -160,26 +384,26 @@ function Zbuduj-Raport($d, [string[]]$wywrotkiNadzorcy) {
   if ($stan["cykl.ruszony"]) { $l += "  cykl startowany : $($stan['cykl.ruszony'])" }
   if (@($wywrotkiNadzorcy).Count -gt 0) {
     $l += "  WYWROTKI Z POPRZEDNICH PRZEBIEGOW:"
-    foreach ($w in $wywrotkiNadzorcy) { $l += "      $w" }
+    foreach ($w in @($wywrotkiNadzorcy)) { $l += "      $w" }
   }
   $l += "  dziennik        : $(Join-Path $KatalogDomowy '.claude\.megaruchacz-zasobnik.log')"
-  return $l
+  return ,$l
 }
 
 # Podpowiedz przy ikonie. NotifyIcon.Text ma twardy sufit 63 znakow, wiec tekst
 # jest budowany tak, zeby sie zmiescil, a nie ciety po fakcie.
 function Podpowiedz($d) {
   $w = "?"
-  if ($d.Wersja -and $d.Wersja.Lokalna) { $w = $d.Wersja.Lokalna }
-  $c = "cykl ?"
-  if ($d.Cykl) {
+  if ($d -and $d.Wersja -and $d.Wersja.Lokalna) { $w = $d.Wersja.Lokalna }
+  $c = "nauka ?"
+  if ($d -and $d.Cykl) {
     $g = Godzin-Od-Cyklu $d.Cykl
-    if ($null -eq $g) { $c = "cykl NIGDY" }
-    elseif ($g -lt 24) { $c = "cykl dzis" }
-    else { $c = "cykl stoi $([int]($g / 24)) dni" }
+    if ($null -eq $g) { $c = "nauka NIGDY" }
+    elseif ($g -lt 24) { $c = "nauka dzis" }
+    else { $c = "nauka stoi $([int]($g / 24)) dni" }
   }
   $a = ""
-  if (@($d.Alarmy).Count -gt 0) { $a = " ALARM x$(@($d.Alarmy).Count)" }
+  if ($d -and (@($d.Alarmy).Count -gt 0)) { $a = " UWAGA x$(@($d.Alarmy).Count)" }
   $t = "MegaRuchacz ${w} - ${c}${a}"
   if ($t.Length -gt 63) { $t = $t.Substring(0, 63) }
   return $t
@@ -191,8 +415,13 @@ function Podpowiedz($d) {
 # alarmy, zostawic slad "bylem tu". Wolany z zegara co $Minut i raz przy starcie.
 # $pokazDymek to skrypt-blok przyjmujacy tytul i tresc - dzieki temu ten sam
 # dozor dziala z ikona w zasobniku i bez niej (tryb -Raz).
-function Dozor($pokazDymek, [bool]$zKolejka) {
-  $d = Zbierz-Wszystko $false $zKolejka
+#
+# $zSieci: to DOZOR zaglada po nowsza wersje, a nie okno. Pobranie potrafi trwac
+# kilkanascie sekund, a okno ma sie otwierac natychmiast - wiec siec obslugujemy
+# tam, gdzie nikt nie czeka. Samo pobranie i tak jest dlawione do raz na pol
+# godziny wewnatrz Stan-Wersji.
+function Dozor($pokazDymek, [bool]$zKolejka, [bool]$zSieci) {
+  $d = Zbierz-Wszystko $zSieci $zKolejka
 
   # Cykl wiedzy - to jest teraz GLOWNY wyzwalacz, niezalezny od hookow.
   try {
@@ -225,6 +454,12 @@ function Dozor($pokazDymek, [bool]$zKolejka) {
 # --------------------------------------------------------------- tryby bez GUI
 
 if ($Raz -or $Raport) {
+  # Teksty okna maja polskie znaki, a konsola Windows startuje na stronie
+  # kodowej, ktora ich nie zna. Bez tej linii wydruk sprawdzenia wyglada jak
+  # usterka kodowania, choc w samym oknie wszystko jest w porzadku.
+  try { [Console]::OutputEncoding = [System.Text.Encoding]::UTF8 }
+  catch { Write-Warning "nie przestawilem konsoli na UTF-8, polskie znaki moga wyjsc jako krzaki: $($_.Exception.Message)" }
+
   # Wywrotki z poprzedniego przebiegu meldujemy PRZED praca - inaczej nowy
   # przebieg nadpisalby slad po starym i nikt by sie o nim nie dowiedzial.
   $stare = @()
@@ -233,7 +468,13 @@ if ($Raz -or $Raport) {
 
   if ($Raport) {
     $d = Zbierz-Wszystko $true $true
-    Zbuduj-Raport $d $stare | ForEach-Object { Write-Output $_ }
+    $probl = Zbierz-Problemy $d $stare "" ([datetime]::Now)
+    $roz = @()
+    try { $roz = Rachunek-Rozbicie }
+    catch { Zanotuj-Wywrotke "rachunek za pamiec (rozbicie)" $_; $roz = @("  NIE UDALO SIE POLICZYC - szczegoly w dzienniku nadzorcy") }
+    Zbuduj-Przod $d $probl ([datetime]::Now) | ForEach-Object { Write-Output $_ }
+    Write-Output ""
+    Zbuduj-Szczegoly $d $stare $roz | ForEach-Object { Write-Output $_ }
     Zapisz-Obecnosc "raport"
     exit 0
   }
@@ -272,9 +513,15 @@ if ($Raz -or $Raport) {
     }
   }
 
-  $d = Dozor $dymek $true
+  $d = Dozor $dymek $true $false
   Write-Output ""
-  Zbuduj-Raport $d $stare | ForEach-Object { Write-Output $_ }
+  $probl = Zbierz-Problemy $d $stare "" ([datetime]::Now)
+  $roz = @()
+  try { $roz = Rachunek-Rozbicie }
+  catch { Zanotuj-Wywrotke "rachunek za pamiec (rozbicie)" $_; $roz = @("  NIE UDALO SIE POLICZYC - szczegoly w dzienniku nadzorcy") }
+  Zbuduj-Przod $d $probl ([datetime]::Now) | ForEach-Object { Write-Output $_ }
+  Write-Output ""
+  Zbuduj-Szczegoly $d $stare $roz | ForEach-Object { Write-Output $_ }
   if (@($d.Alarmy).Count -gt 0) { exit 1 }
   exit 0
 }
@@ -299,9 +546,69 @@ if (-not $mojZamek) {
   exit 0
 }
 
-$script:Okno  = $null
-$script:Pole  = $null
-$script:Ikona = $null
+# --- stan okna ---------------------------------------------------------------
+$script:Okno          = $null
+$script:Ikona         = $null
+$script:Przewijak     = $null
+$script:Root          = $null
+$script:LPodtytul     = $null
+$script:PanelProblemy = $null
+$script:PanelLiczby   = $null
+$script:PanelStan     = $null
+$script:BSzczegoly    = $null
+$script:PoleSzczegoly = $null
+$script:Pasek         = $null
+$script:BAktualizuj   = $null
+$script:LAktualizuj   = $null
+$script:BCykl         = $null
+$script:LCykl         = $null
+$script:ZegarOtwarcia = $null
+
+# Bufor: ostatnio zebrane liczby i GODZINA, z ktorej pochodza. Ta godzina jest
+# pokazywana zawsze - okno, ktore pokazuje stare liczby jako biezace, klamie.
+$script:Dane      = $null
+$script:DaneCzas  = $null
+$script:DaneBlad  = $null
+$script:Rozbicie  = $null   # rozbicie rachunku liczymy dopiero, gdy ktos rozwinie szczegoly
+$script:Wywrotki  = @()
+$script:Licze     = $false
+$script:Problemy  = @()
+# Gdy sekcja szczegolow pokazuje cudzy tekst (odpowiedz straznika po pobraniu
+# nowszej wersji), przeliczenie danych NIE ma jej podmieniac - uzytkownik
+# czytalby wtedy co innego, niz przed chwila kliknal.
+$script:SzczegolyZajete = $false
+
+# --- wyglad ------------------------------------------------------------------
+# KOLOR TYLKO TAM, GDZIE NIESIE ZNACZENIE. Czerwony wylacznie przy sprawie,
+# ktora wymaga dzialania, zolty przy "czegos nie wiem", zielony przy jednym
+# zdaniu "wszystko gra". Cala reszta jest szara albo czarna. Tecza w oknie
+# uczy ignorowania kolorow, a wtedy czerwony tez przestaje dzialac.
+$script:KolTekst  = [System.Drawing.Color]::FromArgb(28, 28, 30)
+$script:KolSzary  = [System.Drawing.Color]::FromArgb(106, 108, 112)
+$script:KolPilne  = [System.Drawing.Color]::FromArgb(176, 32, 32)
+$script:KolUwaga  = [System.Drawing.Color]::FromArgb(146, 98, 0)
+$script:KolDobrze = [System.Drawing.Color]::FromArgb(24, 104, 56)
+$script:TloPilne  = [System.Drawing.Color]::FromArgb(253, 236, 236)
+$script:TloUwaga  = [System.Drawing.Color]::FromArgb(255, 248, 227)
+$script:TloPaska  = [System.Drawing.Color]::FromArgb(246, 246, 248)
+
+# Hierarchia robi sie krojem i wielkoscia, nie kolorem: liczba 22 pt, naglowek
+# nad nia 8,75 pt, zdanie pod nia 8,75 pt. Czcionki sa WSPOLNE dla wszystkich
+# etykiet - tworzone przy kazdym odmalowaniu wyciekalyby uchwytami GDI.
+$script:CzDuza   = New-Object System.Drawing.Font("Segoe UI", 22, [System.Drawing.FontStyle]::Bold)
+$script:CzTytul  = New-Object System.Drawing.Font("Segoe UI", 15, [System.Drawing.FontStyle]::Bold)
+$script:CzGruba  = New-Object System.Drawing.Font("Segoe UI", 10.5, [System.Drawing.FontStyle]::Bold)
+$script:CzZwykla = New-Object System.Drawing.Font("Segoe UI", 9.75)
+$script:CzMala   = New-Object System.Drawing.Font("Segoe UI", 8.75)
+$script:CzStala  = New-Object System.Drawing.Font("Consolas", 9.5)
+
+# Szerokosci. Okno ma 780 px; po odjeciu ramki, marginesow i MIEJSCA NA PIONOWY
+# SUWAK zostaje 700 px na tresc. Trzy kafelki po 228 z marginesami daja 696,
+# wiec suwak poziomy nie pojawia sie nawet wtedy, gdy tresc jest dluga -
+# a tekst wyjezdzajacy poza krawedz bylby ucieciem po cichu.
+$script:SzerTresc   = 700
+$script:SzerKafelka = 228
+$script:SzerKarty   = 696
 
 # ZLAPANE 24.09.2026 NA PROBIE Z PRAWDZIWYM OKNEM, i to jest dokladnie ten rodzaj
 # usterki, dla ktorego istnieje zasada "cisza jest zakazana": proces startowany
@@ -323,112 +630,516 @@ function Wymus-Pokazanie($formularz) {
   } catch { Zanotuj-Wywrotke "wymuszenie pokazania okna" $_ }
 }
 
-function Odswiez-Tresc([bool]$zSieci) {
-  if (-not $script:Pole -or $script:Pole.IsDisposed) { return }
-  $script:Pole.Text = "Zbieram dane - rachunek, stan cyklu, wersja..."
-  $script:Okno.Refresh()
-  try {
-    $d = Zbierz-Wszystko $zSieci $true
-    $script:Pole.Lines = [string[]](Zbuduj-Raport $d @())
-    if ($script:Ikona) { $script:Ikona.Text = Podpowiedz $d }
-  } catch {
-    Zanotuj-Wywrotke "zlozenie okna" $_
-    $script:Pole.Text = "NIE UDALO SIE ZLOZYC RAPORTU: $($_.Exception.Message)" + "`r`n`r`n" +
-                        "Slad w $(Join-Path $KatalogDomowy '.claude\.megaruchacz-zasobnik.log')"
-  }
-  $script:Pole.SelectionStart = 0
-  $script:Pole.ScrollToCaret()
+# --- klocki okna -------------------------------------------------------------
+
+function Etykieta([string]$tekst, $czcionka, $kolor) {
+  $l = New-Object System.Windows.Forms.Label
+  $l.AutoSize = $true
+  $l.Font = $czcionka
+  $l.ForeColor = $kolor
+  $l.Text = "$tekst"
+  $l.Margin = New-Object System.Windows.Forms.Padding(0, 0, 0, 2)
+  return $l
 }
 
-function Nowy-Przycisk([string]$napis, [int]$szerokosc) {
+# Etykieta zawijana ma podana MAKSYMALNA szerokosc, a nie stala - dzieki temu
+# dluga porada laduje w kilku wierszach zamiast wyjechac poza okno. Tekst, ktory
+# wyjezdza poza okno, jest uciety po cichu, a tego w tym projekcie nie wolno.
+function Etykieta-Zawijana([string]$tekst, $czcionka, $kolor, [int]$szerokosc) {
+  $l = Etykieta $tekst $czcionka $kolor
+  $l.MaximumSize = New-Object System.Drawing.Size($szerokosc, 0)
+  return $l
+}
+
+function Pionowy([int]$szerokosc) {
+  $p = New-Object System.Windows.Forms.FlowLayoutPanel
+  $p.FlowDirection = [System.Windows.Forms.FlowDirection]::TopDown
+  $p.WrapContents = $false
+  $p.AutoSize = $true
+  $p.AutoSizeMode = [System.Windows.Forms.AutoSizeMode]::GrowAndShrink
+  $p.Margin = New-Object System.Windows.Forms.Padding(0)
+  $p.Padding = New-Object System.Windows.Forms.Padding(0)
+  if ($szerokosc -gt 0) { $p.MinimumSize = New-Object System.Drawing.Size($szerokosc, 0) }
+  return $p
+}
+
+function Poziomy {
+  $p = New-Object System.Windows.Forms.FlowLayoutPanel
+  $p.FlowDirection = [System.Windows.Forms.FlowDirection]::LeftToRight
+  $p.WrapContents = $false
+  $p.AutoSize = $true
+  $p.AutoSizeMode = [System.Windows.Forms.AutoSizeMode]::GrowAndShrink
+  $p.Margin = New-Object System.Windows.Forms.Padding(0)
+  $p.Padding = New-Object System.Windows.Forms.Padding(0)
+  return $p
+}
+
+function Wyczysc-Panel($panel) {
+  if (-not $panel) { return }
+  while ($panel.Controls.Count -gt 0) {
+    $c = $panel.Controls[0]
+    $panel.Controls.RemoveAt(0)
+    try { $c.Dispose() }
+    catch { Notuj "nie udalo sie zwolnic kontrolki okna: $($_.Exception.Message)" }
+  }
+}
+
+function Nowy-Przycisk([string]$napis) {
   $b = New-Object System.Windows.Forms.Button
   $b.Text = $napis
-  $b.Width = $szerokosc
-  $b.Height = 30
+  $b.Height = 34
+  $b.Dock = [System.Windows.Forms.DockStyle]::Fill
+  $b.Font = $script:CzZwykla
+  $b.FlatStyle = [System.Windows.Forms.FlatStyle]::System
+  $b.Margin = New-Object System.Windows.Forms.Padding(0, 0, 10, 4)
   return $b
 }
+
+# --- odmalowanie -------------------------------------------------------------
+
+function Odmaluj-Podtytul {
+  if (-not $script:LPodtytul -or $script:LPodtytul.IsDisposed) { return }
+  if ($script:Licze) {
+    $script:LPodtytul.ForeColor = $script:KolSzary
+    if ($script:DaneCzas) {
+      $script:LPodtytul.Text = "Przeliczam... na razie widzisz liczby sprzed $($script:DaneCzas.ToString('HH:mm'))."
+    } else {
+      $script:LPodtytul.Text = "Przeliczam, to potrwa kilka sekund..."
+    }
+    return
+  }
+  if ($script:DaneBlad) {
+    $script:LPodtytul.ForeColor = $script:KolUwaga
+    if ($script:DaneCzas) {
+      $script:LPodtytul.Text = "Przeliczenie się nie udało - liczby są sprzed $($script:DaneCzas.ToString('HH:mm'))."
+    } else {
+      $script:LPodtytul.Text = "Przeliczenie się nie udało i nie mam żadnych liczb."
+    }
+    return
+  }
+  $script:LPodtytul.ForeColor = $script:KolSzary
+  $kiedy = "przed chwilą"
+  if ($script:DaneCzas) { $kiedy = Kiedy-Ludzko $script:DaneCzas }
+  $script:LPodtytul.Text = "Sprawdzone $kiedy. Okno liczy to samo za każdym razem, gdy je otwierasz, i co $Minut min w tle."
+}
+
+function Karta-Problemu($p) {
+  $k = Pionowy $script:SzerKarty
+  $k.Padding = New-Object System.Windows.Forms.Padding(12, 10, 12, 10)
+  $k.Margin  = New-Object System.Windows.Forms.Padding(0, 0, 0, 8)
+  $kolor = $script:KolUwaga
+  $k.BackColor = $script:TloUwaga
+  if ($p.Waga -eq "pilne") { $kolor = $script:KolPilne; $k.BackColor = $script:TloPilne }
+  $k.Controls.Add((Etykieta-Zawijana $p.Tytul $script:CzGruba $kolor ($script:SzerKarty - 30)))
+  if ($p.Porada) {
+    $k.Controls.Add((Etykieta-Zawijana $p.Porada $script:CzZwykla $script:KolTekst ($script:SzerKarty - 30)))
+  }
+  return $k
+}
+
+function Odmaluj-Problemy {
+  if (-not $script:PanelProblemy -or $script:PanelProblemy.IsDisposed) { return }
+  Wyczysc-Panel $script:PanelProblemy
+  # Bez @() - patrz uwaga o "return ,$lista" w naglowku stan-nadzorcy.ps1.
+  $script:Problemy = Zbierz-Problemy $script:Dane $script:Wywrotki $script:DaneBlad $script:DaneCzas
+  if (@($script:Problemy).Count -eq 0) {
+    # Niewidoczna kontrolka nie bierze udzialu w ukladaniu, wiec sekcja bez
+    # problemow NIE ZOSTAWIA po sobie ani pustej ramki, ani odstepu.
+    $script:PanelProblemy.Visible = $false
+    return
+  }
+  foreach ($p in $script:Problemy) { $script:PanelProblemy.Controls.Add((Karta-Problemu $p)) }
+  $script:PanelProblemy.Visible = $true
+}
+
+function Kafelek-Liczby($t) {
+  $k = Pionowy $script:SzerKafelka
+  $k.Margin = New-Object System.Windows.Forms.Padding(0, 0, 4, 0)
+  $szer = $script:SzerKafelka - 12
+  $k.Controls.Add((Etykieta-Zawijana $t.Naglowek $script:CzMala $script:KolSzary $szer))
+  if ($null -ne $t.Liczba) {
+    $w = Poziomy
+    $duza = Etykieta ("~" + (Liczba-Ludzka $t.Liczba)) $script:CzDuza $script:KolTekst
+    $duza.Margin = New-Object System.Windows.Forms.Padding(0, 0, 5, 0)
+    $w.Controls.Add($duza)
+    $jed = Etykieta "tokenów" $script:CzZwykla $script:KolSzary
+    $jed.Margin = New-Object System.Windows.Forms.Padding(0, 19, 0, 0)
+    $w.Controls.Add($jed)
+    $k.Controls.Add($w)
+    if ($t.Ogon) { $k.Controls.Add((Etykieta-Zawijana $t.Ogon $script:CzMala $script:KolSzary $szer)) }
+  } else {
+    # Zero znaczyloby "nic nie kosztuje" - a my po prostu nie wiemy. Mowimy to
+    # wprost i podajemy powod, zamiast pokazac liczbe, ktorej nie mamy.
+    $k.Controls.Add((Etykieta "nie wiem" $script:CzDuza $script:KolUwaga))
+    $k.Controls.Add((Etykieta-Zawijana $t.Powod $script:CzMala $script:KolUwaga $szer))
+  }
+  $k.Controls.Add((Etykieta-Zawijana $t.Opis $script:CzMala $script:KolSzary $szer))
+  return $k
+}
+
+function Odmaluj-Liczby {
+  if (-not $script:PanelLiczby -or $script:PanelLiczby.IsDisposed) { return }
+  Wyczysc-Panel $script:PanelLiczby
+  $r = $null; $c = $null
+  if ($script:Dane) { $r = $script:Dane.Rachunek; $c = $script:Dane.Cykl }
+  $trzy = @()
+  try { $trzy = Trzy-Liczby $r $c }
+  catch { Zanotuj-Wywrotke "zlozenie trzech liczb" $_ }
+  if (@($trzy).Count -eq 0) {
+    $script:PanelLiczby.Controls.Add((Etykieta-Zawijana (
+      "Liczb jeszcze nie ma - nie udało się ich złożyć. Powód jest w szczegółach.") $script:CzZwykla $script:KolUwaga $script:SzerTresc))
+    return
+  }
+  foreach ($t in $trzy) { $script:PanelLiczby.Controls.Add((Kafelek-Liczby $t)) }
+}
+
+function Odmaluj-Stan {
+  if (-not $script:PanelStan -or $script:PanelStan.IsDisposed) { return }
+  Wyczysc-Panel $script:PanelStan
+  if (@($script:Problemy).Count -eq 0) {
+    $script:PanelStan.Controls.Add((Etykieta "Wszystko gra - nic nie wymaga Twojej uwagi." $script:CzGruba $script:KolDobrze))
+  }
+  $linie = @()
+  if ($script:Dane) {
+    try { $linie = Linie-Stanu $script:Dane.Wersja $script:Dane.Cykl }
+    catch { Zanotuj-Wywrotke "zlozenie linii stanu" $_ }
+  }
+  foreach ($l in $linie) {
+    $script:PanelStan.Controls.Add((Etykieta-Zawijana $l $script:CzZwykla $script:KolSzary $script:SzerTresc))
+  }
+}
+
+function Odmaluj-Przyciski {
+  if (-not $script:BCykl -or $script:BCykl.IsDisposed) { return }
+  $n = Napisy-Przyciskow $script:Dane
+  $script:BAktualizuj.Text = $n.Aktualizuj
+  $script:LAktualizuj.Text = $n.AktualizujOpis
+  $script:BCykl.Text       = $n.Cykl
+  $script:LCykl.Text       = $n.CyklOpis
+  $script:BCykl.Enabled    = $n.CyklWlaczony
+}
+
+# Wysokosc dobierana pod tresc, a nie na sztywno: w stanie normalnym okno ma sie
+# miescic na ekranie BEZ PRZEWIJANIA, a po rozwinieciu szczegolow urosnac tylko
+# do wysokosci pulpitu. Gdy tresc i tak nie mieszcza sie w ekranie, zostaje
+# przewijanie panelu - nic nie znika.
+function Dopasuj-Wysokosc {
+  if (-not $script:Okno -or $script:Okno.IsDisposed) { return }
+  try {
+    $script:Root.PerformLayout()
+    $ramka = $script:Okno.Height - $script:Okno.ClientSize.Height
+    $trzeba = $script:Root.PreferredSize.Height + $script:Przewijak.Padding.Vertical + $script:Pasek.Height + $ramka + 10
+    $pulpit = [System.Windows.Forms.Screen]::FromControl($script:Okno).WorkingArea.Height
+    $script:Okno.Height = [math]::Max(360, [math]::Min($trzeba, $pulpit - 60))
+  } catch { Zanotuj-Wywrotke "dobranie wysokosci okna" $_ }
+}
+
+function Odmaluj-Okno {
+  if (-not $script:Okno -or $script:Okno.IsDisposed) { return }
+  $script:Okno.SuspendLayout()
+  try {
+    Odmaluj-Podtytul
+    Odmaluj-Problemy
+    Odmaluj-Liczby
+    Odmaluj-Stan
+    Odmaluj-Przyciski
+  } catch {
+    Zanotuj-Wywrotke "odmalowanie okna" $_
+    if ($script:LPodtytul -and -not $script:LPodtytul.IsDisposed) {
+      $script:LPodtytul.ForeColor = $script:KolPilne
+      $script:LPodtytul.Text = "NIE UDAŁO SIĘ ZŁOŻYĆ OKNA: $($_.Exception.Message)"
+    }
+  } finally {
+    $script:Okno.ResumeLayout($true)
+  }
+  Dopasuj-Wysokosc
+}
+
+# --- dane dla okna -----------------------------------------------------------
+
+function Napelnij-Szczegoly {
+  if (-not $script:PoleSzczegoly -or $script:PoleSzczegoly.IsDisposed) { return }
+  if ($null -eq $script:Rozbicie) {
+    $script:PoleSzczegoly.Text = "Licze rozbicie rachunku..."
+    $script:Okno.Refresh()
+    try { $script:Rozbicie = Rachunek-Rozbicie }
+    catch {
+      Zanotuj-Wywrotke "rachunek za pamiec (rozbicie)" $_
+      $script:Rozbicie = @("  NIE UDALO SIE POLICZYC ROZBICIA: $($_.Exception.Message)")
+    }
+  }
+  try { $script:PoleSzczegoly.Lines = [string[]](Zbuduj-Szczegoly $script:Dane $script:Wywrotki $script:Rozbicie) }
+  catch {
+    Zanotuj-Wywrotke "zlozenie szczegolow" $_
+    $script:PoleSzczegoly.Text = "NIE UDALO SIE ZLOZYC SZCZEGOLOW: $($_.Exception.Message)"
+  }
+  $script:PoleSzczegoly.SelectionStart = 0
+  $script:PoleSzczegoly.ScrollToCaret()
+}
+
+# Przeliczenie BEZ zagladania do sieci - po nowsza wersje chodzi dozor, ktory
+# nikogo nie trzyma. Dzieki temu otwarcie okna nie czeka na gita.
+function Odswiez-Dane {
+  $script:Licze = $true
+  Odmaluj-Podtytul
+  if ($script:Okno -and -not $script:Okno.IsDisposed) { $script:Okno.Refresh() }
+  try {
+    $script:Dane = Zbierz-Wszystko $false $true
+    $script:DaneCzas = [datetime]::Now
+    $script:DaneBlad = $null
+    $script:Rozbicie = $null
+    if ($script:PoleSzczegoly -and $script:PoleSzczegoly.Visible -and (-not $script:SzczegolyZajete)) {
+      Napelnij-Szczegoly
+    }
+  } catch {
+    # Cisza jest zakazana: nieudane przeliczenie MA byc widoczne w oknie jako
+    # zolta karta, a nie schowane za starymi liczbami udajacymi biezace.
+    Zanotuj-Wywrotke "przeliczenie danych dla okna" $_
+    $script:DaneBlad = $_.Exception.Message
+  }
+  $script:Licze = $false
+}
+
+# Okno ODSWIEZA SIE SAMO przy kazdym otwarciu - dlatego nie ma przycisku
+# [Odswiez]. Przeliczenie rusza dopiero po odmalowaniu okna (stad zegar na
+# 150 ms zamiast wolania wprost): uzytkownik widzi najpierw liczby z bufora
+# razem z godzina, z ktorej pochodza, a nie pusty ekran przez kilka sekund.
+function Zaplanuj-Przeliczenie {
+  if (-not $script:ZegarOtwarcia) {
+    $script:ZegarOtwarcia = New-Object System.Windows.Forms.Timer
+    $script:ZegarOtwarcia.Add_Tick({
+      $script:ZegarOtwarcia.Stop()
+      Odswiez-Dane
+      Odmaluj-Okno
+      if ($script:Ikona) {
+        try { $script:Ikona.Text = Podpowiedz $script:Dane } catch { Zanotuj-Wywrotke "podpowiedz przy ikonie" $_ }
+      }
+    })
+  }
+  $script:ZegarOtwarcia.Stop()
+  $script:ZegarOtwarcia.Interval = 150
+  $script:ZegarOtwarcia.Start()
+}
+
+# --- budowa okna -------------------------------------------------------------
 
 function Pokaz-Okno {
   if ($script:Okno -and -not $script:Okno.IsDisposed) {
     $script:Okno.WindowState = [System.Windows.Forms.FormWindowState]::Normal
     $script:Okno.Show()
     Wymus-Pokazanie $script:Okno
+    Odmaluj-Okno
+    Zaplanuj-Przeliczenie
     return
   }
 
   $f = New-Object System.Windows.Forms.Form
-  $f.Text = "MegaRuchacz - nadzorca"
-  $f.Size = New-Object System.Drawing.Size(880, 720)
+  $f.Text = "MegaRuchacz"
+  $f.Size = New-Object System.Drawing.Size(780, 600)
+  $f.MinimumSize = New-Object System.Drawing.Size(760, 360)
   $f.StartPosition = [System.Windows.Forms.FormStartPosition]::CenterScreen
+  $f.BackColor = [System.Drawing.Color]::White
   try { $f.Icon = Ikona-Nadzorcy } catch { Zanotuj-Wywrotke "ikona okna" $_ }
 
-  $pole = New-Object System.Windows.Forms.TextBox
-  $pole.Multiline = $true
-  $pole.ReadOnly = $true
-  $pole.ScrollBars = [System.Windows.Forms.ScrollBars]::Vertical
-  $pole.Font = New-Object System.Drawing.Font("Consolas", 9.5)
-  $pole.Dock = [System.Windows.Forms.DockStyle]::Fill
-  $pole.BackColor = [System.Drawing.Color]::White
-  # Okno pokazuje sie NAJPIERW z ta linia, a dopiero potem sie wypelnia:
-  # rachunek liczy osobny proces, wiec puste okno przez kilka sekund
-  # wygladaloby jak zawieszone. Zawieszone i pracujace maja sie roznic.
-  $pole.Text = "Zbieram dane - rachunek, stan cyklu, wersja..."
+  # Pasek przyciskow siedzi na formularzu, a nie w przewijanej tresci - ma byc
+  # pod reka zawsze, takze po rozwinieciu szczegolow.
+  $script:Pasek = New-Object System.Windows.Forms.TableLayoutPanel
+  $script:Pasek.Dock = [System.Windows.Forms.DockStyle]::Bottom
+  $script:Pasek.AutoSize = $true
+  $script:Pasek.AutoSizeMode = [System.Windows.Forms.AutoSizeMode]::GrowAndShrink
+  $script:Pasek.ColumnCount = 3
+  $script:Pasek.RowCount = 2
+  $script:Pasek.Padding = New-Object System.Windows.Forms.Padding(16, 10, 16, 10)
+  $script:Pasek.BackColor = $script:TloPaska
+  $script:Pasek.ColumnStyles.Add((New-Object System.Windows.Forms.ColumnStyle([System.Windows.Forms.SizeType]::Percent, 39))) | Out-Null
+  $script:Pasek.ColumnStyles.Add((New-Object System.Windows.Forms.ColumnStyle([System.Windows.Forms.SizeType]::Percent, 39))) | Out-Null
+  $script:Pasek.ColumnStyles.Add((New-Object System.Windows.Forms.ColumnStyle([System.Windows.Forms.SizeType]::Percent, 22))) | Out-Null
+  $script:Pasek.RowStyles.Add((New-Object System.Windows.Forms.RowStyle([System.Windows.Forms.SizeType]::Absolute, 38))) | Out-Null
+  $script:Pasek.RowStyles.Add((New-Object System.Windows.Forms.RowStyle([System.Windows.Forms.SizeType]::AutoSize))) | Out-Null
 
-  $pasek = New-Object System.Windows.Forms.FlowLayoutPanel
-  $pasek.Dock = [System.Windows.Forms.DockStyle]::Bottom
-  $pasek.Height = 44
-  $pasek.Padding = New-Object System.Windows.Forms.Padding(6)
+  $script:BAktualizuj = Nowy-Przycisk "Sprawdź i pobierz nowszą wersję MegaRuchacza"
+  $script:BCykl       = Nowy-Przycisk "Przeczytaj zaległe rozmowy"
+  $bZamknij           = Nowy-Przycisk "Zamknij okno"
+  $script:LAktualizuj = Etykieta-Zawijana "" $script:CzMala $script:KolSzary 270
+  $script:LCykl       = Etykieta-Zawijana "" $script:CzMala $script:KolSzary 270
+  $lZamknij           = Etykieta-Zawijana "Ikona w zasobniku zostaje i pilnuje dalej." $script:CzMala $script:KolSzary 150
 
-  $bOdswiez    = Nowy-Przycisk "Odswiez" 90
-  $bAktualizuj = Nowy-Przycisk "Aktualizuj" 110
-  $bCykl       = Nowy-Przycisk "Uruchom cykl teraz" 150
-  $bZamknij    = Nowy-Przycisk "Zamknij" 90
-  $pasek.Controls.AddRange(@($bOdswiez, $bAktualizuj, $bCykl, $bZamknij))
+  $script:Pasek.Controls.Add($script:BAktualizuj, 0, 0)
+  $script:Pasek.Controls.Add($script:BCykl, 1, 0)
+  $script:Pasek.Controls.Add($bZamknij, 2, 0)
+  $script:Pasek.Controls.Add($script:LAktualizuj, 0, 1)
+  $script:Pasek.Controls.Add($script:LCykl, 1, 1)
+  $script:Pasek.Controls.Add($lZamknij, 2, 1)
 
-  $bOdswiez.Add_Click({ Odswiez-Tresc $true })
+  # Przewijak istnieje po to, zeby przy malym ekranie albo po rozwinieciu
+  # szczegolow tresc dalo sie przesunac, a nie zeby zniknela pod krawedzia.
+  $script:Przewijak = New-Object System.Windows.Forms.Panel
+  $script:Przewijak.Dock = [System.Windows.Forms.DockStyle]::Fill
+  $script:Przewijak.AutoScroll = $true
+  $script:Przewijak.BackColor = [System.Drawing.Color]::White
+  $script:Przewijak.Padding = New-Object System.Windows.Forms.Padding(20, 16, 20, 16)
 
-  # Przycisk aktualizacji robi DOKLADNIE to, co hook Codeksa: wola
-  # straznik-zasad.ps1 -Tlo (fetch + merge --ff-only, nigdy reset --hard).
-  # Warunki odmowy - brudne drzewo, rozjechana historia, brak zdalnej -
-  # naleza do straznika i to on je wypisuje; my pokazujemy, co powiedzial.
-  $bAktualizuj.Add_Click({
-    $script:Pole.Text = "Aktualizuje - straznik pobiera nowsza wersje i nanosi poprawki..."
-    $script:Okno.Refresh()
-    $wynik = @()
-    try { $wynik = @(Aktualizuj) }
-    catch { Zanotuj-Wywrotke "aktualizacja" $_; $wynik = @("NIE UDALO SIE: $($_.Exception.Message)") }
-    $script:Pole.Lines = [string[]](@("== AKTUALIZACJA ==", "") + $wynik + @("", "Za chwile odswieze reszte okna."))
-    $script:Okno.Refresh()
-    Start-Sleep -Seconds 3
-    Odswiez-Tresc $true
+  $script:Root = Pionowy $script:SzerTresc
+  $script:Root.Dock = [System.Windows.Forms.DockStyle]::Top
+
+  $lTytul = Etykieta "MegaRuchacz" $script:CzTytul $script:KolTekst
+  $lTytul.Margin = New-Object System.Windows.Forms.Padding(0, 0, 0, 1)
+  $script:LPodtytul = Etykieta-Zawijana "Przeliczam, to potrwa kilka sekund..." $script:CzMala $script:KolSzary $script:SzerTresc
+  $script:LPodtytul.Margin = New-Object System.Windows.Forms.Padding(0, 0, 0, 14)
+
+  $script:PanelProblemy = Pionowy $script:SzerTresc
+  $script:PanelProblemy.Margin = New-Object System.Windows.Forms.Padding(0, 0, 0, 10)
+  $script:PanelProblemy.Visible = $false
+
+  $script:PanelLiczby = Poziomy
+  $script:PanelLiczby.Margin = New-Object System.Windows.Forms.Padding(0, 0, 0, 16)
+
+  $script:PanelStan = Pionowy $script:SzerTresc
+  $script:PanelStan.Margin = New-Object System.Windows.Forms.Padding(0, 0, 0, 14)
+
+  $script:BSzczegoly = New-Object System.Windows.Forms.Button
+  $script:BSzczegoly.Text = "Pokaż szczegóły - z czego to się składa i gdzie to leży"
+  $script:BSzczegoly.Font = $script:CzZwykla
+  $script:BSzczegoly.FlatStyle = [System.Windows.Forms.FlatStyle]::System
+  $script:BSzczegoly.AutoSize = $true
+  $script:BSzczegoly.Height = 30
+  $script:BSzczegoly.Margin = New-Object System.Windows.Forms.Padding(0, 0, 0, 8)
+
+  $script:PoleSzczegoly = New-Object System.Windows.Forms.TextBox
+  $script:PoleSzczegoly.Multiline = $true
+  $script:PoleSzczegoly.ReadOnly = $true
+  $script:PoleSzczegoly.WordWrap = $false
+  $script:PoleSzczegoly.ScrollBars = [System.Windows.Forms.ScrollBars]::Both
+  $script:PoleSzczegoly.Font = $script:CzStala
+  $script:PoleSzczegoly.BackColor = [System.Drawing.Color]::White
+  $script:PoleSzczegoly.Size = New-Object System.Drawing.Size($script:SzerTresc, 300)
+  $script:PoleSzczegoly.Margin = New-Object System.Windows.Forms.Padding(0, 0, 0, 6)
+  $script:PoleSzczegoly.Visible = $false
+
+  $script:Root.Controls.Add($lTytul)
+  $script:Root.Controls.Add($script:LPodtytul)
+  $script:Root.Controls.Add($script:PanelProblemy)
+  $script:Root.Controls.Add($script:PanelLiczby)
+  $script:Root.Controls.Add($script:PanelStan)
+  $script:Root.Controls.Add($script:BSzczegoly)
+  $script:Root.Controls.Add($script:PoleSzczegoly)
+  $script:Przewijak.Controls.Add($script:Root)
+
+  $f.Controls.Add($script:Przewijak)
+  $f.Controls.Add($script:Pasek)
+  $f.Add_FormClosed({
+    $script:Okno = $null; $script:Root = $null; $script:Przewijak = $null
+    $script:LPodtytul = $null; $script:PanelProblemy = $null; $script:PanelLiczby = $null
+    $script:PanelStan = $null; $script:BSzczegoly = $null; $script:PoleSzczegoly = $null
+    $script:Pasek = $null; $script:BAktualizuj = $null; $script:LAktualizuj = $null
+    $script:BCykl = $null; $script:LCykl = $null
   })
 
-  $bCykl.Add_Click({
-    $script:Pole.Text = "Startuje cykl wiedzy..."
-    $script:Okno.Refresh()
-    $poszlo = $false
-    try { $poszlo = Ruszaj-Cykl } catch { Zanotuj-Wywrotke "reczny start cyklu" $_ }
-    if ($poszlo) {
-      $script:Pole.Text = "Cykl wiedzy wystartowal w tle. Potrwa kilka minut." + "`r`n" +
-                          "Koszt pojawi sie w tym oknie po zakonczeniu - kliknij wtedy [Odswiez]."
+  # --- co robia przyciski ---
+
+  $script:BSzczegoly.Add_Click({
+    $script:SzczegolyZajete = $false
+    if ($script:PoleSzczegoly.Visible) {
+      $script:PoleSzczegoly.Visible = $false
+      $script:BSzczegoly.Text = "Pokaż szczegóły - z czego to się składa i gdzie to leży"
     } else {
-      $script:Pole.Text = "NIE UDALO SIE WYSTARTOWAC CYKLU." + "`r`n" +
-                          "Sprobuj recznie: powershell -ExecutionPolicy Bypass -File $Zrodlo\narzedzia\cykl-dzienny.ps1" + "`r`n" +
-                          "Slad w $(Join-Path $KatalogDomowy '.claude\.megaruchacz-zasobnik.log')"
+      Napelnij-Szczegoly
+      $script:PoleSzczegoly.Visible = $true
+      $script:BSzczegoly.Text = "Ukryj szczegóły"
+    }
+    Dopasuj-Wysokosc
+  })
+
+  # Przycisk bezpieczny - NIE pyta o zgode, bo nie wydaje ani jednego tokena.
+  # Robi DOKLADNIE to, co hook Codeksa: wola straznik-zasad.ps1 -Tlo
+  # (fetch + merge --ff-only, nigdy reset --hard). Warunki odmowy - brudne
+  # drzewo, rozjechana historia, brak zdalnej - naleza do straznika i to on
+  # je wypisuje; my pokazujemy, co powiedzial.
+  $script:BAktualizuj.Add_Click({
+    $script:BAktualizuj.Enabled = $false
+    $script:LAktualizuj.Text = "Pobieram... to potrwa do dwóch minut."
+    # Odpowiedz straznika ma zostac na ekranie do czasu, az uzytkownik sam
+    # przelaczy szczegoly - dlatego znacznik "zajete".
+    $script:SzczegolyZajete = $true
+    if (-not $script:PoleSzczegoly.Visible) {
+      $script:PoleSzczegoly.Visible = $true
+      $script:BSzczegoly.Text = "Ukryj szczegóły"
+      Dopasuj-Wysokosc
+    }
+    $script:PoleSzczegoly.Text = "Pobieram nowszą wersję - strażnik sprawdza serwer i nanosi poprawki..."
+    $script:Okno.Refresh()
+    $wynik = @()
+    try { $wynik = Aktualizuj }
+    catch { Zanotuj-Wywrotke "aktualizacja" $_; $wynik = @("NIE UDALO SIE: $($_.Exception.Message)") }
+    $script:PoleSzczegoly.Lines = [string[]](
+      @("CO POWIEDZIAŁ STRAŻNIK", "") + $wynik +
+      @("", "To jest odpowiedź na kliknięcie, nie zwykła zawartość szczegółów.",
+            "Kliknij [Ukryj szczegóły], żeby wrócić do normalnego widoku."))
+    $script:Okno.Refresh()
+    $script:BAktualizuj.Enabled = $true
+    $script:Rozbicie = $null
+    Odswiez-Dane
+    Odmaluj-Okno
+  })
+
+  # JEDYNY przycisk w tym oknie, ktory wydaje tokeny - i dlatego jedyny, ktory
+  # pyta. 24.09.2026 jego poprzednik ("Uruchom cykl teraz") wydal jednym
+  # kliknieciem 312 609 tokenow, nie mowiac o tym ani slowa wczesniej.
+  # Domyslnie podswietlone jest "Nie": przypadkowy Enter ma nic nie kosztowac.
+  $script:BCykl.Add_Click({
+    $n = Napisy-Przyciskow $script:Dane
+    $s = $n.Szacunek
+    $t = @()
+    if ($s -and ($null -ne $s.Tokeny)) {
+      $t += "Przeczytanie zaległych rozmów będzie kosztować około $(Liczba-Ludzka $s.Tokeny) tokenów."
+    } else {
+      $t += "NIE WIEM, ile to będzie kosztować."
+      if ($s -and $s.Powod) { $t += "Powód: $($s.Powod)." }
+      if ($script:Dane -and $script:Dane.Cykl -and ($null -ne $script:Dane.Cykl.Koszt)) {
+        $t += "Poprzednie czytanie kosztowało ~$(Liczba-Ludzka $script:Dane.Cykl.Koszt) tokenów - takiego rzędu liczby się spodziewaj."
+      }
+    }
+    $t += ""
+    if ($s) { foreach ($z in $s.Podstawa) { $t += $z } }
+    $t += ""
+    $t += "To jedyny przycisk w tym oknie, który naprawdę wydaje tokeny."
+    $t += "Kliknij Tak, żeby uruchomić. Po kliknięciu Nie nie stanie się nic."
+    $odp = [System.Windows.Forms.MessageBox]::Show(
+      $script:Okno, ($t -join "`r`n"), "Przeczytać zaległe rozmowy?",
+      [System.Windows.Forms.MessageBoxButtons]::YesNo,
+      [System.Windows.Forms.MessageBoxIcon]::Warning,
+      [System.Windows.Forms.MessageBoxDefaultButton]::Button2)
+    if ($odp -ne [System.Windows.Forms.DialogResult]::Yes) {
+      Notuj "czytanie zaleglych rozmow: uzytkownik nie potwierdzil - nic nie ruszylo"
+      return
+    }
+
+    $poszlo = $false
+    try { $poszlo = Ruszaj-Cykl } catch { Zanotuj-Wywrotke "reczny start czytania rozmow" $_ }
+    if ($poszlo) {
+      $script:BCykl.Enabled = $false
+      $script:LCykl.Text = "Czytanie ruszyło w tle. Potrwa kilka minut, liczby odświeżą się same."
+      Notuj "czytanie zaleglych rozmow ruszylo z okna po potwierdzeniu kosztu"
+    } else {
+      $script:LCykl.Text = "NIE UDAŁO SIĘ uruchomić - szczegóły w oknie obok."
+      [System.Windows.Forms.MessageBox]::Show(
+        $script:Okno,
+        ("Nie udało się uruchomić czytania rozmów." + "`r`n`r`n" +
+         "Spróbuj ręcznie:" + "`r`n" +
+         "powershell -ExecutionPolicy Bypass -File $Zrodlo\narzedzia\cykl-dzienny.ps1" + "`r`n`r`n" +
+         "Ślad w $(Join-Path $KatalogDomowy '.claude\.megaruchacz-zasobnik.log')"),
+        "Nie udało się", [System.Windows.Forms.MessageBoxButtons]::OK,
+        [System.Windows.Forms.MessageBoxIcon]::Error) | Out-Null
     }
   })
 
   $bZamknij.Add_Click({ $script:Okno.Close() })
 
-  $f.Controls.Add($pole)
-  $f.Controls.Add($pasek)
-  $f.Add_FormClosed({ $script:Okno = $null; $script:Pole = $null })
-
   $script:Okno = $f
-  $script:Pole = $pole
   $f.Show()
   Wymus-Pokazanie $f
-  Odswiez-Tresc $true
+  Odmaluj-Okno
+  Zaplanuj-Przeliczenie
 }
 
 # ----------------------------------------------------------------- ikona i menu
@@ -455,20 +1166,36 @@ function Nowa-Pozycja([string]$napis, $akcja) {
   return $p
 }
 
+# W MENU NIE MA JUZ "Uruchom cykl teraz". Ta pozycja wydawala setki tysiecy
+# tokenow jednym kliknieciem, bez slowa o koszcie i bez pytania. Czytanie rozmow
+# da sie odpalic wylacznie przyciskiem w oknie, ktory pokazuje szacunek i pyta -
+# jedna droga do wydawania pieniedzy, i to ta, ktora ostrzega.
 $menu = New-Object System.Windows.Forms.ContextMenuStrip
-$menu.Items.Add((Nowa-Pozycja "Pokaz rachunek i stan" { Pokaz-Okno })) | Out-Null
-$menu.Items.Add((Nowa-Pozycja "Sprawdz teraz" {
-  try { Dozor $script:Dymek $true | Out-Null } catch { Zanotuj-Wywrotke "reczne sprawdzenie" $_ }
-  Pokaz-Dymek "MegaRuchacz: sprawdzone" "Dozor przeszedl recznie. Szczegoly w oknie - kliknij ikone."
-})) | Out-Null
-$menu.Items.Add((Nowa-Pozycja "Uruchom cykl teraz" {
-  $poszlo = $false
-  try { $poszlo = Ruszaj-Cykl } catch { Zanotuj-Wywrotke "reczny start cyklu z menu" $_ }
-  if ($poszlo) { Pokaz-Dymek "MegaRuchacz: cykl ruszyl" "Cykl wiedzy pracuje w tle. Koszt pokaze sie w oknie po zakonczeniu." }
-  else { Pokaz-Dymek "MegaRuchacz: cykl NIE ruszyl" "Nie udalo sie wystartowac narzedzia\cykl-dzienny.ps1 - szczegoly w oknie." }
+$menu.Items.Add((Nowa-Pozycja "Otwórz okno MegaRuchacza" { Pokaz-Okno })) | Out-Null
+# Recznemu przeliczeniu zostaje miejsce TUTAJ, a nie w oknie: okno liczy samo,
+# ale kto wlasnie cos poprawil (np. skrocil CLAUDE.md), chce zobaczyc skutek
+# natychmiast, nie po kwadransie.
+#
+# Ta pozycja SAMA LICZY i nic nie uruchamia - swiadomie nie wola Dozoru, bo
+# dozor przy okazji startuje czytanie rozmow, gdy wypada na nie pora. Pozycja
+# menu nazwana "przelicz liczby" nie ma prawa wydac ani jednego tokena.
+$menu.Items.Add((Nowa-Pozycja "Przelicz liczby teraz (nic nie kosztuje)" {
+  try {
+    $d = Zbierz-Wszystko $true $true
+    $script:Dane = $d
+    $script:DaneCzas = [datetime]::Now
+    $script:DaneBlad = $null
+    $script:Rozbicie = $null
+    $script:Ikona.Text = Podpowiedz $d
+    Odmaluj-Okno
+    Pokaz-Dymek "MegaRuchacz: przeliczone" "Liczby sa swieze. Kliknij ikone, zeby je zobaczyc."
+  } catch {
+    Zanotuj-Wywrotke "reczne przeliczenie z menu" $_
+    Pokaz-Dymek "MegaRuchacz: nie przeliczylem" "Nie udalo sie przeliczyc liczb: $($_.Exception.Message)"
+  }
 })) | Out-Null
 $menu.Items.Add((New-Object System.Windows.Forms.ToolStripSeparator)) | Out-Null
-$menu.Items.Add((Nowa-Pozycja "Zakoncz nadzorce" {
+$menu.Items.Add((Nowa-Pozycja "Zamknij MegaRuchacza (ikona zniknie)" {
   Notuj "nadzorca zakonczony z menu - do najblizszego zalogowania nikt nie pilnuje cyklu"
   $script:Ikona.Visible = $false
   [System.Windows.Forms.Application]::Exit()
@@ -492,21 +1219,32 @@ $script:Zegar.Add_Tick({
     $script:Zegar.Interval = [math]::Max(1, $Minut) * 60 * 1000
   }
   try {
-    $d = Dozor $script:Dymek $true
+    # $zSieci = $true: po nowsza wersje zaglada dozor, bo tu nikt nie czeka
+    # przed ekranem. Okno dostaje gotowa odpowiedz i otwiera sie od razu.
+    $d = Dozor $script:Dymek $true $true
+    $script:Dane = $d
+    $script:DaneCzas = [datetime]::Now
+    $script:DaneBlad = $null
+    $script:Rozbicie = $null
     $script:Ikona.Text = Podpowiedz $d
+    # Otwarte okno ma sie odswiezyc samo - uzytkownik nie ma go zamykac
+    # i otwierac po to, zeby zobaczyc nowe liczby.
+    Odmaluj-Okno
   } catch { Zanotuj-Wywrotke "przebieg dozoru" $_ }
 })
 $script:Zegar.Start()
 
 # Wywrotki z poprzedniego uruchomienia - nadzorca, ktory sie wczoraj wywrocil,
-# ma o tym powiedziec, a nie udawac, ze wstal czysty.
+# ma o tym powiedziec, a nie udawac, ze wstal czysty. Zostaja tez w pamieci
+# sesji, zeby okno pokazalo je jako zolta karte w sekcji problemow.
 try {
   $stare = Odbierz-Wywrotki
-  if ($stare.Count -gt 0) {
+  $script:Wywrotki = @($stare)
+  if ($script:Wywrotki.Count -gt 0) {
     $ogon = ""
-    if ($stare.Count -gt 1) { $ogon = " (i jeszcze $($stare.Count - 1))" }
+    if ($script:Wywrotki.Count -gt 1) { $ogon = " (i jeszcze $($script:Wywrotki.Count - 1))" }
     Pokaz-Dymek "MegaRuchacz: nadzorca wywrocil sie poprzednio" (
-      "$($stare[0])${ogon}. Kliknij ikone - w oknie jest komplet. " +
+      "$($script:Wywrotki[0])${ogon}. Kliknij ikone - w oknie jest komplet. " +
       "Dziennik: $(Join-Path $KatalogDomowy '.claude\.megaruchacz-zasobnik.log')")
   }
 } catch { Zanotuj-Wywrotke "odczyt wywrotek przy starcie" $_ }
