@@ -11,7 +11,7 @@ from pathlib import Path
 
 import pytest
 
-from lore import facts
+from lore import facts, selection
 
 ENTRY = re.compile(r"^- \[ \] \[(\d{4}-\d{2}-\d{2})\] \(([^)]+)\) (.+)$")
 NOW = datetime.now(timezone.utc)  # one fixed point, so the same `ago` gives the very same string
@@ -22,18 +22,43 @@ def ago(hours: float) -> str:
 
 
 @pytest.fixture
-def waiting_room(tmp_path, monkeypatch, environment):
-    """The whole harvest inside tmp_path — the real ~/.claude must not be touched by the tests."""
+def selective(tmp_path, monkeypatch, environment):
+    """The whole harvest inside tmp_path — the real ~/.claude must not be touched by the tests.
+
+    The choice is the real one here: only a correction, a repetition or a "zapamiętaj" goes on.
+    """
     knowledge = tmp_path / "wiedza"
     monkeypatch.setattr(facts, "KNOWLEDGE_DIR", knowledge)
     monkeypatch.setattr(facts, "MARKER_PATH", knowledge / ".ostatnie-wyciaganie")
     monkeypatch.setattr(facts, "MARKER_ID_PATH", knowledge / ".ostatnie-wyciaganie-id")
-    monkeypatch.setattr(facts, "DAY_ZERO_PATH", knowledge / ".dzien-zero")
+    monkeypatch.setattr(facts, "DAY_ZERO_PATH", knowledge / ".dzien-zero-wyboru")
     monkeypatch.setattr(facts, "CANDIDATES_PATH", knowledge / "kandydaci.md")
     monkeypatch.setattr(facts, "RULES_PATH", tmp_path / "CLAUDE.md")
+    monkeypatch.setattr(facts, "CODEX_RULES_PATH", tmp_path / "AGENTS.md")
     monkeypatch.setattr(facts, "DB_PATH", tmp_path / "lore.db")
     facts.start_pass()  # the pass accumulator is module state — no test may inherit another's calls
+    # a sandbox that has been learning for a long time: day zero drawn at "now" would put every
+    # chunk a test adds behind the line. The tests OF day zero remove this first — see no_day_zero.
+    set_day_zero(ago(24 * 365))
     return environment
+
+
+def no_day_zero() -> None:
+    """For the tests of drawing the line itself: a machine that has never learnt anything."""
+    facts.DAY_ZERO_PATH.unlink(missing_ok=True)
+
+
+@pytest.fixture
+def waiting_room(selective, monkeypatch):
+    """The same sandbox, with EVERY message of the user chosen and none of them trimmed.
+
+    The tests using it are about the axis, the marker, the cap and the waiting room, not about the
+    choice (tests/test_selection.py is). Letting everything through keeps their material as plain
+    as it was, and their sizes exactly what they say.
+    """
+    monkeypatch.setattr(selection, "reasons", lambda msg, echoes: [selection.REMEMBER])
+    monkeypatch.setattr(selection, "HEAD_CHARS", 1_000_000)
+    return selective
 
 
 def add(environment, ts: str, role: str, text: str, line: int = 1, landed: str | None = None) -> int:
@@ -67,6 +92,11 @@ def sorted_answer(*items: dict):
 def recorder(seen: list[str]):
     """Stand-in that only writes down what it was given — for checking that nothing is skipped."""
     return lambda material: seen.append(material) or ""
+
+
+def said(piece: str) -> str:
+    """The user's own words out of one piece of material (the header and the context stripped)."""
+    return piece.split("\nuser: ", 1)[1]
 
 
 def numbers(material: str) -> list[str]:
@@ -108,7 +138,7 @@ def test_takes_only_chunks_newer_than_the_marker(waiting_room):
 
     material = facts.collect(waiting_room.conn, facts.since_marker())
 
-    assert [t.split(": ", 1)[1] for t in material.texts] == ["nowe ustalenie"]
+    assert [said(t) for t in material.texts] == ["nowe ustalenie"]
 
 
 def test_missing_marker_means_the_last_day(waiting_room):
@@ -118,7 +148,7 @@ def test_missing_marker_means_the_last_day(waiting_room):
     assert not facts.MARKER_PATH.exists()
     material = facts.collect(waiting_room.conn, facts.since_marker())
 
-    assert [t.split(": ", 1)[1] for t in material.texts] == ["dzis rano"]
+    assert [said(t) for t in material.texts] == ["dzis rano"]
 
 
 def test_cap_takes_the_oldest_and_leaves_the_rest_as_a_backlog(waiting_room):
@@ -163,7 +193,7 @@ def test_only_the_user_is_harvested(waiting_room):
 
     material = facts.collect(waiting_room.conn, facts.since_marker())
 
-    assert [t.split(": ", 1)[1] for t in material.texts] == ["pracuje na Windowsie"]
+    assert [said(t) for t in material.texts] == ["pracuje na Windowsie"]
 
 
 def test_a_brief_to_a_subagent_is_not_the_user(waiting_room):
@@ -194,7 +224,7 @@ def test_a_scheduled_task_prompt_is_not_the_user(waiting_room):
 
     material = facts.collect(waiting_room.conn, facts.since_marker())
 
-    assert [t.split(": ", 1)[1] for t in material.texts] == [
+    assert [said(t) for t in material.texts] == [
         "zapachy maja numery, nie nazwy",
         'mowie o tagu <scheduled-task name="x"> w srodku zdania',
     ]
@@ -303,6 +333,7 @@ def test_a_marker_from_before_the_id_existed_does_not_read_the_archive_again(wai
 def test_a_fresh_install_does_not_swallow_the_archive_it_found(waiting_room):
     """Three years of transcripts, pulled into the database within the hour of the install. Day zero
     is drawn on the first run, and everything indexed before it stays where it is."""
+    no_day_zero()
     for i in range(50):
         add(waiting_room, ago(24 * 30 * (i + 1)), "user", f"stara rozmowa numer {i} " * 20,
             line=i + 1, landed=ago(0.2))
@@ -317,16 +348,25 @@ def test_a_fresh_install_does_not_swallow_the_archive_it_found(waiting_room):
     assert facts.DAY_ZERO_PATH.exists()
 
 
-def test_day_zero_of_a_running_install_is_the_read_marker_so_the_backlog_survives(waiting_room):
-    """An install that has been harvesting for weeks: drawing the line at "now" would throw away
-    everything still waiting at the marker."""
-    add(waiting_room, ago(3), "user", "wczorajsza rozmowa, jeszcze nieprzeczytana")
+def test_the_first_run_of_the_selection_lets_the_old_backlog_go_and_says_so(waiting_room):
+    """The user's decision of 2026-09-24: a machine that was harvesting before the selection does not
+    catch up on its backlog — the line is drawn at "now" even with a read marker far behind it. The
+    backlog is counted once, and the marker jumps to the line so it is not counted every day again."""
+    no_day_zero()
+    add(waiting_room, ago(3), "user", "wczorajsza rozmowa, jeszcze nieprzeczytana", landed=ago(3))
     facts.write_marker(ago(10))
+    seen = []
 
-    r = facts.run(ask=answers("Użytkownik pracuje na Windowsie."), conn=waiting_room.conn)
+    r = facts.run(ask=recorder(seen), conn=waiting_room.conn)
 
-    assert facts.DAY_ZERO_PATH.read_text(encoding="utf-8").strip() == ago(10)
-    assert r["chunks"] == 1
+    zero = facts.DAY_ZERO_PATH.read_text(encoding="utf-8").strip()
+    assert zero > ago(1)  # drawn now, not at the marker
+    assert (r["chunks"], r["before_zero"]) == (0, 1) and not seen
+    assert facts.since_marker().stamp == zero
+    again = facts.run(ask=recorder(seen), conn=waiting_room.conn)
+    assert again["before_zero"] == 0 and not seen
+
+
 
 
 def test_day_zero_is_drawn_once_and_then_left_alone(waiting_room):
