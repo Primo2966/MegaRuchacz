@@ -164,8 +164,22 @@ function Sprawdz-Warunki {
     Krok "codex   : nie widze Codeksa na tej maszynie - pomijam"
   }
 
-  if (-not $script:Claude -and -not $script:CodexJest) {
-    $braki += "narzedzie, w ktorym dalo by sie zarejestrowac serwer MCP - nie ma ani Claude Code, ani Codeksa. Zainstaluj jedno z nich:  npm install -g @anthropic-ai/claude-code   albo   npm install -g @openai/codex"
+  # opencode rozpoznajemy jak wdroz.ps1: binarka w PATH albo katalog konfiguracji
+  # (~/.config/opencode). Serwer MCP wpisujemy do opencode.json pod kluczem "mcp".
+  $script:Opencode     = $null
+  $script:OpencodeDom  = Join-Path $env:USERPROFILE ".config\opencode"
+  $script:OpencodeCfg  = Join-Path $script:OpencodeDom "opencode.json"
+  $oc = Get-Command opencode -CommandType Application -ErrorAction SilentlyContinue | Select-Object -First 1
+  if ($oc) { $script:Opencode = $oc.Source }
+  $script:OpencodeJest = [bool]$script:Opencode -or (Test-Path $script:OpencodeDom)
+  if ($script:OpencodeJest) {
+    Krok "opencode: wpis mcp.$NazwaMcp pojdzie do $($script:OpencodeCfg)"
+  } else {
+    Krok "opencode: nie widze go na tej maszynie - pomijam"
+  }
+
+  if (-not $script:Claude -and -not $script:CodexJest -and -not $script:OpencodeJest) {
+    $braki += "narzedzie, w ktorym dalo by sie zarejestrowac serwer MCP - nie ma ani Claude Code, ani Codeksa, ani opencode. Zainstaluj jedno z nich:  npm install -g @anthropic-ai/claude-code  /  @openai/codex  /  opencode-ai"
   }
 
   if (Test-Path (Join-Path $script:Lore "pyproject.toml")) {
@@ -187,10 +201,11 @@ function Sprawdz-Warunki {
 # Jedno miejsce na warunek "co tu w ogole jest": dostaje opis Claude Code i opis
 # Codeksa, oddaje tylko te, ktore Sprawdz-Warunki naprawde znalazlo. Inaczej ten
 # sam warunek siedzi w kilku ekranach naraz i rozjezdza sie przy pierwszej zmianie.
-function Wykryte-Narzedzia($opisClaude, $opisCodex) {
+function Wykryte-Narzedzia($opisClaude, $opisCodex, $opisOpencode) {
   $lista = @()
-  if ($script:Claude)    { $lista += $opisClaude }
-  if ($script:CodexJest) { $lista += $opisCodex }
+  if ($script:Claude)       { $lista += $opisClaude }
+  if ($script:CodexJest)    { $lista += $opisCodex }
+  if ($script:OpencodeJest -and $opisOpencode) { $lista += $opisOpencode }
   return $lista
 }
 
@@ -199,11 +214,15 @@ function Wykryte-Narzedzia($opisClaude, $opisCodex) {
 function Ekran-Zgody {
   # Kazdy tekst tego ekranu ma mowic prawde o TEJ maszynie - wymieniamy tylko te
   # narzedzia, ktore Sprawdz-Warunki (wolane wczesniej) naprawde na niej znalazlo.
-  $zKim  = @(Wykryte-Narzedzia "Claude Code" "Codeksem")
-  $czyje = if ($zKim.Count -gt 0) { $zKim -join " i " } else { "Twoim narzedziem AI" }
+  $zKim  = @(Wykryte-Narzedzia "Claude Code" "Codeksem" "opencode")
+  $czyje = if ($zKim.Count -gt 1) {
+             (($zKim[0..($zKim.Count - 2)] -join ", ") + " i " + $zKim[-1])
+           } elseif ($zKim.Count -eq 1) { $zKim[0] }
+           else { "Twoim narzedziem AI" }
 
   $opisCodex = if ($script:CodexMa) { "Codex CLI - przez 'codex mcp add'" } else { "Codex CLI - wpisem w $($script:CodexCfg) (stary plik zostanie skopiowany obok)" }
-  $gdzie = @(Wykryte-Narzedzia "Claude Code - przez 'claude mcp add', w zasiegu Twojego uzytkownika" $opisCodex)
+  $gdzie = @(Wykryte-Narzedzia "Claude Code - przez 'claude mcp add', w zasiegu Twojego uzytkownika" $opisCodex `
+                                "opencode - wpisem mcp.$NazwaMcp w $($script:OpencodeCfg) (stary plik zostanie skopiowany obok)")
   $lista = ($gdzie | ForEach-Object { "        - $_" }) -join "`n"
 
   # O usuwaniu mowimy tylko tam, gdzie naprawde jest co usuwac - na swiezej
@@ -279,6 +298,45 @@ function Zarejestruj-Mcp {
   # jedno polecenie serwera dla wszystkich narzedzi - rozjazd miedzy nimi byloby
   # najgorszym mozliwym bledem: jedno okno widzi Lore, drugie sie wywala
   $polecenie = @($script:Uv, "--directory", $script:Lore, "run", "python", "-m", "lore.server")
+
+  # ---- opencode (zapis do opencode.json - nie ma wlasnego polecenia "mcp add").
+  # Idempotentnie: wpis mcp.<nazwa> jest nadpisywany, reszta pliku zostaje.
+  # Robimy to PRZED czesciami Claude/Codex, bo tamte koncza funkcje wczesniej,
+  # gdy ich narzedzia nie ma - a opencode jest od nich niezalezny.
+  if (-not $script:OpencodeJest) {
+    if ($Proba) { Plan "opencode    : nie ma go na tej maszynie - pomijam" }
+    else        { Krok "opencode    : nie ma go na tej maszynie - pomijam" }
+  } elseif ($Proba) {
+    Plan "opencode    : kopia zapasowa $($script:OpencodeCfg) obok, gdy plik istnieje"
+    Plan "opencode    : wpis mcp.$NazwaMcp (type=local, enabled=true) do $($script:OpencodeCfg)"
+  } else {
+    New-Item -ItemType Directory -Force -Path $script:OpencodeDom | Out-Null
+    $s = $null
+    if (Test-Path $script:OpencodeCfg) {
+      $kopia = "$($script:OpencodeCfg).bak-" + (Get-Date -Format "yyyyMMdd-HHmmss")
+      Copy-Item $script:OpencodeCfg $kopia -Force
+      Krok "opencode    : kopia zapasowa starej konfiguracji: $kopia"
+      try {
+        $raw = [System.IO.File]::ReadAllText($script:OpencodeCfg)
+        if ($raw.Length -gt 0 -and [int]$raw[0] -eq 65279) { $raw = $raw.Substring(1) }
+        $s = $raw | ConvertFrom-Json
+      } catch {
+        Blad "rejestracja w opencode nie powiodla sie - $($script:OpencodeCfg) nie jest czystym JSON-em, nie ruszam go."
+        exit 1
+      }
+    } else {
+      $s = [pscustomobject]@{ '$schema' = 'https://opencode.ai/config.json' }
+    }
+    if (-not ($s.PSObject.Properties.Name -contains 'mcp') -or $null -eq $s.mcp) {
+      $s | Add-Member -NotePropertyName mcp -NotePropertyValue ([pscustomobject]@{}) -Force
+    }
+    $wpis = [pscustomobject]@{ type = 'local'; command = @($polecenie); enabled = $true }
+    if ($s.mcp.PSObject.Properties.Name -contains $NazwaMcp) { $s.mcp.$NazwaMcp = $wpis }
+    else { $s.mcp | Add-Member -NotePropertyName $NazwaMcp -NotePropertyValue $wpis -Force }
+    [System.IO.File]::WriteAllText($script:OpencodeCfg, ($s | ConvertTo-Json -Depth 20),
+      (New-Object System.Text.UTF8Encoding($false)))
+    Krok "opencode    : wpis mcp.$NazwaMcp jest w $($script:OpencodeCfg)"
+  }
 
   # ---- Claude Code
   if ($script:Claude) {
@@ -699,6 +757,26 @@ function Sprawdz-Mcp-Wpis {
     Write-Host "  --    serwer MCP w Claude Code - pominiete, nie ma Claude Code na tej maszynie" -ForegroundColor DarkGray
   }
 
+  # opencode: sprawdzamy wpis mcp.<nazwa> w opencode.json. To sprawdzenie
+  # REJESTRACJI, nie dzialania - podpiecie widac dopiero w nowej sesji.
+  if ($script:OpencodeJest) {
+    $okO = $false
+    if (Test-Path $script:OpencodeCfg) {
+      try {
+        $rawO = [System.IO.File]::ReadAllText($script:OpencodeCfg)
+        if ($rawO.Length -gt 0 -and [int]$rawO[0] -eq 65279) { $rawO = $rawO.Substring(1) }
+        $cfgO = $rawO | ConvertFrom-Json
+        if ($cfgO.mcp -and ($cfgO.mcp.PSObject.Properties.Name -contains $NazwaMcp) -and $cfgO.mcp.$NazwaMcp.command) {
+          $okO = $true
+        }
+      } catch { }
+    }
+    Zapisz-Wynik "serwer MCP w opencode" $okO "wpis mcp.$NazwaMcp nie siedzi w $($script:OpencodeCfg) albo plik nie jest JSON-em"
+    Nie-Sprawdzono "czy opencode podepnie serwer $NazwaMcp przy starcie - wpis jest, ale podpiecie widac dopiero w nowej sesji opencode"
+  } else {
+    Write-Host "  --    serwer MCP w opencode - pominiete, nie ma opencode na tej maszynie" -ForegroundColor DarkGray
+  }
+
   if (-not $script:CodexJest) {
     Write-Host "  --    serwer MCP w Codeksie - pominiete, nie ma Codeksa na tej maszynie" -ForegroundColor DarkGray
     return
@@ -847,6 +925,8 @@ function Sprawdz-Instalacje {
     if (-not $script:CodexJest) { Plan "Codex - pominiete, nie ma go na tej maszynie" }
     elseif ($script:CodexMa)    { Plan "codex mcp get $NazwaMcp - czy Codex zna ten wpis" }
     else                        { Plan "czy w $($script:CodexCfg) jest tabela [mcp_servers.$NazwaMcp]" }
+    if ($script:OpencodeJest) { Plan "czy w $($script:OpencodeCfg) jest wpis mcp.$NazwaMcp" }
+    else                      { Plan "opencode - pominiete, nie ma go na tej maszynie" }
     Plan "handshake JSON-RPC z serwerem ${NazwaMcp}: initialize + tools/list + lore_stats"
     return
   }

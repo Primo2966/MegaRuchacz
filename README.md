@@ -10,8 +10,10 @@ językiem.
 Kluczowa różnica wobec zwykłej pracy z agentem: zadania lecą równolegle, a pilnuje
 ich kierownik, nie Ty. Pod **Claude Code** dochodzi rzecz najcenniejsza — **nie
 czekasz**: rzucasz zadanie, dostajesz klawiaturę z powrotem w sekundach i piszesz
-następne. Pod **Codeksem** tego nie ma: wątek główny czeka na wszystkich
-podagentów, więc runda idzie naraz, ale klawiaturę odzyskujesz dopiero po niej.
+następne. Pod **Codeksem** i pod **opencode** tego nie ma: wątek główny czeka na
+wszystkich podagentów, więc runda idzie naraz, ale klawiaturę odzyskujesz dopiero
+po niej. Różnica między nimi: pod Codeksem hooki trzeba raz zatwierdzić
+poleceniem `/hooks`, a opencode ładuje swoją wtyczkę sam — nic nie klikasz.
 
 W zestawie jest też **Lore — przeszukiwalna pamięć wszystkich Twoich rozmów** z agentem —
 żeby ustalenie z innego okna sprzed tygodnia nie przepadło.
@@ -26,6 +28,7 @@ W zestawie jest też **Lore — przeszukiwalna pamięć wszystkich Twoich rozmó
 | `zasady-globalne.md` | zasady wpisywane do plików instrukcji narzędzi AI |
 | `.claude/agents/` | prompty czterech ról: implementer, scout, verifier, zastępca |
 | `szablony-codex/` | to samo dla Codeksa: role, zasady kierownika, hooki |
+| `szablony-opencode/` | to samo dla opencode: role, zasady kierownika, wtyczka rejestru |
 | `lore/` | moduł `pamiec` — serwer MCP z przeszukiwalną pamięcią rozmów |
 | `narzedzia/` | instalator pamięci, wpisywanie zasad, strażnik, audyt sufitów |
 | `rozszerzenie/` | panel VS Code: lista okien zadaniowych, licznik workerów |
@@ -37,11 +40,17 @@ W zestawie jest też **Lore — przeszukiwalna pamięć wszystkich Twoich rozmó
 
 - **implementer** — wprowadza konkretną zmianę w wyznaczonych plikach. Pod Claude
   Code pracuje w osobnej kopii repozytorium, więc dwa zadania w tych samych plikach
-  mogą lecieć naprawdę równolegle; pod Codeksem rozłączności pilnuje treść zlecenia.
+  mogą lecieć naprawdę równolegle; pod Codeksem i opencode rozłączności pilnuje
+  treść zlecenia.
 - **scout** — rozpoznanie: gdzie co leży. Tylko czyta, niczego nie blokuje.
 - **verifier** — sprawdza pojedynczą zmianę: czy działa i czy nie psuje reszty.
 - **zastępca** — sprawdza, czy **całość** nadal trzyma się kupy po serii
   równoległych zmian. Uruchamiany w punktach scalenia, nie po każdym zadaniu.
+
+Kto pisze rejestr pracy, zależy od narzędzia: pod Claude Code hooki
+`SubagentStart`/`SubagentStop`, pod Codeksem hooki z `.codex/hooks.json` (raz
+zatwierdzone przez `/hooks`), a pod opencode wtyczka `.opencode/plugins/mr-log.js`,
+której nie trzeba zatwierdzać.
 
 ## Wymagania
 
@@ -49,21 +58,54 @@ W zestawie jest też **Lore — przeszukiwalna pamięć wszystkich Twoich rozmó
   i na razie nie planujemy; to świadoma decyzja, nie przeoczenie.
 - **git** — izolacja workerów stoi na `git worktree`.
 - **Node.js** — bez niego instalator **nie zapisze żadnych hooków ani ich
-  ładunków**, ani dla Claude Code, ani dla Codeksa. Odpadają wtedy: zasady
-  wstrzykiwane na starcie sesji, rejestr pracy workerów i cała samoobsługa
-  strażnika. Reszta wdrożenia idzie normalnie, ale to nie jest drobiazg.
-- **Claude Code albo Codex CLI** — wystarczy jedno. Pod Claude Code działa pełny
-  tryb (workerzy w tle, hooki, izolowane kopie repozytorium); pod Codeksem pamięć
-  działa w całości, a tryb workerów w wersji okrojonej — co dokładnie odpada,
-  mówi tabela „Na maszynie z samym Codeksem".
+  ładunków**, ani dla Claude Code, ani dla Codeksa, i nie sprawdzi działania
+  wtyczki opencode. Odpadają wtedy: zasady wstrzykiwane na starcie sesji, rejestr
+  pracy workerów i cała samoobsługa strażnika. Reszta wdrożenia idzie normalnie,
+  ale to nie jest drobiazg.
+- **Claude Code, Codex CLI albo opencode** — wystarczy jedno. Pod Claude Code działa
+  pełny tryb (workerzy w tle, hooki, izolowane kopie repozytorium); pod Codeksem
+  i opencode pamięć działa w całości, a tryb workerów w wersji okrojonej — co
+  dokładnie odpada, mówi tabela „Na maszynie z samym Codeksem" (pod opencode jest
+  tak samo, tylko nic nie trzeba zatwierdzać).
 - **Python 3.12 + `uv`** — tylko jeśli chcesz Lore, czyli pamięci rozmów.
 
 ## Instalacja
+
+### Globalnie — raz na komputer (zalecane)
+
+```powershell
+powershell -ExecutionPolicy Bypass -File <ścieżka>\narzedzia\instaluj-globalnie.ps1
+```
+
+Jedna komenda i tryb kierownika działa w **każdym projekcie** i we **wszystkich
+trzech** narzędziach naraz — nie wdrażasz nic po kolei:
+
+- **opencode** — role w `~/.config/opencode/agents`, wtyczka rejestru w `~/.config/opencode/plugins`;
+- **Claude Code** — role w `~/.claude/agents`, rejestr i hooki w `~/.claude/settings.json`;
+- **Codex** — zasady w `~/.codex/AGENTS.md`, rejestr i hooki w `~/.codex/hooks.json`;
+- **zasady** dla wszystkich trzech lecą przez `~/.claude/CLAUDE.md` (Claude Code i opencode)
+  oraz `~/.codex/AGENTS.md` (Codex).
+
+Stan pracy — rejestr zadań i mapa projektu — zostaje **w projekcie**, w `.megaruchacz\`.
+Zakłada go pierwszy worker, gdy zajdzie potrzeba, więc nic nie zalega w projektach,
+w których nie rozdajesz roboty.
+
+Zdjąć: ten sam skrypt z `-Usun`. Zobaczyć plan bez zapisu: `-Proba`.
+
+> **Cena tej wygody:** zasady kierownika jadą do modelu przy **każdej** sesji,
+> w każdym projekcie — rzędu kilku tysięcy tokenów na okno. To nie usterka,
+> to koszt „kierownik wszędzie".
+
+### Per projekt — gdy chcesz tylko w jednym
 
 ```powershell
 # w katalogu projektu, do którego chcesz wdrożyć tryb
 powershell -ExecutionPolicy Bypass -File <ścieżka>\wdroz.ps1
 ```
+
+Po instalacji globalnej `wdroz.ps1` **nic nie robi** w projekcie — żeby nie
+dublować rejestru i zasad. Obejście, gdy naprawdę chcesz wdrożenie projektowe:
+dodaj `-WymusProjektowo`.
 
 Instalator **przed zrobieniem czegokolwiek mówi, co zamierza**: jakie pliki zapisze
 i gdzie, że dopisze hooki uruchamiane przy starcie sesji, i że wpisze zasady do
@@ -159,8 +201,9 @@ i każdy instaluje się osobno. Możesz wziąć sam tryb pracy, samą pamięć, 
 **Co daje:** agent przestaje być wykonawcą, a staje się kierownikiem. Zadania lecą
 równolegle, po udanej robocie zmiany same wracają do `main`, a Ty widzisz meldunek
 po ludzku, nie surowe raporty. Pod **Claude Code** dochodzą dwie rzeczy, których
-pod samym Codeksem nie ma: rzucasz zadanie i **od razu piszesz następne**, a każdy
-worker siedzi w osobnej kopii repozytorium, więc nie wchodzą sobie w pliki.
+pod samym Codeksem ani opencode nie ma: rzucasz zadanie i **od razu piszesz
+następne**, a każdy worker siedzi w osobnej kopii repozytorium, więc nie wchodzą
+sobie w pliki.
 
 **Co kosztuje:** nic. Same pliki tekstowe, działa od razu po instalacji.
 
@@ -185,6 +228,7 @@ i wprost. Nic nie wychodzi poza Twój komputer.
 | **Claude Code w Orce** | tak | tak |
 | **Codex w Orce** | tak — workerów odpala Orca | tak, instalator sam rejestruje |
 | **Codex sam z siebie** | tak, w wersji dla Codeksa — bez pracy w tle i bez izolowanych kopii repozytorium; hooki wymagają jednorazowego `/hooks` | tak, instalator sam rejestruje |
+| **opencode** | tak, w wersji dla opencode — bez pracy w tle i bez izolowanych kopii repozytorium; wtyczka rejestru **nie wymaga zatwierdzania** | tak, instalator sam rejestruje (wpis `mcp.lore` w `opencode.json`) |
 | **Claude Desktop** (aplikacja) | **nie** | da się, ale ręcznie — patrz niżej |
 | Zwykły GPT, ChatGPT w przeglądarce | nie | nie |
 
@@ -226,6 +270,37 @@ Uwaga na rozmiar: Codex wczytuje `AGENTS.md` **do 32 KiB** — dłuższy plik pr
 i koniec zasad przepada. Strażnik ostrzega o tym jedną linią i robi to również pod
 Codeksem, tyle że ostrzeżenie idzie do dziennika `~\.claude\.megaruchacz-tlo.log`,
 a nie na ekran — żeby je zobaczyć, trzeba tam zajrzeć.
+
+### Maszyna z samym opencode — co tam działa, a co nie
+
+To ta sama wersja co dla Codeksa, z jedną różnicą: **nic nie trzeba zatwierdzać**.
+Wtyczka `.opencode/plugins/mr-log.js` ładuje się sama, a przy starcie woła w tle
+strażnika zasad (samoaktualizacja, pilnowanie bloków zasad) — pod Codeksem robi to
+hook `SessionStart`, którego opencode nie ma.
+
+| Co | Na maszynie z samym opencode |
+|---|---|
+| zasady globalne | **działa** — opencode czyta `~/.claude/CLAUDE.md` (zgodność z Claude Code) |
+| aktualizacja narzędzia | **dzieje się sama** — wtyczka woła strażnika w tle przy każdym starcie opencode |
+| pilnowanie, czy zasady nie zniknęły | **też działa** — ten sam strażnik wpisuje skasowany blok z powrotem |
+| `pamiec` (Lore) | **działa** — instalator rejestruje serwer MCP w `opencode.json`; indeks czyta jednak na razie tylko rozmowy Claude Code i Codeksa |
+| tryb workerów | **działa** — role w `.opencode/agents/`, rejestr prowadzi wtyczka, mapa i rejestr w `.megaruchacz/` |
+| praca w tle | **nie ma** — wątek główny czeka na wszystkich podagentów |
+| izolowane kopie repozytorium (worktree) | **nie ma** — rozłączności plików pilnuje wyłącznie treść zlecenia i rejestr |
+
+**Uwaga o zasadach globalnych.** opencode bierze zasady domowe z `~/.claude/CLAUDE.md`
+tylko dopóki nie ma `~/.config/opencode/AGENTS.md`. Gdy ten drugi plik powstanie,
+wygrywa — i `~/.claude/CLAUDE.md` przestaje być czytany. Instalator celowo go nie
+zakłada, żeby nie zgubić tego, co już masz w `CLAUDE.md`.
+
+**Gdy `AGENTS.md` jest śledzony w gicie**, instalator go nie rusza (tak samo jak
+pod Codeksem). Pod Codeksem zasady ratuje wtedy hook `SessionStart`; pod opencode
+robi to wtyczka — dokłada `.megaruchacz/zasady-kierownika.md` jako plik instrukcji,
+o ile w `AGENTS.md` nie ma bloku MegaRuchacza. Nie ma więc podwójnego ładowania.
+
+Granica ról czytających jest słabsza niż pod Codeksem: `edit: deny` blokuje
+narzędzia zapisu (`edit`, `write`, `apply_patch`), ale nie `bash` — pisanie przez
+powłokę zatrzymuje dopiero treść promptu. Pod Codeksem robi to piaskownica.
 
 ### Dlaczego Claude Desktop nie uciągnie modułu `workerzy`
 
@@ -273,6 +348,11 @@ Serwer MCP indeksujący transkrypty — Claude Code i Codeksa — do lokalnej ba
 z wyszukiwaniem pełnotekstowym i semantycznym (zapytanie po niemiecku znajdzie
 rozmowę po polsku). Baza i model leżą w `~\.lore` (a jeśli baza powstała wcześniej
 w `~\.claude`, zostaje tam) i **nie wychodzą poza Twoją maszynę**.
+
+Serwer rejestrują trzy narzędzia: Claude Code, Codex CLI i opencode (wpis
+`mcp.lore` w `~/.config/opencode/opencode.json`). **Rozmowy z opencode nie są
+jeszcze indeksowane** — w opencode przeszukujesz historię Claude Code i Codeksa.
+To znany dług, nie przeoczenie.
 
 ### Problem, który to rozwiązuje
 
@@ -469,11 +549,14 @@ narzędzie, dostaje pusty mechanizm, nie cudzą wiedzę.
 
 Wolimy to napisać, niż udawać, że jest komplet.
 
-- **Pod Codeksem strażnik melduje do dziennika, nie na ekran.** Robi wszystko to
-  samo co pod Claude Code, ale żeby zobaczyć, co powiedział, trzeba zajrzeć do
-  `~\.claude\.megaruchacz-tlo.log`.
+- **Pod Codeksem i opencode strażnik melduje do dziennika, nie na ekran.** Robi
+  wszystko to samo co pod Claude Code, ale żeby zobaczyć, co powiedział, trzeba
+  zajrzeć do `~\.claude\.megaruchacz-tlo.log`.
 - **Rejestr okien dla panelu VS Code prowadzą tylko workerzy Claude Code.**
-  Podagenci Codeksa piszą do rejestru pracy, ale w panelu ich nie zobaczysz.
+  Podagenci Codeksa i opencode piszą do rejestru pracy, ale w panelu ich nie zobaczysz.
+- **Lore nie indeksuje jeszcze rozmów z opencode.** Serwer MCP jest zarejestrowany
+  i działa, ale w opencode przeszukujesz historię Claude Code i Codeksa. Czytnik
+  bazy `opencode.db` to osobna robota.
 - **Panel VS Code** ma zaszytą ścieżkę do skryptu i działa tylko przy repozytorium
   w konkretnej lokalizacji.
 - **Tylko Windows.** Instalator jest w PowerShellu; wersji na Linuksa i maca nie

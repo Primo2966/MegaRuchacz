@@ -10,12 +10,17 @@
 #   -BezPytania     pomija ekran zgody i zaklada zgode na wszystko (tryb nieinteraktywny)
 #   -KatalogDomowy  podstawiony katalog domowy - do testow, zeby nie ruszac wlasnej konfiguracji
 #   -WymusCodex     wdraza czesc dla Codeksa nawet wtedy, gdy nie widac go na maszynie
+#   -WymusProjektowo  wdraza w projekcie mimo stojacej instalacji globalnej
+#
+# UWAGA: gdy stoi instalacja GLOBALNA (narzedzia\instaluj-globalnie.ps1), ten
+# skrypt nic nie robi w projekcie - inaczej rejestr i zasady szlyby dwa razy.
 
 param(
   [string]$Projekt = (Get-Location).Path,
   [switch]$BezPytania,
   [string]$KatalogDomowy = $HOME,
-  [switch]$WymusCodex
+  [switch]$WymusCodex,
+  [switch]$WymusProjektowo
 )
 
 $Zrodlo  = Split-Path -Parent $MyInvocation.MyCommand.Path
@@ -158,6 +163,81 @@ function Sledzony-W-Gicie($projekt, $plik) {
   } catch { return $false }
 }
 
+# Wspolna czesc trybu dla narzedzi bez Claude Code - Codex CLI i opencode.
+# Tworzy katalog stanu .megaruchacz\, zaklada rejestr i mape, kopiuje zasady
+# i wpisuje je do AGENTS.md miedzy znaczniki. AGENTS.md czyta i Codex, i opencode,
+# wiec to jest jedna droga zasad dla obu.
+#
+# Wszystko idempotentne: powtorne wdrozenie nie nadpisze rejestru ani mapy,
+# podmieni tylko kopie zasad i blok w AGENTS.md. Plik sledzony w gicie zostaje
+# nietkniety - wtedy zasady dziala tylko ten plik w .megaruchacz\.
+# Zwraca $true, gdy zasady sa w AGENTS.md: od tego zalezy, czy hook Codeksa ma
+# wiezc pelna tresc, czy samo przypomnienie.
+function Wstaw-Harness($projekt, $plikZasad) {
+  $mega = Join-Path $projekt ".megaruchacz"
+  New-Item -ItemType Directory -Force -Path $mega | Out-Null
+
+  foreach ($f in @("worklog.md","mapa.md")) {
+    $cel = Join-Path $mega $f
+    if (-not (Test-Path $cel)) {
+      if ($f -eq "worklog.md") {
+        [System.IO.File]::WriteAllText($cel, "# Rejestr pracy`r`n`r`n", $script:Utf8Zapis)
+      } else {
+        [System.IO.File]::WriteAllText($cel,
+          "# Mapa projektu`r`n`r`n_(pusto - pierwszy scout ma tu dopisac, co gdzie lezy)_`r`n", $script:Utf8Zapis)
+      }
+      Write-Host "OK  .megaruchacz\$f (nowy)"
+    } else {
+      Write-Host "--  .megaruchacz\$f juz istnieje, zostawiam"
+    }
+  }
+
+  Copy-Item $plikZasad (Join-Path $mega "zasady-kierownika.md") -Force
+
+  $POCZATEK = "<!-- MegaRuchacz:start -->"
+  $KONIEC   = "<!-- MegaRuchacz:koniec -->"
+  $trescZasad = [System.IO.File]::ReadAllText($plikZasad, $script:Utf8Odczyt)
+  $blokZasad = $POCZATEK + "`r`n" + $trescZasad.Trim() + "`r`n" + $KONIEC + "`r`n"
+  $celAgentsMd = Join-Path $projekt "AGENTS.md"
+
+  if (-not (Test-Path $celAgentsMd)) {
+    [System.IO.File]::WriteAllText($celAgentsMd, $blokZasad, $script:Utf8Zapis)
+    Write-Host "OK  AGENTS.md (nowy plik - zasady kierownika, czyta go i Codex, i opencode)"
+    return $true
+  }
+
+  # Cudzy plik czytamy ostroznie: gdy nie jest UTF-8, nie zgadujemy kodowania
+  # i nie ruszamy go w ogole - lepiej zostawic zasady w .megaruchacz\.
+  $stareAgents = $null
+  try { $stareAgents = [System.IO.File]::ReadAllText($celAgentsMd, $script:Utf8Odczyt) }
+  catch {
+    Write-Host "UWAGA  AGENTS.md nie daje sie odczytac jako UTF-8 - nie ruszam go" -ForegroundColor Yellow
+    return $false
+  }
+
+  $odKad = $stareAgents.IndexOf($POCZATEK, [System.StringComparison]::Ordinal)
+  $doKad = $stareAgents.IndexOf($KONIEC, [System.StringComparison]::Ordinal)
+  if ($odKad -ge 0 -and $doKad -gt $odKad) {
+    Kopia-Zapasowa $celAgentsMd
+    $noweAgents = $stareAgents.Substring(0, $odKad) + $blokZasad.TrimEnd() +
+                  $stareAgents.Substring($doKad + $KONIEC.Length)
+    [System.IO.File]::WriteAllText($celAgentsMd, $noweAgents, $script:Utf8Zapis)
+    Write-Host "OK  AGENTS.md - blok MegaRuchacza odswiezony, reszta pliku nietknieta"
+    return $true
+  }
+  if (Sledzony-W-Gicie $projekt "AGENTS.md") {
+    Write-Host "UWAGA  AGENTS.md jest sledzony w gicie - NIE ruszam go." -ForegroundColor Yellow
+    Write-Host "       Zasady kierownika leza w .megaruchacz\zasady-kierownika.md. Zeby narzedzie" -ForegroundColor Yellow
+    Write-Host "       czytalo je samodzielnie, wklej ich tresc do AGENTS.md miedzy znaczniki" -ForegroundColor Yellow
+    Write-Host "       $POCZATEK i $KONIEC" -ForegroundColor Yellow
+    return $false
+  }
+  Kopia-Zapasowa $celAgentsMd
+  [System.IO.File]::WriteAllText($celAgentsMd, $stareAgents.TrimEnd() + "`r`n`r`n" + $blokZasad, $script:Utf8Zapis)
+  Write-Host "OK  AGENTS.md - blok MegaRuchacza dopisany na koncu (plik nie jest sledzony w gicie)"
+  return $true
+}
+
 # Numer wersji narzedzia - najwyzszy naglowek "## X.Y.Z" w ZMIANY.md.
 # Wpisy w tym pliku nie zawsze ida po kolei, wiec liczy sie najwyzszy, nie pierwszy.
 function Wersja-Narzedzia($plikZmian) {
@@ -183,6 +263,19 @@ if ($Projekt -eq (Resolve-Path $Zrodlo).Path) {
   exit 1
 }
 
+# Instalacja GLOBALNA ma pierwszenstwo. Gdy stoi, wdroz per projekt nie wchodzi:
+# zdublowalby rejestr (globalny hook/plugin i projektowy pisalyby do tego samego
+# worklog.md) i zasady (globalny CLAUDE.md i projektowy AGENTS.md). Wyjatek na
+# wyraźne zyczenie -WymusProjektowo.
+$MarkerGlobalny = Join-Path $KatalogDomowy ".claude\.megaruchacz-global"
+if ((Test-Path $MarkerGlobalny) -and -not $WymusProjektowo) {
+  Write-Host ""
+  Write-Host "MegaRuchacz dziala juz GLOBALNIE (znacznik: $MarkerGlobalny)." -ForegroundColor Green
+  Write-Host "Nie wdrazam per projekt, zeby nie dublowac rejestru pracy ani zasad."
+  Write-Host "Jesli chcesz mimo to wdrozenie wlasnie w tym projekcie, uruchom z -WymusProjektowo."
+  exit 0
+}
+
 # Co jest na TEJ maszynie. Tryb workerow stoi w calosci na mechanizmach Claude
 # Code (hooki, subagenci, izolowane kopie repozytorium) - bez niego nie zadziala
 # i nie wolno udawac, ze jest inaczej. Zasady globalne i odswiezanie narzedzia
@@ -198,6 +291,14 @@ $Codex = Get-Command codex -CommandType Application -ErrorAction SilentlyContinu
 $DomCodex = $env:CODEX_HOME
 if (-not $DomCodex) { $DomCodex = Join-Path $KatalogDomowy ".codex" }
 $JestCodex = ($null -ne $Codex) -or (Test-Path $DomCodex) -or $WymusCodex
+
+# opencode: tryb workerow stoi na wtyczce (.opencode\plugins\) i podagentach,
+# ktore opencode ma sam. Widzimy go po poleceniu w PATH albo po katalogu
+# konfiguracji (~/.config/opencode). Przelacznika "wymus" nie ma - bez samego
+# opencode nie ma czego wdrazac, a katalog konfiguracji i tak trzeba utworzyc.
+$Opencode = Get-Command opencode -CommandType Application -ErrorAction SilentlyContinue | Select-Object -First 1
+$DomOpencode = Join-Path $KatalogDomowy ".config\opencode"
+$JestOpencode = ($null -ne $Opencode) -or (Test-Path $DomOpencode)
 
 # --------------------------------------------------------------- 0. ekran zgody
 # Zanim cokolwiek ruszymy - co dokladnie sie stanie i gdzie. Nikt nie ma byc
@@ -275,6 +376,27 @@ if ($JestCodex) {
   Write-Host "   zostanie pominieta. Wymusic mozna przelacznikiem -WymusCodex."
   Write-Host ""
 }
+if ($JestOpencode) {
+  Write-Host "1c) Widze opencode - tryb workerow wchodzi takze dla niego:"
+  Write-Host "   .opencode\agents\*.md       definicje czterech rol podagentow"
+  Write-Host "   .opencode\plugins\mr-log.js wtyczka: dopisuje start i koniec workera"
+  Write-Host "                               do .megaruchacz\worklog.md. To zamiennik"
+  Write-Host "                               hookow Codeksa - opencode laduje ja sam,"
+  Write-Host "                               NIC nie trzeba zatwierdzac."
+  Write-Host "   AGENTS.md w korzeniu projektu   zasady kierownika miedzy znacznikami MegaRuchacz."
+  Write-Host "                               Czyta go i opencode, i Codex. Gdy tego pliku"
+  Write-Host "                               nie ma - powstanie nowy (niesledzony przez gita)."
+  Write-Host "                               Gdy Twoj AGENTS.md jest sledzony w repo - NIE"
+  Write-Host "                               ruszam go i powiem o tym wprost."
+  Write-Host "   .megaruchacz\               rejestr pracy, mapa i kopia zasad."
+  Write-Host "   Po instalacji ZAMKNIJ i otworz opencode na nowo - role i wtyczke"
+  Write-Host "   opencode wczytuje raz, przy starcie."
+  Write-Host ""
+} else {
+  Write-Host "1c) opencode nie widze na tej maszynie - czesc dla niego (.opencode\) zostanie"
+  Write-Host "   pominieta."
+  Write-Host ""
+}
 Write-Host "2) Poza projektem - zasady globalne:"
 Write-Host "   do $plikDomowy i do ~\.codex\AGENTS.md zostanie dopisany blok"
 Write-Host "   miedzy znacznikami <!-- MegaRuchacz:start --> i <!-- MegaRuchacz:koniec -->."
@@ -297,23 +419,25 @@ foreach ($m in $Moduly) {
 Write-Host ""
 
 # Uczciwie i przed zgoda: czego na tej maszynie nie da sie wdrozyc.
-if (-not $Claude -and -not $JestCodex) {
-  Write-Host "UWAGA - nie widze na tej maszynie ani Claude Code, ani Codeksa:" -ForegroundColor Yellow
-  Write-Host "   Tryb workerow (rozdawanie zadan, hooki, izolowane kopie repozytorium) stoi na" -ForegroundColor Yellow
-  Write-Host "   mechanizmach tych dwoch narzedzi. Tutaj NIE zadziala i instalator nie bedzie" -ForegroundColor Yellow
+if (-not $Claude -and -not $JestCodex -and -not $JestOpencode) {
+  Write-Host "UWAGA - nie widze na tej maszynie ani Claude Code, ani Codeksa, ani opencode:" -ForegroundColor Yellow
+  Write-Host "   Tryb workerow (rozdawanie zadan, role podagentow, rejestr) stoi na" -ForegroundColor Yellow
+  Write-Host "   mechanizmach tych narzedzi. Tutaj NIE zadziala i instalator nie bedzie" -ForegroundColor Yellow
   Write-Host "   udawal, ze jest inaczej." -ForegroundColor Yellow
-  Write-Host "   Dziala za to: zasady globalne (Codex czyta ~\.codex\AGENTS.md sam, bez hooka)" -ForegroundColor Yellow
-  Write-Host "   i modul pamieci [pamiec]. Nowsza wersje narzedzia pobiera hook startowy," -ForegroundColor Yellow
-  Write-Host "   wiec bez zadnego z tych dwoch narzedzi trzeba ja podciagac samemu:" -ForegroundColor Yellow
-  Write-Host "   powershell -File $Straznik" -ForegroundColor Yellow
+  Write-Host "   Dziala za to: zasady globalne i modul pamieci [pamiec]. Nowsza wersje" -ForegroundColor Yellow
+  Write-Host "   narzedzia pobiera hook startowy, wiec bez zadnego z tych narzedzi trzeba" -ForegroundColor Yellow
+  Write-Host "   ja podciagac samemu: powershell -File $Straznik" -ForegroundColor Yellow
   Write-Host "   Pliki trybu workerow zapisze mimo to - zaczna dzialac, gdy narzedzie sie pojawi." -ForegroundColor Yellow
   Write-Host ""
 } elseif (-not $Claude) {
-  Write-Host "UWAGA - nie widze Claude Code, widze Codeksa:" -ForegroundColor Yellow
-  Write-Host "   Tryb workerow wdroze w wersji dla Codeksa. Ma dwa ograniczenia, o ktorych" -ForegroundColor Yellow
-  Write-Host "   trzeba wiedziec: nie ma pracy w tle (watek glowny czeka na wszystkich" -ForegroundColor Yellow
-  Write-Host "   podagentow) i nie ma izolacji przez kopie repozytorium - rozlacznosc plikow" -ForegroundColor Yellow
-  Write-Host "   pilnuje wylacznie tresc zlecenia i rejestr." -ForegroundColor Yellow
+  $widziane = @()
+  if ($JestCodex)    { $widziane += "Codeksa" }
+  if ($JestOpencode) { $widziane += "opencode" }
+  Write-Host "UWAGA - nie widze Claude Code, widze $($widziane -join ' i '):" -ForegroundColor Yellow
+  Write-Host "   Tryb workerow wdroze w wersji dla tych narzedzi. Ma dwa ograniczenia," -ForegroundColor Yellow
+  Write-Host "   o ktorych trzeba wiedziec: nie ma pracy w tle (watek glowny czeka na" -ForegroundColor Yellow
+  Write-Host "   wszystkich podagentow) i nie ma izolacji przez kopie repozytorium -" -ForegroundColor Yellow
+  Write-Host "   rozlacznosc plikow pilnuje wylacznie tresc zlecenia i rejestr." -ForegroundColor Yellow
   Write-Host "   Pliki dla Claude Code zapisze mimo to - zaczna dzialac, gdy sie pojawi." -ForegroundColor Yellow
   Write-Host ""
 }
@@ -666,13 +790,28 @@ if (zmiana) { fs.writeFileSync(cel, JSON.stringify(s, null, 2)); process.exit(0)
 process.exit(4);
 '@
 
-if ($JestCodex) {
+# Kodowanie dla obu czesci bez Claude Code (Codex i opencode): UTF-8 bez BOM
+# przy zapisie, UTF-8 rzucajacy bledem przy odczycie - zepsute polskie znaki
+# maja zatrzymac zapis, a nie przejsc po cichu.
+$script:Utf8Zapis  = New-Object System.Text.UTF8Encoding($false)
+$script:Utf8Odczyt = New-Object System.Text.UTF8Encoding($false, $true)
+
+# Wspolna czesc dla Codeksa i opencode: katalog stanu .megaruchacz\ z rejestrem,
+# mapa i kopia zasad oraz blok zasad w AGENTS.md. AGENTS.md czyta i Codex,
+# i opencode - to jedna droga zasad dla obu. Gdy sa oba narzedzia, wygrywa wariant
+# opencode: jest nowszy i opisuje oba sposoby pisania rejestru (wtyczka w opencode,
+# hooki w Codeksie).
+$codexZasadyWAgents = $false
+if ($JestCodex -or $JestOpencode) {
   Write-Host ""
-  Write-Host "--- Codex ---"
-  $utf8Zapis  = New-Object System.Text.UTF8Encoding($false)
-  $utf8Odczyt = New-Object System.Text.UTF8Encoding($false, $true)
+  Write-Host "--- Codex / opencode ---"
+  $plikZasadHarness = Join-Path $Zrodlo "szablony-codex\zasady-kierownika.md"
+  if ($JestOpencode) { $plikZasadHarness = Join-Path $Zrodlo "szablony-opencode\zasady-kierownika.md" }
+  $codexZasadyWAgents = Wstaw-Harness $Projekt $plikZasadHarness
+}
+
+if ($JestCodex) {
   New-Item -ItemType Directory -Force -Path (Join-Path $celCodex "agents") | Out-Null
-  New-Item -ItemType Directory -Force -Path $celMega | Out-Null
 
   # Role podagentow - tak samo jak w Claude Code: cudzy plik o tej samej nazwie
   # dostaje kopie zapasowa, swoje rozpoznajemy po znaczniku kierownik-template.
@@ -688,71 +827,8 @@ if ($JestCodex) {
   }
   Write-Host "OK  role podagentow -> .codex\agents\"
 
-  # Pliki stanu - tylko gdy ich nie ma. Rejestr prowadzi hook, mape wypelnia
-  # pierwszy scout; nadpisanie skasowaloby dorobek projektu.
-  $celRejestru = Join-Path $celMega "worklog.md"
-  if (-not (Test-Path $celRejestru)) {
-    [System.IO.File]::WriteAllText($celRejestru, "# Rejestr pracy`r`n`r`n", $utf8Zapis)
-    Write-Host "OK  .megaruchacz\worklog.md (nowy)"
-  } else {
-    Write-Host "--  .megaruchacz\worklog.md juz istnieje, zostawiam"
-  }
-  $celMapy = Join-Path $celMega "mapa.md"
-  if (-not (Test-Path $celMapy)) {
-    [System.IO.File]::WriteAllText($celMapy,
-      "# Mapa projektu`r`n`r`n_(pusto - pierwszy scout ma tu dopisac, co gdzie lezy)_`r`n", $utf8Zapis)
-    Write-Host "OK  .megaruchacz\mapa.md (nowa)"
-  } else {
-    Write-Host "--  .megaruchacz\mapa.md juz istnieje, zostawiam"
-  }
-
-  Copy-Item (Join-Path $Zrodlo "szablony-codex\zasady-kierownika.md") (Join-Path $celMega "zasady-kierownika.md") -Force
   Copy-Item (Join-Path $Zrodlo "szablony-codex\przypomnienie.json") (Join-Path $celMega "przypomnienie.json") -Force
-  Write-Host "OK  .megaruchacz\zasady-kierownika.md + przypomnienie dla hooka"
-
-  # AGENTS.md - jedyna droga zasad, ktora nie wymaga zatwierdzania hookow.
-  # Tresc idzie miedzy znaczniki, wlasne zapiski uzytkownika zostaja nietkniete,
-  # a pliku sledzonego w repozytorium nie ruszamy w ogole.
-  $POCZATEK = "<!-- MegaRuchacz:start -->"
-  $KONIEC   = "<!-- MegaRuchacz:koniec -->"
-  $trescZasad = [System.IO.File]::ReadAllText((Join-Path $celMega "zasady-kierownika.md"), $utf8Odczyt)
-  $blokZasad = $POCZATEK + "`r`n" + $trescZasad.Trim() + "`r`n" + $KONIEC + "`r`n"
-  $stareAgents = $null
-  if (-not (Test-Path $celAgentsMd)) {
-    [System.IO.File]::WriteAllText($celAgentsMd, $blokZasad, $utf8Zapis)
-    $codexZasadyWAgents = $true
-    Write-Host "OK  AGENTS.md (nowy plik - zasady kierownika, Codex czyta go sam)"
-  } else {
-    # Cudzy plik czytamy ostroznie: gdy nie jest UTF-8, nie zgadujemy kodowania
-    # i nie ruszamy go w ogole - lepiej zostawic zasady w .megaruchacz\.
-    $stareAgents = $null
-    try { $stareAgents = [System.IO.File]::ReadAllText($celAgentsMd, $utf8Odczyt) }
-    catch { Write-Host "UWAGA  AGENTS.md nie daje sie odczytac jako UTF-8 - nie ruszam go" -ForegroundColor Yellow }
-  }
-  if ($null -ne $stareAgents) {
-    $odKad = $stareAgents.IndexOf($POCZATEK, [System.StringComparison]::Ordinal)
-    $doKad = $stareAgents.IndexOf($KONIEC, [System.StringComparison]::Ordinal)
-    if ($odKad -ge 0 -and $doKad -gt $odKad) {
-      Kopia-Zapasowa $celAgentsMd
-      $noweAgents = $stareAgents.Substring(0, $odKad) + $blokZasad.TrimEnd() +
-                    $stareAgents.Substring($doKad + $KONIEC.Length)
-      [System.IO.File]::WriteAllText($celAgentsMd, $noweAgents, $utf8Zapis)
-      $codexZasadyWAgents = $true
-      Write-Host "OK  AGENTS.md - blok MegaRuchacza odswiezony, reszta pliku nietknieta"
-    } elseif (Sledzony-W-Gicie $Projekt "AGENTS.md") {
-      Write-Host "UWAGA  AGENTS.md jest sledzony w gicie - NIE ruszam go." -ForegroundColor Yellow
-      Write-Host "       Zasady kierownika leza w .megaruchacz\zasady-kierownika.md. Zeby Codex" -ForegroundColor Yellow
-      Write-Host "       czytal je sam, wklej ich tresc do AGENTS.md miedzy znaczniki" -ForegroundColor Yellow
-      Write-Host "       $POCZATEK i $KONIEC" -ForegroundColor Yellow
-      Write-Host "       Do tego czasu ida do modelu wylacznie hookiem SessionStart - czyli dopiero" -ForegroundColor Yellow
-      Write-Host "       po zatwierdzeniu hookow poleceniem /hooks." -ForegroundColor Yellow
-    } else {
-      Kopia-Zapasowa $celAgentsMd
-      [System.IO.File]::WriteAllText($celAgentsMd, $stareAgents.TrimEnd() + "`r`n`r`n" + $blokZasad, $utf8Zapis)
-      $codexZasadyWAgents = $true
-      Write-Host "OK  AGENTS.md - blok MegaRuchacza dopisany na koncu (plik nie jest sledzony w gicie)"
-    }
-  }
+  Write-Host "OK  .megaruchacz\przypomnienie.json (ladunek hooka Codeksa)"
 
   # Ladunki hookow i wpisy w .codex\hooks.json sklada node - tak samo jak po
   # stronie Claude Code. Bez node'a nie ma ich i nie udajemy, ze sa.
@@ -787,6 +863,35 @@ if ($JestCodex) {
 
   Write-Host "UWAGA  hooki Codeksa rusza dopiero po zatwierdzeniu poleceniem /hooks w CLI." -ForegroundColor Yellow
   Write-Host "       Zatwierdzasz raz - skrot liczy sie z definicji hooka, nie z tresci skryptu." -ForegroundColor Yellow
+}
+
+if ($JestOpencode) {
+  Write-Host ""
+  Write-Host "--- opencode ---"
+  $celOpenAgents  = Join-Path $Projekt ".opencode\agents"
+  $celOpenPlugins = Join-Path $Projekt ".opencode\plugins"
+  New-Item -ItemType Directory -Force -Path $celOpenAgents  | Out-Null
+  New-Item -ItemType Directory -Force -Path $celOpenPlugins | Out-Null
+
+  # Role podagentow - tak samo jak w Codeksie: cudzy plik o tej samej nazwie
+  # dostaje kopie zapasowa, swoje rozpoznajemy po znaczniku kierownik-template.
+  Get-ChildItem (Join-Path $Zrodlo "szablony-opencode\agents\*.md") | ForEach-Object {
+    $celRoli = Join-Path $celOpenAgents $_.Name
+    if (Test-Path $celRoli) {
+      if (-not ((Get-Content $celRoli -Raw) -match "kierownik-template")) {
+        Kopia-Zapasowa $celRoli
+        Write-Host "UWAGA  masz wlasny .opencode\agents\$($_.Name) - odlozylem kopie obok" -ForegroundColor Yellow
+      }
+    }
+    Copy-Item $_.FullName $celRoli -Force
+  }
+  Write-Host "OK  role podagentow -> .opencode\agents\"
+
+  # Wtyczka rejestru - odpowiednik hookow Codeksa. opencode laduje kazdy plik
+  # z .opencode\plugins\ sam przy starcie, wiec NIC nie trzeba zatwierdzac.
+  # Mowi o tym takze znacznik ~/.claude/.megaruchacz-opencode-zyje, ktory wtyczka odswieza.
+  Copy-Item (Join-Path $Zrodlo "szablony-opencode\plugins\mr-log.js") (Join-Path $celOpenPlugins "mr-log.js") -Force
+  Write-Host "OK  .opencode\plugins\mr-log.js (rejestr workerow bez hookow)"
 }
 
 # ---------------------------------------------------------- 5. reszta instalacji
@@ -851,26 +956,36 @@ foreach ($m in $Moduly) {
   }
   $linieWersji += "$k.data: $teraz"
 }
-# Wdrozenie dla Codeksa ma wlasny plik stanu (.megaruchacz\wersja.txt), w tym
-# samym formacie "klucz: wartosc". Od 0.14.1 odswieza go takze straznik -
-# Nanies-Poprawki-Codex przesuwa tam "codex.wersja" i "codex.data" razem z reszta
-# poprawek. Ten sam klucz zostaje w pliku wersji Claude Code, zeby jedno miejsce
-# mowilo cala prawde o wdrozeniu; Pilnuj-Wersji przesuwa go razem z modulem.
+# Wdrozenie dla narzedzi bez Claude Code ma wlasny plik stanu (.megaruchacz\wersja.txt),
+# w tym samym formacie "klucz: wartosc". Straznik przesuwa tam "codex.wersja"
+# i "opencode.wersja" razem z reszta poprawek. Ten sam klucz zostaje w pliku wersji
+# Claude Code, zeby jedno miejsce mowilo cala prawde o wdrozeniu.
 if ($JestCodex) {
   $linieWersji += "codex.wersja: $wersja"
   $linieWersji += "codex.data: $teraz"
+}
+if ($JestOpencode) {
+  $linieWersji += "opencode.wersja: $wersja"
+  $linieWersji += "opencode.data: $teraz"
 }
 [System.IO.File]::WriteAllText((Join-Path $Projekt ".claude\megaruchacz-wersja.txt"),
   (($linieWersji -join "`r`n") + "`r`n"), (New-Object System.Text.UTF8Encoding($false)))
 Write-Host "OK  .claude\megaruchacz-wersja.txt (wersja $wersja, commit $commit)"
 
-if ($JestCodex) {
-  $linieCodex = @("zrodlo: $Zrodlo", "commit: $commit", "data: $teraz",
-                  "codex.wersja: $wersja", "codex.data: $teraz")
-  if ($codexZasadyWAgents) { $linieCodex += "codex.zasady: AGENTS.md" }
-  else { $linieCodex += "codex.zasady: tylko hook - AGENTS.md nietkniety" }
+if ($JestCodex -or $JestOpencode) {
+  $linieHarness = @("zrodlo: $Zrodlo", "commit: $commit", "data: $teraz")
+  if ($JestCodex) {
+    $linieHarness += @("codex.wersja: $wersja", "codex.data: $teraz")
+    if ($codexZasadyWAgents) { $linieHarness += "codex.zasady: AGENTS.md" }
+    else { $linieHarness += "codex.zasady: tylko hook - AGENTS.md nietkniety" }
+  }
+  if ($JestOpencode) {
+    $linieHarness += @("opencode.wersja: $wersja", "opencode.data: $teraz")
+    if ($codexZasadyWAgents) { $linieHarness += "opencode.zasady: AGENTS.md" }
+    else { $linieHarness += "opencode.zasady: tylko .megaruchacz - AGENTS.md nietkniety" }
+  }
   [System.IO.File]::WriteAllText((Join-Path $celMega "wersja.txt"),
-    (($linieCodex -join "`r`n") + "`r`n"), (New-Object System.Text.UTF8Encoding($false)))
+    (($linieHarness -join "`r`n") + "`r`n"), (New-Object System.Text.UTF8Encoding($false)))
   Write-Host "OK  .megaruchacz\wersja.txt (wersja $wersja, commit $commit)"
 }
 
@@ -1153,6 +1268,77 @@ if ($JestCodex) {
   Write-Host "  --    czesc dla Codeksa - pominieta, nie widze go na tej maszynie (wymusic mozna: -WymusCodex)"
 }
 
+# --- czesc dla opencode ---
+# Tu da sie sprawdzic wiecej niz zapis na dysku: wtyczka to zwykly modul, wiec
+# uruchamiamy ja naprawde na probnych zdarzeniach sesji i patrzymy, czy rejestr
+# urosl. To, ze opencode ja wczyta, widac dopiero w nowej sesji - i tak mowimy.
+if ($JestOpencode) {
+  foreach ($p in @(".megaruchacz\zasady-kierownika.md",".megaruchacz\worklog.md",
+                   ".megaruchacz\mapa.md",".opencode\plugins\mr-log.js")) {
+    Sprawdz $p (Test-Path (Join-Path $Projekt $p)) "plik nie powstal"
+  }
+  Get-ChildItem (Join-Path $Zrodlo "szablony-opencode\agents\*.md") | ForEach-Object {
+    Sprawdz ".opencode\agents\$($_.Name)" (Test-Path (Join-Path $Projekt ".opencode\agents\$($_.Name)")) "plik nie powstal"
+  }
+
+  $plikWtyczki = Join-Path $Zrodlo "szablony-opencode\plugins\mr-log.js"
+  if (-not $Node) {
+    Sprawdz "wtyczka mr-log.js daje sie uruchomic" $false "nie ma node w PATH - nie mam czym jej sprawdzic"
+  } elseif (-not (Test-Path $plikWtyczki)) {
+    Sprawdz "wtyczka mr-log.js daje sie uruchomic" $false "nie ma pliku $plikWtyczki"
+  } else {
+    $proba = Join-Path $env:TEMP "mr-proba-opencode-$Stempel"
+    New-Item -ItemType Directory -Force -Path $proba | Out-Null
+    # Wtyczka jest modulem ESM, ktory opencode laduje sam. node traktuje ".js"
+    # jako CommonJS, wiec na probe kopiujemy ja jako ".mjs" - skladnia i eksport
+    # sa te same, a node ma jednoznaczny sygnal, ze to modul.
+    Copy-Item $plikWtyczki (Join-Path $proba "mr-log.mjs") -Force
+    $harness = @'
+import { MrLog } from "./mr-log.mjs"
+import fs from "node:fs"
+const katalog = process.argv[2]
+const h = await MrLog({ directory: katalog })
+await h.event({ event: { type: "session.created", properties: { info: { id: "proba-1", parentID: "main", title: "scout" } } } })
+await h.event({ event: { type: "session.idle", properties: { sessionID: "proba-1" } } })
+const plik = katalog + "/.megaruchacz/worklog.md"
+if (!fs.existsSync(plik)) process.exit(2)
+const t = fs.readFileSync(plik, "utf8")
+if (!/START/.test(t) || !/KONIEC/.test(t)) process.exit(3)
+if (!/scout/.test(t)) process.exit(4)
+// Znacznik .opencode-zyje lezy teraz globalnie (~/.claude/), nie w projekcie -
+// dlatego nie sprawdzamy go tutaj.
+// Gdy AGENTS.md nie ma bloku zasad, wtyczka doklada .megaruchacz/zasady-kierownika.md
+// jako plik instrukcji - bez tego opencode nie mialby skad wziac zasad.
+fs.writeFileSync(katalog + "/.megaruchacz/zasady-kierownika.md", "# zasady\n")
+const cfg = { instructions: [] }
+await h.config(cfg)
+const dokladka = (cfg.instructions || []).some((i) => String(i).replace(/\\/g, "/").includes(".megaruchacz/zasady-kierownika.md"))
+if (!dokladka) process.exit(6)
+process.exit(0)
+'@
+    $plikHarness = Join-Path $proba "proba.mjs"
+    [System.IO.File]::WriteAllText($plikHarness, $harness, (New-Object System.Text.UTF8Encoding($false)))
+    $kodW = -1
+    try {
+      $global:LASTEXITCODE = 0
+      & $Node.Source (Join-Path $proba "proba.mjs") $proba 2>&1 | Out-Null
+      $kodW = $LASTEXITCODE
+    } catch { $kodW = -1 }
+    $czemuW = "wtyczka nie dopisala rejestru (kod $kodW)"
+    if ($kodW -eq 2) { $czemuW = "wtyczka nie utworzyla .megaruchacz\worklog.md" }
+    if ($kodW -eq 3) { $czemuW = "wtyczka nie zapisala START i KONIEC" }
+    if ($kodW -eq 4) { $czemuW = "rejestr nie ma rodzaju workera ze zdarzenia" }
+    if ($kodW -eq 6) { $czemuW = "wtyczka nie dolozyla zasad jako pliku instrukcji, gdy nie ma ich w AGENTS.md" }
+    Sprawdz "wtyczka mr-log.js dopisuje workera do rejestru (uruchomiona naprawde)" ($kodW -eq 0) $czemuW
+    Remove-Item $proba -Recurse -Force -ErrorAction SilentlyContinue
+  }
+
+  Nie-Sprawdzono "role z .opencode\agents\ i wtyczke potwierdza tylko zapis na dysku (dodatkowo wtyczke uruchomilem na probnych zdarzeniach) - to, ze opencode ja wczyta i ze zdarzenia sesji naprawde do niej dotra, widac dopiero w nowej sesji"
+  Nie-Sprawdzono "poprawki do czesci opencode nanosi potem straznik zasad tak samo jak do .codex\ - bez zatwierdzania, bo opencode nie ma mechanizmu /hooks"
+} else {
+  Write-Host "  --    czesc dla opencode - pominieta, nie widze go na tej maszynie"
+}
+
 Sprawdz "wpisanie zasad globalnych" $wynikZasad.ok $wynikZasad.czemu
 
 # Stare zadanie zdejmowalismy tylko wtedy, gdy nie zrobil tego instalator
@@ -1194,13 +1380,22 @@ if ($script:Bledy.Count -eq 0) {
   Write-Host "Gotowe - wszystko na miejscu, zaden sledzony plik nie ruszony." -ForegroundColor Green
   if ($Claude) {
     Write-Host "Zamknij i otworz Claude Code na nowo, zeby zasady weszly w zycie."
-  } elseif ($JestCodex) {
-    Write-Host "Zamknij i otworz Codeksa na nowo, zeby zasady weszly w zycie."
+  } elseif ($JestCodex -or $JestOpencode) {
+    $doOtwardia = @()
+    if ($JestCodex)    { $doOtwardia += "Codeksa" }
+    if ($JestOpencode) { $doOtwardia += "opencode" }
+    Write-Host "Zamknij i otworz $($doOtwardia -join ' i ') na nowo, zeby zasady weszly w zycie."
   } else {
     Write-Host "Zamknij i otworz swoje narzedzie AI na nowo, zeby zasady weszly w zycie."
-    Write-Host "Na tej maszynie NIE dziala tryb workerow - wymaga Claude Code albo Codeksa." -ForegroundColor Yellow
+    Write-Host "Na tej maszynie NIE dziala tryb workerow - wymaga Claude Code, Codeksa albo opencode." -ForegroundColor Yellow
     Write-Host "Dzialaja zasady globalne. Nowsza wersje narzedzia podciaga hook startowy," -ForegroundColor Yellow
     Write-Host "a tu go nie ma - rob to sam: powershell -File $Straznik" -ForegroundColor Yellow
+  }
+  if ($JestOpencode) {
+    Write-Host ""
+    Write-Host "opencode: nic wiecej nie trzeba zatwierdzac - role i wtyczke wczytuje sam" -ForegroundColor Green
+    Write-Host "  przy starcie. Rejestr .megaruchacz\worklog.md zapelni sie przy pierwszym" -ForegroundColor Green
+    Write-Host "  rozdanym zadaniu; slad dzialania wtyczki to ~\.claude\.megaruchacz-opencode-zyje." -ForegroundColor Green
   }
   if ($JestCodex) {
     Write-Host ""
