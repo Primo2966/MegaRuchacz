@@ -5,10 +5,12 @@ from __future__ import annotations
 import re
 import sqlite3
 import threading
+from dataclasses import dataclass
 
 import numpy as np
 
-from .db import EMBED_DIM, connect, embed_query, ts_to_local
+from .db import (EMBED_DIM, MODELS, ModelUnavailable, active_model, connect, embed_query, log, now_iso,
+                 ts_to_local, vector_status)
 
 TOP_PER_CHANNEL = 30
 RRF_K = 60
@@ -44,34 +46,78 @@ def _filters(project: str | None, since: str | None, until: str | None) -> tuple
 
 # ---------------------------------------------------------------- vector cache
 
+@dataclass(frozen=True)
+class _Snapshot:
+    """Vectors of ONE model plus the name of that model. The query is embedded with `model` and
+    compared with `matrix` only — the two cannot come from different models by construction."""
+
+    model: str | None
+    ids: np.ndarray
+    matrix: np.ndarray
+
+
+_EMPTY = _Snapshot(None, np.zeros(0, dtype=np.int64), np.zeros((0, EMBED_DIM), dtype=np.float32))
+
+
 class _VectorCache:
-    """The whole embedding matrix in RAM (scale: tens of thousands x 384 float32)."""
+    """The whole embedding matrix in RAM (scale: tens of thousands x 384-768 float32).
+
+    Only the `vectors` table is ever read — during a conversion the new model's vectors wait in
+    `vectors_next` and stay out of the ranking until the switch replaces the table as a whole.
+    """
 
     def __init__(self) -> None:
-        self.ids = np.zeros(0, dtype=np.int64)
-        self.matrix = np.zeros((0, EMBED_DIM), dtype=np.float32)
-        self._state: tuple[int, int] = (-1, -1)
+        self.snapshot = _EMPTY
+        self._state: tuple = ()
         self._lock = threading.Lock()
 
-    def refresh(self, conn: sqlite3.Connection) -> None:
-        r = conn.execute("SELECT count(*), coalesce(max(chunk_id), 0) FROM vectors").fetchone()
-        state = (int(r[0]), int(r[1]))
-        if state == self._state:
-            return
-        with self._lock:
+    def refresh(self, conn: sqlite3.Connection) -> _Snapshot:
+        # one read transaction: the model name and the vectors must come from the same moment,
+        # not from both sides of a switch
+        began = not conn.in_transaction
+        if began:
+            conn.execute("BEGIN")
+        try:
+            model = active_model(conn)
+            r = conn.execute("SELECT count(*), coalesce(max(chunk_id), 0) FROM vectors").fetchone()
+            state = (model, int(r[0]), int(r[1]))
             if state == self._state:
-                return
-            rows = conn.execute("SELECT chunk_id, emb FROM vectors ORDER BY chunk_id").fetchall()
-            if rows:
-                self.ids = np.fromiter((x[0] for x in rows), dtype=np.int64, count=len(rows))
-                self.matrix = np.vstack([np.frombuffer(x[1], dtype=np.float32) for x in rows])
-            else:
-                self.ids = np.zeros(0, dtype=np.int64)
-                self.matrix = np.zeros((0, EMBED_DIM), dtype=np.float32)
-            self._state = state
+                return self.snapshot
+            with self._lock:
+                if state != self._state:
+                    self.snapshot = self._load(conn, model)
+                    self._state = state
+                return self.snapshot
+        finally:
+            if began:
+                conn.execute("COMMIT")
+
+    @staticmethod
+    def _load(conn: sqlite3.Connection, model: str | None) -> _Snapshot:
+        spec = MODELS.get(model or "")
+        if spec is None:
+            log(f"WARNING: vectors of an unknown model {model!r} - semantic search is OFF, full text only "
+                "(python -m lore.migrate converts them)")
+            return _Snapshot(model, _EMPTY.ids, _EMPTY.matrix)
+        size = spec.dim * 4
+        ids, rows, wrong = [], [], 0
+        for cid, emb in conn.execute("SELECT chunk_id, emb FROM vectors ORDER BY chunk_id"):
+            if len(emb) != size:  # e.g. written by an old process still running the previous model
+                wrong += 1
+                continue
+            ids.append(cid)
+            rows.append(np.frombuffer(emb, dtype=np.float32))
+        if wrong:
+            log(f"WARNING: {wrong} vectors are not {spec.dim}-dimensional ({model}) - left out of the ranking; "
+                "python -m lore.migrate re-embeds them")
+        if not rows:
+            return _Snapshot(model, _EMPTY.ids, np.zeros((0, spec.dim), dtype=np.float32))
+        return _Snapshot(model, np.array(ids, dtype=np.int64), np.vstack(rows))
 
 
 _cache = _VectorCache()
+# the last reason the vector channel had to stand aside (shown in stats) — never swallowed
+last_vector_error: str | None = None
 
 
 # ---------------------------------------------------------------- channels
@@ -89,11 +135,18 @@ def _fts_channel(conn, q: str, where: str, args: list, limit: int) -> list[int]:
 
 
 def _vector_channel(conn, q: str, where: str, args: list, limit: int, filtered: bool) -> list[int]:
-    _cache.refresh(conn)
-    if len(_cache.ids) == 0:
+    global last_vector_error
+    snap = _cache.refresh(conn)
+    if len(snap.ids) == 0:
         return []
-    v = embed_query(q)
-    ids, m = _cache.ids, _cache.matrix
+    try:
+        v = embed_query(q, model=snap.model)
+    except ModelUnavailable as e:
+        # full text still answers; the reason is logged and kept for stats, not dropped
+        last_vector_error = f"{now_iso()} {e}"
+        log(f"WARNING: semantic search skipped, full text only: {e}")
+        return []
+    ids, m = snap.ids, snap.matrix
     if filtered:
         allowed = {r[0] for r in conn.execute(f"SELECT c.id FROM chunks c WHERE {where}", args)}
         keep = np.fromiter((i in allowed for i in ids), dtype=bool, count=len(ids))
@@ -220,6 +273,8 @@ def stats(conn: sqlite3.Connection | None = None) -> dict:
             "sessions": sessions, "chunks": total, "files": files,
             "last_indexed": ts_to_local(last[0]) if last else None,
             "database": str(DB_PATH), "size_MB": round(size / 1e6, 1),
+            "vectors": vector_status(conn),
+            "last_vector_error": last_vector_error,
             "projects": per,
         }
     finally:

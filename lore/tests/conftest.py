@@ -20,9 +20,9 @@ from lore import db, index  # noqa: E402
 TS = "2026-09-16T10:00:00.000Z"
 
 
-def _zero_vectors(texts: list[str], batch: int = 32) -> np.ndarray:
+def _zero_vectors(texts: list[str], batch: int = 32, model: str | None = None) -> np.ndarray:
     """Stand-in for embed_passages — the tests check chunking and incrementality, not the model."""
-    return np.zeros((len(texts), db.EMBED_DIM), dtype=np.float32)
+    return np.zeros((len(texts), db.model_spec(model).dim), dtype=np.float32)
 
 
 def record(role: str, text: str, session: str = "test-session", ts: str = TS) -> dict:

@@ -571,6 +571,7 @@ version = "0.1.0"
 source = { virtual = "." }
 dependencies = [
     { name = "fastembed" },
+    { name = "huggingface-hub" },
     { name = "mcp", extra = ["cli"] },
     { name = "numpy" },
 ]
@@ -583,6 +584,7 @@ dev = [
 [package.metadata]
 requires-dist = [
     { name = "fastembed", specifier = ">=0.4" },
+    { name = "huggingface-hub", specifier = ">=0.20" },
     { name = "mcp", extras = ["cli"], specifier = ">=2.0" },
     { name = "numpy", specifier = ">=1.26" },
 ]
