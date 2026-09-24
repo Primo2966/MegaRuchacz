@@ -547,6 +547,34 @@ def test_a_fact_standing_in_the_current_layer_is_not_proposed_again(waiting_room
     assert r["added"] == []
 
 
+def test_a_dormant_fact_heard_again_is_a_sighting_not_a_new_candidate(waiting_room):
+    """Put to sleep by lore.verify, it is still known here: the repetition is what wakes it up."""
+    facts.KNOWLEDGE_DIR.mkdir(parents=True, exist_ok=True)
+    (facts.KNOWLEDGE_DIR / facts.DORMANT_NAME).write_text(
+        "# Uśpione fakty\n\n- 2026-12-20 | O użytkowniku | U-261220-1 | Użytkownik pracuje na"
+        " Windowsie.\n", encoding="utf-8")
+    add(waiting_room, ago(1), "user", "cokolwiek")
+    facts.write_marker(ago(2))
+
+    r = facts.run(ask=answers("Użytkownik pracuje na Windowsie."), conn=waiting_room.conn)
+
+    assert r["added"] == []
+    assert "| wyłowiony ponownie |" in trail(None) and "Użytkownik pracuje na Windowsie." in trail(None)
+
+
+def test_a_waiting_entry_with_its_note_is_not_proposed_again(waiting_room):
+    # the note of what it contradicts is lore.verify's, not part of the fact
+    facts.RULES_PATH.write_text("# Ustalenia\n- [2026-09-16] Redis jest potrzebny na tej maszynie."
+                                " (przeczy: „Redis nie jest potrzebny na tej maszynie.”)\n",
+                                encoding="utf-8")
+    add(waiting_room, ago(1), "user", "cokolwiek")
+    facts.write_marker(ago(2))
+
+    r = facts.run(ask=answers("Redis jest potrzebny na tej maszynie."), conn=waiting_room.conn)
+
+    assert r["added"] == []
+
+
 # ---------------------------------------------------------------- where a fact came from
 
 def trail(path) -> str:
