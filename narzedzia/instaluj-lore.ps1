@@ -478,6 +478,35 @@ function Zaloz-Zadanie {
   Krok "zadanie $NazwaZadania jest w harmonogramie ($($stan.Opis)) - indeks odswiezany co $InterwalMin min"
 }
 
+# Autostart nadzorcy w zasobniku. Cykl wiedzy musi miec wyzwalacz NIEZALEZNY
+# od hookow: hook nie chodzi, gdy nikt nie otworzyl okna, a wtedy milknie takze
+# wykrywanie tego, ze nic nie chodzi (17-24.09.2026 cykl stal tydzien i nikt
+# sie o tym nie dowiedzial). Sama rejestracja siedzi w zasobnik\, tu jest tylko
+# jej wywolanie - instalator pamieci nie ma powodu znac szczegolow Harmonogramu.
+# Brak tego katalogu to starsza kopia narzedzia, nie awaria instalacji pamieci.
+function Zaloz-Nadzorce {
+  $skrypt = Join-Path $Zrodlo "zasobnik\zainstaluj-zasobnik.ps1"
+  if (-not (Test-Path $skrypt)) {
+    Ostrzezenie "nie ma ${skrypt} - nadzorcy w zasobniku nie zakladam (starsza kopia narzedzia?)"
+    return
+  }
+  # Splatowanie TABLICA a nie tablica: przy @("-Zrodlo", $Zrodlo) PowerShell
+  # przekazal "-Zrodlo" jako WARTOSC pierwszego parametru pozycyjnego i instalator
+  # szukal nadzorcy w katalogu o nazwie "-Zrodlo". Zlapane 24.09.2026.
+  $argumenty = @{ Zrodlo = $Zrodlo }
+  if ($Proba) { $argumenty["Proba"] = $true }
+  try {
+    & $skrypt @argumenty
+    if ($LASTEXITCODE -ne 0) {
+      Ostrzezenie "nadzorca w zasobniku nie wstal (kod ${LASTEXITCODE}) - reszta instalacji jest w porzadku"
+      Krok "sprobuj osobno: powershell -ExecutionPolicy Bypass -File $skrypt"
+    }
+  } catch {
+    Ostrzezenie "nie udalo sie zalozyc nadzorcy w zasobniku: $($_.Exception.Message)"
+    Krok "sprobuj osobno: powershell -ExecutionPolicy Bypass -File $skrypt"
+  }
+}
+
 # Sprzatanie po starszych instalacjach. Zadanie odswiezalo narzedzie co godzine;
 # dzis robi to hook przy starcie sesji, wiec wpis w Harmonogramie jest juz tylko
 # zbednym bieganiem w tle. Brak zadania to normalna sytuacja, nie blad - na
@@ -906,6 +935,7 @@ if (-not $TylkoSprawdz) {
   Zainstaluj-Srodowisko
   Zarejestruj-Mcp
   Zaloz-Zadanie
+  Zaloz-Nadzorce
   Usun-Zadanie-Odswiezania
   Usun-Zadania-Cyklu
 }
