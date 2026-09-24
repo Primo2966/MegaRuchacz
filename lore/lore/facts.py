@@ -55,6 +55,10 @@ SIGHTED_AGAIN = "wyłowiony ponownie"  # the same fact once more — the evidenc
 # The field holding EVERY conversation of the batch. The readable source next to it names only
 # the first MAX_NAMED_SESSIONS; "i 2 innych" cannot tell whether two sightings share a conversation.
 SESSIONS_FIELD = "sesje:"
+# Facts of the durable layer nobody mentioned for months — lore.verify moves them there instead of
+# deleting them. They count as known here: heard again, such a fact leaves a sighting in the trail
+# (and that sighting is what wakes it up) instead of coming back to the waiting room as new.
+DORMANT_NAME = "uspione.md"
 RULES_PATH = CLAUDE_HOME / "CLAUDE.md"  # read only — the waiting room is the only thing we write
 CODEX_RULES_PATH = Path.home() / ".codex" / "AGENTS.md"
 
@@ -162,8 +166,11 @@ do warstwy bieżącej (wygasa po 14 dniach). Do stałej fakt przechodzi dopiero 
 najmniej dwóch różnych rozmowach. Tu zostaje tylko to, czego automat nie ma prawa rozstrzygnąć:
 
 - `[!]` odrzucone — podana ścieżka nie istnieje,
-- `[?]` sporne — przeczy temu, co już jest zapisane; którą wersję zostawić, decydujesz Ty,
 - `[x]` odhaczone ręcznie — automat tego nie rusza.
+
+Sprzeczność z tym, co już zapisane, nie czeka tu na decyzję: nowsze wygrywa. Wpis automatu jest
+zastępowany od razu, wpis przypięty (napisany ręcznie) — gdy nowa wersja padnie w dwóch różnych
+rozmowach. Stara wersja idzie do ~/.claude/wiedza/historia-zmian.md, każdą zmianę da się cofnąć.
 
 Nawias po dacie mówi, dokąd wpis należy: (stala/podsekcja), (biezaca), (referencyjna:plik.md).
 Skąd się wzięły — w ~/.claude/wiedza/zrodla.md.
@@ -174,7 +181,10 @@ SOURCES_HEADER = """# Skąd się wzięły fakty
 Jedna linia na zdarzenie: `data | zdarzenie | szczegóły | treść faktu`. „wyłowiony” mówi, z których
 rozmów fakt pochodzi („sesje:” — komplet identyfikatorów), „wyłowiony ponownie” — że padł znowu,
 „wpisany” — kiedy trafił do warstwy bieżącej, „awansowany” — kiedy przeszedł do stałej, bo padł
-w co najmniej dwóch różnych rozmowach, „wygasł” — kiedy zniknął z bieżącej po 14 dniach.
+w co najmniej dwóch różnych rozmowach, „wygasł” — kiedy zniknął z bieżącej po 14 dniach,
+„uśpiony” / „obudzony” — kiedy wyszedł ze stałej po 90 dniach bez wzmianki i kiedy do niej wrócił,
+„zastąpiony” / „wpisany w miejsce” — która wersja przegrała, a która wygrała sprzeczność,
+„cofnięty” — zmiana cofnięta na polecenie.
 
 Żeby znaleźć rozmowę: `lore_search` po treści faktu, zawężony do podanej daty albo sesji.
 Ten plik NIE jest doklejany do rozmów — dlatego trop stoi tu, a nie przy wpisie w wiedzy.
@@ -192,6 +202,9 @@ _LEADING_DAY = re.compile(r"^\[\d{4}-\d{2}-\d{2}\]\s*")  # the date a "biezaca" 
 # the reason lore.verify glues to an entry it did not let through — part of the verdict, not of
 # the fact; counted in, the same sentence would look new and be proposed all over again
 _REASON = re.compile(r"\s*\((?:nie znaleziono|sporne|nie mieści się):.*$")
+# the note lore.verify glues to a current entry still waiting to replace a pinned one — it says what
+# the entry contradicts, it is not part of the fact
+PENDING_NOTE = re.compile(r"\s*\(przeczy:\s*„.*”\)\s*$")
 _PUNCTUATION = re.compile(r"[^\w\s]", re.UNICODE)
 _POLISH = str.maketrans("ąćęłńóśźż", "acelnoszz")
 
@@ -1134,19 +1147,36 @@ def waiting_facts() -> list[Fact]:
     return out
 
 
+def dormant_entry(line: str) -> tuple[str, str, str, str] | None:
+    """One line of wiedza/uspione.md: (the day it fell asleep, its subsection, the change id, the
+    fact). None for anything else — the header, a blank line, a line the user wrote by hand."""
+    if not line.startswith("- "):
+        return None
+    parts = line[2:].split(" | ", 3)
+    if len(parts) != 4 or not re.fullmatch(r"\d{4}-\d{2}-\d{2}", parts[0].strip()):
+        return None
+    return parts[0].strip(), parts[1].strip(), parts[2].strip(), parts[3].strip()
+
+
 def known_facts() -> set[str]:
     """Normalized facts already waiting in the candidates file or already standing in the rules.
 
     Every instruction file on this machine counts, not only Claude Code's: a fact approved into
     the Codex file would otherwise look unknown here and come back to the waiting room tomorrow,
-    asking the user to approve the same sentence over and over.
+    asking the user to approve the same sentence over and over. The dormant facts count too — see
+    DORMANT_NAME.
     """
     known = {normalize(f.text) for f in waiting_facts()}
     for path in instruction_paths():
         for line in _lines(path):
             # the date of a "biezaca" entry is not part of the fact: left in, the same sentence
             # would look new every day and the current layer would fill up with copies of itself
-            known.add(normalize(_LEADING_DAY.sub("", _BULLET.sub("", line).strip())))
+            text = PENDING_NOTE.sub("", _BULLET.sub("", line).strip())
+            known.add(normalize(_LEADING_DAY.sub("", text)))
+    for line in _lines(KNOWLEDGE_DIR / DORMANT_NAME):
+        entry = dormant_entry(line)
+        if entry:
+            known.add(normalize(entry[3]))
     known.discard("")
     return known
 
