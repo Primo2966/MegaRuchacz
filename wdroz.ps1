@@ -115,13 +115,20 @@ function Znajdz-Bash {
 # Odpala polecenie hooka doslownie tak, jak zrobilby to Claude Code: przez bash,
 # z CLAUDE_PROJECT_DIR wskazujacym projekt. Polecenie idzie do pliku, bo
 # cudzyslowy w argumencie "bash -c" gina po drodze w PowerShell 5.1.
-function Odpal-Przez-Bash($polecenie) {
+# $srodowisko - dodatkowe zmienne na czas proby (np. odciecie od prawdziwego stanu
+# w katalogu domowym), przywracane potem co do jednej.
+function Odpal-Przez-Bash($polecenie, $srodowisko = @{}) {
   $tmp = Join-Path $env:TEMP ("mr-hook-proba-$Stempel-" + [guid]::NewGuid().ToString("N").Substring(0, 6) + ".sh")
   # LF, bez BOM - bash na Windowsie nie trawi ani CR, ani znacznika kodowania
   [System.IO.File]::WriteAllText($tmp, (($polecenie -replace "`r`n", "`n") + "`n"),
                                  (New-Object System.Text.UTF8Encoding($false)))
-  $poprzedni = $env:CLAUDE_PROJECT_DIR
-  $env:CLAUDE_PROJECT_DIR = $Projekt
+  $zmienne = @{ CLAUDE_PROJECT_DIR = $Projekt }
+  foreach ($k in $srodowisko.Keys) { $zmienne[$k] = $srodowisko[$k] }
+  $poprzednie = @{}
+  foreach ($k in $zmienne.Keys) {
+    $poprzednie[$k] = [Environment]::GetEnvironmentVariable($k, "Process")
+    [Environment]::SetEnvironmentVariable($k, $zmienne[$k], "Process")
+  }
   try {
     $global:LASTEXITCODE = 0
     $wyjscie = & $script:Bash ($tmp -replace "\\", "/") 2>&1 | Out-String
@@ -129,8 +136,7 @@ function Odpal-Przez-Bash($polecenie) {
   } catch {
     return @{ kod = -1; tekst = $_.Exception.Message }
   } finally {
-    if ($null -eq $poprzedni) { Remove-Item Env:CLAUDE_PROJECT_DIR -ErrorAction SilentlyContinue }
-    else { $env:CLAUDE_PROJECT_DIR = $poprzedni }
+    foreach ($k in $poprzednie.Keys) { [Environment]::SetEnvironmentVariable($k, $poprzednie[$k], "Process") }
     Remove-Item $tmp -Force -ErrorAction SilentlyContinue
   }
 }
@@ -335,7 +341,9 @@ Write-Host "   agents\*.md                 definicje czterech rol workerow"
 Write-Host "   worklog.md, mapa.md         pliki stanu: rejestr zadan i mapa projektu"
 Write-Host "   megaruchacz-zasady.md       zasady pracy kierownika"
 Write-Host "   megaruchacz-sesja.json      gotowy ladunek dla hooka startowego"
-Write-Host "   orchestrator-reminder.json  krotkie przypomnienie przy kazdym poleceniu"
+Write-Host "   orchestrator-reminder.json  krotkie przypomnienie przy kazdym poleceniu; gdy stoi"
+Write-Host "                               pamiec [pamiec], skrypt dokleja do niego do 2 trafnych"
+Write-Host "                               fragmentow z archiwum rozmow (narzedzia\przypomnienie.js)"
 Write-Host "   mr-log.js                   dopisuje do rejestru start i koniec workera"
 Write-Host "   megaruchacz-wersja.txt      wersja wdrozenia, zeby dalo sie je aktualizowac"
 Write-Host "   settings.json               DOPISANE HOOKI - uruchamiane przy kazdej sesji"
@@ -558,14 +566,34 @@ function dodajHook(event, plik, opis) {
 // Nazwa ladunku ZOSTAJE w poleceniu - po niej rozpoznaja ten hook koszt-pamieci.ps1
 // i sufit-ladunku.ps1. "|| cat" ratuje maszyny bez node'a: przypomnienie dojdzie
 // wtedy w calosci, tylko bez linii postepu.
+// Stary hook (samo "cat" ladunku) podmieniamy na skrypt - tak samo jak straznik
+// (Podmien-Przypomnienie-Claude). Bez tego ponowne wdrozenie meldowaloby "juz jest"
+// i zostawialo projekt bez podpowiedzi z archiwum.
 function dodajPrzypomnienie(opis) {
   const event = "UserPromptSubmit", plik = "orchestrator-reminder.json";
   s.hooks[event] = s.hooks[event] || [];
-  if (JSON.stringify(s.hooks[event]).includes(plik)) { console.log("--  hook " + event + " juz jest"); return; }
   const r = repo.replace(/\\/g, "/");
-  s.hooks[event].push({ hooks: [{ type: "command", shell: "bash", timeout: 5,
-    command: 'node "' + r + '/narzedzia/przypomnienie.js" "$CLAUDE_PROJECT_DIR/.claude/' + plik +
-             '" || cat "$CLAUDE_PROJECT_DIR/.claude/' + plik + '"' }] });
+  const polecenie = 'node "' + r + '/narzedzia/przypomnienie.js" "$CLAUDE_PROJECT_DIR/.claude/' + plik +
+                    '" || cat "$CLAUDE_PROJECT_DIR/.claude/' + plik + '"';
+  if (JSON.stringify(s.hooks[event]).includes(plik)) {
+    let podmienione = false;
+    for (const g of s.hooks[event]) {
+      for (const h of (g && g.hooks) || []) {
+        if (!h || !String(h.command || "").includes(plik)) continue;
+        if (/przypomnienie\.js(?![A-Za-z0-9])/.test(h.command)) continue;
+        h.command = polecenie;
+        podmienione = true;
+      }
+    }
+    if (podmienione) {
+      zmiana = true;
+      console.log("OK  hook " + event + " - stare przypomnienie (samo cat) podmienione na skrypt z podpowiedzia z archiwum");
+    } else {
+      console.log("--  hook " + event + " juz jest");
+    }
+    return;
+  }
+  s.hooks[event].push({ hooks: [{ type: "command", shell: "bash", timeout: 5, command: polecenie }] });
   zmiana = true;
   console.log("OK  hook " + event + " - " + opis);
 }
@@ -1086,7 +1114,14 @@ if (-not $Claude) {
   Write-Host "        miejscach instalacji Gita, wiec nie mam czym ich sprobowac" -ForegroundColor Yellow
   Nie-Sprawdzono "hookow Claude Code nie probowalem uruchomic - nie widze bash.exe na tej maszynie; jesli hooki mimo to dzialaja, Claude Code ma wlasnego basha, a jesli nie - doinstaluj Git for Windows albo dopisz jego bin\ do PATH"
 } else {
-  # a) hooki podajace gotowy JSON - odpalamy naprawde i sprawdzamy, co wyszlo
+  # a) hooki podajace gotowy JSON - odpalamy naprawde i sprawdzamy, co wyszlo.
+  #    Przypomnienie (przypomnienie.js) pisze do katalogu domowego: stan podpowiedzi
+  #    z archiwum i jednorazowy meldunek cyklu wiedzy, ktory po odczycie znika.
+  #    Proba nie ma prawa zjesc prawdziwego meldunku ani zapisac w prawdziwym stanie
+  #    awarii, ktorej nie bylo - dlatego idzie na podstawionym katalogu domowym.
+  $domProby = Join-Path $env:TEMP "mr-hook-dom-$Stempel"
+  New-Item -ItemType Directory -Force -Path $domProby | Out-Null
+  $izolacja = @{ USERPROFILE = $domProby; MR_ARCHIWUM_STAN = (Join-Path $domProby "archiwum-stan.json") }
   $ladunki = @(
     @{ zdarzenie = "SessionStart";     znacznik = "megaruchacz-sesja.json" },
     @{ zdarzenie = "UserPromptSubmit"; znacznik = "orchestrator-reminder.json" }
@@ -1099,12 +1134,49 @@ if (-not $Claude) {
       Sprawdz "hook $zdarzenie ($znacznik) wykonuje sie" $false "nie ma go w settings.json"
       continue
     }
-    $w = Odpal-Przez-Bash $h.command
+    $w = Odpal-Przez-Bash $h.command $izolacja
     $tresc = "$($w.tekst)".Trim()
     $ok = ($w.kod -eq 0 -and $tresc)
     if ($ok) { try { $tresc | ConvertFrom-Json | Out-Null } catch { $ok = $false } }
     Sprawdz "hook $zdarzenie ($znacznik) wykonuje sie" $ok "polecenie z settings.json nie wypisalo poprawnego JSON-a (kod $($w.kod))"
   }
+
+  # a2) przypomnienie: czy wola skrypt (podpowiedz z archiwum) i czy ma wyjscie
+  #     awaryjne - a potem PROBA NEGATYWNA: to samo polecenie z PATH-em, w ktorym
+  #     node'a nie ma. Zabezpieczenie, ktorego nikt nie probowal zlamac, nie liczy
+  #     sie za zrobione (CLAUDE.md, "Cisza jest zakazana"). Wyjscie idzie do pliku,
+  #     a nie przez potok PowerShella, bo ten przekodowalby polskie znaki i porownanie
+  #     z ladunkiem na dysku sypaloby sie falszywie.
+  $hP = Polecenie-Hooka $ustawienia "UserPromptSubmit" "orchestrator-reminder.json"
+  if ($hP) {
+    $polP = "$($hP.command)"
+    Sprawdz "hook UserPromptSubmit wola narzedzia\przypomnienie.js (podpowiedz z archiwum)" `
+      ($polP -match 'przypomnienie\.js(?![A-Za-z0-9])') "polecenie samo wypisuje plik (stare 'cat') - uruchom wdrozenie ponownie albo otworz sesje, straznik podmieni je sam"
+    Sprawdz "hook UserPromptSubmit ma wyjscie awaryjne bez node'a (|| cat)" `
+      ($polP -match '\|\|\s*cat\s') "bez node'a przypomnienie zasad by nie doszlo"
+    $plikPrzyp = Join-Path $Projekt ".claude\orchestrator-reminder.json"
+    $wyjProby  = Join-Path $domProby "bez-node.json"
+    $wyjUnix   = $wyjProby -replace "\\", "/"
+    $bezNode = "export PATH=/usr/bin`n" +
+               "if command -v node >/dev/null 2>&1; then exit 97; fi`n" +
+               "{ " + $polP + " ; } > '" + $wyjUnix + "'"
+    $wN = Odpal-Przez-Bash $bezNode $izolacja
+    if ($wN.kod -eq 97) {
+      Nie-Sprawdzono "proby negatywnej przypomnienia (bez node'a) nie dalo sie zrobic - node siedzi w /usr/bin basha, wiec nie umiem go odciac"
+    } else {
+      $okN = $false
+      $czemuN = "kod $($wN.kod)"
+      try {
+        $oczekiwane = ([System.IO.File]::ReadAllText($plikPrzyp, [System.Text.Encoding]::UTF8) | ConvertFrom-Json).hookSpecificOutput.additionalContext
+        $dostalem   = ([System.IO.File]::ReadAllText($wyjProby, [System.Text.Encoding]::UTF8) | ConvertFrom-Json).hookSpecificOutput.additionalContext
+        if ($wN.kod -ne 0) { $czemuN = "polecenie skonczylo sie kodem $($wN.kod)" }
+        elseif ("$dostalem" -ne "$oczekiwane") { $czemuN = "wyszlo cos innego niz pelne przypomnienie ($("$dostalem".Length) zamiast $("$oczekiwane".Length) znakow)" }
+        else { $okN = $true }
+      } catch { $czemuN = "nie wyszedl poprawny JSON ($($_.Exception.Message))" }
+      Sprawdz "PROBA NEGATYWNA: bez node'a w PATH przypomnienie zasad wychodzi w calosci" $okN $czemuN
+    }
+  }
+  Remove-Item $domProby -Recurse -Force -ErrorAction SilentlyContinue
 
   # b) hooki rejestru - samego mr-log.js NIE uruchamiamy, bo dopisalby do
   #    worklog.md zmyslony wpis o workerze, ktorego nie bylo. "node --check"
