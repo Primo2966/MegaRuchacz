@@ -15,7 +15,10 @@ Wszystko działa lokalnie, bez zewnętrznych API. Nic nie wychodzi z komputera.
 ~/.lore/lore.db                                (SQLite)
    ├─ chunks      id, project, session, file, line, part, ts, role, text
    ├─ chunks_fts  FTS5 (unicode61 remove_diacritics 2: „zolty" znajdzie „żółty")
-   ├─ vectors     embeddingi float32[384] (intfloat/multilingual-e5-small, ONNX przez fastembed)
+   ├─ vectors     embeddingi float32[768] (sdadas/mmlw-retrieval-roberta-base, ONNX przez fastembed;
+   │              baza sprzed zmiany modelu trzyma tu e5-small [384] do czasu migracji)
+   ├─ vectors_next wektory nowego modelu budowane podczas migracji (poza rankingiem)
+   ├─ meta        m.in. embed_model — którym modelem liczono `vectors`
    └─ files       co już przetworzono (mtime, rozmiar, offset bajtowy, nr linii)
         │  lore/server.py  — MCPServer przez stdio
         ▼
@@ -35,7 +38,19 @@ api_key/refresh_token = …`, klucze `sk-…`, `AKIA…`, `ghp_…`, `ctx7sk-…
 
 **Wyszukiwanie** (`lore_search`): top-30 z FTS5 (BM25) + top-30 kosinus po wektorach
 (numpy, brute force) → Reciprocal Rank Fusion. Zapytanie po niemiecku znajdzie rozmowę po
-polsku (wspólna przestrzeń wielojęzyczna). Prefiksy `query:`/`passage:` zgodnie z wymogiem e5.
+polsku (wspólna przestrzeń wielojęzyczna). Pytanie jest liczone **tym samym modelem, co wektory
+w bazie** (`meta.embed_model`), z prefiksami z karty modelu: mmlw — `zapytanie: ` przed pytaniem,
+nic przed fragmentem; e5 — `query:`/`passage:`.
+
+**Model**: `sdadas/mmlw-retrieval-roberta-base` (768 wymiarów, ~500 MB). Plik ONNX pochodzi
+z eksportu `dawidplaskowski/mmlw-retrieval-roberta-base_onnx`, przypiętego do jednego commita
+i sumy sha256 każdego pliku — podmieniony plik jest odrzucany, nie używany. Pomiar z 2026-09-24
+na 60 pytaniach z rozmów autora: top10 90% wobec 80% dla e5-small, lepiej także po niemiecku
+i angielsku — `.claude/raporty/pamiec-test-modeli.md`, kod pomiaru w `lore/bench/`.
+
+**Automatyczne przypomnienie** (`lore/recall.py`, wołane przez `narzedzia/przypomnienie.js`
+przy każdej wiadomości): samo FTS5, bez modelu wektorowego (budżet < 1 s), najwyżej 2 fragmenty,
+z progiem trafności; bazę otwiera tylko do odczytu.
 
 ## Gdzie leżą dane
 
@@ -54,7 +69,7 @@ Transkrypty to co innego: czyta się je tam, gdzie zapisują je same narzędzia
 ## Uruchamianie
 
 Wymagania: `uv` (winget `astral-sh.uv`), Python 3.12 (`uv python install 3.12`).
-Zależności instalują się same przy pierwszym `uv run`. Model embeddingów (~470 MB)
+Zależności instalują się same przy pierwszym `uv run`. Model embeddingów (~500 MB)
 pobiera się raz do `<katalog danych>/lore_models/` (domyślnie `~/.lore/lore_models/`).
 
 ```powershell
@@ -66,7 +81,33 @@ uv --directory C:\dev\claude-worker\lore run python -m lore.server
 ```
 
 Serwer przy starcie sam uruchamia indeksowanie przyrostowe w wątku w tle.
-Dodatkowo zadanie harmonogramu Windows odświeża indeks co 30 min.
+Dodatkowo zadanie harmonogramu Windows `LoreIndex` (zakłada je `narzedzia\instaluj-lore.ps1`)
+odświeża indeks co 10 min od zalogowania.
+
+## Zmiana modelu wektorowego (migracja)
+
+Świeża baza od razu liczy modelem mmlw. Baza sprzed zmiany (e5-small) **działa dalej na starym
+modelu**, dopóki jej nie przeliczysz — wyszukiwanie nigdy nie miesza dwóch modeli w jednym
+rankingu, a nowe fragmenty dostają do tego czasu wektor starego modelu. Przeliczenie nie rusza samo:
+
+```powershell
+# przeliczenie archiwum w tle, partiami po 64 fragmenty (u autora ~2 h na CPU dla ~56 tys. fragmentów)
+uv --directory C:\dev\claude-worker\lore run python -m lore.migrate
+
+# stan: jaki model ma baza, ile przeliczono, tempo, szacowany koniec
+uv --directory C:\dev\claude-worker\lore run python -m lore.migrate --status
+```
+
+- Nowe wektory idą do osobnej tabeli `vectors_next`; wyszukiwanie korzysta ze starych aż do
+  przełączenia, które jest jedną transakcją (usuń starą tabelę, przemianuj nową, zapisz model).
+- Każda partia to osobna transakcja: przerwanie (zamknięte okno, wyłączony komputer) traci
+  najwyżej jedną partię, a ponowne uruchomienie rusza od miejsca, w którym stanęło.
+- Postęp leży w `lore.migration.json` obok bazy (odświeżany po każdej partii); czyta go też
+  nadzorca w zasobniku. Stan „running" ze starym znacznikiem życia = martwy proces.
+- Na bazie już przeliczonej to samo polecenie **naprawia**: dolicza brakujące wektory i te
+  o złym rozmiarze. Nic do naprawy = szybkie „nic".
+- Do końca migracji `lore_stats` (pole `vectors`) i log każdego procesu Lore mówią wprost, że
+  baza ma inny model niż skonfigurowany.
 
 ## Rejestracja w Claude Code (globalnie, wszystkie projekty)
 
