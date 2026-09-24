@@ -73,6 +73,11 @@
 # nic nigdy nie chodzilo, wiec alarmy musza sie odezwac:
 #   powershell -ExecutionPolicy Bypass -File zasobnik\nadzorca.ps1 -Raport -Proba -KatalogDomowy C:\Temp\pusty
 #
+# Proba negatywna listy zmian w pamieci - w podstawionym katalogu domowym
+# kladziemy wlasny .claude\wiedza\.wiedza-stan.txt (NIGDY prawdziwy): z dwiema
+# liniami meldunek_N ma pokazac obie z identyfikatorami, z "meldunek: bez zmian"
+# jedna linie, a bez pliku - "nie wiem", nigdy zero.
+#
 # Kod wyjscia w trybie -Raz: 0 gdy nie bylo alarmow, 1 gdy byl choc jeden.
 
 param(
@@ -140,10 +145,17 @@ function Ikona-Nadzorcy {
 # cykl, wersja, alarmy - plus slad samego nadzorcy, bo on tez ma nie milczec
 # o sobie. Zbierane raz, zeby dozor i okno nie liczyly tego samego dwa razy.
 function Zbierz-Wszystko([bool]$zSieci, [bool]$zKolejka) {
-  $d = [pscustomobject]@{ Wersja = $null; Cykl = $null; Rachunek = $null; Alarmy = @() }
+  $d = [pscustomobject]@{ Wersja = $null; Cykl = $null; Rachunek = $null; Alarmy = @(); Pamiec = $null; Przeliczanie = $null }
 
   try { $d.Wersja = Stan-Wersji $zSieci }
   catch { Zanotuj-Wywrotke "odczyt wersji narzedzia" $_ }
+
+  # Oba odczyty to same pliki na dysku, bez wolania skryptow - ulamek sekundy.
+  try { $d.Pamiec = Stan-Zmian-Pamieci }
+  catch { Zanotuj-Wywrotke "odczyt zmian w pamieci" $_ }
+
+  try { $d.Przeliczanie = Postep-Przeliczania }
+  catch { Zanotuj-Wywrotke "odczyt postepu przeliczania archiwum" $_ }
 
   try { $d.Cykl = Stan-Cyklu $zKolejka }
   catch { Zanotuj-Wywrotke "odczyt stanu cyklu" $_ }
@@ -315,10 +327,21 @@ function Zbuduj-Przod($d, $problemy, $czas) {
   if (@($problemy).Count -eq 0) { $l += "  Wszystko gra - nic nie wymaga Twojej uwagi." }
   $linie = @()
   if ($d) {
-    try { $linie = Linie-Stanu $d.Wersja $d.Cykl }
+    try { $linie = Linie-Stanu $d.Wersja $d.Cykl $d.Przeliczanie }
     catch { Zanotuj-Wywrotke "linie stanu do wydruku" $_; $l += "  NIE UDALO SIE ZLOZYC - szczegoly w dzienniku nadzorcy" }
   }
   foreach ($x in $linie) { $l += "  $x" }
+  $pm = $null
+  try { $pm = Opis-Zmian-Pamieci $(if ($d) { $d.Pamiec } else { $null }) }
+  catch { Zanotuj-Wywrotke "zmiany w pamieci do wydruku" $_; $l += "  NIE UDALO SIE ZLOZYC ZMIAN W PAMIECI - szczegoly w dzienniku nadzorcy" }
+  if ($pm) {
+    $l += "  $($pm.Linia)"
+    if (@($pm.Zmiany).Count -gt 0) {
+      $l += "      (w oknie schowane pod [pokaż zmiany])"
+      foreach ($x in $pm.Zmiany) { $l += "      $x" }
+    }
+    if ($pm.Porada) { $l += "      $($pm.Porada)" }
+  }
   $l += ""
 
   $l += "PRZYCISKI W OKNIE - co się stanie po kliknięciu"
@@ -361,6 +384,26 @@ function Zbuduj-Szczegoly($d, $wywrotkiNadzorcy, $rozbicie) {
   $l += "== NAUKA Z ROZMOW (cykl wiedzy) =="
   if ($d -and $d.Cykl) { $l += Opis-Cyklu $d.Cykl }
   else { $l += "  NIE UDALO SIE ODCZYTAC - szczegoly w dzienniku nadzorcy" }
+  $l += ""
+
+  # Surowy meldunek modulu pamieci - razem z komenda cofania, ktora na wierzchu
+  # jest zastapiona zdaniem "powiedz Claude'owi".
+  $l += "== ZMIANY W PAMIECI (meldunek ostatniej nauki) =="
+  if ($d -and $d.Pamiec) {
+    $pz = $d.Pamiec
+    $l += "  plik            : $($pz.Plik)"
+    if ($pz.Dzien) { $l += "  dzien nauki     : $($pz.Dzien.ToString('yyyy-MM-dd'))" }
+    if (-not $pz.Wiadomo) { $l += "  NIE WIADOMO     : $($pz.Powod)" }
+    if ($pz.Naglowek) { $l += "  meldunek        : $($pz.Naglowek)" }
+    foreach ($x in $pz.Zmiany) { $l += "                    $($x.Tresc)" }
+    $l += "  cofniecie       : uv --directory $Zrodlo\lore run python -m lore.verify --cofnij <id>"
+  } else {
+    $l += "  NIE UDALO SIE ODCZYTAC - szczegoly w dzienniku nadzorcy"
+  }
+  if ($d -and $d.Przeliczanie -and $d.Przeliczanie.Plik) {
+    $l += "  przeliczanie    : jest plik $($d.Przeliczanie.Plik)"
+    if ($d.Przeliczanie.Powod) { $l += "                    $($d.Przeliczanie.Powod)" }
+  }
   $l += ""
 
   $l += "== ALARMY, PELNA TRESC RAZEM Z KOMENDAMI =="
@@ -563,6 +606,11 @@ $script:LAktualizuj   = $null
 $script:BCykl         = $null
 $script:LCykl         = $null
 $script:ZegarOtwarcia = $null
+$script:PanelZmian    = $null   # linie zmian w pamieci, schowane pod "pokaz zmiany"
+$script:LinkZmian     = $null
+# Rozwiniecie listy zmian przezywa przeliczenie okna - inaczej lista zwijalaby
+# sie sama co kwadrans, w trakcie czytania.
+$script:ZmianyRozwiniete = $false
 
 # Bufor: ostatnio zebrane liczby i GODZINA, z ktorej pochodza. Ta godzina jest
 # pokazywana zawsze - okno, ktore pokazuje stare liczby jako biezace, klamie.
@@ -801,11 +849,76 @@ function Odmaluj-Stan {
   }
   $linie = @()
   if ($script:Dane) {
-    try { $linie = Linie-Stanu $script:Dane.Wersja $script:Dane.Cykl }
+    try { $linie = Linie-Stanu $script:Dane.Wersja $script:Dane.Cykl $script:Dane.Przeliczanie }
     catch { Zanotuj-Wywrotke "zlozenie linii stanu" $_ }
   }
   foreach ($l in $linie) {
     $script:PanelStan.Controls.Add((Etykieta-Zawijana $l $script:CzZwykla $script:KolSzary $script:SzerTresc))
+  }
+  Dodaj-Zmiany-Pamieci
+}
+
+# "Pamiec dzis: 2 zmiany" jedna linia, a obok odnosnik [pokaz zmiany], ktory
+# rozwija linie z identyfikatorami i zdanie, jak cofnac. Rozwijanie tylko
+# przelacza widocznosc - nie przebudowuje panelu, bo kontrolka zwalniana we
+# wlasnej procedurze klikniecia potrafi wywrocic WinForms.
+function Dodaj-Zmiany-Pamieci {
+  $script:PanelZmian = $null
+  $script:LinkZmian = $null
+  $pz = $null
+  if ($script:Dane) { $pz = $script:Dane.Pamiec }
+  $o = $null
+  try { $o = Opis-Zmian-Pamieci $pz }
+  catch { Zanotuj-Wywrotke "zlozenie zmian w pamieci" $_ }
+  if (-not $o) {
+    $script:PanelStan.Controls.Add((Etykieta-Zawijana "Pamięć: nie udało się złożyć listy zmian - powód jest w dzienniku nadzorcy." $script:CzZwykla $script:KolUwaga $script:SzerTresc))
+    return
+  }
+  $kolor = $script:KolSzary
+  if ($o.Uwaga) { $kolor = $script:KolUwaga }
+  if (@($o.Zmiany).Count -eq 0) {
+    $script:PanelStan.Controls.Add((Etykieta-Zawijana $o.Linia $script:CzZwykla $kolor $script:SzerTresc))
+    return
+  }
+
+  $wiersz = Poziomy
+  $wiersz.Margin = New-Object System.Windows.Forms.Padding(0, 0, 0, 2)
+  $lin = Etykieta $o.Linia $script:CzZwykla $kolor
+  $lin.Margin = New-Object System.Windows.Forms.Padding(0, 0, 6, 0)
+  $wiersz.Controls.Add($lin)
+  $script:LinkZmian = New-Object System.Windows.Forms.LinkLabel
+  $script:LinkZmian.AutoSize = $true
+  $script:LinkZmian.Font = $script:CzZwykla
+  $script:LinkZmian.Margin = New-Object System.Windows.Forms.Padding(0)
+  $wiersz.Controls.Add($script:LinkZmian)
+  $script:PanelStan.Controls.Add($wiersz)
+
+  $script:PanelZmian = Pionowy ($script:SzerTresc - 16)
+  $script:PanelZmian.Margin = New-Object System.Windows.Forms.Padding(16, 2, 0, 4)
+  foreach ($z in $o.Zmiany) {
+    $script:PanelZmian.Controls.Add((Etykieta-Zawijana $z $script:CzMala $script:KolTekst ($script:SzerTresc - 16)))
+  }
+  if ($o.Porada) {
+    $p = Etykieta-Zawijana $o.Porada $script:CzZwykla $script:KolTekst ($script:SzerTresc - 16)
+    $p.Margin = New-Object System.Windows.Forms.Padding(0, 4, 0, 0)
+    $script:PanelZmian.Controls.Add($p)
+  }
+  $script:PanelStan.Controls.Add($script:PanelZmian)
+  Ustaw-Rozwiniecie-Zmian
+
+  $script:LinkZmian.Add_LinkClicked({
+    $script:ZmianyRozwiniete = -not $script:ZmianyRozwiniete
+    Ustaw-Rozwiniecie-Zmian
+    Dopasuj-Wysokosc
+  })
+}
+
+function Ustaw-Rozwiniecie-Zmian {
+  if (-not $script:PanelZmian -or $script:PanelZmian.IsDisposed) { return }
+  $script:PanelZmian.Visible = $script:ZmianyRozwiniete
+  if ($script:LinkZmian -and -not $script:LinkZmian.IsDisposed) {
+    if ($script:ZmianyRozwiniete) { $script:LinkZmian.Text = "ukryj zmiany" }
+    else { $script:LinkZmian.Text = "pokaż zmiany" }
   }
 }
 
@@ -1033,6 +1146,7 @@ function Pokaz-Okno {
     $script:PanelStan = $null; $script:BSzczegoly = $null; $script:PoleSzczegoly = $null
     $script:Pasek = $null; $script:BAktualizuj = $null; $script:LAktualizuj = $null
     $script:BCykl = $null; $script:LCykl = $null
+    $script:PanelZmian = $null; $script:LinkZmian = $null
   })
 
   # --- co robia przyciski ---
