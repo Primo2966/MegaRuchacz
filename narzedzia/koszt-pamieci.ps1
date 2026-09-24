@@ -24,6 +24,10 @@
 #                            kod 1 gdy cokolwiek wystaje - do odpalenia po kazdej
 #                            zmianie zasad, bez czekania na reszte raportu
 #     -Zwiezle               DOKLADNIE JEDNA linia do pokazania przy starcie sesji
+#     -Dane                  to samo co -Zwiezle (klucz "linia"), a do tego alarmy z waga,
+#                            ocena kosztu nauki (zwykly dzien czy nadrabianie) i dni
+#                            z historii - linie "klucz: wartosc" dla nadzorcy w zasobniku
+#                            (zasobnik\stan-nadzorcy.ps1). Liczone tutaj i tylko tutaj
 #     -Rozbicie              kilkanascie linii: te same trzy rachunki rozbite na pozycje,
 #                            z paskiem, udzialem i sciezka przy kazdej. Straznik pokazuje
 #                            to RAZ dziennie, przy pierwszej sesji
@@ -33,7 +37,8 @@
 #
 # Kod wyjscia: 0 gdy nic nie jest ucinane i zaden prog alarmowy nie jest
 # przekroczony, 1 gdy cokolwiek z tego zachodzi - zeby dalo sie to podpiac jako
-# sprawdzenie.
+# sprawdzenie. Zolta INFORMACJA (np. nauka nadrabiala zaleglosc) kodu NIE podnosi:
+# mowi, co sie stalo i dlaczego, ale niczego nie trzeba naprawiac.
 #
 # WARTOSCI SUFITOW CZYTAMY Z PLIKOW, KTORE JE USTALAJA (straznik, hooks.json,
 # facts.py, index.py). Wpisane tu na sztywno zaczelyby klamac przy pierwszej
@@ -48,6 +53,7 @@ param(
   [string]$Projekt = "",
   [switch]$TylkoSufity,
   [switch]$Zwiezle,
+  [switch]$Dane,
   [switch]$Rozbicie,
   [switch]$Zwykly,
   [switch]$ZalozZadanie,
@@ -96,23 +102,53 @@ $ProgWzrostu    = 20
 # $MinPozycjiDoUdzialu - ponizej tylu pozycji w rachunku udzial nic nie mowi
 #   (przy dwoch pozycjach jedna prawie zawsze ma ponad polowe), wiec alarm
 #   o udziale w ogole sie nie odzywa.
-# $AlarmCyklu - koszt cyklu wiedzy za JEDNA dobe. Tu skad wzielo sie 120 000,
-#   bo prog wpisany bez uzasadnienia dwa razy juz po cichu psul dzialanie:
-#     - jeden przebieg wylawiania bierze najwyzej MAX_INPUT_CHARS = 60 000 znakow
-#       materialu (lore\lore\facts.py), czyli ~20 000 tokenow wejscia; z poleceniem
-#       i odpowiedzia modelu liczymy z zapasem ~24 000 tokenow na przebieg,
-#     - na JEDNO podejscie cykl bierze najwyzej $MaxNadrabiania = 5 przebiegow
-#       (narzedzia\cykl-dzienny.ps1), czyli 5 * 24 000 = ~120 000 tokenow.
-#   Tyle wolno kosztowac pelnemu podejsciu i zwyklemu, nawet gestemu dniu pracy.
-#   Powyzej znaczy, ze cykl wracal po kolejne raty ($MaxProb = 5 podejsc na dobe,
-#   gorna granica to ~600 000 tokenow) - czyli goni zaleglosc, ktorej nie dogania,
-#   i to jest ten moment, w ktorym uzytkownik ma sie o tym dowiedziec.
-#   Gdyby ktoras z tych trzech liczb sie zmienila, ten prog trzeba przeliczyc.
-$AlarmNaWiadomosc    = 300
-$AlarmNaSesje        = 5000
-$AlarmUdzialu        = 70
-$MinPozycjiDoUdzialu = 3
-$AlarmCyklu          = 120000
+# $AlarmCyklu - koszt nauki z rozmow (cykl wiedzy) za ZWYKLY dzien, czyli taki,
+#   w ktorym nauka czytala material z jednego dnia (patrz $DniMaterialuZwyklego).
+#   Skad 350 000 - bo prog wpisany bez uzasadnienia dwa razy juz po cichu psul
+#   dzialanie, a 24.09.2026 swiecil na czerwono bez powodu:
+#     - pierwsza wersja (120 000) zakladala ~24 000 tokenow na jedno wywolanie
+#       modelu: MAX_INPUT_CHARS = 60 000 znakow materialu (lore\lore\facts.py)
+#       plus polecenie i odpowiedz. POMIAR z 24.09.2026 (.koszt-cyklu.txt,
+#       tokeny_zrodlo: pomiar) dal 312 609 tokenow na 5 wywolan, czyli ~62 500
+#       na wywolanie - ponad dwa i pol raza wiecej. Samego materialu bylo tam
+#       ~84 000 tokenow (252 578 wyslanych znakow / 3); reszte doklada kazde
+#       wywolanie narzedzia AI niezaleznie od tego, ile jest do czytania,
+#     - na JEDNO podejscie cykl bierze najwyzej $MaxNadrabiania = 5 wywolan
+#       (narzedzia\cykl-dzienny.ps1), czyli 5 * 62 500 = ~312 500 tokenow,
+#     - 350 000 to jedno pelne podejscie plus ~12% zapasu na wahania narzutu.
+#   Przy starym progu alarm odzywal sie na zupelnie zwyczajnym, jednym podejsciu -
+#   a falszywy alarm uczy ignorowania. Powyzej progu na ZWYKLYM dniu znaczy, ze
+#   cykl wracal po kolejne raty ze swiezymi rozmowami ($MaxProb = 5 podejsc na
+#   dobe) - i to jest ten moment, w ktorym uzytkownik ma sie o tym dowiedziec.
+#   Dzien NADRABIANIA (material sprzed wielu dni) przekracza ten prog z natury
+#   rzeczy i dostaje zolta informacje, nie czerwony alarm.
+#   Gdyby zmienil sie $MaxNadrabiania albo narzut wywolania, prog trzeba przeliczyc.
+# $DniMaterialuZwyklego - zwykly dzien nauki czyta rozmowy z poprzedniego dnia,
+#   bo cykl chodzi raz na dobe. Gdy najstarsza przeczytana wiadomosc jest starsza
+#   o WIECEJ niz tyle dni od dnia przebiegu, przebieg NADRABIAL zaleglosc.
+#   1, bo taki jest rytm cyklu - nie liczba z powietrza. Jedna spozniona rozmowa
+#   sprzed kilku dni tez robi z dnia nadrabianie: to blad w strone zoltej
+#   informacji, a nie czerwonego alarmu - swiadomie, bo falszywy alarm jest gorszy.
+# $ProgInformacjiNauki - od ilu tokenow dzien NADRABIANIA dostaje zolta informacje
+#   "dlaczego tyle". 125 000 = dwa wywolania po zmierzone ~62 500: ponizej dzien
+#   nadrabiania kosztuje tyle, co spokojny zwykly dzien, i nie ma czego tlumaczyc.
+#   To nie jest alarm i nie podnosi kodu wyjscia.
+# $DniWzrostuCyklu, $ProcWzrostuCyklu - drugi powod do czerwieni: koszt zwyklego
+#   dnia rosnie dzien po dniu. Jeden czy dwa drozsze dni to zwykle gestsza praca;
+#   trzy wzrosty z rzedu, kazdy o co najmniej 20%, to juz ~1,7 raza w cztery dni -
+#   trend, a nie przypadek. Dni nadrabiania sie tu nie licza, bo sa jednorazowe.
+# $DniStatystyki - ile ostatnich dni pokazuje statystyka w oknie nadzorcy: tyle,
+#   ile dluzsze okno podsumowania w lore\lore\facts.py (WINDOWS = (7, 30)).
+$AlarmNaWiadomosc     = 300
+$AlarmNaSesje         = 5000
+$AlarmUdzialu         = 70
+$MinPozycjiDoUdzialu  = 3
+$AlarmCyklu           = 350000
+$DniMaterialuZwyklego = 1
+$ProgInformacjiNauki  = 125000
+$DniWzrostuCyklu      = 3
+$ProcWzrostuCyklu     = 20
+$DniStatystyki        = 30
 
 # Przedrostek ladunku hooka startowego Codeksa - MUSI brzmiec tak samo jak
 # w straznik-zasad.ps1 (Zbuduj-Sesje-Codex) i w wdroz.ps1, bo inaczej liczymy
@@ -550,6 +586,11 @@ function Dzien-Cyklu($stan, $przedrostek) {
     Tokeny        = $tokeny
     Zrodlo        = (Klucz-Tekst  $stan "${przedrostek}tokeny_zrodlo")
     Fakty         = (Klucz-Liczba $stan "${przedrostek}fakty")
+    # Za jaki okres: ile wiadomosci i z jakiego przedzialu czasu nauka czytala.
+    # Bez tego drogi dzien nadrabiania wygladal jak nowa norma (24.09.2026).
+    Wiadomosci    = (Klucz-Liczba $stan "${przedrostek}wiadomosci")
+    ZakresOd      = (Klucz-Tekst  $stan "${przedrostek}zakres_od")
+    ZakresDo      = (Klucz-Tekst  $stan "${przedrostek}zakres_do")
   }
 }
 
@@ -561,6 +602,310 @@ function Koszt-Cyklu($plik) {
   if ($null -eq $dzis) { return $null }
   $dzis | Add-Member -NotePropertyName "Poprzedni" -NotePropertyValue (Dzien-Cyklu $stan "poprzedni.")
   return $dzis
+}
+
+# --- historia kosztu nauki ---------------------------------------------------
+# Dziennik przebiegow (.koszt-historia.tsv, jedna linia na PRZEBIEG) i jego
+# podsumowania 7/30 dni (.koszt-podsumowanie.txt) pisze samo wylawianie
+# (lore\lore\facts.py, record_pass). Tu tylko czytamy i ukladamy po dniach.
+#
+# Po co: sama liczba "nauka kosztowala 312 609 tokenow" nie mowi, czy to nowa
+# norma, czy jednorazowe nadrabianie zaleglosci sprzed tygodnia - a od tego
+# zalezy, czy uzytkownik ma cos robic. Odpowiada na to zakres przeczytanych
+# wiadomosci (zakres_od) zestawiony z dniem przebiegu.
+#
+# Funkcje oddajace liste oddaja ja ROZWINIETA ("return @(...)"), a wolajacy
+# owija wywolanie w @() - jedna konwencja na caly ten blok.
+
+$KolumnyHistorii = @("kiedy", "narzedzie", "wywolania", "tokeny", "tokeny_zrodlo", "znaki_wyslane",
+                     "znaki_odebrane", "wiadomosci", "zakres_od", "zakres_do", "fakty")
+
+function Dzien-Z-Tekstu($tekst) {
+  # 'RRRR-MM-DD' albo 'RRRR-MM-DD GG:MM' -> sam dzien; $null przy braku i smieciu
+  if (-not $tekst) { return $null }
+  $t = ("" + $tekst).Trim()
+  if ($t.Length -lt 10) { return $null }
+  $d = [datetime]::MinValue
+  if ([datetime]::TryParseExact($t.Substring(0, 10), 'yyyy-MM-dd', [Globalization.CultureInfo]::InvariantCulture,
+      [Globalization.DateTimeStyles]::None, [ref]$d)) { return $d.Date }
+  return $null
+}
+
+function Czy-Nadrabianie($dzienPrzebiegu, $zakresOd) {
+  # $true / $false, a $null gdy nie wiadomo - przebieg bez zakresu (starsza wersja
+  # nauki go nie zapisywala). "Nie wiem" idzie dalej jako "nie wiem", nie jako zgadniete.
+  $dp = Dzien-Z-Tekstu $dzienPrzebiegu
+  $od = Dzien-Z-Tekstu $zakresOd
+  if (($null -eq $dp) -or ($null -eq $od)) { return $null }
+  return (($dp - $od).Days -gt $DniMaterialuZwyklego)
+}
+
+function Zakres-Krotko($od, $doo) {
+  # "16.09", "16-17.09" albo "28.08-02.09" - okres, za ktory placono, jednym rzutem oka
+  $a = Dzien-Z-Tekstu $od
+  $b = Dzien-Z-Tekstu $doo
+  if ($null -eq $a) { return "" }
+  if (($null -eq $b) -or ($a -eq $b)) { return $a.ToString('dd.MM') }
+  if (($a.Month -eq $b.Month) -and ($a.Year -eq $b.Year)) { return ($a.ToString('dd') + "-" + $b.ToString('dd.MM')) }
+  return ($a.ToString('dd.MM') + "-" + $b.ToString('dd.MM'))
+}
+
+function Czytaj-Historie($plik) {
+  $h = [pscustomobject]@{ Jest = $false; Wiersze = @(); Pominiete = 0; Powod = "" }
+  if (-not (Test-Path -LiteralPath $plik)) {
+    $h.Powod = "nie ma jeszcze dziennika przebiegow nauki ($plik)"
+    return $h
+  }
+  $tekst = $null
+  try { $tekst = Czytaj $plik }
+  catch {
+    $h.Powod = "dziennika przebiegow $plik nie da sie odczytac: $($_.Exception.Message)"
+    return $h
+  }
+  $h.Jest = $true
+  $linie = @(($tekst -split '\r?\n') | Where-Object { ("" + $_).Trim() })
+  if (($linie.Count -gt 0) -and $linie[0].StartsWith("kiedy")) { $linie = @($linie | Select-Object -Skip 1) }
+  $wiersze = @()
+  foreach ($l in $linie) {
+    $pola = $l -split "`t"
+    # Linia, ktora nie pasuje do kolumn, nie jest zgadywana - ale jest LICZONA,
+    # bo pominieta po cichu bylaby zgubionym kosztem.
+    if ($pola.Count -ne $KolumnyHistorii.Count) { $h.Pominiete++; continue }
+    $s = @{}
+    for ($i = 0; $i -lt $pola.Count; $i++) { $s[$KolumnyHistorii[$i]] = $pola[$i] }
+    $dzien = Dzien-Z-Tekstu $s["kiedy"]
+    if ($null -eq $dzien) { $h.Pominiete++; continue }
+    $wiersze += [pscustomobject]@{
+      Dzien       = $dzien
+      Tokeny      = (Klucz-Liczba $s "tokeny")
+      Wywolania   = (Klucz-Liczba $s "wywolania")
+      Wiadomosci  = (Klucz-Liczba $s "wiadomosci")
+      ZakresOd    = (Klucz-Tekst  $s "zakres_od")
+      ZakresDo    = (Klucz-Tekst  $s "zakres_do")
+      Nadrabianie = (Czy-Nadrabianie $s["kiedy"] $s["zakres_od"])
+    }
+  }
+  $h.Wiersze = $wiersze
+  if (($wiersze.Count -eq 0) -and (-not $h.Powod)) { $h.Powod = "dziennik przebiegow nauki jest pusty ($plik)" }
+  return $h
+}
+
+function Nowy-Dzien($dzien) {
+  return [pscustomobject]@{
+    Dzien = $dzien; Razem = [long]0; Zwykle = [long]0; Nadrabianie = [long]0; Nieznane = [long]0
+    Przebiegi = 0; Wiadomosci = [long]0; ZakresOd = $null; ZakresDo = $null
+  }
+}
+
+function Dni-Historii($wiersze) {
+  # Przebiegi zsumowane po dniu, a tokeny rozdzielone na trzy: zwykly dzien,
+  # nadrabianie i "nie wiadomo" (przebieg bez zakresu). Dopiero to rozdzielenie
+  # mowi, czy drogi dzien byl nowa norma, czy jednorazowym nadrabianiem.
+  $mapa = @{}
+  foreach ($w in @($wiersze)) {
+    if (-not $w) { continue }
+    $k = $w.Dzien.ToString('yyyy-MM-dd')
+    if (-not $mapa.ContainsKey($k)) { $mapa[$k] = Nowy-Dzien $w.Dzien }
+    $d = $mapa[$k]
+    $t = [long]0
+    if ($null -ne $w.Tokeny) { $t = [long]$w.Tokeny }
+    $d.Razem += $t
+    if ($w.Nadrabianie -eq $true) { $d.Nadrabianie += $t }
+    elseif ($w.Nadrabianie -eq $false) { $d.Zwykle += $t }
+    else { $d.Nieznane += $t }
+    $d.Przebiegi++
+    if ($null -ne $w.Wiadomosci) { $d.Wiadomosci += [long]$w.Wiadomosci }
+    # 'RRRR-MM-DD GG:MM' porownuje sie poprawnie jako tekst
+    if ($w.ZakresOd -and ((-not $d.ZakresOd) -or ($w.ZakresOd -lt $d.ZakresOd))) { $d.ZakresOd = $w.ZakresOd }
+    if ($w.ZakresDo -and ((-not $d.ZakresDo) -or ($w.ZakresDo -gt $d.ZakresDo))) { $d.ZakresDo = $w.ZakresDo }
+  }
+  return @($mapa.Values | Sort-Object -Property Dzien)
+}
+
+function Dni-Z-Pliku-Dnia($cykl) {
+  # Gdy dziennika jeszcze nie ma, jedyne znane dni to te dwa z .koszt-cyklu.txt
+  # (dzis i poprzedni). Pokazujemy je zamiast pustki - z tym samym podzialem.
+  $wynik = @()
+  if (-not $cykl) { return @() }
+  foreach ($c in @($cykl, $cykl.Poprzedni)) {
+    if ((-not $c) -or ($null -eq $c.Tokeny)) { continue }
+    $dzien = Dzien-Z-Tekstu $c.Data
+    if ($null -eq $dzien) { continue }
+    $d = Nowy-Dzien $dzien
+    $t = [long]$c.Tokeny
+    $d.Razem = $t
+    $n = Czy-Nadrabianie $c.Data $c.ZakresOd
+    if ($n -eq $true) { $d.Nadrabianie = $t }
+    elseif ($n -eq $false) { $d.Zwykle = $t }
+    else { $d.Nieznane = $t }
+    $d.Przebiegi = 1
+    if ($null -ne $c.Wiadomosci) { $d.Wiadomosci = [long]$c.Wiadomosci }
+    $d.ZakresOd = $c.ZakresOd
+    $d.ZakresDo = $c.ZakresDo
+    $wynik += $d
+  }
+  return @($wynik | Sort-Object -Property Dzien)
+}
+
+function Ocena-Cyklu($cykl, $dni) {
+  # Rodzaj ostatniego dnia nauki: zwykly / nadrabianie / mieszany / nieznany,
+  # a "" gdy nie ma czego oceniac. Do tego typowy zwykly dzien i biezacy wzrost.
+  $o = [pscustomobject]@{
+    Rodzaj = ""; Zrodlo = ""
+    Razem = $null; Zwykle = $null; Nadrabianie = $null; Nieznane = $null
+    Wiadomosci = $null; ZakresOd = $null; ZakresDo = $null
+    TypowyDzien = $null; TypowychDni = 0
+    Wzrosty = 0; WzrostOd = $null; WzrostOdTokeny = $null; WzrostDo = $null; WzrostDoTokeny = $null
+  }
+  $lista = @($dni)
+  $granica = [datetime]::Today.AddDays(-($DniStatystyki - 1))
+
+  # Typowy zwykly dzien = srodkowa wartosc (nie srednia) z dni BEZ nadrabiania:
+  # jeden dzien nadrabiania nie ma prawa udawac, ze tyle kosztuje zwykla praca.
+  $czyste = @($lista | Where-Object { ($_.Zwykle -gt 0) -and ($_.Nadrabianie -eq 0) -and ($_.Nieznane -eq 0) })
+  $wartosci = @($czyste | Where-Object { $_.Dzien -ge $granica } | ForEach-Object { [long]$_.Zwykle } | Sort-Object)
+  if ($wartosci.Count -gt 0) {
+    $s = [int][math]::Floor($wartosci.Count / 2)
+    if (($wartosci.Count % 2) -eq 1) { $o.TypowyDzien = [long]$wartosci[$s] }
+    else { $o.TypowyDzien = [long][math]::Round(($wartosci[$s - 1] + $wartosci[$s]) / 2.0) }
+    $o.TypowychDni = $wartosci.Count
+  }
+
+  # Wzrost: kolejne dni kalendarzowe, kazdy drozszy od poprzedniego o co najmniej
+  # $ProcWzrostuCyklu procent. Liczone od najnowszego zwyklego dnia wstecz.
+  if ($czyste.Count -ge 2) {
+    $i = $czyste.Count - 1
+    $n = 0
+    while ($i -gt 0) {
+      $teraz = $czyste[$i]
+      $wczesniej = $czyste[$i - 1]
+      if (($teraz.Dzien - $wczesniej.Dzien).Days -ne 1) { break }
+      if ([double]$teraz.Zwykle -lt ([double]$wczesniej.Zwykle * (1 + $ProcWzrostuCyklu / 100.0))) { break }
+      $n++
+      $i--
+    }
+    $ostatni = $czyste[$czyste.Count - 1]
+    # trend sprzed tygodnia nie jest alarmem na dzis
+    if (($n -gt 0) -and (([datetime]::Today - $ostatni.Dzien).Days -le $DniCyklStary)) {
+      $o.Wzrosty = $n
+      $o.WzrostOd = $czyste[$i].Dzien
+      $o.WzrostOdTokeny = $czyste[$i].Zwykle
+      $o.WzrostDo = $ostatni.Dzien
+      $o.WzrostDoTokeny = $ostatni.Zwykle
+    }
+  }
+
+  if ((-not $cykl) -or ($null -eq $cykl.Tokeny)) { return $o }
+  $o.Razem = [long]$cykl.Tokeny
+  $o.Wiadomosci = $cykl.Wiadomosci
+  $o.ZakresOd = $cykl.ZakresOd
+  $o.ZakresDo = $cykl.ZakresDo
+  $dzien = Dzien-Z-Tekstu $cykl.Data
+  $zHistorii = $null
+  if ($null -ne $dzien) { $zHistorii = @($lista | Where-Object { $_.Dzien -eq $dzien }) | Select-Object -First 1 }
+  if ($zHistorii -and ($zHistorii.Razem -gt 0)) {
+    # Ocena po przebiegach: dzien moze byc czesciowo zwykly, czesciowo nadrabianiem.
+    $o.Zrodlo = "historia"
+    $o.Zwykle = [long]$zHistorii.Zwykle
+    $o.Nadrabianie = [long]$zHistorii.Nadrabianie
+    $o.Nieznane = [long]$zHistorii.Nieznane
+    # Plik dnia i dziennik moga sie rozjechac (dziennik ruszyl w polowie dnia).
+    # Roznicy nie przypisujemy ani zwyklemu dniu, ani nadrabianiu - to "nie wiem".
+    if ($o.Razem -gt $zHistorii.Razem) { $o.Nieznane += ($o.Razem - $zHistorii.Razem) }
+    if (-not $o.ZakresOd) { $o.ZakresOd = $zHistorii.ZakresOd }
+    if (-not $o.ZakresDo) { $o.ZakresDo = $zHistorii.ZakresDo }
+    if ($null -eq $o.Wiadomosci) { $o.Wiadomosci = $zHistorii.Wiadomosci }
+  } else {
+    # Dziennika dla tego dnia nie ma - oceniamy caly dzien po zakresie z pliku dnia.
+    $o.Zrodlo = "plik-dnia"
+    $o.Zwykle = [long]0
+    $o.Nadrabianie = [long]0
+    $o.Nieznane = [long]0
+    $n = Czy-Nadrabianie $cykl.Data $cykl.ZakresOd
+    if ($n -eq $true) { $o.Nadrabianie = $o.Razem }
+    elseif ($n -eq $false) { $o.Zwykle = $o.Razem }
+    else { $o.Nieznane = $o.Razem }
+  }
+  if (($o.Nadrabianie -gt 0) -and ($o.Zwykle -gt 0)) { $o.Rodzaj = "mieszany" }
+  elseif ($o.Nadrabianie -gt 0) { $o.Rodzaj = "nadrabianie" }
+  elseif ($o.Zwykle -gt 0) { $o.Rodzaj = "zwykly" }
+  elseif ($o.Nieznane -gt 0) { $o.Rodzaj = "nieznany" }
+  else { $o.Rodzaj = "zwykly" }   # zero tokenow - nie bylo czego placic
+  return $o
+}
+
+function Statystyka-Nauki($historia, $dni, $cykl, $podsum) {
+  # Dni do wykresu i sumy 7/30 dni. Sumy bierzemy z podsumowania, ktore liczy
+  # samo wylawianie; dopiero gdy go nie ma, dodajemy dni z dziennika - i mowimy,
+  # skad jest liczba (SumyZ), bo ta sama nazwa z dwoch zrodel to przepis na rozjazd.
+  $s = [pscustomobject]@{
+    Zrodlo = ""; Powod = ""; Dni = @(); Pominiete = 0
+    Suma7 = $null; Suma7Od = $null; Suma30 = $null; Suma30Od = $null; SumyZ = ""
+    Srednia = $null; SredniaDni = 0; PodsumowanieZ = ""
+  }
+  $granica30 = [datetime]::Today.AddDays(-($DniStatystyki - 1))
+  $granica7  = [datetime]::Today.AddDays(-6)
+  if ($historia) { $s.Pominiete = $historia.Pominiete }
+  if (@($dni).Count -gt 0) {
+    $s.Zrodlo = "historia"
+    $s.Dni = @(@($dni) | Where-Object { $_.Dzien -ge $granica30 })
+  } else {
+    $s.Zrodlo = "brak"
+    if ($historia) { $s.Powod = $historia.Powod }
+    $zPliku = @(Dni-Z-Pliku-Dnia $cykl | Where-Object { $_.Dzien -ge $granica30 })
+    if ($zPliku.Count -gt 0) {
+      $s.Zrodlo = "plik-dnia"
+      $s.Dni = $zPliku
+    }
+  }
+
+  $z7 = Klucz-Liczba $podsum "dni7.tokeny"
+  $z30 = Klucz-Liczba $podsum "dni30.tokeny"
+  if (($s.Zrodlo -eq "historia") -and ($null -ne $z7) -and ($null -ne $z30)) {
+    $s.SumyZ = "podsumowanie"
+    $s.Suma7 = $z7
+    $s.Suma30 = $z30
+    $s.Suma7Od = Klucz-Tekst $podsum "dni7.od"
+    $s.Suma30Od = Klucz-Tekst $podsum "dni30.od"
+    $s.PodsumowanieZ = Klucz-Tekst $podsum "zaktualizowano"
+  } elseif (@($s.Dni).Count -gt 0) {
+    $s.SumyZ = "dni"
+    $s.Suma7 = [long]0
+    $s.Suma30 = [long]0
+    foreach ($d in $s.Dni) {
+      $s.Suma30 += [long]$d.Razem
+      if ($d.Dzien -ge $granica7) { $s.Suma7 += [long]$d.Razem }
+    }
+    $s.Suma7Od = $granica7.ToString('yyyy-MM-dd')
+    $s.Suma30Od = $granica30.ToString('yyyy-MM-dd')
+  }
+  # Srednia NA DZIEN NAUKI, nie na dzien kalendarza: przy trzech dniach historii
+  # dzielenie przez 30 udawaloby, ze nauka jest dziesiec razy tansza, niz jest.
+  $zNauka = @(@($s.Dni) | Where-Object { $_.Razem -gt 0 })
+  if (($zNauka.Count -gt 0) -and ($null -ne $s.Suma30)) {
+    $s.SredniaDni = $zNauka.Count
+    $s.Srednia = [long][math]::Round([double]$s.Suma30 / $zNauka.Count)
+  }
+  return $s
+}
+
+function Zdanie-Typowego-Dnia($o) {
+  if (($null -ne $o.TypowyDzien) -and ($o.TypowychDni -gt 0)) {
+    $zIlu = "z $($o.TypowychDni) dni"
+    if ($o.TypowychDni -eq 1) { $zIlu = "z 1 dnia" }
+    return "Zwykly dzien (bez nadrabiania) kosztuje ok. $(Liczba $o.TypowyDzien) tokenow - typowa wartosc $zIlu."
+  }
+  return "Ile kosztuje zwykly dzien - jeszcze nie wiadomo: historia kosztow dopiero sie zbiera i nie ma w niej ani jednego dnia bez nadrabiania."
+}
+
+function Opis-Rodzaju($o) {
+  switch ($o.Rodzaj) {
+    "zwykly"      { return "zwykly dzien - material z jednego dnia" }
+    "nadrabianie" { return "NADRABIANIE zaleglosci - material sprzed wiecej niz $DniMaterialuZwyklego dnia; jednorazowy koszt, nie nowa norma" }
+    "mieszany"    { return "czesciowo nadrabianie: ~$(Liczba $o.Nadrabianie) tokenow nadrabiania i ~$(Liczba $o.Zwykle) za swieze rozmowy" }
+    "nieznany"    { return "nie wiadomo - nauka nie zapisala, z jakiego okresu czytala rozmowy (starsza wersja modulu pamieci)" }
+  }
+  return "nie ma czego oceniac"
 }
 
 # --- baza Lore ---------------------------------------------------------------
@@ -750,6 +1095,10 @@ $plikZnacznik = Join-Path $katWiedzy ".ostatnie-wyciaganie"
 # nie byc i to NIE jest awaria, tylko "cykl jeszcze nie liczyl kosztu"
 $plikCyklKoszt   = Join-Path $katWiedzy ".koszt-cyklu.txt"
 $plikCyklOstatni = Join-Path $katWiedzy "cykl-ostatni.txt"
+# historia przebiegow nauki i jej podsumowania 7/30 dni - pisze je samo
+# wylawianie (lore\lore\facts.py, record_pass). Brak = historia dopiero sie zbiera.
+$plikHistoria    = Join-Path $katWiedzy ".koszt-historia.tsv"
+$plikPodsum      = Join-Path $katWiedzy ".koszt-podsumowanie.txt"
 $bazaLore     = Join-Path $katKlaudii "lore.db"
 $plikAgents   = Join-Path $KatalogDomowy ".codex\AGENTS.md"
 
@@ -1091,6 +1440,15 @@ $tokSesja = Policz-Udzialy $kubSesja
 # kazda sesja. $null znaczy "cykl jeszcze nie liczyl kosztu".
 $cykl = Koszt-Cyklu $plikCyklKoszt
 
+# Historia i ocena kosztu nauki: czy ostatni dzien byl zwykly, czy nadrabial
+# zaleglosc, ile kosztuje typowy dzien i czy koszt rosnie. Arytmetyka na plikach,
+# ktore zapisalo samo wylawianie - nic nie jest tu mierzone drugi raz.
+$historia    = Czytaj-Historie $plikHistoria
+$dniHistorii = @(Dni-Historii $historia.Wiersze)
+$ocena       = Ocena-Cyklu $cykl $dniHistorii
+$podsum      = Klucze-Z-Tekstu (Czytaj-Cicho $plikPodsum)
+$statystyka  = Statystyka-Nauki $historia $dniHistorii $cykl $podsum
+
 # --- wypisanie: tryb zwiezly (DOKLADNIE JEDNA LINIA) -------------------------
 
 $ucinane = @(Sortuj-Sufity @($sufity | Where-Object { $_.Ucina -and $_.Przekroczony }))
@@ -1116,24 +1474,39 @@ function Najdrozsza($pozycje) {
   return $l[0]
 }
 
-function Alarm($krotko, $pelny) {
-  return [pscustomobject]@{ Krotko = $krotko; Pelny = $pelny }
+function Alarm($krotko, $pelny, $temat = "", $waga = "pilne", $liczba = $null, $prog = $null, $okres = "") {
+  # Waga: "pilne" (czerwone, podnosi kod wyjscia), "uwaga" (zolte - czegos nie
+  # wiemy), "info" (zolte - co sie stalo i dlaczego; nic nie trzeba robic).
+  # Okres mowi, ZA JAKI CZAS jest liczba: "stan na teraz" albo konkretne dni.
+  # Liczba bez okresu i bez "za co" wyprodukowala 24.09.2026 alarm, ktory klamal.
+  return [pscustomobject]@{ Krotko = $krotko; Pelny = $pelny; Temat = $temat; Waga = $waga
+                            Liczba = $liczba; Prog = $prog; Okres = $okres }
 }
 
+# Czerwone alarmy podnosza kod wyjscia. Informacje - nie: mowia, co sie stalo
+# i dlaczego, ale nic sie nie pali, a kod 1 za nie bylby falszywym alarmem
+# u kazdego, kto ten kod sprawdza (straznik, nadzorca).
 $alarmy = @()
+$informacje = @()
 
+# Dwa pierwsze rachunki to STAN PLIKOW NA TERAZ, a nie koszt jakiegos dnia -
+# i tak ma byc napisane, bo "kosztuje X" bez "za co" czyta sie jak rachunek za dzis.
 if ($tokWiadomosc -gt $AlarmNaWiadomosc) {
   $n = Najdrozsza $kubWiadomosc
-  $alarmy += Alarm "wiadomosc +$tokWiadomosc tokenow (prog $AlarmNaWiadomosc)" `
-    ("Kazda Twoja wiadomosc kosztuje ~$(Liczba $tokWiadomosc) tokenow, prog to $(Liczba $AlarmNaWiadomosc). " +
-     "Najdrozsza pozycja: $($n.Nazwa) - $($n.Rada). Plik: $($n.Skad).")
+  $alarmy += Alarm "kazda wiadomosc dokleja ~$tokWiadomosc tokenow (prog $AlarmNaWiadomosc)" `
+    ("Do KAZDEJ Twojej wiadomosci doklejane jest ~$(Liczba $tokWiadomosc) tokenow tekstu, prog to $(Liczba $AlarmNaWiadomosc). " +
+     "To stan plikow na teraz, nie koszt jednego dnia. " +
+     "Najdrozsza pozycja: $($n.Nazwa) - $($n.Rada). Plik: $($n.Skad).") `
+    "wiadomosc" "pilne" $tokWiadomosc $AlarmNaWiadomosc "stan na teraz, przy kazdej wiadomosci"
 }
 
 if ($tokSesja -gt $AlarmNaSesje) {
   $n = Najdrozsza $kubSesja
-  $alarmy += Alarm "start sesji +$tokSesja tokenow (prog $AlarmNaSesje)" `
-    ("Start sesji kosztuje ~$(Liczba $tokSesja) tokenow, prog to $(Liczba $AlarmNaSesje). " +
-     "Najdrozsza pozycja: $($n.Nazwa) (~$(Liczba $n.Tokeny) tokenow) - $($n.Rada). Plik: $($n.Skad).")
+  $alarmy += Alarm "kazda sesja zaczyna od ~$tokSesja tokenow (prog $AlarmNaSesje)" `
+    ("Na start KAZDEJ sesji wchodzi ~$(Liczba $tokSesja) tokenow tekstu, prog to $(Liczba $AlarmNaSesje). " +
+     "To stan plikow na teraz, nie koszt jednego dnia. " +
+     "Najdrozsza pozycja: $($n.Nazwa) (~$(Liczba $n.Tokeny) tokenow) - $($n.Rada). Plik: $($n.Skad).") `
+    "sesja" "pilne" $tokSesja $AlarmNaSesje "stan na teraz, przy kazdym starcie sesji"
 }
 
 foreach ($k in @(
@@ -1144,60 +1517,223 @@ foreach ($k in @(
   $n = Najdrozsza $k.Poz
   if ($n.Procent -le $AlarmUdzialu) { continue }
   $alarmy += Alarm "$($n.Nazwa) to $($n.Procent)% rachunku za $($k.Nazwa)" `
-    ("Jedna pozycja zjada $($n.Procent)% rachunku za $($k.Nazwa): $($n.Nazwa), ~$(Liczba $n.Tokeny) tokenow. " +
-     "Skracanie czegokolwiek innego nic nie da - $($n.Rada). Plik: $($n.Skad).")
+    ("Jedna pozycja zjada $($n.Procent)% rachunku za $($k.Nazwa) (stan plikow na teraz): $($n.Nazwa), ~$(Liczba $n.Tokeny) tokenow. " +
+     "Skracanie czegokolwiek innego nic nie da - $($n.Rada). Plik: $($n.Skad).") `
+    "udzial" "pilne" $n.Procent $AlarmUdzialu "stan na teraz"
 }
 
 if ($skokKosztu) {
-  $alarmy += Alarm "+$zmianaProc% od poprzedniego pomiaru" `
-    ("Start sesji urosl o $zmianaProc% od poprzedniego pomiaru ($(Liczba $poprz.Tokeny) -> $(Liczba $tokSesja) tokenow) - " +
-     "sprawdz, co doszlo do $plikClaude albo czy do rachunku nie doszla nowa pozycja (rozbicie nizej wymienia wszystkie).")
+  # Wzrost "od poprzedniego pomiaru" bez daty tego pomiaru nie mowi, czy urosl
+  # przez noc, czy przez miesiac - a to dwie rozne sprawy.
+  $odKiedy = "poprzedniego pomiaru (data nieznana)"
+  if ($poprz.Data) { $odKiedy = "pomiaru z $($poprz.Data.ToString('dd.MM HH:mm'))" }
+  $alarmy += Alarm "start sesji +$zmianaProc% od $odKiedy" `
+    ("Start sesji urosl o $zmianaProc% od $odKiedy ($(Liczba $poprz.Tokeny) -> $(Liczba $tokSesja) tokenow na kazda sesje) - " +
+     "sprawdz, co doszlo do $plikClaude albo czy do rachunku nie doszla nowa pozycja (rozbicie nizej wymienia wszystkie).") `
+    "wzrost" "pilne" $zmianaProc $ProgWzrostu $odKiedy
 }
 
-# Cykl wiedzy. Jedyny alarm w tym raporcie, ktory mowi o naprawde wydanych
-# tokenach, a nie o doklejonym tekscie - dlatego liczba stoi tu osobno i nie
-# jest z niczym sumowana.
-if ($cykl -and ($null -ne $cykl.Tokeny) -and ([long]$cykl.Tokeny -gt $AlarmCyklu)) {
-  $czymCykl = $cykl.Narzedzie
-  if (-not $czymCykl) { $czymCykl = "nieznanym narzedziem" }
-  $dzienCykl = $cykl.Data
-  if (-not $dzienCykl) { $dzienCykl = "ostatniego dnia" }
-  $alarmy += Alarm "cykl wiedzy $(Liczba $cykl.Tokeny) tokenow (prog $(Liczba $AlarmCyklu))" `
-    ("Cykl wiedzy kosztowal $dzienCykl ~$(Liczba $cykl.Tokeny) tokenow w $(Lub-Nieznane $cykl.Wywolania) wywolaniach ($czymCykl), " +
-     "prog to $(Liczba $AlarmCyklu). To jedyna pozycja w tym raporcie placona prawdziwym wywolaniem modelu. " +
-     "Tyle wychodzi, gdy cykl nadrabia zaleglosc raty po racie - zajrzyj do $plikCyklOstatni. " +
-     "Trwale zbijesz to, zmniejszajac `$MaxNadrabiania albo `$MaxProb w narzedzia\cykl-dzienny.ps1.")
+# Nauka z rozmow (cykl wiedzy) - jedyny koszt w tym raporcie placony naprawde
+# wywolanym modelem. Alarm mowi ZA CO (ile wiadomosci), ZA JAKI OKRES (z ktorych
+# dni) i CZY TO SIE POWTARZA (zwykly dzien czy nadrabianie). Sama liczba nad
+# progiem dala 24.09.2026 czerwony alarm "pamiec kosztuje wiecej, niz powinna"
+# za jednorazowe nadrabianie rozmow sprzed tygodnia.
+# Pomiar starszy niz $DniCyklStary dni nie jest alarmem na dzis - o tym, ze cykl
+# stoi, mowi osobne ostrzezenie nizej.
+$cyklSwiezy = ($cykl -and ($null -ne $cykl.Tokeny) -and (($null -eq $cykl.Wiek) -or ($cykl.Wiek -le $DniCyklStary)))
+if ($cyklSwiezy) {
+  $kiedyNauka = Kiedy-Cykl $cykl.Wiek
+  if (-not $kiedyNauka) { $kiedyNauka = "ostatnio" }
+  $okresNauki = Zakres-Krotko $ocena.ZakresOd $ocena.ZakresDo
+  $ileWiad  = "nieznana liczba wiadomosci"
+  $ileWiadB = "nieznana liczbe wiadomosci"
+  if ($null -ne $ocena.Wiadomosci) {
+    $ileWiad  = "$(Liczba $ocena.Wiadomosci) wiadomosci"
+    $ileWiadB = $ileWiad
+  }
+  $zOkresu = ""
+  if ($okresNauki) { $zOkresu = " z $okresNauki" }
+  $typowy = Zdanie-Typowego-Dnia $ocena
+  $zwyklyNadProgiem = (($null -ne $ocena.Zwykle) -and ($ocena.Zwykle -gt $AlarmCyklu))
+
+  if ($zwyklyNadProgiem) {
+    $alarmy += Alarm "nauka $kiedyNauka ~$(Liczba $ocena.Zwykle) tokenow za zwykly dzien (prog $(Liczba $AlarmCyklu))" `
+      ("Nauka z rozmow kosztowala $kiedyNauka ($($cykl.Data)) ~$(Liczba $ocena.Zwykle) tokenow za material z jednego dnia " +
+       "($ileWiad$zOkresu), a prog zwyklego dnia to $(Liczba $AlarmCyklu). To NIE jest nadrabianie zaleglosci - " +
+       "cykl wracal po kolejne raty ze swiezymi rozmowami. $typowy " +
+       "Zajrzyj do $plikCyklOstatni. Trwale zbijesz to, zmniejszajac `$MaxNadrabiania albo `$MaxProb w narzedzia\cykl-dzienny.ps1.") `
+      "cykl-zwykly" "pilne" $ocena.Zwykle $AlarmCyklu $okresNauki
+  }
+
+  if ((-not $zwyklyNadProgiem) -and ($null -ne $ocena.Razem) -and ($ocena.Razem -gt $ProgInformacjiNauki) -and ($ocena.Nadrabianie -gt 0)) {
+    $wTym = ""
+    if ($ocena.Zwykle -gt 0) {
+      $wTym = " W tym ~$(Liczba $ocena.Zwykle) tokenow za swieze rozmowy - ta czesc miesci sie w progu zwyklego dnia ($(Liczba $AlarmCyklu))."
+    }
+    $informacje += Alarm "nauka $kiedyNauka ~$(Liczba $ocena.Razem) tokenow - nadrabianie $ileWiad$zOkresu, jednorazowo" `
+      ("Nauka z rozmow kosztowala $kiedyNauka ~$(Liczba $ocena.Razem) tokenow, bo NADRABIALA zaleglosc: przeczytala $ileWiadB$zOkresu.$wTym " +
+       "To jednorazowe nadrabianie, nie nowy staly koszt - gdy zaleglosc sie skonczy, nauka czyta tylko rozmowy z poprzedniego dnia. $typowy") `
+      "cykl-nadrabianie" "info" $ocena.Razem $ProgInformacjiNauki $okresNauki
+  } elseif ((-not $zwyklyNadProgiem) -and ($ocena.Rodzaj -eq "nieznany") -and ($ocena.Razem -gt $AlarmCyklu)) {
+    $informacje += Alarm "nauka $kiedyNauka ~$(Liczba $ocena.Razem) tokenow - nie wiadomo, za jaki okres" `
+      ("Nauka z rozmow kosztowala $kiedyNauka ~$(Liczba $ocena.Razem) tokenow, ale nie zapisala, z jakiego okresu czytala rozmowy - " +
+       "wiec nie da sie powiedziec, czy to jednorazowe nadrabianie zaleglosci, czy zwykly dzien (prog zwyklego dnia to $(Liczba $AlarmCyklu)). " +
+       "Zakres zapisuje nowsza wersja modulu pamieci (lore) - po aktualizacji ta niewiadoma zniknie.") `
+      "cykl-nieznany" "uwaga" $ocena.Razem $AlarmCyklu ""
+  }
+
+  if ($ocena.Wzrosty -ge $DniWzrostuCyklu) {
+    $okresWzrostu = $ocena.WzrostOd.ToString('dd.MM') + "-" + $ocena.WzrostDo.ToString('dd.MM')
+    $alarmy += Alarm "koszt nauki rosnie $($ocena.Wzrosty) dni z rzedu (${okresWzrostu}, ~$(Liczba $ocena.WzrostOdTokeny) -> ~$(Liczba $ocena.WzrostDoTokeny) tokenow na dzien)" `
+      ("Koszt zwyklego dnia nauki (bez nadrabiania) rosl $($ocena.Wzrosty) dni z rzedu, za kazdym razem o co najmniej $ProcWzrostuCyklu procent - " +
+       "od $($ocena.WzrostOd.ToString('yyyy-MM-dd')) (~$(Liczba $ocena.WzrostOdTokeny) tokenow) do $($ocena.WzrostDo.ToString('yyyy-MM-dd')) (~$(Liczba $ocena.WzrostDoTokeny) tokenow). " +
+       "To trend, nie jednorazowy skok. Co nauka czytala - w $plikCyklOstatni.") `
+      "cykl-rosnie" "pilne" $ocena.Wzrosty $DniWzrostuCyklu $okresWzrostu
+  }
 }
+
+# Historia kosztow tez nie ma prawa zawiesc po cichu: podsumowanie samo zglasza,
+# gdy dziennik sie nie zapisuje (lore\lore\facts.py, _anomaly), a nieczytelne
+# linie dziennika to koszt, ktorego nie ma w zadnej sumie.
+$nieprawidlowosc = Klucz-Tekst $podsum "nieprawidlowosc"
+if ($nieprawidlowosc) {
+  $zKiedy = Klucz-Tekst $podsum "zaktualizowano"
+  if (-not $zKiedy) { $zKiedy = "data nieznana" }
+  $informacje += Alarm "historia kosztow nauki sie nie zapisuje" `
+    ("Podsumowanie kosztow nauki (stan z $zKiedy) zglasza: $nieprawidlowosc. " +
+     "Dopoki to trwa, statystyka 7 i 30 dni jest niepelna. Plik: $plikPodsum.") `
+    "historia" "uwaga" $null $null $zKiedy
+}
+if ($historia.Pominiete -gt 0) {
+  $informacje += Alarm "dziennik kosztow nauki ma $($historia.Pominiete) nieczytelnych linii" `
+    ("W dzienniku przebiegow nauki $($historia.Pominiete) linii nie pasuje do kolumn - ich koszt nie jest liczony ani w statystyce, ani w ocenie dnia. " +
+     "Plik: $plikHistoria.") `
+    "historia" "uwaga" $historia.Pominiete $null ""
+}
+
+# --- jedna linia: dla straznika (-Zwiezle) i dla nadzorcy (-Dane) --------------
+# Liczby bez separatora tysiecy: ta linia ma sie zmiescic w jednym wierszu
+# terminala i jest pokazywana przez straznika przy kazdym otwarciu sesji.
+# Obie liczby, bo sama sesyjna sugerowala, ze tyle placi sie za wiadomosc.
+# Zero tokenow za start sesji nie znaczy "za darmo", tylko "nie bylo czego
+# policzyc" - i tak to ma byc napisane, tak samo jak przy przypomnieniu.
+$czSesja = "start sesji +$tokSesja tokenow"
+if ($tokSesja -le 0) { $czSesja = "startu sesji nie umiem zmierzyc" }
+if ($tokWiadomosc -gt 0) {
+  $rachunek = "pamiec: wiadomosc +$tokWiadomosc tokenow, $czSesja"
+} else {
+  $rachunek = "pamiec: $czSesja, przypomnienia nie umiem zmierzyc"
+}
+if ($cosUcinane) {
+  $g = $ucinane[0]
+  $opis = "UCINANE: $($g.Krotka) -$($g.Strata) $($g.Jednostka)"
+  if ($g.Naglowek) { $opis = $opis + " (od ""$(Skroc $g.Naglowek 34)"")" }
+  if ($ucinane.Count -gt 1) { $opis = $opis + " i jeszcze $($ucinane.Count - 1)" }
+  $liniaZwiezla = "UWAGA $rachunek, $opis"
+} elseif ($alarmy.Count -gt 0) {
+  $opis = "ALARM: $($alarmy[0].Krotko)"
+  if ($alarmy.Count -gt 1) { $opis = $opis + " i jeszcze $($alarmy.Count - 1)" }
+  $liniaZwiezla = "UWAGA $rachunek, $opis"
+} else {
+  $liniaZwiezla = "$rachunek, nic nie jest ucinane"
+  # Informacja idzie w te sama linie, ale BEZ slowa UWAGA i bez kodu 1 -
+  # straznik pokazuje ja wtedy jako zwykly meldunek, a nie jako alarm.
+  if ($informacje.Count -gt 0) {
+    $slowo = "info"
+    if ($informacje[0].Waga -eq "uwaga") { $slowo = "do sprawdzenia" }
+    $liniaZwiezla = $liniaZwiezla + "; ${slowo}: $($informacje[0].Krotko)"
+    if ($informacje.Count -gt 1) { $liniaZwiezla = $liniaZwiezla + " i jeszcze $($informacje.Count - 1)" }
+  }
+}
+$kodWyjscia = 0
+if ($cosUcinane -or ($alarmy.Count -gt 0)) { $kodWyjscia = 1 }
 
 if ($Zwiezle) {
-  # Liczby bez separatora tysiecy: ta linia ma sie zmiescic w jednym wierszu
-  # terminala i jest pokazywana przez straznika przy kazdym otwarciu sesji.
-  # Obie liczby, bo sama sesyjna sugerowala, ze tyle placi sie za wiadomosc.
-  # Zero tokenow za start sesji nie znaczy "za darmo", tylko "nie bylo czego
-  # policzyc" - i tak to ma byc napisane, tak samo jak przy przypomnieniu.
-  $czSesja = "start sesji +$tokSesja tokenow"
-  if ($tokSesja -le 0) { $czSesja = "startu sesji nie umiem zmierzyc" }
-  if ($tokWiadomosc -gt 0) {
-    $rachunek = "pamiec: wiadomosc +$tokWiadomosc tokenow, $czSesja"
-  } else {
-    $rachunek = "pamiec: $czSesja, przypomnienia nie umiem zmierzyc"
+  Write-Output $liniaZwiezla
+  exit $kodWyjscia
+}
+
+# --- wypisanie: dane dla nadzorcy (-Dane) --------------------------------------
+# Nadzorca w zasobniku NICZEGO nie liczy drugi raz - dostaje stad linie, alarmy
+# z waga i okresem, ocene kosztu nauki i dni do wykresu. Format "klucz: wartosc",
+# ten sam co pozostale pliki stanu; kazda wartosc w jednej linii.
+
+function Wartosc-Linii($v) {
+  if ($null -eq $v) { return "" }
+  if ($v -is [datetime]) { return $v.ToString('yyyy-MM-dd') }
+  return ((("" + $v) -replace '[\r\n\t]+', ' ').Trim())
+}
+
+function Para($klucz, $wartosc) {
+  Write-Output ("{0}: {1}" -f $klucz, (Wartosc-Linii $wartosc))
+}
+
+if ($Dane) {
+  Para "linia" $liniaZwiezla
+  Para "kod" $kodWyjscia
+  $nr = 0
+  foreach ($a in (@($alarmy) + @($informacje))) {
+    $nr++
+    Para "alarm.$nr.temat"  $a.Temat
+    Para "alarm.$nr.waga"   $a.Waga
+    Para "alarm.$nr.liczba" $a.Liczba
+    Para "alarm.$nr.prog"   $a.Prog
+    Para "alarm.$nr.okres"  $a.Okres
+    Para "alarm.$nr.krotko" $a.Krotko
+    Para "alarm.$nr.pelny"  $a.Pelny
   }
-  if ($cosUcinane) {
-    $g = $ucinane[0]
-    $opis = "UCINANE: $($g.Krotka) -$($g.Strata) $($g.Jednostka)"
-    if ($g.Naglowek) { $opis = $opis + " (od ""$(Skroc $g.Naglowek 34)"")" }
-    if ($ucinane.Count -gt 1) { $opis = $opis + " i jeszcze $($ucinane.Count - 1)" }
-    $linia = "UWAGA $rachunek, $opis"
-  } elseif ($alarmy.Count -gt 0) {
-    $opis = "ALARM: $($alarmy[0].Krotko)"
-    if ($alarmy.Count -gt 1) { $opis = $opis + " i jeszcze $($alarmy.Count - 1)" }
-    $linia = "UWAGA $rachunek, $opis"
-  } else {
-    $linia = "$rachunek, nic nie jest ucinane"
+  Para "alarmy" $nr
+
+  Para "cykl.prog"            $AlarmCyklu
+  Para "cykl.dni_zwyklego"    $DniMaterialuZwyklego
+  Para "cykl.dni_wzrostu"     $DniWzrostuCyklu
+  if ($cykl) {
+    Para "cykl.data"          $cykl.Data
+    Para "cykl.wiek"          $cykl.Wiek
+    Para "cykl.tokeny"        $cykl.Tokeny
+    Para "cykl.wywolania"     $cykl.Wywolania
+    Para "cykl.zrodlo"        $cykl.Zrodlo
   }
-  Write-Output $linia
-  if ($cosUcinane -or $alarmy.Count -gt 0) { exit 1 }
-  exit 0
+  Para "cykl.rodzaj"          $ocena.Rodzaj
+  Para "cykl.ocena_z"         $ocena.Zrodlo
+  Para "cykl.wiadomosci"      $ocena.Wiadomosci
+  Para "cykl.zakres_od"       $ocena.ZakresOd
+  Para "cykl.zakres_do"       $ocena.ZakresDo
+  Para "cykl.zwykle"          $ocena.Zwykle
+  Para "cykl.nadrabianie"     $ocena.Nadrabianie
+  Para "cykl.nieznane"        $ocena.Nieznane
+  Para "cykl.typowy_dzien"    $ocena.TypowyDzien
+  Para "cykl.typowych_dni"    $ocena.TypowychDni
+  Para "cykl.wzrosty"         $ocena.Wzrosty
+  Para "cykl.wzrost_od"       $ocena.WzrostOd
+  Para "cykl.wzrost_od_tokeny" $ocena.WzrostOdTokeny
+  Para "cykl.wzrost_do"       $ocena.WzrostDo
+  Para "cykl.wzrost_do_tokeny" $ocena.WzrostDoTokeny
+  Para "cykl.proc_wzrostu"    $ProcWzrostuCyklu
+  Para "cykl.prog_informacji" $ProgInformacjiNauki
+
+  Para "stat.zrodlo"          $statystyka.Zrodlo
+  Para "stat.powod"           $statystyka.Powod
+  Para "stat.pominiete"       $statystyka.Pominiete
+  Para "stat.okno_dni"        $DniStatystyki
+  Para "stat.suma7"           $statystyka.Suma7
+  Para "stat.suma7_od"        $statystyka.Suma7Od
+  Para "stat.suma30"          $statystyka.Suma30
+  Para "stat.suma30_od"       $statystyka.Suma30Od
+  Para "stat.sumy_z"          $statystyka.SumyZ
+  Para "stat.podsumowanie_z"  $statystyka.PodsumowanieZ
+  Para "stat.srednia"         $statystyka.Srednia
+  Para "stat.srednia_dni"     $statystyka.SredniaDni
+  Para "stat.plik"            $plikHistoria
+  # dzien|razem|zwykle|nadrabianie|nieznane|przebiegi|wiadomosci - tylko dni z danymi
+  $nrDnia = 0
+  foreach ($d in @($statystyka.Dni)) {
+    $nrDnia++
+    Para "stat.dzien.$nrDnia" ("{0}|{1}|{2}|{3}|{4}|{5}|{6}" -f $d.Dzien.ToString('yyyy-MM-dd'), $d.Razem, $d.Zwykle,
+                               $d.Nadrabianie, $d.Nieznane, $d.Przebiegi, $d.Wiadomosci)
+  }
+  Para "stat.dni" $nrDnia
+  exit $kodWyjscia
 }
 
 # --- wypisanie: rozbicie na pozycje (raz dziennie, przy pierwszej sesji) ------
@@ -1323,6 +1859,21 @@ if ($Rozbicie) {
     if ($null -ne $cykl.Wywolania) { $szczegoly += "$(Liczba $cykl.Wywolania) wywolan" }
     if ($null -ne $cykl.Fakty)     { $szczegoly += "$(Liczba $cykl.Fakty) faktow" }
     if ($szczegoly.Count -gt 0) { $blok += ("  {0,-20} {1}" -f "", ($szczegoly -join ", ")) }
+    # Za jaki okres i czy to nadrabianie - bez tego drogi dzien nadrabiania
+    # wyglada w rozbiciu jak nowa norma.
+    $okresR = Zakres-Krotko $ocena.ZakresOd $ocena.ZakresDo
+    $wiadR = ""
+    if ($null -ne $ocena.Wiadomosci) { $wiadR = "$(Liczba $ocena.Wiadomosci) wiadomosci" }
+    if ($okresR) { $wiadR = ("$wiadR z $okresR").Trim() }
+    $rodzajR = ""
+    switch ($ocena.Rodzaj) {
+      "nadrabianie" { $rodzajR = "nadrabianie zaleglosci (jednorazowo)" }
+      "mieszany"    { $rodzajR = "czesciowo nadrabianie zaleglosci" }
+      "zwykly"      { $rodzajR = "zwykly dzien" }
+      "nieznany"    { $rodzajR = "okres nieznany" }
+    }
+    $czesciR = @(@($rodzajR, $wiadR) | Where-Object { $_ })
+    if ($czesciR.Count -gt 0) { $blok += ("  {0,-20} {1}" -f "", ($czesciR -join ": ")) }
     if ($poprzedniCykl -and ($null -ne $poprzedniCykl.Tokeny)) {
       $blok += Wiersz-Rozbicia "poprzednio" (Pasek $poprzedniCykl.Tokeny $maxCykl) (Liczba $poprzedniCykl.Tokeny) ""
     }
@@ -1531,6 +2082,14 @@ if ($alarmy.Count -gt 0) {
   }
   Linia "  Progi sa nasze - siedza na gorze narzedzia\koszt-pamieci.ps1 i zmienia sie je jedna linijka."
 }
+# Informacje sa zolte i nie podnosza kodu wyjscia: mowia, co sie stalo i za jaki
+# okres, ale niczego nie trzeba naprawiac.
+foreach ($a in $informacje) {
+  $slowo = "INFO"
+  if ($a.Waga -eq "uwaga") { $slowo = "DO SPRAWDZENIA" }
+  Linia ("  {0}: {1}" -f $slowo, $a.Krotko) "Yellow"
+  Linia ("    {0}" -f $a.Pelny) "Yellow"
+}
 if ((-not $cosUcinane) -and ($alarmy.Count -gt 0)) {
   Linia "  Nic za to nie jest ucinane - kazdy tekst miesci sie w swoim suficie."
 }
@@ -1633,6 +2192,15 @@ if (-not $cykl) {
   Linia ("  Wyslane: {0} znakow, odebrane: {1} znakow" -f `
          (Lub-Nieznane $cykl.ZnakiWyslane), (Lub-Nieznane $cykl.ZnakiOdebrane))
   Linia ("  {0}" -f (Opis-Zrodla $cykl.Zrodlo))
+  $okresPelny = "nie zapisany (starsza wersja modulu pamieci)"
+  if ($ocena.ZakresOd) { $okresPelny = "$($ocena.ZakresOd) - $($ocena.ZakresDo)" }
+  Linia ("  Za jaki okres: {0} wiadomosci z {1}" -f (Lub-Nieznane $ocena.Wiadomosci), $okresPelny)
+  $kolorRodzaju = $null
+  if (@("nadrabianie", "mieszany", "nieznany") -contains $ocena.Rodzaj) { $kolorRodzaju = "Yellow" }
+  $skadOceny = "z dziennika przebiegow"
+  if ($ocena.Zrodlo -eq "plik-dnia") { $skadOceny = "z pliku dnia - dziennika przebiegow dla tego dnia nie ma" }
+  Linia ("  Rodzaj: {0} (ocena {1})" -f (Opis-Rodzaju $ocena), $skadOceny) $kolorRodzaju
+  Linia ("  {0}" -f (Zdanie-Typowego-Dnia $ocena))
   $poprzCykl = $cykl.Poprzedni
   if ((-not $poprzCykl) -or ($null -eq $poprzCykl.Tokeny) -or ($null -eq $cykl.Tokeny)) {
     Linia "  Poprzedniego dnia nie ma z czym porownac - cykl nie podal jego liczb."
@@ -1655,6 +2223,28 @@ if (-not $cykl) {
     Linia "  w ogole nie chodzi. Sprawdz: powershell -File narzedzia\cykl-dzienny.ps1 -Proba" "Yellow"
   }
   Linia "  Zapisal to sam cykl: $plikCyklKoszt"
+}
+
+# Historia dni: to samo, co wykres w oknie nadzorcy, tylko w liniach.
+if (@($statystyka.Dni).Count -gt 0) {
+  $skadSum = "z podsumowania $plikPodsum"
+  if ($statystyka.SumyZ -eq "dni") { $skadSum = "zsumowane z dni ponizej" }
+  Linia ("  Historia: 7 dni ~{0}, {1} dni ~{2} tokenow ({3}); dni z nauka: {4}" -f `
+         (Lub-Nieznane $statystyka.Suma7), $DniStatystyki, (Lub-Nieznane $statystyka.Suma30), $skadSum, $statystyka.SredniaDni)
+  foreach ($d in @($statystyka.Dni)) {
+    $podzial = @()
+    if ($d.Zwykle -gt 0)      { $podzial += "zwykly dzien ~$(Liczba $d.Zwykle)" }
+    if ($d.Nadrabianie -gt 0) { $podzial += "nadrabianie ~$(Liczba $d.Nadrabianie)" }
+    if ($d.Nieznane -gt 0)    { $podzial += "okres nieznany ~$(Liczba $d.Nieznane)" }
+    Linia ("    {0}  ~{1,9} tokenow  {2}" -f $d.Dzien.ToString('yyyy-MM-dd'), (Liczba $d.Razem), ($podzial -join ", "))
+  }
+  if ($statystyka.Zrodlo -eq "plik-dnia") {
+    Linia "  Dziennika przebiegow ($plikHistoria) jeszcze nie ma - to jedyne znane dni, z $plikCyklKoszt. Statystyka rosnie z kazdym dniem nauki."
+  }
+} else {
+  $powodHist = $statystyka.Powod
+  if (-not $powodHist) { $powodHist = "brak dni z nauka w ostatnich $DniStatystyki dniach" }
+  Linia "  Historia: $powodHist - statystyka dopiero sie zbiera."
 }
 
 Linia ""
@@ -1752,7 +2342,11 @@ if ($cykl -and ($null -ne $cykl.Tokeny)) {
   $ogonZrodla = ""
   if ($cykl.Zrodlo -eq "szacunek") { $ogonZrodla = " (szacunek)" }
   elseif ($cykl.Zrodlo -eq "pomiar") { $ogonZrodla = " (pomiar)" }
-  Linia "  Cykl wiedzy: ~$(Liczba $cykl.Tokeny) tokenow$ogonZrodla raz na dobe - i to jedyne z tych trzech, co naprawde wola model."
+  $ogonRodzaju = ""
+  $okres10 = Zakres-Krotko $ocena.ZakresOd $ocena.ZakresDo
+  if (@("nadrabianie", "mieszany") -contains $ocena.Rodzaj) { $ogonRodzaju = ", nadrabianie zaleglosci z $okres10 (jednorazowo)" }
+  elseif ($okres10) { $ogonRodzaju = ", rozmowy z $okres10" }
+  Linia "  Nauka z rozmow (cykl wiedzy): ~$(Liczba $cykl.Tokeny) tokenow$ogonZrodla przy ostatnim przebiegu$ogonRodzaju - i to jedyne z tych trzech, co naprawde wola model."
 } else {
   Linia "  Cykl wiedzy: kosztu jeszcze nie policzyl - liczba pojawi sie po pierwszym przebiegu cyklu."
 }
