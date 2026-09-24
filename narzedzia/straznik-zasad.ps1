@@ -108,6 +108,14 @@ $plikDomowy   = Join-Path $KatalogDomowy ".claude\CLAUDE.md"
 # wpisz-zasady.ps1, ktory liczy go tak samo - z $KatalogDomowy. Gdybysmy tu
 # patrzyli gdzie indziej, straznik pilnowalby innego pliku, niz naprawia.
 $plikCodex    = Join-Path $KatalogDomowy ".codex\AGENTS.md"
+
+# Czy narzedzia bez Claude Code sa na tej maszynie. Poprawki nanosimy tylko na
+# czesc narzedzia, ktore tu stoi: katalog .megaruchacz\ jest wspolny dla Codeksa
+# i opencode, wiec jego obecnosc nie dowodzi, ze stoi tu oba. Detekcja ta sama
+# co w wdroz.ps1 - polecenie w PATH albo katalog konfiguracji narzedzia.
+$JestCodex    = [bool](Get-Command codex    -CommandType Application -ErrorAction SilentlyContinue) -or (Test-Path (Split-Path -Parent $plikCodex))
+$JestOpencode = [bool](Get-Command opencode -CommandType Application -ErrorAction SilentlyContinue) -or (Test-Path (Join-Path $KatalogDomowy ".config\opencode"))
+
 $plikStanu    = Join-Path $KatalogDomowy ".claude\.megaruchacz-straznik.txt"
 $plikWersji   = Join-Path $Projekt ".claude\megaruchacz-wersja.txt"
 # Znacznik ostatniego zagladania do sieci. Lezy w katalogu domowym, a nie przy
@@ -865,8 +873,12 @@ function Napraw-Hooki-Codex($celCodex, $zrodlo, $projekt, $stempel) {
 function Nanies-Poprawki-Codex($zrodlo, $projekt, $stempel) {
   $celCodex = Join-Path $projekt ".codex"
   $celMega  = Join-Path $projekt ".megaruchacz"
-  # Bez .megaruchacz\ to nie jest wdrozenie dla Codeksa - nie zakladamy go sami.
+  # Bez .megaruchacz\ to nie jest wdrozenie dla narzedzia - nie zakladamy go sami.
+  # O obecnosci Codeksa w projekcie rozstrzyga katalog .codex\ (wdroz.ps1 go zaklada,
+  # gdy Codeksa widzi - takze po $env:CODEX_HOME, ktorego straznik z premedytacja
+  # nie czyta). Gdy katalogu nie ma, a Codeksa nie widac - nie ma czego odswiezac.
   if (-not (Test-Path $celMega)) { return }
+  if (-not (Test-Path $celCodex) -and -not $JestCodex) { return }
   $szablony = Join-Path $zrodlo "szablony-codex"
   if (-not (Test-Path $szablony)) { return }
 
@@ -916,6 +928,47 @@ function Nanies-Poprawki-Codex($zrodlo, $projekt, $stempel) {
   }
 }
 
+# Czesc opencode wdrozenia: role w .opencode\agents\ i wtyczka rejestru.
+# Odswiezamy na tych samych zasadach co .codex\ - z jednym wyjatkiem: opencode
+# nie ma hooks.json ani zatwierdzania, wiec nie ma tu czego oglaszac czlowiekowi.
+# Gdy Codex jest na maszynie, Nanies-Poprawki-Codex tez odswiezy zasady i AGENTS.md
+# (wariantem codeksowym); to wezwanie idzie po nim, wiec wygrywa wariant opencode -
+# ten sam, ktory wybiera wdroz.ps1, gdy sa oba narzedzia.
+function Nanies-Poprawki-Opencode($zrodlo, $projekt, $stempel) {
+  $celMega = Join-Path $projekt ".megaruchacz"
+  # Bez .megaruchacz\ to nie jest wdrozenie trybu workerow - nie zakladamy go sami.
+  # Bez opencode na maszynie nie ma czego odswiezac.
+  if (-not (Test-Path $celMega)) { return }
+  if (-not $JestOpencode) { return }
+  $szablony = Join-Path $zrodlo "szablony-opencode"
+  if (-not (Test-Path $szablony)) { return }
+
+  New-Item -ItemType Directory -Force -Path (Join-Path $projekt ".opencode\agents")  | Out-Null
+  New-Item -ItemType Directory -Force -Path (Join-Path $projekt ".opencode\plugins") | Out-Null
+  foreach ($p in @(Get-ChildItem (Join-Path $szablony "agents\*.md") -ErrorAction SilentlyContinue)) {
+    [void](Odswiez $p.FullName (Join-Path $projekt ".opencode\agents\$($p.Name)") $stempel)
+  }
+  [void](Odswiez (Join-Path $szablony "plugins\mr-log.js") (Join-Path $projekt ".opencode\plugins\mr-log.js") $stempel)
+
+  # Zasady i AGENTS.md - tym samym kodem co czesc codeksowa, zeby znaczniki,
+  # kopie zapasowe i warunek "sledzony w gicie" byly w jednym miejscu.
+  $plikZasad = Join-Path $szablony "zasady-kierownika.md"
+  [void](Odswiez $plikZasad (Join-Path $celMega "zasady-kierownika.md") $stempel)
+  [void](Odswiez-Agents $projekt $plikZasad $stempel)
+
+  # Slad w pliku wersji wdrozenia - ten sam format "klucz: wartosc".
+  $plikW = Join-Path $celMega "wersja.txt"
+  if (Test-Path $plikW) {
+    $w = Wersja-Narzedzia (Join-Path $zrodlo "ZMIANY.md")
+    if ($w) {
+      $stanO = Czytaj-Klucze $plikW
+      $stanO["opencode.wersja"] = $w
+      $stanO["opencode.data"] = (Get-Date -Format 'yyyy-MM-dd HH:mm')
+      Zapisz-Klucze $plikW $stanO
+    }
+  }
+}
+
 # Nanosi poprawki na pliki nalezace do narzedzia. NIE rusza plikow stanu
 # (worklog.md, mapa.md) - to praca uzytkownika.
 
@@ -949,6 +1002,13 @@ function Nanies-Poprawki($zrodlo, $projekt) {
   # poprawek, ktore juz weszly po stronie Claude Code.
   try { Nanies-Poprawki-Codex $zrodlo $projekt $stempel }
   catch { Mow "MegaRuchacz: czesci codeksowej wdrozenia nie udalo sie odswiezyc ($($_.Exception.Message)) - zrobi to ponowne uruchomienie wdroz.ps1." }
+
+  # Czesc opencode idzie zaraz po codeksowej i swiadomie ja przykrywa: gdy oba
+  # narzedzia sa na maszynie, wariant opencode (opisujacy oba) ma byc tym, ktory
+  # trafia do AGENTS.md i .megaruchacz\. Osobny try, zeby potkniecie na jednej
+  # czesci nie zabralo drugiej.
+  try { Nanies-Poprawki-Opencode $zrodlo $projekt $stempel }
+  catch { Mow "MegaRuchacz: czesci opencode wdrozenia nie udalo sie odswiezyc ($($_.Exception.Message)) - zrobi to ponowne uruchomienie wdroz.ps1." }
 }
 
 # ------------------------------------------------- 0. swiezosc kopii narzedzia
@@ -1232,6 +1292,13 @@ function Pilnuj-Wersji {
     if ($stan["codex.wersja"]) {
       $stan["codex.wersja"] = $wZrodla
       $stan["codex.data"] = $stan["$k.data"]
+    }
+    # To samo dla czesci opencode - Nanies-Poprawki tez ja odswieza i przesuwa
+    # znacznik w .megaruchacz\wersja.txt, ale klucz w pliku wdrozenia Claude Code
+    # musi pojsc razem z nim, zeby "jedno miejsce" mowilo prawde.
+    if ($stan["opencode.wersja"]) {
+      $stan["opencode.wersja"] = $wZrodla
+      $stan["opencode.data"] = $stan["$k.data"]
     }
     $zmiana = $true
     Mow "MegaRuchacz: modul [$($m.nazwa)] zaktualizowany $stara -> $wZrodla (co doszlo: $plikZmian)"

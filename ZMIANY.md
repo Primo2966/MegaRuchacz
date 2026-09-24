@@ -4,6 +4,55 @@ Każda zmiana wypychana na gita dostaje tu wpis. Numer rośnie wg zasady:
 pierwsza cyfra — przebudowa łamiąca zgodność, druga — nowa funkcja,
 trzecia — poprawka.
 
+## 0.19.0 — 2026-09-24
+
+- **Instalacja GLOBALNA: `narzedzia\instaluj-globalnie.ps1`.** Jedna komenda dla
+  calego komputera. Role, zasady i rejestr dzialaja od razu w **kazdym** projekcie,
+  bez wdrazania po kolei. Stan pracy (rejestr, mapa) nadal laduje w projekcie,
+  w `.megaruchacz\` - zaklada go pierwszy worker, gdy zajdzie potrzeba, wiec nic
+  nie zalega bezczynnie.
+- **Trzy narzedzia naraz:**
+  - opencode: role w `~/.config/opencode/agents`, wtyczka rejestru w `~/.config/opencode/plugins`.
+  - Claude Code: role w `~/.claude/agents`, rejestr i hooki w `~/.claude/settings.json`,
+    worktree ustawiony globalnie.
+  - Codex: zasady w `~/.codex/AGENTS.md`, rejestr i hooki w `~/.codex/hooks.json`.
+  - Zasady dla wszystkich trzech leca przez `~/.claude/CLAUDE.md` (Claude Code
+    i opencode) oraz `~/.codex/AGENTS.md` (Codex), blokiem `MegaRuchacz:kierownik`.
+- **`-Usun`** zdejmuje wszystko, co instalacja zalozyla. **`-Proba`** pokazuje plan.
+- **Konflikt globalne/per-projekt rozwiazany.** `wdroz.ps1` po instalacji globalnej
+  nie wdrazia nic w projekcie (znacznik `~/.claude/.megaruchacz-global`) - inaczej
+  rejestr i zasady szlyby dwa razy. Obejscie: `-WymusProjektowo`.
+- **Zweryfikowane na prawdziwym opencode i Claude Code** (na tymczasowym katalogu
+  domowym): opencode widzi cztery nowe role i laduje wtyczke; rejestr Claude pisze
+  do `.megaruchacz/worklog.md` w wybranym projekcie; `-Usun` czysci.
+- **Znany dlug:** globalny rejestr Codeksa nie zna projektu z gory - bierze go
+  z `CODEX_PROJECT_DIR` albo biezacego katalogu, wiec wymaga potwierdzenia na
+  maszynie z Codeksem. Role Codeksa zapisane jako pliki w `~/.codex/agents/`,
+  ale dzisiejszy Codex deklaruje role w `config.toml` - do sprawdzenia.
+
+## 0.18.0 — 2026-09-18
+
+- **Tryb workerow działa w opencode.** Trzeci obok Claude Code i Codeksa. Role
+  (implementer, scout, verifier, zastepca) ladują do `.opencode/agents/*.md`,
+  a rejestr pracy prowadzi **wtyczka** `.opencode/plugins/mr-log.js` - opencode
+  laduje ja sam przy starcie, więc **nic nie trzeba zatwierdzać** (inaczej niż
+  hooki Codeksa z `/hooks`). Wtyczka slucha zdarzen sesji podagentow i dopisuje
+  START/KONIEC do `.megaruchacz/worklog.md`, tego samego pliku co pod Codeksem.
+- **Zasady dla obu narzedzi w jednym miejscu.** AGENTS.md czyta i opencode,
+  i Codex, więc blok zasad jest wspolny. Gdy na maszynie sa oba narzedzia,
+  wygrywa wariant opencode - opisuje oba sposoby pisania rejestru.
+- **Straznik odswieza tez czesc opencode.** Role i wtyczka nanosza sie same przy
+  podbiciu wersji, bez zatwierdzania. `.megaruchacz/` jest wspolny dla Codeksa
+  i opencode, dlatego straznik rozpoznaje narzedzie po jego katalogu w projekcie
+  (`.codex/`, `.opencode/`) albo po poleceniu w PATH - nie po samym `.megaruchacz/`.
+- **Granice trybu pod opencode** (w `szablony-opencode/CZYTAJ.md`): brak pracy
+  w tle, brak izolacji przez worktree, `edit: deny` blokuje narzedzia zapisu,
+  ale nie bash. To te same ograniczenia co pod Codeksem, z jedna roznica:
+  nic nie wymaga zatwierdzania.
+- **Znany dług:** Lore nie indeksuje jeszcze rozmow z opencode - w opencode
+  przeszukuje historie Claude Code i Codeksa. Czytnik bazy `opencode.db` to
+  osobna robota.
+
 ## 0.1.1 — 2026-09-16
 
 - **Sprostowanie w README.** Poprzednia wersja twierdziła, że Codex nie ma
