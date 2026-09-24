@@ -79,7 +79,7 @@ function Rejestr-Modulow {
     [ordered]@{
       nazwa        = "pamiec"
       opis         = "Lore - przeszukiwalna pamiec wszystkich rozmow odbytych na tej maszynie"
-      koszt        = "okolo 465 MB pobrania i Python, lokalna baza z trescia rozmow, dostep agenta do tych tresci, zadanie w harmonogramie co 10 minut"
+      koszt        = "okolo 496 MB pobrania i Python, lokalna baza z trescia rozmow, dostep agenta do tych tresci, zadanie w harmonogramie co 10 minut i nadzorca w zasobniku (drugie zadanie, przy logowaniu); na istniejacej bazie - przeliczenie archiwum na nowy model w tle, ~2-4 h z obnizonym priorytetem"
       pytaj        = $true
       instalator   = "narzedzia\instaluj-lore.ps1"
       aktualizacja = "instalator"
@@ -590,6 +590,30 @@ function Polecenie-Przypomnienia($zrodloUkosniki) {
   return 'node "' + $zrodloUkosniki + '/narzedzia/przypomnienie.js" "$CLAUDE_PROJECT_DIR/.claude/orchestrator-reminder.json" || cat "$CLAUDE_PROJECT_DIR/.claude/orchestrator-reminder.json"'
 }
 
+# Podmiana STAREGO hooka przypomnienia (samo "cat" pliku) na wywolanie skryptu.
+# To jedyne miejsce, w ktorym nadpisujemy polecenie juz istniejacego hooka - bez
+# tego wdrozenia sprzed 2026-09-17 nigdy nie pokazalyby postepu cyklu ani (od
+# 2026-09-24) podpowiedzi z archiwum, bo hook dopisuje sie wylacznie wtedy, gdy go
+# w ogole nie ma. Ruszamy tylko wpisy, ktore niosa NASZ plik i nie wolaja jeszcze
+# naszego skryptu. Zmienia $s w miejscu; zwraca $true, gdy cos podmienila.
+# Wolana z Napraw-Hooki (po podbiciu wersji) i z Pilnuj-Przypomnienia-Zawsze
+# (przy kazdym przebiegu) - stare wdrozenie nie ma czekac na nastepna wersje.
+function Podmien-Przypomnienie-Claude($s, $r) {
+  $podmienione = $false
+  if ($s.hooks -and ($s.hooks.PSObject.Properties.Name -contains "UserPromptSubmit")) {
+    foreach ($grupa in @($s.hooks.UserPromptSubmit)) {
+      foreach ($h in @($grupa.hooks)) {
+        if (-not $h) { continue }
+        if ("$($h.command)" -notlike "*orchestrator-reminder.json*") { continue }
+        if (Wola-Przypomnienie "$($h.command)") { continue }
+        $h.command = Polecenie-Przypomnienia $r
+        $podmienione = $true
+      }
+    }
+  }
+  return $podmienione
+}
+
 # settings.json jest w polowie wlasnoscia uzytkownika - dopisujemy wylacznie
 # brakujace hooki, nigdy nie przepisujemy calego pliku.
 function Napraw-Hooki($cel, $zrodlo, $stempel) {
@@ -614,23 +638,7 @@ function Napraw-Hooki($cel, $zrodlo, $stempel) {
     $doDodania += ,@("SessionStart", 'powershell -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "' +
       $r + '/narzedzia/straznik-zasad.ps1" -Zrodlo "' + $r + '" -Projekt "$CLAUDE_PROJECT_DIR" || true', 15)
   }
-  # Podmiana STAREGO hooka przypomnienia (samo "cat" pliku) na wywolanie skryptu.
-  # To jedyne miejsce, w ktorym nadpisujemy polecenie juz istniejacego hooka - bez
-  # tego wdrozenia sprzed 2026-09-17 nigdy nie pokazalyby postepu cyklu, bo hook
-  # dopisuje sie wylacznie wtedy, gdy go w ogole nie ma. Ruszamy tylko wpisy, ktore
-  # niosa NASZ plik i nie wolaja jeszcze naszego skryptu.
-  $podmienione = $false
-  if ($s.hooks -and ($s.hooks.PSObject.Properties.Name -contains "UserPromptSubmit")) {
-    foreach ($grupa in @($s.hooks.UserPromptSubmit)) {
-      foreach ($h in @($grupa.hooks)) {
-        if (-not $h) { continue }
-        if ("$($h.command)" -notlike "*orchestrator-reminder.json*") { continue }
-        if ("$($h.command)" -like "*przypomnienie.js*") { continue }
-        $h.command = Polecenie-Przypomnienia $r
-        $podmienione = $true
-      }
-    }
-  }
+  $podmienione = Podmien-Przypomnienie-Claude $s $r
 
   if ($doDodania.Count -eq 0 -and -not $podmienione) { return $false }
 
@@ -781,37 +789,26 @@ function Wynik-Hookow {
   return [ordered]@{ Dodane = @(); Poprawione = @(); Limity = @() }
 }
 
-# .codex\hooks.json - tu chodzimy na palcach. Zmiana DEFINICJI hooka (polecenie,
-# timeout, matcher, async) uniewaznia zatwierdzenie z /hooks i zmusza uzytkownika
-# do powtarzania go, wiec grupy, ktore juz tam sa, ruszamy WYLACZNIE tak, jak
-# opisuje Zsynchronizuj-Grupe (rozjechane polecenie, zanizony sufit) - poza tym
-# dopisujemy tylko brakujace. Swoje poznajemy po "statusMessage", tak samo jak
-# wdroz.ps1. Zwraca Wynik-Hookow - o kazdej pozycji trzeba powiedziec wprost.
-function Napraw-Hooki-Codex($celCodex, $zrodlo, $projekt, $stempel) {
+# Szablon hookow Codeksa z podstawionymi sciezkami - albo $null, gdy go nie ma
+# albo nie jest JSON-em.
+function Szablon-Hookow-Codex($zrodlo, $projekt) {
   $surowy = Czytaj-Tekst (Join-Path $zrodlo "szablony-codex\hooks.json")
-  if (-not $surowy) { return (Wynik-Hookow) }
+  if (-not $surowy) { return $null }
   $surowy = $surowy.TrimStart([char]0xFEFF).Replace("{{PROJEKT}}", $projekt.Replace("\","/")).Replace("{{ZRODLO}}", $zrodlo.Replace("\","/"))
-  try { $szablon = $surowy | ConvertFrom-Json } catch { return (Wynik-Hookow) }
-  if (-not $szablon.hooks) { return (Wynik-Hookow) }
+  try { $szablon = $surowy | ConvertFrom-Json } catch { return $null }
+  if (-not $szablon.hooks) { return $null }
+  return $szablon
+}
 
-  $plik = Join-Path $celCodex "hooks.json"
-  $s = [pscustomobject]@{}
-  $raw = Czytaj-Tekst $plik
-  # Cudzy plik, ktory nie jest czystym JSON-em, zostaje nietkniety - tak samo
-  # jak w instalatorze. Lepiej nie dopisac hooka niz zepsuc komus ustawienia.
-  if ($raw) {
-    try { $s = $raw.TrimStart([char]0xFEFF) | ConvertFrom-Json } catch { return (Wynik-Hookow) }
-  }
-  if (-not ($s.PSObject.Properties.Name -contains "hooks") -or $null -eq $s.hooks) {
-    $s | Add-Member -NotePropertyName hooks -NotePropertyValue ([pscustomobject]@{}) -Force
-  }
-
-  # Jedyny wyjatek od zasady "istniejacych grup nie ruszamy": stare przypomnienie,
-  # ktore samo wypisywalo plik ("cat" / Get-Content). Dzis to samo robi skrypt, ktory
-  # dokleja linie o pracujacym cyklu - i bez tej jednej podmiany zadne wdrozenie
-  # sprzed 2026-09-17 by jej nie zobaczylo. Podmieniamy RAZ: polecenie wskazuje juz
-  # na skrypt, wiec kazda kolejna poprawka dzieje sie w srodku skryptu i nie wymaga
-  # ponownego zatwierdzania hookow.
+# Jedyny wyjatek od zasady "istniejacych grup nie ruszamy": stare przypomnienie,
+# ktore samo wypisywalo plik ("cat" / Get-Content). Dzis to samo robi skrypt, ktory
+# dokleja linie o pracujacym cyklu i podpowiedz z archiwum - i bez tej jednej
+# podmiany zadne wdrozenie sprzed 2026-09-17 by ich nie zobaczylo. Podmieniamy RAZ:
+# polecenie wskazuje juz na skrypt, wiec kazda kolejna poprawka dzieje sie w srodku
+# skryptu i nie wymaga ponownego zatwierdzania hookow. Zmienia $s w miejscu;
+# zwraca $true, gdy cos podmienila. Wolana z Napraw-Hooki-Codex i z
+# Pilnuj-Przypomnienia-Zawsze.
+function Podmien-Przypomnienie-Codex($s, $szablon) {
   $podmienione = $false
   $wzorPrzyp = $null
   foreach ($g in @($szablon.hooks.UserPromptSubmit)) {
@@ -819,7 +816,7 @@ function Napraw-Hooki-Codex($celCodex, $zrodlo, $projekt, $stempel) {
       if (Wola-Przypomnienie ("" + $hw.command + " " + $hw.commandWindows)) { $wzorPrzyp = $hw }
     }
   }
-  if ($wzorPrzyp -and ($s.hooks.PSObject.Properties.Name -contains "UserPromptSubmit")) {
+  if ($wzorPrzyp -and $s.hooks -and ($s.hooks.PSObject.Properties.Name -contains "UserPromptSubmit")) {
     foreach ($grupa in @($s.hooks.UserPromptSubmit)) {
       foreach ($h in @($grupa.hooks)) {
         if (-not $h) { continue }
@@ -833,6 +830,32 @@ function Napraw-Hooki-Codex($celCodex, $zrodlo, $projekt, $stempel) {
       }
     }
   }
+  return $podmienione
+}
+
+# .codex\hooks.json - tu chodzimy na palcach. Zmiana DEFINICJI hooka (polecenie,
+# timeout, matcher, async) uniewaznia zatwierdzenie z /hooks i zmusza uzytkownika
+# do powtarzania go, wiec grupy, ktore juz tam sa, ruszamy WYLACZNIE tak, jak
+# opisuje Zsynchronizuj-Grupe (rozjechane polecenie, zanizony sufit) - poza tym
+# dopisujemy tylko brakujace. Swoje poznajemy po "statusMessage", tak samo jak
+# wdroz.ps1. Zwraca Wynik-Hookow - o kazdej pozycji trzeba powiedziec wprost.
+function Napraw-Hooki-Codex($celCodex, $zrodlo, $projekt, $stempel) {
+  $szablon = Szablon-Hookow-Codex $zrodlo $projekt
+  if (-not $szablon) { return (Wynik-Hookow) }
+
+  $plik = Join-Path $celCodex "hooks.json"
+  $s = [pscustomobject]@{}
+  $raw = Czytaj-Tekst $plik
+  # Cudzy plik, ktory nie jest czystym JSON-em, zostaje nietkniety - tak samo
+  # jak w instalatorze. Lepiej nie dopisac hooka niz zepsuc komus ustawienia.
+  if ($raw) {
+    try { $s = $raw.TrimStart([char]0xFEFF) | ConvertFrom-Json } catch { return (Wynik-Hookow) }
+  }
+  if (-not ($s.PSObject.Properties.Name -contains "hooks") -or $null -eq $s.hooks) {
+    $s | Add-Member -NotePropertyName hooks -NotePropertyValue ([pscustomobject]@{}) -Force
+  }
+
+  $podmienione = Podmien-Przypomnienie-Codex $s $szablon
 
   $wynik = Wynik-Hookow
   if ($podmienione) { $wynik.Poprawione += "UserPromptSubmit" }
@@ -982,6 +1005,55 @@ function Pilnuj-Sufitu-Zawsze {
   $celCodex = Join-Path $Projekt '.codex'
   if (-not (Test-Path $celMega)) { return }
   Pilnuj-Sufitu-Sesji-Codex $celMega $celCodex
+}
+
+# Stary hook przypomnienia ("cat" pliku) podmieniamy przy KAZDYM przebiegu, nie
+# tylko po podbiciu wersji - z tego samego powodu co sufit wyzej: gdy wersja
+# wdrozenia rowna sie zrodlowej, Nanies-Poprawki nie leci wcale, a wdrozenie, ktore
+# przespalo podmiane (do 2026-09-17 nie zachodzila nigdzie przez blad z podciagiem
+# nazwy), zostaloby z "cat" na zawsze - bez podpowiedzi z archiwum i bez linii
+# postepu cyklu. Samo sprawdzenie to odczyt dwoch malych plikow; zapis tylko wtedy,
+# gdy jest co podmienic, i wtedy zawsze z jedna linia dla czlowieka.
+function Pilnuj-Przypomnienia-Zawsze {
+  if (-not $Projekt) { return }
+  $stempel = Get-Date -Format "yyyyMMdd-HHmmss"
+  $r = $Zrodlo.Replace("\","/")
+
+  # Claude Code - tylko we wdrozeniu MegaRuchacza (jest plik wersji).
+  $plik = Join-Path $Projekt ".claude\settings.json"
+  if ((Test-Path $plikWersji) -and (Test-Path $plik)) {
+    $raw = Czytaj-Tekst $plik
+    $s = $null
+    if ($raw) {
+      try { $s = $raw.TrimStart([char]0xFEFF) | ConvertFrom-Json }
+      catch { Notuj "settings.json nie jest czystym JSON-em - hooka przypomnienia nie sprawdzam: $($_.Exception.Message)" }
+    }
+    if ($s -and (Podmien-Przypomnienie-Claude $s $r)) {
+      Kopia-Zapasowa $plik $stempel
+      Zapisz-Tekst $plik ($s | ConvertTo-Json -Depth 20)
+      Mow "MegaRuchacz: stary hook przypomnienia (samo 'cat') w .claude\settings.json podmieniony na skrypt z podpowiedzia z archiwum - zadziala od nastepnej sesji; bez node'a przypomnienie idzie jak dotad (kopia: settings.json.bak-${stempel})."
+    }
+  }
+
+  # Codex - zmiana polecenia uniewaznia zatwierdzenie z /hooks, wiec prosba idzie
+  # do czlowieka zawsze, a w trybie -Tlo takze do pliku stanu (patrz Nanies-Poprawki-Codex).
+  $plikC = Join-Path $Projekt ".codex\hooks.json"
+  if ((Test-Path (Join-Path $Projekt ".megaruchacz")) -and (Test-Path $plikC)) {
+    $szablon = Szablon-Hookow-Codex $Zrodlo $Projekt
+    $rawC = Czytaj-Tekst $plikC
+    $sC = $null
+    if ($szablon -and $rawC) {
+      try { $sC = $rawC.TrimStart([char]0xFEFF) | ConvertFrom-Json }
+      catch { Notuj ".codex\hooks.json nie jest czystym JSON-em - hooka przypomnienia nie sprawdzam: $($_.Exception.Message)" }
+    }
+    if ($sC -and (Podmien-Przypomnienie-Codex $sC $szablon)) {
+      Kopia-Zapasowa $plikC $stempel
+      Zapisz-Tekst $plikC ($sC | ConvertTo-Json -Depth 20)
+      $prosba = "MegaRuchacz: stary hook przypomnienia Codeksa (samo wypisanie pliku) w .codex\hooks.json podmieniony na skrypt z podpowiedzia z archiwum - zatwierdz go w Codeksie poleceniem /hooks, inaczej przypomnienie nie wystartuje wcale."
+      Mow $prosba
+      if ($Tlo) { Odloz-Wiadomosc $prosba }
+    }
+  }
 }
 
 function Nanies-Poprawki($zrodlo, $projekt) {
@@ -2044,6 +2116,7 @@ try {
     try { Odswiez-Zrodlo } catch { Zanotuj-Wywrotke "odswiezanie zrodla" $_ }
     try { Pilnuj-Zasad }   catch { Zanotuj-Wywrotke "pilnowanie zasad" $_ }
     try { Pilnuj-Sufitu-Zawsze } catch { Zanotuj-Wywrotke "pilnowanie sufitu ladunku" $_ }
+    try { Pilnuj-Przypomnienia-Zawsze } catch { Zanotuj-Wywrotke "podmiana starego hooka przypomnienia" $_ }
     try { Pilnuj-Wersji }  catch { Zanotuj-Wywrotke "pilnowanie wersji wdrozenia" $_ }
     try { Zglos-Koszt }    catch { Zanotuj-Wywrotke "rachunek za pamiec" $_ }
     # Cykl wiedzy takze tutaj: na maszynie z samym Codeksem ten hook jest jedynym,
@@ -2102,6 +2175,7 @@ try {
   try { Odswiez-Zrodlo }   catch { Zanotuj-Wywrotke "odswiezanie zrodla" $_ }
   try { Pilnuj-Zasad }     catch { Zanotuj-Wywrotke "pilnowanie zasad" $_ }
   try { Pilnuj-Sufitu-Zawsze } catch { Zanotuj-Wywrotke "pilnowanie sufitu ladunku" $_ }
+  try { Pilnuj-Przypomnienia-Zawsze } catch { Zanotuj-Wywrotke "podmiana starego hooka przypomnienia" $_ }
   try { Pilnuj-Wersji }    catch { Zanotuj-Wywrotke "pilnowanie wersji wdrozenia" $_ }
   try { Zglos-Kandydatow } catch { Zanotuj-Wywrotke "poczekalnia faktow" $_ }
   try { Zglos-Cykl }       catch { Zanotuj-Wywrotke "meldunek o cyklu" $_ }
