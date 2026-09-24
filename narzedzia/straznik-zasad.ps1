@@ -3,6 +3,10 @@
 #   1. czy blok zasad globalnych MegaRuchacza nadal siedzi w ~/.claude/CLAUDE.md,
 #   2. czy wdrozenie w projekcie nie zostalo w tyle za katalogiem zrodlowym,
 #   3. ile kosztuje pamiec agenta i czy cokolwiek jest UCINANE.
+# Przy instalacji globalnej (~\.claude\.megaruchacz-global) dodatkowo trzyma jeden
+# komplet hookow MegaRuchacza w ~\.claude\settings.json i zdejmuje zdublowane hooki
+# projektowe (patrz Pilnuj-Hookow-Globalnych). W tym trybie wola go globalny hook
+# SessionStart z -Projekt "$CLAUDE_PROJECT_DIR", czyli w KAZDYM projekcie.
 #
 # Wolany przez hook SessionStart, wiec zasada nadrzedna brzmi: gdy wszystko sie
 # zgadza, NIC nie wypisuje i nie robi nic drogiego - z jednym wyjatkiem, punktem
@@ -40,6 +44,13 @@
 #       Codeksa. Osobny hook SessionStart, bo ten od aktualizacji chodzi w tle
 #       i jego wyjscia Codex do rozmowy nie wciaga. Nic nie liczy - czyta
 #       gotowa linie z pliku podrecznego, wiec start sesji na nic nie czeka.
+#   powershell -NoProfile -File narzedzia\straznik-zasad.ps1 -NaprawGlobalne [-Proba]
+#       naprawia SAME hooki instalacji globalnej w ~\.claude\settings.json (jeden
+#       komplet, bez duplikatow, przypomnienie przez skrypt, straznik na starcie)
+#       i nic poza tym. Wola go instaluj-globalnie.ps1; -Proba = tylko plan.
+#       Z jawnym -Projekt <katalog> zdejmuje tez zdublowane hooki z tego projektu.
+#   powershell -NoProfile -File narzedzia\straznik-zasad.ps1 -UsunGlobalne [-Proba]
+#       zdejmuje hooki MegaRuchacza z ~\.claude\settings.json (cudze zostaja).
 #   -KatalogDomowy  podstawiony katalog domowy - do testow
 
 param(
@@ -50,7 +61,10 @@ param(
   [switch]$Moduly,
   [switch]$Tlo,
   [switch]$PoliczKoszt,
-  [switch]$KosztCodex
+  [switch]$KosztCodex,
+  [switch]$NaprawGlobalne,
+  [switch]$UsunGlobalne,
+  [switch]$Proba
 )
 
 $ErrorActionPreference = "Stop"
@@ -617,6 +631,9 @@ function Podmien-Przypomnienie-Claude($s, $r) {
 # settings.json jest w polowie wlasnoscia uzytkownika - dopisujemy wylacznie
 # brakujace hooki, nigdy nie przepisujemy calego pliku.
 function Napraw-Hooki($cel, $zrodlo, $stempel) {
+  # Przy instalacji globalnej hooki projektowe sa duplikatem - Usun-Hooki-Projektowe
+  # je zdejmuje, wiec dopisanie ich tu z powrotem kreciloby sie w kolko.
+  if (Projekt-Bez-Hookow (Split-Path -Parent $cel)) { return $false }
   $plik = Join-Path $cel "settings.json"
   $raw = Czytaj-Tekst $plik
   if (-not $raw) { return $false }
@@ -1081,6 +1098,380 @@ function Nanies-Poprawki($zrodlo, $projekt) {
   # czesci nie zabralo drugiej.
   try { Nanies-Poprawki-Opencode $zrodlo $projekt $stempel }
   catch { Mow "MegaRuchacz: czesci opencode wdrozenia nie udalo sie odswiezyc ($($_.Exception.Message)) - zrobi to ponowne uruchomienie wdroz.ps1." }
+}
+
+# ------------------------------------------ hooki instalacji GLOBALNEJ (Claude Code)
+# Instalacja globalna (narzedzia\instaluj-globalnie.ps1) trzyma hooki MegaRuchacza
+# w ~\.claude\settings.json. Ten plik jest wspolny z innymi programami (Orka dopisuje
+# tam swoje hooki na kilkunastu zdarzeniach), wiec zasada jest twarda: ruszamy
+# WYLACZNIE wpisy rozpoznane jako nasze po sciezce w poleceniu, a cala reszta pliku
+# ma wyjsc z zapisu identyczna co do znaku. Stad wlasny zapis JSON-a (Do-Json) zamiast
+# ConvertTo-Json: tamten w PowerShellu 5.1 przeformatowuje caly plik, a Claude Code
+# pisze go w ukladzie JSON.stringify(s, null, 2) - i ten sam uklad dajemy tutaj.
+#
+# Po co: 2026-09-24 w C:\dev\claude-worker chodzily naraz hooki globalne i stare
+# projektowe - przypomnienie szlo do modelu DWA razy przy kazdej wiadomosci, a rejestr
+# dostawal wpisy podwojnie (w globalnych staly dwa rozne mr-log.js).
+
+$PlikZnacznikaGlobalnego = Join-Path $KatalogDomowy ".claude\.megaruchacz-global"
+function Jest-Globalna { return (Test-Path $PlikZnacznikaGlobalnego) }
+
+# Projekt, w ktorym hookow MegaRuchacza ma NIE byc, bo robia to globalne. Wyjatek:
+# wdroz.ps1 -WymusProjektowo zostawia w pliku wersji "projektowo: wymuszone" -
+# wyrazne zyczenie uzytkownika, wiec wtedy nic nie zdejmujemy.
+function Projekt-Bez-Hookow($projekt) {
+  if (-not $projekt) { return $false }
+  if (-not (Jest-Globalna)) { return $false }
+  $plikW = Join-Path $projekt ".claude\megaruchacz-wersja.txt"
+  if ((Test-Path $plikW) -and ((Czytaj-Klucze $plikW)["projektowo"] -eq "wymuszone")) { return $false }
+  return $true
+}
+
+# Czyj to hook. $null = cudzy (Orka i wszystko inne) - takiego nie ruszamy nigdy.
+# Orke odcinamy jawnie i PIERWSZA, zeby zadne przyszle dopasowanie do naszych nazw
+# nie moglo trafic w jej wpis.
+function Rodzaj-Hooka($h) {
+  if ($null -eq $h) { return $null }
+  $p = "" + $h.command + " " + $h.commandWindows
+  if ($p -match '[\\/]\.orca[\\/]') { return $null }
+  if ($p -like "*straznik-zasad.ps1*")         { return "straznik" }
+  if ($p -like "*megaruchacz-sesja.json*")     { return "zasady" }
+  if ($p -like "*orchestrator-reminder.json*") { return "przypomnienie" }
+  if ($p -match 'mr-log\.js(?![A-Za-z0-9])')  { return "rejestr" }   # mr-log.js i megaruchacz-mr-log.js
+  return $null
+}
+
+# Napis w JSON-ie, z ucieczkami jak w JSON.stringify: cudzyslow, ukosnik wsteczny
+# i znaki sterujace; polskie litery i reszta ida wprost.
+function Json-Tekst([string]$t) {
+  $sb = New-Object System.Text.StringBuilder
+  [void]$sb.Append('"')
+  foreach ($c in $t.ToCharArray()) {
+    $k = [int]$c
+    if ($k -eq 34)     { [void]$sb.Append('\"') }
+    elseif ($k -eq 92) { [void]$sb.Append('\\') }
+    elseif ($k -eq 10) { [void]$sb.Append('\n') }
+    elseif ($k -eq 13) { [void]$sb.Append('\r') }
+    elseif ($k -eq 9)  { [void]$sb.Append('\t') }
+    elseif ($k -eq 8)  { [void]$sb.Append('\b') }
+    elseif ($k -eq 12) { [void]$sb.Append('\f') }
+    elseif ($k -lt 32) { [void]$sb.Append(('\u{0:x4}' -f $k)) }
+    else               { [void]$sb.Append($c) }
+  }
+  [void]$sb.Append('"')
+  return $sb.ToString()
+}
+
+# Wartosc z ConvertFrom-Json z powrotem w JSON, w ukladzie JSON.stringify(x, null, 2).
+function Do-Json($w, [string]$wciecie) {
+  if ($null -eq $w) { return 'null' }
+  if ($w -is [string]) { return (Json-Tekst $w) }
+  if ($w -is [bool]) { if ($w) { return 'true' } else { return 'false' } }
+  if ($w -is [int] -or $w -is [long] -or $w -is [decimal] -or $w -is [double] -or
+      $w -is [single] -or $w -is [int16] -or $w -is [byte]) {
+    return [System.Convert]::ToString($w, [System.Globalization.CultureInfo]::InvariantCulture)
+  }
+  $dalej = $wciecie + '  '
+  if ($w -is [System.Collections.IDictionary]) {
+    if ($w.Count -eq 0) { return '{}' }
+    $czesci = @()
+    foreach ($n in @($w.Keys)) { $czesci += ($dalej + (Json-Tekst "$n") + ': ' + (Do-Json $w[$n] $dalej)) }
+    return "{`n" + ($czesci -join ",`n") + "`n" + $wciecie + "}"
+  }
+  if ($w -is [System.Collections.IList]) {
+    if ($w.Count -eq 0) { return '[]' }
+    $czesci = @()
+    foreach ($e in $w) { $czesci += ($dalej + (Do-Json $e $dalej)) }
+    return "[`n" + ($czesci -join ",`n") + "`n" + $wciecie + "]"
+  }
+  if ($w -is [System.Management.Automation.PSCustomObject]) {
+    $nazwy = @($w.PSObject.Properties | ForEach-Object { $_.Name })
+    if ($nazwy.Count -eq 0) { return '{}' }
+    $czesci = @()
+    foreach ($n in $nazwy) { $czesci += ($dalej + (Json-Tekst $n) + ': ' + (Do-Json $w.$n $dalej)) }
+    return "{`n" + ($czesci -join ",`n") + "`n" + $wciecie + "}"
+  }
+  return (Json-Tekst ("" + $w))
+}
+
+# Plik ustawien razem z tym, co trzeba, zeby zapisac go w tym samym ukladzie: BOM
+# (jest albo nie), konce linii, koncowy znak nowej linii. Nie-JSON rzuca wyjatek -
+# wolajacy mowi o tym czlowiekowi i pliku nie rusza.
+function Czytaj-Ustawienia($plik) {
+  $u = [ordered]@{ s = [pscustomobject]@{}; bom = $false; nl = "`n"; koniec = "`n" }
+  if (-not (Test-Path $plik)) { return $u }
+  $bajty = [System.IO.File]::ReadAllBytes($plik)
+  $u.bom = ($bajty.Length -ge 3 -and $bajty[0] -eq 0xEF -and $bajty[1] -eq 0xBB -and $bajty[2] -eq 0xBF)
+  $raw = [System.IO.File]::ReadAllText($plik, [System.Text.Encoding]::UTF8).TrimStart([char]0xFEFF)
+  if ($raw.Contains("`r`n")) { $u.nl = "`r`n" }
+  if ($raw.EndsWith("`n")) { $u.koniec = $u.nl } else { $u.koniec = "" }
+  if ($raw.Trim().Length -gt 0) {
+    $s = $raw | ConvertFrom-Json
+    if (-not ($s -is [System.Management.Automation.PSCustomObject])) { throw "w pliku nie ma obiektu JSON" }
+    $u.s = $s
+  }
+  return $u
+}
+
+function Zapisz-Ustawienia($plik, $u, $stempel) {
+  $tekst = Do-Json $u.s ""
+  if ($u.nl -ne "`n") { $tekst = $tekst.Replace("`n", $u.nl) }   # w napisach JSON-a nowych linii nie ma - sa \n
+  $tekst += $u.koniec
+  Kopia-Zapasowa $plik $stempel
+  $katalog = Split-Path -Parent $plik
+  if ($katalog -and -not (Test-Path $katalog)) { New-Item -ItemType Directory -Force -Path $katalog | Out-Null }
+  [System.IO.File]::WriteAllText($plik, $tekst, (New-Object System.Text.UTF8Encoding($u.bom)))
+}
+
+# Dwa przebiegi straznika potrafia ruszyc naraz (hook globalny i projektowy na tym
+# samym starcie sesji, dwa okna otwarte jednoczesnie). Bez blokady oba przeczytalyby
+# plik, oba zapisaly - a kopia zapasowa drugiego bylaby juz kopia po zmianie.
+function Pod-Blokada([scriptblock]$robota) {
+  $m = New-Object System.Threading.Mutex($false, "Local\MegaRuchacz-hooki")
+  $mam = $false
+  try {
+    try { $mam = $m.WaitOne(8000) }
+    catch {
+      # Porzucona blokada (poprzedni przebieg padl, trzymajac ja) jest juz nasza.
+      $wew = $_.Exception
+      while ($wew -and -not ($wew -is [System.Threading.AbandonedMutexException])) { $wew = $wew.InnerException }
+      if (-not $wew) { throw }
+      $mam = $true
+    }
+    if (-not $mam) { throw "inny przebieg straznika trzyma hooki od 8 s - tym razem nie ruszam" }
+    return (& $robota)
+  } finally {
+    if ($mam) { $m.ReleaseMutex() }
+    $m.Dispose()
+  }
+}
+
+# Jeden komplet hookow MegaRuchacza w instalacji globalnej. "zasady" (stary wpis
+# "cat ...megaruchacz-sesja.json") nie ma wzoru: zasady ida blokiem w ~\.claude\CLAUDE.md,
+# wiec nowej instalacji go nie dokladamy - istniejacy zostaje, zdejmujemy tylko duplikaty.
+function Wzory-Hookow-Globalnych($zrodlo, $domClaude) {
+  $r = $zrodlo.Replace("\","/").TrimEnd("/")
+  $d = $domClaude.Replace("\","/").TrimEnd("/")
+  $przyp = $d + "/mr/orchestrator-reminder.json"
+  $log = $d + "/megaruchacz-mr-log.js"
+  $straznik = 'powershell -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "' + $r +
+              '/narzedzia/straznik-zasad.ps1" -Zrodlo "' + $r + '" -Projekt "$CLAUDE_PROJECT_DIR" || true'
+  $przypomnienie = 'node "' + $r + '/narzedzia/przypomnienie.js" "' + $przyp + '" || cat "' + $przyp + '"'
+  return @(
+    [pscustomobject]@{ zdarzenie = "SessionStart"; rodzaj = "straznik"
+      hook = [pscustomobject]@{ type = "command"; command = $straznik; shell = "bash"; timeout = 15; statusMessage = "MegaRuchacz: straznik zasad" } },
+    [pscustomobject]@{ zdarzenie = "UserPromptSubmit"; rodzaj = "przypomnienie"
+      hook = [pscustomobject]@{ type = "command"; command = $przypomnienie; shell = "bash"; timeout = 5 } },
+    [pscustomobject]@{ zdarzenie = "SubagentStart"; rodzaj = "rejestr"
+      hook = [pscustomobject]@{ type = "command"; command = ('node "' + $log + '"'); timeout = 5; statusMessage = "MegaRuchacz: wpis do rejestru pracy" } },
+    [pscustomobject]@{ zdarzenie = "SubagentStop"; rodzaj = "rejestr"
+      hook = [pscustomobject]@{ type = "command"; command = ('node "' + $log + '" stop'); timeout = 5; statusMessage = "MegaRuchacz: wpis do rejestru pracy" } }
+  )
+}
+
+function Wzor-Dla($wzory, $zdarzenie, $rodzaj) {
+  foreach ($w in @($wzory)) {
+    if ($null -ne $w -and $w.zdarzenie -eq $zdarzenie -and $w.rodzaj -eq $rodzaj) { return $w }
+  }
+  return $null
+}
+
+# Porzadkuje NASZE hooki w obiekcie ustawien (zmienia $s w miejscu):
+#   - z kazdego rodzaju na danym zdarzeniu zostaje JEDEN wpis - najchetniej ten,
+#     ktory juz jest identyczny ze wzorem, inaczej pierwszy, i ten dostaje postac wzoru,
+#   - pozostale nasze tego rodzaju znikaja; grupa, ktora zostala pusta, znika cala,
+#   - brakujace wzgledem wzoru dokladamy na koncu zdarzenia,
+#   - $usun = zdejmij wszystkie nasze, niczego nie dokladaj.
+# Cudzych wpisow (Rodzaj-Hooka = $null) i cudzych grup nie dotykamy wcale - zostaja
+# tymi samymi obiektami, wiec Do-Json wypisze je dokladnie tak, jak byly.
+function Uporzadkuj-Hooki($s, $wzory, [bool]$usun) {
+  $wynik = [ordered]@{ Usuniete = @(); Dodane = @(); Poprawione = @() }
+  $maHooki = ($s.PSObject.Properties.Name -contains "hooks") -and ($null -ne $s.hooks)
+  if (-not $maHooki) {
+    if ($usun -or @($wzory).Count -eq 0) { return $wynik }
+    $s | Add-Member -NotePropertyName hooks -NotePropertyValue ([pscustomobject]@{}) -Force
+  }
+  $zdarzenia = @($s.hooks.PSObject.Properties | ForEach-Object { $_.Name })
+
+  # Przebieg 1 - ktory wpis kazdego rodzaju zostaje. Pozycja zamiast referencji:
+  # porownywanie obiektow PSObject po referencji w PowerShellu bywa zdradliwe.
+  $wybrane = @{}
+  foreach ($z in $zdarzenia) {
+    $grupy = @($s.hooks.$z)
+    for ($gi = 0; $gi -lt $grupy.Count; $gi++) {
+      $g = $grupy[$gi]
+      if ($null -eq $g -or -not ($g.PSObject.Properties.Name -contains "hooks")) { continue }
+      $hs = @($g.hooks)
+      for ($hi = 0; $hi -lt $hs.Count; $hi++) {
+        $rodzaj = Rodzaj-Hooka $hs[$hi]
+        if (-not $rodzaj) { continue }
+        $klucz = "$z|$rodzaj"
+        $wzor = Wzor-Dla $wzory $z $rodzaj
+        $zgodny = ($null -ne $wzor) -and ((Do-Json $hs[$hi] "") -ceq (Do-Json $wzor.hook ""))
+        if (-not $wybrane.ContainsKey($klucz) -or ($zgodny -and -not $wybrane[$klucz].zgodny)) {
+          $wybrane[$klucz] = @{ poz = "$gi|$hi"; zgodny = $zgodny }
+        }
+      }
+    }
+  }
+
+  # Przebieg 2 - zdejmowanie duplikatow i podmiana wybranego na wzor.
+  foreach ($z in $zdarzenia) {
+    $grupy = @($s.hooks.$z)
+    $noweGrupy = @()
+    $zmianaZdarzenia = $false
+    for ($gi = 0; $gi -lt $grupy.Count; $gi++) {
+      $g = $grupy[$gi]
+      if ($null -eq $g -or -not ($g.PSObject.Properties.Name -contains "hooks")) { $noweGrupy += ,$g; continue }
+      $hs = @($g.hooks)
+      $noweHooki = @()
+      $zmianaGrupy = $false
+      for ($hi = 0; $hi -lt $hs.Count; $hi++) {
+        $h = $hs[$hi]
+        $rodzaj = Rodzaj-Hooka $h
+        if (-not $rodzaj) { $noweHooki += ,$h; continue }
+        $klucz = "$z|$rodzaj"
+        if ($usun -or $wybrane[$klucz].poz -ne "$gi|$hi") {
+          $wynik.Usuniete += "$z/$rodzaj"
+          $zmianaGrupy = $true
+          continue
+        }
+        $wzor = Wzor-Dla $wzory $z $rodzaj
+        if ($null -ne $wzor -and -not $wybrane[$klucz].zgodny) {
+          $noweHooki += ,$wzor.hook
+          $wynik.Poprawione += "$z/$rodzaj"
+          $zmianaGrupy = $true
+          continue
+        }
+        $noweHooki += ,$h
+      }
+      if (-not $zmianaGrupy) { $noweGrupy += ,$g; continue }
+      $zmianaZdarzenia = $true
+      if ($noweHooki.Count -eq 0) { continue }
+      $g.hooks = @($noweHooki)
+      $noweGrupy += ,$g
+    }
+    if (-not $zmianaZdarzenia) { continue }
+    if ($noweGrupy.Count -eq 0) { [void]$s.hooks.PSObject.Properties.Remove($z) }
+    else { $s.hooks.$z = @($noweGrupy) }
+  }
+
+  # Przebieg 3 - brakujace.
+  if (-not $usun) {
+    foreach ($w in @($wzory)) {
+      if ($null -eq $w) { continue }
+      if ($wybrane.ContainsKey("$($w.zdarzenie)|$($w.rodzaj)")) { continue }
+      $grupa = [pscustomobject]@{ hooks = @($w.hook) }
+      if ($s.hooks.PSObject.Properties.Name -contains $w.zdarzenie) {
+        $s.hooks.($w.zdarzenie) = @($s.hooks.($w.zdarzenie)) + ,$grupa
+      } else {
+        $s.hooks | Add-Member -NotePropertyName $w.zdarzenie -NotePropertyValue @($grupa) -Force
+      }
+      $wynik.Dodane += "$($w.zdarzenie)/$($w.rodzaj)"
+    }
+  }
+  return $wynik
+}
+
+function Opis-Zmian-Hookow($wynik, [string]$slowoUsuniete) {
+  $czesci = @()
+  if (@($wynik.Usuniete).Count -gt 0)   { $czesci += ($slowoUsuniete + ": " + (@($wynik.Usuniete) -join ", ")) }
+  if (@($wynik.Poprawione).Count -gt 0) { $czesci += ("podmienione na aktualne: " + (@($wynik.Poprawione) -join ", ")) }
+  if (@($wynik.Dodane).Count -gt 0)     { $czesci += ("dolozone: " + (@($wynik.Dodane) -join ", ")) }
+  return ($czesci -join "; ")
+}
+
+# Pliki, ktore wolaja hooki globalne: rejestr i ladunek przypomnienia. Hook wskazujacy
+# na nieistniejacy plik sypalby bledem przy kazdym workerze albo kazdej wiadomosci,
+# wiec dokladamy je (i odswiezamy z kopia zapasowa) razem z hookami.
+function Odswiez-Pliki-Globalne($domClaude, $stempel) {
+  $pary = @(
+    @((Join-Path $Zrodlo "szablony-global\claude\mr-log.js"), (Join-Path $domClaude "megaruchacz-mr-log.js")),
+    @((Join-Path $Zrodlo ".claude\orchestrator-reminder.json"), (Join-Path $domClaude "mr\orchestrator-reminder.json"))
+  )
+  $zmienione = @()
+  foreach ($p in $pary) {
+    if (-not (Test-Path $p[0])) { Mow "MegaRuchacz: brak szablonu $($p[0]) - hook globalny wola plik, ktorego nie mam skad wziac."; continue }
+    $rozne = (-not (Test-Path $p[1])) -or ((Czytaj-Tekst $p[1]) -cne (Czytaj-Tekst $p[0]))
+    if (-not $rozne) { continue }
+    $zmienione += (Split-Path -Leaf $p[1])
+    if ($Proba) { continue }
+    $kat = Split-Path -Parent $p[1]
+    if (-not (Test-Path $kat)) { New-Item -ItemType Directory -Force -Path $kat | Out-Null }
+    Kopia-Zapasowa $p[1] $stempel
+    Copy-Item $p[0] $p[1] -Force
+  }
+  return $zmienione
+}
+
+# Naprawa (albo z $usun - zdjecie) hookow MegaRuchacza w ~\.claude\settings.json.
+# Zwraca $true, gdy hooki globalne sa w porzadku; $false, gdy pliku nie dalo sie
+# ruszyc - wtedy NIE wolno zdejmowac hookow projektowych, bo projekt zostalby bez zadnych.
+function Napraw-Hooki-Globalne([bool]$usun) {
+  $domClaude = Join-Path $KatalogDomowy ".claude"
+  $plik = Join-Path $domClaude "settings.json"
+  $stempel = Get-Date -Format "yyyyMMdd-HHmmss"
+  $pliki = @()
+  if (-not $usun) { $pliki = @(Odswiez-Pliki-Globalne $domClaude $stempel) }
+  if ($pliki.Count -gt 0) {
+    if ($Proba) { Mow ("PROBA  odswiezylbym w ~\.claude: " + ($pliki -join ", ")) }
+    else { Mow ("MegaRuchacz: odswiezone pliki instalacji globalnej w ~\.claude: " + ($pliki -join ", ") + " (kopie .bak-${stempel} obok).") }
+  }
+  return (Pod-Blokada {
+    try { $u = Czytaj-Ustawienia $plik }
+    catch {
+      Mow "MegaRuchacz: $plik nie jest czystym JSON-em - hookow globalnych nie ruszam ($($_.Exception.Message))."
+      return $false
+    }
+    $wzory = @()
+    if (-not $usun) { $wzory = @(Wzory-Hookow-Globalnych $Zrodlo $domClaude) }
+    $wynik = Uporzadkuj-Hooki $u.s $wzory $usun
+    $slowo = if ($usun) { "zdjete" } else { "usuniete duplikaty" }
+    $opis = Opis-Zmian-Hookow $wynik $slowo
+    if (-not $opis) { Notuj "hooki globalne: bez zmian"; return $true }
+    if ($Proba) { Mow "PROBA  $plik - $opis"; return $true }
+    Zapisz-Ustawienia $plik $u $stempel
+    Mow "MegaRuchacz: hooki MegaRuchacza w $plik uporzadkowane ($opis) - zadziala od nastepnej sesji; cudze wpisy nietkniete, kopia: settings.json.bak-${stempel}."
+    return $true
+  })
+}
+
+# Przy instalacji globalnej hooki MegaRuchacza w projekcie sa duplikatem: to one
+# sprawialy, ze przypomnienie szlo dwa razy. Zdejmujemy tylko NASZE (Rodzaj-Hooka),
+# z kopia zapasowa i jedna linia dla czlowieka; cudze hooki i reszta pliku zostaja.
+function Usun-Hooki-Projektowe {
+  if (-not (Projekt-Bez-Hookow $Projekt)) { return }
+  $plik = Join-Path $Projekt ".claude\settings.json"
+  if (-not (Test-Path $plik)) { return }
+  # Sesja otwarta w katalogu domowym: projektowy .claude\settings.json to wtedy TEN
+  # SAM plik co globalny - zdjelibysmy dokladnie te hooki, ktore maja zostac.
+  $globalny = Join-Path $KatalogDomowy ".claude\settings.json"
+  if ([System.IO.Path]::GetFullPath($plik) -ieq [System.IO.Path]::GetFullPath($globalny)) { return }
+  $stempel = Get-Date -Format "yyyyMMdd-HHmmss"
+  [void](Pod-Blokada {
+    try { $u = Czytaj-Ustawienia $plik }
+    catch {
+      Mow "MegaRuchacz: $plik nie jest czystym JSON-em - zdublowanych hookow projektowych nie zdejmuje ($($_.Exception.Message))."
+      return $false
+    }
+    $wynik = Uporzadkuj-Hooki $u.s @() $true
+    $ile = @($wynik.Usuniete).Count
+    if ($ile -eq 0) { return $true }
+    if ($Proba) { Mow ("PROBA  $plik - zdjalbym $ile hookow MegaRuchacza: " + (@($wynik.Usuniete) -join ", ")); return $true }
+    Zapisz-Ustawienia $plik $u $stempel
+    Mow ("MegaRuchacz: dziala instalacja globalna, wiec z .claude\settings.json tego projektu zdjalem " +
+         "$ile hookow MegaRuchacza, ktore ja dublowaly (" + (@($wynik.Usuniete) -join ", ") +
+         ") - kopia: settings.json.bak-${stempel}. Z powrotem: wdroz.ps1 -WymusProjektowo.")
+    return $true
+  })
+}
+
+# Przy KAZDYM przebiegu, gdy stoi instalacja globalna: najpierw hooki globalne, potem
+# - tylko jesli te sa w porzadku - zdjecie duplikatow z projektu.
+function Pilnuj-Hookow-Globalnych {
+  if (-not (Jest-Globalna)) { return }
+  if (-not (Napraw-Hooki-Globalne $false)) { return }
+  Usun-Hooki-Projektowe
 }
 
 # ------------------------------------------------- 0. swiezosc kopii narzedzia
@@ -2072,6 +2463,22 @@ try {
     exit 0
   }
 
+  # Tryb dla instaluj-globalnie.ps1 - wylacznie hooki globalne (i pliki, ktore wolaja),
+  # nic poza tym: zadnego pobierania, cyklu ani rachunku. Znacznika instalacji
+  # nie sprawdzamy, bo instalator stawia go dopiero na koncu. Kod wyjscia 1 = nie wyszlo.
+  # Z jawnym -Projekt dodatkowo zdejmuje zdublowane hooki z tego projektu (to samo,
+  # co robi przebieg przy starcie sesji) - bez pobierania z gita i bez cyklu wiedzy.
+  if ($NaprawGlobalne -or $UsunGlobalne) {
+    $ok = $false
+    try { $ok = Napraw-Hooki-Globalne ([bool]$UsunGlobalne) }
+    catch { Write-Host "MegaRuchacz: porzadkowanie hookow globalnych sie wywrocilo - $($_.Exception.Message)" }
+    if ($ok -and $NaprawGlobalne -and $PSBoundParameters.ContainsKey("Projekt")) {
+      try { Usun-Hooki-Projektowe }
+      catch { Write-Host "MegaRuchacz: zdejmowanie hookow projektowych sie wywrocilo - $($_.Exception.Message)"; $ok = $false }
+    }
+    if ($ok) { exit 0 } else { exit 1 }
+  }
+
   # Tryb pomocniczy - policz rachunek za pamiec i odloz gotowa linie do pliku
   # podrecznego. Startuje go straznik sam, osobnym procesem, wiec nikt tu nie
   # czeka i nikt nie czyta: zadnego wypisywania, zadnych innych sprawdzen.
@@ -2115,6 +2522,7 @@ try {
   if ($Tlo) {
     try { Odswiez-Zrodlo } catch { Zanotuj-Wywrotke "odswiezanie zrodla" $_ }
     try { Pilnuj-Zasad }   catch { Zanotuj-Wywrotke "pilnowanie zasad" $_ }
+    try { Pilnuj-Hookow-Globalnych } catch { Zanotuj-Wywrotke "hooki instalacji globalnej" $_ }
     try { Pilnuj-Sufitu-Zawsze } catch { Zanotuj-Wywrotke "pilnowanie sufitu ladunku" $_ }
     try { Pilnuj-Przypomnienia-Zawsze } catch { Zanotuj-Wywrotke "podmiana starego hooka przypomnienia" $_ }
     try { Pilnuj-Wersji }  catch { Zanotuj-Wywrotke "pilnowanie wersji wdrozenia" $_ }
@@ -2174,6 +2582,7 @@ try {
   # wiec ma sens dopiero wtedy, gdy ten katalog jest swiezy.
   try { Odswiez-Zrodlo }   catch { Zanotuj-Wywrotke "odswiezanie zrodla" $_ }
   try { Pilnuj-Zasad }     catch { Zanotuj-Wywrotke "pilnowanie zasad" $_ }
+  try { Pilnuj-Hookow-Globalnych } catch { Zanotuj-Wywrotke "hooki instalacji globalnej" $_ }
   try { Pilnuj-Sufitu-Zawsze } catch { Zanotuj-Wywrotke "pilnowanie sufitu ladunku" $_ }
   try { Pilnuj-Przypomnienia-Zawsze } catch { Zanotuj-Wywrotke "podmiana starego hooka przypomnienia" $_ }
   try { Pilnuj-Wersji }    catch { Zanotuj-Wywrotke "pilnowanie wersji wdrozenia" $_ }
