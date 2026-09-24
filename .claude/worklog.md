@@ -1780,3 +1780,17 @@ MegaRuchacz dopisuje pod spodem swoje notatki o kolejce i blokadach.
 - 15:35:48  KONIEC worker
 - 15:36:11  KONIEC implementer
 - 15:36:11  KONIEC implementer
+- 09:13:06  START  implementer
+- 09:13:06  START  implementer
+- 09:13:18  KONIEC worker
+- 09:13:18  KONIEC worker
+
+[INSTALATOR-EXE] QUEUED | wdroz.ps1, narzedzia\instaluj-lore.ps1, nowy katalog instalatora | — | 2026-09-24
+  Instalator jako plik wykonywalny (.exe): sam dociaga brakujace skladniki
+  (uv, Python 3.12, node) zamiast kazac je instalowac recznie, i obsluguje
+  TRZY narzedzia: Claude Code, Codex, OpenCode.
+  Czeka na: aplikacje w zasobniku (dzieli z nia wykrywanie narzedzi i samoaktualizacje).
+  NIEWIADOMA: OpenCode - nigdy go nie badalismy. Nie wiadomo, czy ma hooki,
+  podagentow i wlasny plik instrukcji. Przed wycena trzeba to ustalic.
+- 09:13:38  KONIEC worker
+- 09:13:38  KONIEC worker
