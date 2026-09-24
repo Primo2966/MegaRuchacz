@@ -14,12 +14,27 @@ a wrong fact disappears by itself. A fact is PROMOTED to the durable layer only 
 heard in at least two different conversations (the trail in wiedza/zrodla.md says which), and
 only a few per run — see MAX_PROMOTIONS.
 
-Two things stop a fact on the way in, and each of them says so out loud:
+One thing stops a fact on the way in, and says so out loud: a claim that can be checked and does
+NOT hold (a path that is not there) — rejected, stays flagged in the waiting room.
 
-* a claim that can be checked and does NOT hold (a path that is not there) — rejected, stays flagged,
-* a claim that CONTRADICTS something already written down — the one case a machine must not settle,
-  because it would have to guess which version is true; it stays, marked as disputed, quoting the
-  entry it clashes with.
+A claim that CONTRADICTS something already written down no longer waits for the user either (by
+2026-09-24 that queue was the second pile nobody answered): the NEWER VERSION WINS. Over an entry
+the automaton wrote itself it wins at once; over a PINNED entry (anything the automaton did not
+write — the rules from before it existed and whatever the user had written down) only once the new
+version has been heard in two different conversations — a pinned entry is often a trap or a ban
+("PUŁAPKA w SQP", "zakaz next build"), and one misread sentence must not swap it out. Until then
+the new version waits in the current layer with a note of what it contradicts. The loser is never
+deleted: it goes to wiedza/historia-zmian.md.
+
+The durable layer refreshes itself as well — otherwise nothing ever leaves it and, at the ceiling,
+it blocks everything new. An entry the automaton put there and nobody confirmed for SLEEP_DAYS
+falls asleep: it moves to wiedza/uspione.md (the reference layer, not sent with the sessions) and
+wakes up, back into the durable layer, the first time it is heard again. Pinned entries never fall
+asleep — their whole point is that they work without being mentioned.
+
+Every such change (replacement, falling asleep, waking up, promotion) gets a short id and a copy of
+every file it touched, and `--cofnij <id|RRRR-MM-DD>` takes it back — see undo(). What changed
+today is written, id by id, into the summary of the run (.wiedza-stan.txt, keys "meldunek*").
 
 A promotion that would push the durable layer over its 8 000 character ceiling does not happen —
 the fact stays in the current layer and the run says the ceiling is what stopped it.
@@ -36,10 +51,14 @@ the MegaRuchacz markers is off limits, and a file is copied aside (wiedza/kopie)
 facts entering without being asked have to have a way back.
 
 Run: uv --directory C:\\dev\\claude-worker\\lore run python -m lore.verify [--proba]
+Undo: uv --directory C:\\dev\\claude-worker\\lore run python -m lore.verify --cofnij <id|RRRR-MM-DD>
+List: uv --directory C:\\dev\\claude-worker\\lore run python -m lore.verify --zmiany [RRRR-MM-DD]
 """
 
 from __future__ import annotations
 
+import hashlib
+import json
 import re
 import shutil
 import sys
@@ -48,13 +67,15 @@ from datetime import datetime
 from pathlib import Path
 
 from .db import CLAUDE_HOME, log
-from .facts import (SESSIONS_FIELD, SIGHTED, SIGHTED_AGAIN, SOURCES_HEADER, SOURCES_NAME,
-                    normalize)
+from .facts import (DORMANT_NAME, PENDING_NOTE, SESSIONS_FIELD, SIGHTED, SIGHTED_AGAIN,
+                    SOURCES_HEADER, SOURCES_NAME, dormant_entry, normalize)
 
 KNOWLEDGE_DIR = CLAUDE_HOME / "wiedza"
 CANDIDATES_PATH = KNOWLEDGE_DIR / "kandydaci.md"
 BACKUP_DIR = KNOWLEDGE_DIR / "kopie"
 STATE_NAME = ".wiedza-stan.txt"  # 'klucz: wartosc', the same shape as .koszt-cyklu.txt
+HISTORY_NAME = "historia-zmian.md"  # every automatic change, for a human to read — and the losers
+JOURNAL_NAME = ".zmiany.jsonl"  # the same changes for undo(): the ops and the state after each
 
 # The instruction files of the tools the user may be running — written, but never outside the
 # "## Co wiem" section. A list on purpose: another tool is one more line here and nothing else.
@@ -104,6 +125,15 @@ MIN_CONVERSATIONS = 2
 # sixty facts, +68%, in one run. At three a day the growth is small enough to be read in the
 # summary of each run, and still quick enough that a fact heard twice waits days, not weeks.
 MAX_PROMOTIONS = 3
+# How long an entry the automaton put into the durable layer stays there without being heard again.
+# 90 days is the user's decision (2026-09-24): a fact about his work comes up at least once a
+# quarter, and one that did not is paying its place in every session for nothing. It is not lost —
+# it moves to wiedza/uspione.md and comes back the first time it is heard. Pinned entries (see
+# Trail.is_auto) never fall asleep, whatever this number says.
+SLEEP_DAYS = 90
+# The summary of a run shows the day's changes one line each, at most this many; the head line gives
+# the totals and says where the rest is, so what did not fit is announced, not cut off quietly.
+REPORT_LINES = 5
 CURRENT_HEADING_RE = re.compile(r"^###\s+Bie")  # written both with and without the Polish tail
 SUBHEADING_RE = re.compile(r"^#{1,3}\s")
 
@@ -281,17 +311,16 @@ def verify(text: str, exists=None) -> Verdict:
 
 # ---------------------------------------------------------------- contradiction
 
-# THE one thing this automaton is not allowed to settle. Everything else it can be wrong about
-# cheaply — a fact in the wrong subsection is one move for the user. Picking between two versions
-# of the same fact is different: whichever it picks, the loser disappears without a word and the
-# winner may be the false one, and that kind of quiet mistake lives for months.
+# Settled by the rule "the newer version wins" (see the module docstring) — never by deleting the
+# loser without a word: it goes to the history with the id of the change, and the change can be
+# taken back. A pinned entry needs the new version from two different conversations first.
 #
 # The detection is deliberately narrow — the same sentence with ONE detail changed:
 #   "Postgres stoi w C:\\dev\\pgsql"  vs  "Postgres stoi w D:\\pgsql"      (a value swapped)
 #   "Redis nie jest potrzebny"        vs  "Redis jest potrzebny"           (a negation flipped)
-# Narrow, because a false alarm sends the user back to a queue we have just abolished. The price
-# is stated plainly: a contradiction phrased in other words is NOT caught and the new fact enters
-# on its own. That is a known hole, not a solved problem — see the report of the run, which says
+# Narrow, because a false clash would now swap out a healthy entry. The price is stated plainly:
+# a contradiction phrased in other words is NOT caught and the new fact enters on its own, next to
+# the old one. That is a known hole, not a solved problem — see the report of the run, which says
 # how many entries were compared.
 _NEGATIONS = frozenset({"nie", "nigdy", "bez", "żaden", "żadna", "żadne", "żadnego", "brak",
                         "zaden", "zadna", "zadne", "zadnego"})
@@ -319,24 +348,29 @@ def skeleton(text: str) -> tuple[str, tuple[str, ...]]:
     return " ".join(words), tuple(sorted(values))
 
 
-def contradicted_by(text: str, standing: list[str]) -> str | None:
-    """The standing entry the fact clashes with, or None. The first clash wins — one is enough."""
+def clashes(text: str, standing: list) -> list:
+    """Every standing entry (Entry) the fact contradicts — all of them, not the first one only:
+    whether the entry is pinned or the automaton's decides what happens, so all of them count."""
     subject, claim = skeleton(text)
     if len(subject.split()) < MIN_SKELETON_WORDS:
-        return None
+        return []
+    out = []
     for entry in standing:
-        other_subject, other_claim = skeleton(entry)
+        other_subject, other_claim = skeleton(entry.text)
         if other_subject == subject and other_claim != claim:
-            return entry
-    return None
+            out.append(entry)
+    return out
 
 
 QUOTE_LIMIT = 120  # a quote is a pointer to the entry, not a copy of it
+# The note a waiting entry carries in the current layer — that layer is sent with every session,
+# so the quote there is shorter than in the history.
+PENDING_QUOTE_LIMIT = 70
 
 
-def _quote(entry: str) -> str:
+def _quote(entry: str, limit: int = QUOTE_LIMIT) -> str:
     short = " ".join(entry.split())
-    return short if len(short) <= QUOTE_LIMIT else short[:QUOTE_LIMIT].rstrip() + "…"
+    return short if len(short) <= limit else short[:limit].rstrip() + "…"
 
 
 # ---------------------------------------------------------------- the waiting room
@@ -349,6 +383,7 @@ class Candidate:
     detail: str = ""  # the subsection for "stala", the file name for "referencyjna"
     day: str = ""  # the day it was harvested — the trail back to the conversation
     pointer: str = ""  # "referencyjna" only: the line that stands in place of the whole listing
+    against: str = ""  # it contradicts this pinned entry and waits for a second conversation
 
     @property
     def heading(self) -> str:
@@ -368,16 +403,27 @@ class Candidate:
         """What actually stands in the current layer: the sentence with its date, which the ageing
         reads. An entry without a harvest date gets the day it was written — undated, it would
         never expire."""
-        return f"[{self.day or today}] {self.shown}"
+        return current_entry(self.day or today, self.shown, self.against)
+
+
+def current_entry(day: str, text: str, against: str = "") -> str:
+    """The text of a "### Bieżące" entry: its date, the fact and — while it waits to replace a
+    pinned entry — the note of what it contradicts (facts.PENDING_NOTE reads it back)."""
+    note = f" (przeczy: „{_quote(against, PENDING_QUOTE_LIMIT)}”)" if against else ""
+    return f"[{day}] {text}{note}"
 
 
 @dataclass
 class Reviewed:
     lines: list[str] = field(default_factory=list)  # the new content of the waiting room
-    approved: list[Candidate] = field(default_factory=list)  # they go into the knowledge, by themselves
+    approved: list[Candidate] = field(default_factory=list)  # new entries of the current layer
     suspicious: list[tuple[str, list[str]]] = field(default_factory=list)  # a claim that does not hold
-    disputed: list[tuple[str, str]] = field(default_factory=list)  # (fact, the entry it contradicts)
-    waiting: int = 0  # still there, with nobody but the user able to decide
+    # always empty since "the newer version wins" — nothing waits for the user any more; the key
+    # stays so that what reads the summary does not break
+    disputed: list[tuple[str, str]] = field(default_factory=list)
+    replacing: list["Replacement"] = field(default_factory=list)  # a newer version, taking a place
+    pending: list[Candidate] = field(default_factory=list)  # among approved: waiting on a pinned one
+    waiting: int = 0  # still in the waiting room: the rejected ones
 
 
 def _flag(m: re.Match, box: str, text: str) -> str:
@@ -394,15 +440,18 @@ def _read_candidate(m: re.Match) -> Candidate:
     return Candidate(text, layer, detail, m.group("day") or "")
 
 
-def review_candidates(lines: list[str], exists=None, standing: list[str] | None = None) -> Reviewed:
-    """Empties the waiting room: everything that is not rejected or disputed goes.
+def review_candidates(lines: list[str], exists=None, standing: list | None = None,
+                      trail: "Trail | None" = None) -> Reviewed:
+    """Empties the waiting room: everything that is not rejected goes.
 
-    `standing` are the facts already written down (they decide the contradictions). There is no
-    ceiling to check here any more: what goes, goes to the current layer, which ages out by itself;
-    the ceiling of the durable layer is checked where something is promoted into it.
+    `standing` are the entries already written down (Entry, or a bare sentence — read as pinned);
+    they decide the contradictions, and `trail` says from how many conversations the new version
+    came. There is no ceiling to check here: the ceiling of the durable layer is checked where
+    something is promoted into it or replaces something there.
     """
     exists = exists or path_exists
-    standing = list(standing or [])
+    trail = trail or Trail()
+    standing = [e if isinstance(e, Entry) else Entry(e, False, "", []) for e in (standing or [])]
     out = Reviewed()
     pending: Candidate | None = None  # the entry the next "odsyłacz:" line belongs to
     for line in lines:
@@ -426,17 +475,53 @@ def review_candidates(lines: list[str], exists=None, standing: list[str] | None 
                                            f" (nie znaleziono: {', '.join(verdict.missing)})"))
             out.waiting += 1
             continue
-        clash = contradicted_by(candidate.text, standing)
-        if clash is not None:
-            out.disputed.append((candidate.text, clash))
-            out.lines.append(_flag(m, "?", f"{candidate.text} (sporne: przeczy wpisowi"
-                                          f" \u201e{_quote(clash)}\u201d)"))
-            out.waiting += 1
-            continue
-        out.approved.append(candidate)
-        standing.append(candidate.text)  # two candidates of one run can contradict each other too
         pending = candidate  # its "odsyłacz:" line, if any, comes next and leaves with it
+        # a listing stands in the file as its pointer, not as itself — there is no entry of its own
+        # to take the place of, so it goes in as it always did
+        found = clashes(candidate.text, standing) if candidate.layer != "referencyjna" else []
+        _settle(candidate, found, standing, trail, out)
     return out
+
+
+def _settle(candidate: Candidate, found: list, standing: list, trail: "Trail",
+            out: Reviewed) -> None:
+    """The newer version wins — at once over the automaton's entry, over a pinned one only when it
+    was heard in MIN_CONVERSATIONS different conversations. `standing` is kept up to date, so that
+    two candidates of one run settle between themselves the same way (the later one is newer)."""
+    pinned = [e for e in found if not e.auto]
+    auto = [e for e in found if e.auto]
+    heard = conversations(trail.evidence(fact_key(candidate.text)))
+    if pinned and heard < MIN_CONVERSATIONS:
+        candidate.against = pinned[0].text
+        waiting = Entry(candidate.text, True, CURRENT_SUBSECTION, [], candidate.day, pinned[0].text,
+                        auto=True)
+        out.pending.append(candidate)
+        mine = [e for e in auto if e.current]  # an older waiting version of it — the newer one wins
+        if mine:
+            out.replacing.append(Replacement(candidate.text, mine[0], mine[1:], candidate.day,
+                                             candidate.against, candidate, heard))
+            _swap(standing, mine, waiting)
+        else:
+            out.approved.append(candidate)
+            standing.append(waiting)
+        return
+    if not found:
+        out.approved.append(candidate)
+        standing.append(Entry(candidate.text, True, CURRENT_SUBSECTION, [], candidate.day,
+                              auto=True))
+        return
+    # the durable version first: that is the one every session reads
+    target = pinned[0] if pinned else sorted(auto, key=lambda e: e.current)[0]
+    rest = [e for e in auto if e is not target]  # another pinned one is the user's — left alone
+    out.replacing.append(Replacement(candidate.text, target, rest, candidate.day, "", candidate,
+                                     heard))
+    _swap(standing, [target] + rest, Entry(candidate.text, target.current, target.heading, [],
+                                           candidate.day, auto=True))
+
+
+def _swap(standing: list, gone: list, new: "Entry") -> None:
+    standing[:] = [e for e in standing if all(e is not g for g in gone)]
+    standing.append(new)
 
 
 # ---------------------------------------------------------------- the rules ("## Co wiem")
@@ -506,7 +591,13 @@ class Bullet:
     def text(self) -> str:
         """The whole entry in one line — an entry wrapped over several lines is still one fact."""
         joined = " ".join(part.strip() for part in self.lines)
-        return _UNCONFIRMED.sub("", joined).strip().lstrip("-*").strip()
+        return PENDING_NOTE.sub("", _UNCONFIRMED.sub("", joined)).strip().lstrip("-*").strip()
+
+    @property
+    def against(self) -> str:
+        """The quote of the pinned entry a waiting entry contradicts; '' for every other entry."""
+        m = PENDING_NOTE.search(_UNCONFIRMED.sub("", " ".join(p.strip() for p in self.lines)))
+        return m.group(0).strip()[len("(przeczy:"):-1].strip().strip("„”") if m else ""
 
 
 def bullets(body: list[str]) -> list[Bullet]:
@@ -553,11 +644,15 @@ def _heading_index(body: list[str], heading: str) -> int | None:
 
 def insert_fact(body: list[str], fact: str, heading: str) -> list[str]:
     """Appends the fact at the end of its subsection (creating the subsection if it is missing)."""
-    entry = f"- {fact}"
+    return insert_entry(body, [f"- {fact}"], heading)
+
+
+def insert_entry(body: list[str], entry: list[str], heading: str) -> list[str]:
+    """insert_fact for an entry already written out — possibly wrapped over several lines."""
     idx = _heading_index(body, heading)
     if idx is None:
         tail = body + ([] if body and not body[-1].strip() else [""])
-        return tail + [heading, "", entry, ""]
+        return tail + [heading, ""] + entry + [""]
     end = idx + 1
     while end < len(body) and not body[end].strip().startswith(("### ", "## ")):
         end += 1
@@ -566,7 +661,7 @@ def insert_fact(body: list[str], fact: str, heading: str) -> list[str]:
         kept.pop()
     if not kept or kept[0].strip():
         kept.insert(0, "")
-    return body[:idx + 1] + kept + [entry, ""] + body[end:]
+    return body[:idx + 1] + kept + list(entry) + [""] + body[end:]
 
 
 @dataclass
@@ -633,8 +728,10 @@ def backup_file(path: Path, day: str | None = None) -> Path:
 
 
 def _entry_text(line: str) -> str:
-    """One line of a file stripped down to the fact itself — no bullet, no date, no warning."""
-    return _LEADING_DAY.sub("", _UNCONFIRMED.sub("", line).strip().lstrip("-*").strip())
+    """One line of a file stripped down to the fact itself — no bullet, no date, no warning, no
+    note of what it contradicts."""
+    bare = PENDING_NOTE.sub("", _UNCONFIRMED.sub("", line))
+    return _LEADING_DAY.sub("", bare.strip().lstrip("-*").strip())
 
 
 def facts_in(lines: list[str]) -> set[str]:
@@ -648,20 +745,6 @@ def facts_in(lines: list[str]) -> set[str]:
     return known
 
 
-def standing_facts(lines: list[str]) -> list[str]:
-    """The facts of one file that are in force — the "## Co wiem" section, entry by entry.
-
-    They are what a new fact is confronted with: a contradiction can only be found against
-    something that is actually written down.
-    """
-    bounds = section_bounds(lines)
-    if bounds is None:
-        return []
-    start, end = bounds
-    return [text for text in (_LEADING_DAY.sub("", b.text) for b in bullets(lines[start:end]))
-            if text]
-
-
 @dataclass
 class FileResult:
     """What one pass did to one instruction file."""
@@ -669,10 +752,8 @@ class FileResult:
     stale: list[tuple[str, list[str]]] = field(default_factory=list)
     healed: list[str] = field(default_factory=list)
     added: list[str] = field(default_factory=list)  # new facts, written into the current layer
-    promoted: list[str] = field(default_factory=list)  # moved from the current layer to the durable
     expired: list[str] = field(default_factory=list)  # taken out of the current layer by their age
     changed: bool = False
-    backup: str | None = None
     note: str | None = None  # set when the file has no "## Co wiem" — nothing was written
 
 
@@ -692,24 +773,6 @@ def fact_key(text: str) -> tuple[str, tuple[str, ...]]:
     promotion would instead ride along with every session for months.
     """
     return skeleton(_LEADING_DAY.sub("", text.strip()))
-
-
-def _layers(lines: list[str]) -> tuple[list[str], list[tuple[str, str]]]:
-    """The entries of '## Co wiem' split in two: the durable ones, and (day, sentence) of the
-    current ones — the day is '' when the entry carries none."""
-    bounds = section_bounds(lines)
-    if bounds is None:
-        return [], []
-    body = lines[bounds[0]:bounds[1]]
-    current = _subsection_bounds(body, CURRENT_HEADING_RE)
-    if current is None:
-        return [b.text for b in bullets(body) if b.text], []
-    durable = body[:current[0]] + body[current[1]:]
-    now = []
-    for b in bullets(body[current[0]:current[1]]):
-        m = _DAY.match(b.text)
-        now.append((m.group(1) if m else "", _LEADING_DAY.sub("", b.text)))
-    return [b.text for b in bullets(durable) if b.text], now
 
 
 def _drop_current(body: list[str], keys: set) -> tuple[list[str], list[str]]:
@@ -736,6 +799,10 @@ def _drop_current(body: list[str], keys: set) -> tuple[list[str], list[str]]:
 # ---------------------------------------------------------------- repetition is the evidence
 
 WRITTEN, PROMOTED, EXPIRED = "wpisany", "awansowany", "wygasł"  # the events this module writes
+# ...and the ones of the refreshing durable layer and of "the newer version wins"
+SLEPT, WOKEN = "uśpiony", "obudzony"
+REPLACED, REPLACED_BY = "zastąpiony", "wpisany w miejsce"  # the loser and the winner of a clash
+UNDONE = "cofnięty"
 _OLD_SESSIONS = re.compile(r"\(sesje:\s*([^)]*)\)")
 _POINTER_NOTE = re.compile(r";\s*odsyłacz:\s*(.+)$")
 
@@ -751,14 +818,44 @@ class Sighting:
 
 @dataclass
 class Trail:
-    """What wiedza/zrodla.md knows, read back for the two decisions: promote, and let expire."""
+    """What wiedza/zrodla.md knows, read back for the decisions: promote, let expire, put to sleep,
+    wake up — and which entries are the automaton's at all."""
     sightings: dict = field(default_factory=dict)  # fact key -> [Sighting], oldest first
     written: set = field(default_factory=set)  # keys of entries the automaton put into "Bieżące"
     pointers: dict = field(default_factory=dict)  # key of a pointer line -> key of its listing
+    # keys of entries the automaton put into the DURABLE layer: promoted, woken up, the winner of
+    # a clash — and the ones written straight there in the week that was allowed (2026-09-17..24)
+    auto_durable: set = field(default_factory=set)
+    confirmed: dict = field(default_factory=dict)  # key -> the latest day it was put in or kept
+    undone: dict = field(default_factory=dict)  # key -> the latest day a change of it was undone
 
     def evidence(self, key) -> list[Sighting]:
         """The sightings behind an entry — for a reference pointer, those of its listing."""
         return self.sightings.get(self.pointers.get(key, key), [])
+
+    def is_auto(self, entry: "Entry") -> bool:
+        """Did the automaton write this entry? What it did not write is PINNED: the rules from before
+        it existed and whatever the user had written down himself. The trail is the only proof —
+        an entry with no event behind it counts as the user's, which is the safe side: a pinned
+        entry never falls asleep and is replaced only on the word of two conversations."""
+        return entry.key in (self.written if entry.current else self.auto_durable)
+
+    def last_confirmed(self, key) -> str | None:
+        """The last day the fact was heard in a conversation — or put into the durable layer, or
+        kept there by an undone sleep, whichever is later."""
+        days = [s.day for s in self.evidence(key)]
+        if key in self.confirmed:
+            days.append(self.confirmed[key])
+        return max(days) if days else None
+
+    def blocked(self, key) -> bool:
+        """A change the user took back is not redone by the next run on the same evidence: it waits
+        for the fact to be heard again, after the day of the undo."""
+        day = self.undone.get(key)
+        return day is not None and not any(s.day > day for s in self.evidence(key))
+
+    def confirm(self, key, day: str) -> None:
+        self.confirmed[key] = max(day, self.confirmed.get(key, day))
 
 
 def _sessions(raw: str) -> frozenset[str] | None:
@@ -785,21 +882,40 @@ def read_trail() -> Trail:
         parts = line[2:].split(" | ", 5)
         if len(parts) < 5:
             continue
-        day, event = parts[0].strip(), parts[1].strip()
+        day, event, detail = parts[0].strip(), parts[1].strip(), parts[2].strip()
         if event in (SIGHTED, SIGHTED_AGAIN):
             if len(parts) == 6 and parts[4].startswith(SESSIONS_FIELD):
                 sessions, text = _sessions(parts[4]), parts[5]
             else:  # the format from before the full list of sessions
                 sessions, text = _old_sessions(parts[3]), " | ".join(parts[4:])
             out.sightings.setdefault(fact_key(text), []).append(
-                Sighting(day, parts[2].strip(), sessions, text.strip()))
-        elif event == WRITTEN and parts[2].strip().startswith("biezaca"):
-            text = " | ".join(parts[4:])
-            out.written.add(fact_key(text))
+                Sighting(day, detail, sessions, text.strip()))
+            continue
+        key = fact_key(" | ".join(parts[4:]))
+        if event == WRITTEN and detail.startswith("biezaca"):
+            out.written.add(key)
             pointer = _POINTER_NOTE.search(parts[3])
             if pointer:
                 out.written.add(fact_key(pointer.group(1)))
-                out.pointers[fact_key(pointer.group(1))] = fact_key(text)
+                out.pointers[fact_key(pointer.group(1))] = key
+        elif event == WRITTEN and detail.startswith("stala"):
+            # the week the automaton wrote straight into the durable layer — its entries, too
+            out.auto_durable.add(key)
+            out.confirm(key, day)
+        elif event in (PROMOTED, WOKEN):
+            out.auto_durable.add(key)
+            out.confirm(key, day)
+        elif event == REPLACED_BY:
+            if detail.startswith("biezaca"):
+                out.written.add(key)
+            else:
+                out.auto_durable.add(key)
+                out.confirm(key, day)
+        elif event == UNDONE:
+            if detail.startswith(CHANGE_KINDS["U"]):
+                out.confirm(key, day)  # the user wants it back — that counts as hearing it again
+            else:
+                out.undone[key] = max(day, out.undone.get(key, day))
     return out
 
 
@@ -828,6 +944,7 @@ class Promotion:
     heading: str  # where it goes in the durable layer
     conversations: int
     first_seen: str
+    dormant: "Dormant | None" = None  # not a promotion but a fact waking up out of uspione.md
 
     @property
     def key(self) -> tuple:
@@ -850,12 +967,14 @@ class Promotions:
 
 
 def choose_promotions(current: list[str], trail: Trail, durable: set,
-                      room: int | None) -> Promotions:
+                      room: int | None, wakes: list[Promotion] | tuple = ()) -> Promotions:
     """Which entries of the current layer move to the durable one in this run.
 
     `current` — the sentences of the current layer, this run's newcomers included; `durable` — the
     keys already standing in the durable layer (nothing there is moved or doubled — this is not
-    a migration backwards); `room` — characters left under the ceiling, None when not measured.
+    a migration backwards); `room` — characters left under the ceiling, None when not measured;
+    `wakes` — dormant facts heard again: they come back under the same limit and the same ceiling,
+    and before the promotions, since they have been in the durable layer once already.
 
     A fact the model itself labelled "biezaca" is not promoted however often it comes back: it said
     the thing changes in days, and the durable layer never ages out.
@@ -870,9 +989,13 @@ def choose_promotions(current: list[str], trail: Trail, durable: set,
         heard = conversations(sightings)
         if heard < MIN_CONVERSATIONS or sightings[-1].label.startswith("biezaca"):
             continue
+        if trail.blocked(key):
+            continue  # the user took this promotion back — it waits to be heard again
         earned.append(Promotion(text, promotion_heading(text, sightings[-1].label), heard,
                                 min(s.day for s in sightings)))
     earned.sort(key=lambda p: (-p.conversations, p.first_seen))  # the most repeated first
+    earned = [w for w in wakes if w.key not in durable] + [p for p in earned
+                                                           if p.key not in {w.key for w in wakes}]
     out, left = Promotions(), room
     for p in earned:
         if len(out.chosen) >= MAX_PROMOTIONS:
@@ -914,53 +1037,362 @@ def expiring(current: list[tuple[str, str]], trail: Trail, today: str,
     return leaving, own
 
 
-def update_file(path: Path, approved: list[Candidate], exists=None, day: str | None = None,
-                dry_run: bool = False, promoted: list[Promotion] | tuple = (),
-                leaving: set | frozenset = frozenset()) -> FileResult:
-    """Audits what stands in one file, then: the promoted facts leave the current layer for the
-    durable one, the expired ones leave the current layer, and the approved facts it does not know
-    yet come into the current layer with their date — never anywhere else.
+def settle_file(path: Path, lines: list[str], approved: list[Candidate], exists, today: str,
+                leaving: set | frozenset = frozenset()) -> tuple[FileResult, list[str]]:
+    """The part of a run that has no id to take back: audits what stands in one file, lets the
+    expired entries out of the current layer and the approved facts it does not know yet in, with
+    their date — never anywhere else. Returns the new lines; writing is the caller's business.
+    The changes that DO get an id (see Change) are applied on top of this, one by one.
     """
-    raw = _read(path)
-    lines = (raw or "").splitlines()
-    bounds = section_bounds(lines) if raw is not None else None
+    bounds = section_bounds(lines)
     if bounds is None:
         return FileResult(path, note=f"no '{KNOWLEDGE_HEADING}' section in {path}"
-                                     " — nothing approved automatically")
+                                     " — nothing approved automatically"), lines
     start, end = bounds
-    today = day or datetime.now().strftime("%Y-%m-%d")
-    audited = audit_rules(lines[start:end], exists, day)
+    audited = audit_rules(lines[start:end], exists, today)
     out = FileResult(path, stale=audited.stale, healed=audited.healed)
-    moving = {p.key for p in promoted}
-    body, gone = _drop_current(audited.body, moving | set(leaving))
-    gone_keys = {fact_key(text) for text in gone}
-    out.expired = [text for text in gone if fact_key(text) not in moving]
+    body, out.expired = _drop_current(audited.body, set(leaving))
     known = facts_in(lines[:start] + body + lines[end:])
-    for p in promoted:
-        key = normalize(p.text)
-        if key and key not in known:
-            known.add(key)
-            body = insert_fact(body, p.text, p.heading)
-            out.promoted.append(p.text)
-        elif p.key in gone_keys:  # already durable here — only its copy in the current layer went
-            out.promoted.append(p.text)
     for candidate in approved:
-        if fact_key(candidate.shown) in moving:
-            continue  # heard twice already — it goes straight to the durable layer, above
-        entry = candidate.entry(today)
-        key = normalize(_LEADING_DAY.sub("", entry))
+        key = normalize(candidate.shown)
         if not key or key in known:
             continue  # already written down here, possibly in other words than the waiting room used
         known.add(key)
-        body = insert_fact(body, entry, CURRENT_SUBSECTION)
+        body = insert_fact(body, candidate.entry(today), CURRENT_SUBSECTION)
         out.added.append(candidate.text)
     out.changed = body != lines[start:end]
-    if dry_run or not out.changed:
-        return out
-    out.backup = str(backup_file(path))
     # only the body of the section is swapped — the lines around it are the very same objects
-    _write(path, lines[:start] + body + lines[end:], _newline(raw))
+    return out, lines[:start] + body + lines[end:]
+
+
+# ---------------------------------------------------------------- pinned and the automaton's
+
+@dataclass(eq=False)
+class Entry:
+    """One entry of "## Co wiem" — where it stands and whose it is."""
+    text: str  # the fact alone: no bullet, no date, no mark, no note of what it contradicts
+    current: bool  # it stands in "### Bieżące"
+    heading: str  # the subsection it stands under; '' above the first one
+    lines: list[str]  # as written in the file
+    day: str = ""  # the date of a current entry
+    against: str = ""  # a waiting entry: the (quoted) pinned entry it is to replace
+    auto: bool = False  # the automaton wrote it; everything else is pinned — see Trail.is_auto
+
+    @property
+    def key(self) -> tuple:
+        return fact_key(self.text)
+
+
+def _headings(body: list[str]) -> list[str]:
+    """For every line of the body, the subsection heading it stands under ('' above the first)."""
+    out, heading = [], ""
+    for line in body:
+        if SUBHEADING_RE.match(line.strip()):
+            heading = line.strip()
+        out.append(heading)
     return out
+
+
+def entries(lines: list[str]) -> list[Entry]:
+    """Every entry of the "## Co wiem" section of a file, in the order they stand."""
+    bounds = section_bounds(lines)
+    if bounds is None:
+        return []
+    body = lines[bounds[0]:bounds[1]]
+    heads = _headings(body)
+    out = []
+    for b in bullets(body):
+        heading = heads[b.start]
+        current = bool(CURRENT_HEADING_RE.match(heading))
+        day = _DAY.match(b.text)
+        text = _LEADING_DAY.sub("", b.text)
+        if text:
+            out.append(Entry(text, current, heading, list(b.lines), day.group(1) if day else "",
+                             b.against if current else ""))
+    return out
+
+
+def _find(lines: list[str], key, current: bool) -> tuple[int, int, str] | None:
+    """(start, end, heading) of the entry with this key in the given layer; absolute line numbers."""
+    bounds = section_bounds(lines)
+    if bounds is None:
+        return None
+    body = lines[bounds[0]:bounds[1]]
+    heads = _headings(body)
+    for b in bullets(body):
+        in_current = bool(CURRENT_HEADING_RE.match(heads[b.start]))
+        if in_current == current and fact_key(_LEADING_DAY.sub("", b.text)) == key:
+            return bounds[0] + b.start, bounds[0] + b.end, heads[b.start]
+    return None
+
+
+def _entry_key(entry: list[str]) -> tuple:
+    return fact_key(_LEADING_DAY.sub("", Bullet(0, len(entry), entry).text))
+
+
+# ---------------------------------------------------------------- the dormant facts
+
+DORMANT_HEADER = """# Uśpione fakty
+
+Wpisy, które automat kiedyś dopisał do trwałej wiedzy, a potem przez {days} dni nikt ich nie
+potwierdził w rozmowie. Tu nie kosztują nic — ten plik nie jest doklejany do rozmów. Fakt, który
+padnie znowu, wraca do trwałej wiedzy sam. Wpisy przypięte (napisane ręcznie) nigdy tu nie trafiają.
+
+Jedna linia na fakt: `data uśpienia | podsekcja | identyfikator zmiany | treść`.
+Cofnięcie uśpienia: `python -m lore.verify --cofnij <identyfikator>`.
+"""
+
+
+@dataclass
+class Dormant:
+    slept: str  # the day it fell asleep
+    heading: str  # its subsection, without the hashes
+    change: str  # the id of the change that put it here
+    text: str
+
+    @property
+    def line(self) -> str:
+        return f"- {self.slept} | {self.heading} | {self.change} | {self.text}"
+
+    @property
+    def key(self) -> tuple:
+        return fact_key(self.text)
+
+
+def read_dormant(lines: list[str]) -> list[Dormant]:
+    return [Dormant(*parsed) for parsed in map(dormant_entry, lines) if parsed]
+
+
+# ---------------------------------------------------------------- the files of one run
+
+def _render(lines: list[str], newline: str) -> str:
+    return newline.join(lines) + (newline if lines else "")
+
+
+def _sha(text: str | None) -> str | None:
+    return None if text is None else hashlib.sha256(text.encode("utf-8")).hexdigest()
+
+
+class Workspace:
+    """Every file one run may change, held in memory until the end. That is what lets each change
+    that gets an id be recorded with the exact state before and after it — and be taken back."""
+
+    def __init__(self) -> None:
+        self.lines: dict[Path, list[str]] = {}
+        self.newline: dict[Path, str] = {}
+        self.existed: dict[Path, bool] = {}
+
+    def load(self, path: Path) -> None:
+        raw = _read(path)
+        self.lines[path] = (raw or "").splitlines()
+        self.newline[path] = _newline(raw or "")
+        self.existed[path] = raw is not None
+
+    def text(self, path: Path) -> str | None:
+        """The file as it would be written now; None for a file that is not there and stays so."""
+        lines = self.lines[path]
+        if not lines and not self.existed[path]:
+            return None
+        return _render(lines, self.newline[path])
+
+
+# One change is a list of operations on the files, each of them with its exact inverse — that is
+# what undo() falls back on when a file changed since and its copy can no longer be put back whole.
+#   wstaw  (plik, sekcja, linie)            an entry added at the end of a subsection
+#   wyjmij (plik, biezaca, sekcja, linie)   an entry taken out (found by its key, not its bytes)
+#   podmien(plik, biezaca, stare, nowe)     an entry replaced in its place
+#   uspij / zbudz (plik, linia)             a line added to / taken out of wiedza/uspione.md
+
+def _inverse(op: dict) -> dict:
+    kind = op["op"]
+    if kind == "wstaw":
+        return {"op": "wyjmij", "plik": op["plik"], "sekcja": op["sekcja"], "linie": op["linie"],
+                "biezaca": bool(CURRENT_HEADING_RE.match(op["sekcja"]))}
+    if kind == "wyjmij":
+        return {"op": "wstaw", "plik": op["plik"], "sekcja": op["sekcja"] or DEFAULT_SUBSECTION,
+                "linie": op["linie"]}
+    if kind == "podmien":
+        return {**op, "stare": op["nowe"], "nowe": op["stare"]}
+    return {**op, "op": "zbudz" if kind == "uspij" else "uspij"}
+
+
+def _apply(ws: Workspace, op: dict) -> bool:
+    """One operation on the files in memory; False when there was nothing to apply it to."""
+    path = Path(op["plik"])
+    lines = ws.lines[path]
+    kind = op["op"]
+    if kind == "uspij":
+        if not any(line.strip() for line in lines):
+            lines = DORMANT_HEADER.format(days=SLEEP_DAYS).splitlines()
+        ws.lines[path] = lines + [op["linia"]]
+        return True
+    if kind == "zbudz":
+        wanted = dormant_entry(op["linia"])
+        for i, line in enumerate(lines):
+            here = dormant_entry(line)
+            if line == op["linia"] or (here and wanted and fact_key(here[3]) == fact_key(wanted[3])):
+                ws.lines[path] = lines[:i] + lines[i + 1:]
+                return True
+        return False
+    if kind == "wstaw":
+        bounds = section_bounds(lines)
+        if bounds is None:
+            return False
+        body = insert_entry(lines[bounds[0]:bounds[1]], op["linie"], op["sekcja"])
+        ws.lines[path] = lines[:bounds[0]] + body + lines[bounds[1]:]
+        return True
+    old = op["linie"] if kind == "wyjmij" else op["stare"]
+    found = _find(lines, _entry_key(old), op["biezaca"])
+    if found is None:
+        return False
+    start, end, heading = found
+    if kind == "podmien":
+        ws.lines[path] = lines[:start] + list(op["nowe"]) + lines[end:]
+        return True
+    ws.lines[path] = _refill(lines[:start] + lines[end:], heading)
+    return True
+
+
+def _refill(lines: list[str], heading: str) -> list[str]:
+    """A subsection left without a single entry gets its placeholder back — as _drop_current does."""
+    bounds = section_bounds(lines)
+    if bounds is None or not heading:
+        return lines
+    body = lines[bounds[0]:bounds[1]]
+    idx = _heading_index(body, heading)
+    if idx is None:
+        return lines
+    end = idx + 1
+    while end < len(body) and not SUBHEADING_RE.match(body[end].strip()):
+        end += 1
+    part = body[idx:end]
+    if bullets(part[1:]) or any(line.strip() == EMPTY_MARKER for line in part):
+        return lines
+    while len(part) > 1 and not part[-1].strip():
+        part.pop()
+    part += ["", EMPTY_MARKER, ""]
+    return lines[:bounds[0]] + body[:idx] + part + body[end:] + lines[bounds[1]:]
+
+
+CHANGE_KINDS = {"A": "awans", "U": "uśpienie", "O": "obudzenie", "Z": "zastąpienie"}
+
+
+@dataclass
+class Change:
+    """One automatic change the user can take back by its id."""
+    kind: str  # a key of CHANGE_KINDS
+    subject: str  # the fact it is about: promoted, put to sleep, woken, or the winner of a clash
+    old: str = ""  # a replacement: the fact that lost
+    heading: str = ""
+    note: str = ""  # a few words for the history
+    id: str = ""
+    ops: list = field(default_factory=list)
+    before: dict = field(default_factory=dict)  # path -> the whole text before (None: no file)
+    after: dict = field(default_factory=dict)  # path -> sha256 of the whole text after
+
+    def record(self, day: str) -> dict:
+        return {"id": self.id, "dzien": day, "rodzaj": CHANGE_KINDS[self.kind],
+                "przedmiot": self.subject, "stare": self.old, "sekcja": self.heading,
+                "opis": self.note, "ops": self.ops,
+                "pliki": {p: {"kopia": None, "po": sha} for p, sha in self.after.items()}}
+
+
+class Changes:
+    """The changes of one run, applied to the files in memory one after another."""
+
+    def __init__(self, ws: Workspace, today: str, taken: int) -> None:
+        self.ws, self.today, self.done = ws, today, []
+        self.count = taken  # the ids of the day already given out — by earlier runs of the day
+
+    def commit(self, change: Change, ops: list[dict]) -> bool:
+        ops = [op for op in ops if op]
+        if not ops:
+            return False
+        self.count += 1
+        change.id = f"{change.kind}-{self.today[2:4]}{self.today[5:7]}{self.today[8:10]}-{self.count}"
+        touched = list(dict.fromkeys(op["plik"] for op in ops))
+        change.before = {p: self.ws.text(Path(p)) for p in touched}
+        applied = []
+        for op in ops:
+            if op["op"] == "uspij":  # the dormant line names the change that put it there
+                op = {**op, "linia": op["linia"].replace(" | {id} | ", f" | {change.id} | ", 1)}
+            if _apply(self.ws, op):
+                applied.append(op)
+        change.ops = applied
+        change.after = {p: _sha(self.ws.text(Path(p))) for p in touched}
+        self.done.append(change)
+        return True
+
+
+def _layer_ops(ws: Workspace, files: list[Path], key, current: bool) -> list[dict]:
+    """Taking one entry out of one layer of every file it stands in."""
+    ops = []
+    for path in files:
+        found = _find(ws.lines[path], key, current)
+        if found:
+            start, end, heading = found
+            ops.append({"op": "wyjmij", "plik": str(path), "biezaca": current, "sekcja": heading,
+                        "linie": ws.lines[path][start:end]})
+    return ops
+
+
+def sleep_ops(ws: Workspace, files: list[Path], entry: Entry, dormant_path: Path,
+              today: str) -> list[dict]:
+    ops = _layer_ops(ws, files, entry.key, False)
+    if ops:
+        heading = (entry.heading or DEFAULT_SUBSECTION).lstrip("#").strip()
+        ops.append({"op": "uspij", "plik": str(dormant_path),
+                    "linia": Dormant(today, heading, "{id}", entry.text).line})
+    return ops
+
+
+def durable_ops(ws: Workspace, files: list[Path], text: str, heading: str) -> list[dict]:
+    """A fact moving into the durable layer: out of the current one wherever it waits there, in
+    under its heading wherever the durable layer does not have it yet."""
+    key = fact_key(text)
+    ops = _layer_ops(ws, files, key, True)
+    for path in files:
+        if section_bounds(ws.lines[path]) is not None and _find(ws.lines[path], key, False) is None:
+            ops.append({"op": "wstaw", "plik": str(path), "sekcja": heading,
+                        "linie": [f"- {text}"]})
+    return ops
+
+
+@dataclass
+class Replacement:
+    """A newer version of a fact taking the place of an older one — see _settle."""
+    new: str
+    target: Entry
+    extra: list  # other versions of the same thing the automaton wrote — they go as well
+    day: str  # the date the new version carries when it lands in the current layer
+    against: str = ""  # it still waits for a pinned entry: the note stays with it
+    candidate: Candidate | None = None  # it came out of the waiting room this run
+    heard: int = 0  # in how many different conversations the new version was heard
+
+
+def replace_ops(ws: Workspace, files: list[Path], r: Replacement, today: str) -> list[dict]:
+    t = r.target
+    new = [f"- {current_entry(r.day or today, r.new, r.against)}"] if t.current else [f"- {r.new}"]
+    new_key = fact_key(r.new)
+    ops = []
+    for path in files:
+        lines = ws.lines[path]
+        if section_bounds(lines) is None:
+            continue
+        found = _find(lines, t.key, t.current)
+        if found:
+            ops.append({"op": "podmien", "plik": str(path), "biezaca": t.current,
+                        "stare": lines[found[0]:found[1]], "nowe": new})
+        elif _find(lines, new_key, t.current) is None:
+            # the old version was never in this file — the new one goes in anyway, as a new fact
+            # would, so that the files of both tools say the same
+            ops.append({"op": "wstaw", "plik": str(path), "linie": new,
+                        "sekcja": CURRENT_SUBSECTION if t.current
+                        else (t.heading or DEFAULT_SUBSECTION)})
+    for e in r.extra:
+        if e.key != t.key or e.current != t.current:
+            ops += _layer_ops(ws, files, e.key, e.current)
+    return ops
 
 
 # ---------------------------------------------------------------- the reference layer
@@ -1037,15 +1469,269 @@ def note_source(candidate: Candidate, files: list[Path], day: str) -> None:
           candidate.text)
 
 
-def note_promotion(p: Promotion, files: list[Path], day: str) -> None:
-    where = p.heading.lstrip("# ").strip()
-    _note(f"- {day} | {PROMOTED} | stala: {where} -> {_where(files)} | z {p.conversations} rozmów,"
-          f" pierwszy raz {p.first_seen} | {p.text}\n", p.text)
-
-
 def note_expiry(text: str, written: str, files: list[Path], day: str) -> None:
     _note(f"- {day} | {EXPIRED} | biezaca -> {_where(files)} | wpis z {written or '?'},"
           f" starszy niz {CURRENT_DAYS} dni | {text}\n", text)
+
+
+def _flat(text: str) -> str:
+    """A fact quoted inside a trail line — the ' | ' of the format must not appear in it."""
+    return _quote(text).replace("|", "/")
+
+
+def note_change(c: Change, day: str) -> None:
+    """The trail line(s) of one change — read back by read_trail: whose entries are the automaton's,
+    when a fact was last put in, what the user took back."""
+    files = [Path(p) for p in c.after if Path(p).name != DORMANT_NAME]
+    where = f"stala: {c.heading.lstrip('# ').strip()} -> {_where(files)}"
+    if c.kind == "A":
+        line = f"- {day} | {PROMOTED} | {where} | {c.note}; zmiana {c.id} | {c.subject}\n"
+    elif c.kind == "O":
+        line = f"- {day} | {WOKEN} | {where} | zmiana {c.id}; {c.note} | {c.subject}\n"
+    elif c.kind == "U":
+        line = f"- {day} | {SLEPT} | {where} | zmiana {c.id}; {c.note} | {c.subject}\n"
+    else:
+        layer = f"biezaca -> {_where(files)}" if c.heading == CURRENT_SUBSECTION else where
+        line = (f"- {day} | {REPLACED} | {layer} | zmiana {c.id}; przez: {_flat(c.subject)}"
+                f" | {c.old}\n"
+                f"- {day} | {REPLACED_BY} | {layer} | zmiana {c.id}; zamiast: {_flat(c.old)}"
+                f" | {c.subject}\n")
+    _note(line, c.subject)
+
+
+# ---------------------------------------------------------------- the history and the way back
+
+HISTORY_HEADER = """# Historia zmian w wiedzy
+
+Każda zmiana, którą automat zrobił sam: awans do wiedzy stałej, uśpienie, obudzenie, zastąpienie
+starszej wersji nowszą. Nic stąd nie jest doklejane do rozmów. Stara wersja faktu nie ginie — stoi
+tutaj. Każdą zmianę cofa jedno polecenie:
+
+    uv --directory <repo>\\lore run python -m lore.verify --cofnij <identyfikator albo RRRR-MM-DD>
+
+"""
+
+
+def history_line(c: Change, day: str) -> str:
+    if c.kind == "Z":
+        return f"- [{c.id}] {c.old} — zastąpione {day} przez: {c.subject}"
+    if c.kind == "U":
+        return f"- [{c.id}] {c.subject} — uśpione {day} ({c.note}), leży w wiedza/{DORMANT_NAME}"
+    heading = c.heading.lstrip("# ").strip()
+    if c.kind == "O":
+        return f"- [{c.id}] {c.subject} — obudzone {day}, wróciło do stałej ({heading}): {c.note}"
+    return f"- [{c.id}] {c.subject} — awansowane {day} do stałej ({heading}), {c.note}"
+
+
+def _append(name: str, header: str, lines: list[str]) -> None:
+    """One more piece of an append-only file — a failure is logged, never swallowed."""
+    if not lines:
+        return
+    try:
+        KNOWLEDGE_DIR.mkdir(parents=True, exist_ok=True)
+        path = KNOWLEDGE_DIR / name
+        first_time = not path.exists()
+        with open(path, "a", encoding="utf-8", newline="\n") as f:
+            if first_time and header:
+                f.write(header)
+            f.write("".join(line + "\n" for line in lines))
+    except OSError as e:
+        log(f"{len(lines)} line(s) were not written to {name}: {e}")
+
+
+def read_journal() -> list[dict]:
+    """The journal of the changes: records of changes and records of undoing them, oldest first.
+    A line that does not parse is reported, not skipped quietly — it is a change nobody can undo."""
+    raw = _read(KNOWLEDGE_DIR / JOURNAL_NAME)
+    out = []
+    for n, line in enumerate((raw or "").splitlines(), 1):
+        if not line.strip():
+            continue
+        try:
+            out.append(json.loads(line))
+        except ValueError as e:
+            log(f"{JOURNAL_NAME}, line {n} does not parse ({e}) — that change cannot be undone")
+    return out
+
+
+def _undone(records: list[dict]) -> set[str]:
+    return {r["cofnieto"] for r in records if "cofnieto" in r}
+
+
+def save_changes(changes: list[Change], day: str) -> None:
+    """Persists the changes of a run: a copy of every file each of them touched (the state just
+    before it), the journal record, the history line and the trail line. The copies go first —
+    a change recorded without its copy could only be undone by content, never exactly."""
+    if not changes:
+        return
+    records = []
+    for c in changes:
+        rec = c.record(day)
+        for path, text in c.before.items():
+            rec["pliki"][path]["bylo"] = text is not None
+            if text is None:
+                continue  # the file was not there — undoing means removing it again
+            copy = BACKUP_DIR / "zmiany" / f"{c.id}-{Path(path).name}"
+            try:
+                copy.parent.mkdir(parents=True, exist_ok=True)
+                with open(copy, "w", encoding="utf-8", newline="") as f:
+                    f.write(text)
+                rec["pliki"][path]["kopia"] = str(copy)
+            except OSError as e:
+                log(f"no copy of {path} before {c.id}: {e} — it can be undone by content only")
+        records.append(json.dumps(rec, ensure_ascii=False))
+    _append(JOURNAL_NAME, "", records)
+    _append(HISTORY_NAME, HISTORY_HEADER, [history_line(c, day) for c in changes])
+    for c in changes:
+        note_change(c, day)
+
+
+REPORT_QUOTE = 60
+_REPORT_VERBS = {"Z": "zmienilem", "U": "uspilem", "O": "obudzilem", "A": "awansowalem"}
+
+
+def report_lines(records: list[dict], day: str) -> list[str]:
+    """The day's changes for a human: a head line with the totals, then one line per change with
+    the id that takes it back. No changes is one line saying so — never an empty report."""
+    undone = _undone(records)
+    done = [r for r in records if "id" in r and r.get("dzien") == day and r["id"] not in undone]
+    if not done:
+        return ["bez zmian"]
+    count = {kind: sum(r["id"].startswith(kind + "-") for r in done) for kind in _REPORT_VERBS}
+    head = (f"zmienilem {count['Z']}, uspilem {count['U']}, obudzilem {count['O']},"
+            f" awansowalem {count['A']} - cofniecie: python -m lore.verify --cofnij <id>"
+            f" (albo --cofnij {day})")
+    if len(done) > REPORT_LINES:
+        head = (f"UWAGA: {len(done)} zmian, pokazuje {REPORT_LINES} - pelna lista w"
+                f" wiedza/{HISTORY_NAME}; " + head)
+    lines = [head]
+    for r in done[:REPORT_LINES]:
+        kind = r["id"][0]
+        what = f"„{_quote(r['przedmiot'], REPORT_QUOTE)}”"
+        if kind == "Z":
+            what = f"„{_quote(r['stare'], REPORT_QUOTE)}” -> {what}"
+        lines.append(f"{r['id']} {_REPORT_VERBS.get(kind, kind)}: {what}")
+    return lines
+
+
+def _read_exact(path: Path) -> str | None:
+    """The file byte for byte (no newline translation) — what the recorded sha was taken of."""
+    try:
+        return path.read_bytes().decode("utf-8")
+    except (OSError, UnicodeDecodeError):
+        return None
+
+
+def undo(target: str, day: str | None = None) -> dict:
+    """Takes back one change (by its id) or every change of one day (RRRR-MM-DD), newest first.
+
+    Exactly when it can: a file still in the very state the change left it in gets its copy from
+    before the change back, byte for byte. A file that changed since (a later run, the user's own
+    edit) is not overwritten — the change is reversed entry by entry instead, and anything that
+    cannot be found any more is reported, not skipped quietly.
+    """
+    today = day or datetime.now().strftime("%Y-%m-%d")
+    records = read_journal()
+    undone = _undone(records)
+    changes = [r for r in records if "id" in r]
+    wanted = target.strip()
+    if re.fullmatch(r"\d{4}-\d{2}-\d{2}", wanted):
+        chosen = [r for r in changes if r["dzien"] == wanted and r["id"] not in undone]
+    else:
+        chosen = [r for r in changes if r["id"].casefold() == wanted.casefold()]
+        if chosen and chosen[0]["id"] in undone:
+            return {"status": "juz-cofniete", "undone": [], "problems": [],
+                    "note": f"zmiana {chosen[0]['id']} jest juz cofnieta"}
+    if not chosen:
+        return {"status": "brak", "undone": [], "problems": [],
+                "note": f"nie ma zmiany {wanted} do cofniecia (lista: --zmiany)"}
+    out = {"status": "ok", "undone": [], "problems": [], "exact": [], "by_content": []}
+    for rec in reversed(chosen):
+        how = _undo_one(rec, out)
+        out["undone"].append(rec["id"])
+        _append(JOURNAL_NAME, "", [json.dumps({"cofnieto": rec["id"], "dzien": today,
+                                               "sposob": how}, ensure_ascii=False)])
+        _append(HISTORY_NAME, HISTORY_HEADER, [f"- [{rec['id']}] cofnięte {today} ({how})"])
+        subject = rec["przedmiot"]
+        _note(f"- {today} | {UNDONE} | {rec['rodzaj']} {rec['id']} | {how} | {subject}\n", subject)
+    if out["problems"]:
+        out["status"] = "czesciowo"
+    refresh_report(today)
+    return out
+
+
+def _undo_one(rec: dict, out: dict) -> str:
+    exact = True
+    for path_str, snap in rec["pliki"].items():
+        path = Path(path_str)
+        if _sha(_read_exact(path)) == snap["po"]:  # untouched since — the copy goes back whole
+            try:
+                _restore(path, snap)
+                out["exact"].append(f"{rec['id']}: {path.name}")
+                continue
+            except OSError as e:
+                out["problems"].append(f"{rec['id']}: {path.name}: {e} - cofam po tresci")
+        exact = False
+        _undo_by_content(rec, path, out)
+    return "dokladnie" if exact else "po tresci"
+
+
+def _restore(path: Path, snap: dict) -> None:
+    if not snap.get("bylo", True):
+        path.unlink(missing_ok=True)  # the change created the file — it goes again
+        return
+    copy = _read_exact(Path(snap["kopia"])) if snap.get("kopia") else None
+    if copy is None:
+        raise OSError(f"no copy from before the change ({snap.get('kopia') or 'never taken'})")
+    with open(path, "w", encoding="utf-8", newline="") as f:
+        f.write(copy)
+
+
+def _op_text(op: dict) -> str:
+    return " ".join(op.get("linie") or op.get("nowe") or [op.get("linia", "")])
+
+
+def _undo_by_content(rec: dict, path: Path, out: dict) -> None:
+    ws = Workspace()
+    ws.load(path)
+    for op in reversed([op for op in rec["ops"] if op["plik"] == str(path)]):
+        if not _apply(ws, _inverse(op)):
+            out["problems"].append(f"{rec['id']}: {path.name}: nie znaleziono"
+                                   f" „{_quote(_op_text(op), REPORT_QUOTE)}”")
+    text = ws.text(path)
+    try:
+        if text is None:
+            path.unlink(missing_ok=True)
+        else:
+            path.parent.mkdir(parents=True, exist_ok=True)
+            with open(path, "w", encoding="utf-8", newline="") as f:
+                f.write(text)
+        out["by_content"].append(f"{rec['id']}: {path.name}")
+    except OSError as e:
+        out["problems"].append(f"{rec['id']}: {path.name}: {e}")
+
+
+def refresh_report(day: str) -> None:
+    """After an undo the summary of the day must not keep announcing what is gone."""
+    path = KNOWLEDGE_DIR / STATE_NAME
+    raw = _read(path)
+    if raw is None:
+        return
+    kept = [line for line in raw.splitlines() if not line.startswith(REPORT_KEY)]
+    lines = kept + _report_state(report_lines(read_journal(), day))
+    try:
+        path.write_text("\n".join(lines) + "\n", encoding="utf-8", newline="\n")
+    except OSError as e:
+        log(f"the summary was not refreshed after the undo: {e}")
+
+
+REPORT_KEY = "meldunek"
+
+
+def _report_state(lines: list[str]) -> list[str]:
+    """The report as 'klucz: wartosc' lines: meldunek (the head), meldunek_1..N (one change each)."""
+    return [f"{REPORT_KEY}: {lines[0]}"] + [f"{REPORT_KEY}_{i}: {line}"
+                                              for i, line in enumerate(lines[1:], 1)]
 
 
 # ---------------------------------------------------------------- the report of the run
@@ -1068,7 +1754,15 @@ def _state(r: dict, day: str) -> dict[str, str]:
         "weszlo_do_biezacej": str(entered),
         "awansowane_do_stalej": str(promoted),
         "odrzucone": str(len(r["suspicious"])),
+        # nothing waits for the user any more ("the newer version wins"): always 0, kept for
+        # aktualizuj-wiedze.ps1, which warns when it is not
         "sporne": str(len(r["disputed"])),
+        "zastapione": str(len(r["replaced"])),
+        "uspione": str(len(r["slept"])),
+        "obudzone": str(len(r["woken"])),
+        # a newer version of a pinned entry, heard in one conversation so far — it waits in the
+        # current layer, not in a queue for the user
+        "czeka_na_druga_rozmowe": str(r["pending"]),
         "wygasle": str(len(r["expired"])),
         # earned a promotion, but the run already took MAX_PROMOTIONS — they stay in the current
         # layer and go first next time
@@ -1104,7 +1798,12 @@ def _reason(r: dict) -> str:
         tail.append(f"{len(r['over_limit'])} wstrzymane progiem warstwy stalej")
     if r["expired"]:
         tail.append(f"wygaslo {len(r['expired'])} z biezacej")
-    if entered or promoted:
+    for key, what in (("replaced", "zastapiono"), ("slept", "uspiono"), ("woken", "obudzono")):
+        if r[key]:
+            tail.append(f"{what} {len(r[key])}")
+    if r["pending"]:
+        tail.append(f"{r['pending']} czeka na druga rozmowe (przeczy przypietemu)")
+    if entered or promoted or r["replaced"] or r["slept"] or r["woken"]:
         head = (f"dopisano {entered + promoted} faktow (do biezacej {entered},"
                 f" awans do stalej {promoted})")
         return "; ".join([head] + tail)
@@ -1125,6 +1824,7 @@ def write_state(r: dict, day: str) -> None:
     try:
         KNOWLEDGE_DIR.mkdir(parents=True, exist_ok=True)
         lines = [f"{key}: {value}" for key, value in _state(r, day).items()]
+        lines += _report_state(r["report"])
         (KNOWLEDGE_DIR / STATE_NAME).write_text("\n".join(lines) + "\n",
                                                 encoding="utf-8", newline="\n")
     except OSError as e:
@@ -1135,92 +1835,220 @@ def write_state(r: dict, day: str) -> None:
 
 def run(dry_run: bool = False, exists=None, day: str | None = None) -> dict:
     """One pass: waiting room -> the current layer of every instruction file, the facts heard in two
-    conversations -> the durable layer, the old ones out, plus an audit of what stands there."""
+    conversations -> the durable layer, newer versions in place of older ones, the long unconfirmed
+    ones to sleep and back, the old ones of the current layer out, plus an audit of what stands.
+
+    Everything happens in memory first: the part without an id (settle_file), then each change with
+    an id on top of it, recorded with the state before and after — and only then is anything written.
+    """
     exists = exists or path_exists
     today = day or datetime.now().strftime("%Y-%m-%d")
     out = {"status": "dry-run" if dry_run else "ok", "approved": [], "suspicious": [],
            "disputed": [], "over_limit": [], "deferred": [], "waiting": 0, "stale": [],
            "healed": [], "backups": [], "files": [], "added": {}, "entered": [], "promoted": [],
            "expired": [], "own_old": [], "references": [], "stable_chars": 0, "compared": 0,
-           "powod": ""}
+           "replaced": [], "slept": [], "woken": [], "pending": 0, "changes": [],
+           "report": [], "powod": ""}
     files = instruction_files()
     out["files"] = [str(path) for path in files]
-    contents = {path: (_read(path) or "").splitlines() for path in files}
+    ws = Workspace()
+    for path in files:
+        ws.load(path)
+    dormant_path = KNOWLEDGE_DIR / DORMANT_NAME
+    ws.load(dormant_path)
+    original = {path: list(ws.lines[path]) for path in [*files, dormant_path]}
+    trail = read_trail()
+    journal = read_journal()
 
-    # what already stands in the files decides three things: what a new fact may contradict, what
-    # is already durable, and how much room the durable layer still has. Measured BEFORE writing.
-    standing: list[str] = []
-    durable: set = set()
+    # what already stands in the files decides: what a new fact may contradict and whether that is
+    # a pinned entry, what is already durable, how much room the durable layer still has, what
+    # has gone unconfirmed for too long. Measured BEFORE writing.
+    standing: list[Entry] = []
+    for path in files:
+        for e in entries(original[path]):
+            e.auto = trail.is_auto(e)
+            if not any(s.text == e.text and s.current == e.current for s in standing):
+                standing.append(e)
+    durable = {e.key for e in standing if not e.current}
     current: list[tuple[str, str]] = []
-    for lines in contents.values():
-        _merge(standing, standing_facts(lines))
-        stable, now = _layers(lines)
-        durable |= {fact_key(text) for text in stable}
-        _merge(current, now, key=lambda item: fact_key(item[1]))
+    _merge(current, [(e.day, e.text) for e in standing if e.current],
+           key=lambda item: fact_key(item[1]))
     out["compared"] = len(standing)
-    out["stable_chars"] = max((stable_chars(lines) for lines in contents.values()), default=0)
-    room = min((room_for_facts(lines) for lines in contents.values()), default=None)
+    out["stable_chars"] = max((stable_chars(original[p]) for p in files), default=0)
 
     raw_candidates = _read(CANDIDATES_PATH)
-    reviewed = review_candidates((raw_candidates or "").splitlines(), exists, standing)
-    out["approved"] = [c.text for c in reviewed.approved]
+    reviewed = review_candidates((raw_candidates or "").splitlines(), exists, standing, trail)
     out["suspicious"] = list(reviewed.suspicious)
     out["disputed"] = list(reviewed.disputed)
     out["waiting"] = reviewed.waiting
 
-    trail = read_trail()
-    for c in reviewed.approved:  # a newcomer's pointer stands for its listing, as in note_source
-        if c.layer == "referencyjna":
-            trail.pointers[fact_key(c.shown)] = fact_key(c.text)
-    chosen = choose_promotions([text for _, text in current] + [c.shown for c in reviewed.approved],
-                               trail, durable, room)
-    out["deferred"] = [p.text for p in chosen.deferred]
-    out["over_limit"] = [p.text for p in chosen.over_limit]
-    leaving, out["own_old"] = expiring(current, trail, today, {p.key for p in chosen.chosen})
-
-    results = [update_file(path, reviewed.approved, exists, today, dry_run, chosen.chosen,
-                           set(leaving)) for path in files]
-    for r in results:
-        _merge(out["stale"], r.stale, key=lambda item: item[0])
-        _merge(out["healed"], r.healed)
-        _merge(out["entered"], r.added)
-        _merge(out["promoted"], r.promoted)
-        _merge(out["expired"], r.expired)
-        if r.added:
-            out["added"][str(r.path)] = r.added
-        if r.backup:
-            out["backups"].append(r.backup)
-    if not any(r.note is None for r in results):
+    writable = [p for p in files if section_bounds(original[p]) is not None]
+    if not writable:
         # nowhere to put them — the facts stay in the waiting room instead of quietly disappearing
-        out["approved"] = []
-        out["note"] = "; ".join(r.note for r in results) or (
+        out["note"] = "; ".join(f"no '{KNOWLEDGE_HEADING}' section in {p}"
+                                " — nothing approved automatically" for p in files) or (
             f"none of the instruction files exists ({', '.join(str(p) for p in INSTRUCTION_PATHS)})"
             " — nothing approved automatically")
         out["powod"] = _reason(out)
+        out["report"] = report_lines(journal, today)
         if not dry_run:
             if raw_candidates is not None and reviewed.suspicious:
                 _write(CANDIDATES_PATH, reviewed.lines, _newline(raw_candidates))
             write_state(out, today)
         return out
+
+    for c in reviewed.approved:  # a newcomer's pointer stands for its listing, as in note_source
+        if c.layer == "referencyjna":
+            trail.pointers[fact_key(c.shown)] = fact_key(c.text)
+
+    # 1. what nobody confirmed for SLEEP_DAYS leaves the durable layer — the automaton's entries only
+    slept = []
+    for e in standing:
+        last = trail.last_confirmed(e.key) if e.auto and not e.current else None
+        age = _age(last, today) if last else None
+        if age is not None and age > SLEEP_DAYS:
+            slept.append((e, last))
+    left = min((room_for_facts(_without(original[p], [e for e, _ in slept])) for p in writable),
+               default=None)
+
+    # 2. the newer versions — out of the waiting room, and those waiting on a pinned entry that
+    #    have now been heard in a second conversation
+    replacements = []
+    for rep in reviewed.replacing + _confirmed_waiting(standing, trail, reviewed.replacing):
+        grow = 0 if rep.target.current else len(rep.new) - len(rep.target.text)
+        if left is not None and grow > left:
+            out["over_limit"].append(rep.new)  # the ceiling stops it and says so
+            if rep.candidate is not None:  # not lost: it waits in the current layer meanwhile
+                rep.candidate.against = rep.target.text
+                reviewed.approved.append(rep.candidate)
+                reviewed.pending.append(rep.candidate)
+            continue
+        if left is not None:
+            left -= max(0, grow)
+        replacements.append(rep)
+    out["approved"] = [c.text for c in reviewed.approved]
+
+    # 3. the dormant facts heard again, and the promotions — one limit, one ceiling
+    wakes = []
+    for d in read_dormant(ws.lines[dormant_path]):
+        sightings = trail.evidence(d.key)
+        if any(s.day >= d.slept for s in sightings) and not trail.blocked(d.key):
+            wakes.append(Promotion(d.text, f"### {d.heading}", conversations(sightings),
+                                   min(s.day for s in sightings), dormant=d))
+    waiting = ({e.key for e in standing if e.current and e.against}
+               | {fact_key(c.shown) for c in reviewed.pending})
+    gone = {e.key for r in replacements for e in [r.target, *r.extra]}
+    candidates = ([text for _, text in current] + [c.shown for c in reviewed.approved])
+    candidates = [t for t in candidates if fact_key(t) not in waiting | gone]
+    candidates += [r.new for r in replacements if r.target.current and not r.against]
+    chosen = choose_promotions(candidates, trail, durable, left, wakes)
+    out["deferred"] = [p.text for p in chosen.deferred]
+    out["over_limit"] += [p.text for p in chosen.over_limit]
+    leaving, out["own_old"] = expiring(current, trail, today, {p.key for p in chosen.chosen})
+
+    # the part without an id: the audit, what aged out, what came in
+    for path in files:
+        result, ws.lines[path] = settle_file(path, ws.lines[path], reviewed.approved, exists,
+                                             today, set(leaving))
+        if result.note is None:
+            _merge(out["stale"], result.stale, key=lambda item: item[0])
+            _merge(out["healed"], result.healed)
+            _merge(out["entered"], result.added)
+            _merge(out["expired"], result.expired)
+            if result.added:
+                out["added"][str(path)] = result.added
+    entered = list(out["entered"])
+
+    # the changes with an id, one after another on top of it
+    changes = Changes(ws, today, sum(1 for r in journal if "id" in r and r.get("dzien") == today))
+    for e, last in slept:
+        c = Change("U", e.text, heading=e.heading or DEFAULT_SUBSECTION,
+                   note=f"ostatnio potwierdzone {last}")
+        if changes.commit(c, sleep_ops(ws, writable, e, dormant_path, today)):
+            out["slept"].append(e.text)
+    for r in replacements:
+        whose = "automatu" if r.target.auto else f"przypiętego, nowa wersja z {r.heard} rozmów"
+        c = Change("Z", r.new, old=r.target.text, note=f"wpis {whose}",
+                   heading=CURRENT_SUBSECTION if r.target.current
+                   else (r.target.heading or DEFAULT_SUBSECTION))
+        if changes.commit(c, replace_ops(ws, writable, r, today)):
+            out["replaced"].append((r.target.text, r.new, c.id))
+    for p in chosen.chosen:
+        if p.dormant is not None:
+            c = Change("O", p.text, heading=p.heading,
+                       note=f"uśpione {p.dormant.slept}, padło znowu w rozmowie")
+            ops = [{"op": "zbudz", "plik": str(dormant_path), "linia": p.dormant.line}]
+            if changes.commit(c, ops + durable_ops(ws, writable, p.text, p.heading)):
+                out["woken"].append(p.text)
+        else:
+            c = Change("A", p.text, heading=p.heading,
+                       note=f"z {p.conversations} rozmów, pierwszy raz {p.first_seen}")
+            if changes.commit(c, durable_ops(ws, writable, p.text, p.heading)):
+                out["promoted"].append(p.text)
+    # a newcomer promoted in the same run went through the current layer on its way — it is
+    # reported once, as promoted
+    moved = {fact_key(t) for t in out["promoted"] + out["woken"]}
+    out["entered"] = [c.text for c in reviewed.approved
+                      if c.text in entered and fact_key(c.shown) not in moved]
+    out["pending"] = len({e.key for p in writable for e in entries(ws.lines[p])
+                          if e.current and e.against})
+    out["changes"] = [c.id for c in changes.done]
     out["powod"] = _reason(out)
     if dry_run:
+        out["report"] = report_lines(journal + [c.record(today) for c in changes.done], today)
         return out
+
+    for path in files:
+        if ws.lines[path] != original[path]:
+            out["backups"].append(str(backup_file(path)))
+            _write(path, ws.lines[path], ws.newline[path])
+    if ws.lines[dormant_path] != original[dormant_path]:
+        _write(dormant_path, ws.lines[dormant_path], ws.newline[dormant_path])
+    save_changes(changes.done, today)
     for candidate in reviewed.approved:
         if candidate.layer == "referencyjna":
             target = write_reference(candidate, day)
             if target:
                 out["references"].append(target)
-        if candidate.text in out["entered"]:
-            note_source(candidate, files, today)
-    for p in chosen.chosen:
-        if p.text in out["promoted"]:
-            note_promotion(p, files, today)
+        if candidate.text in entered:
+            note_source(candidate, writable, today)
     written_on = {fact_key(text): d for d, text in current}
     for text in out["expired"]:
-        note_expiry(text, written_on.get(fact_key(text), ""), files, today)
+        note_expiry(text, written_on.get(fact_key(text), ""), writable, today)
     if raw_candidates is not None and reviewed.lines != raw_candidates.splitlines():
         _write(CANDIDATES_PATH, reviewed.lines, _newline(raw_candidates))
+    out["report"] = report_lines(read_journal(), today)
     write_state(out, today)
+    return out
+
+
+def _without(lines: list[str], gone: list[Entry]) -> list[str]:
+    """The file with these durable entries taken out — to measure the room they leave behind."""
+    for e in gone:
+        found = _find(lines, e.key, False)
+        if found:
+            lines = lines[:found[0]] + lines[found[1]:]
+    return lines
+
+
+def _confirmed_waiting(standing: list[Entry], trail: Trail, settled: list) -> list:
+    """Newer versions that waited in the current layer for a second conversation and got it: they
+    take the place of the durable entry they contradict. A version whose replacement the user took
+    back waits for a new sighting (Trail.blocked)."""
+    handled = {k for r in settled for k in (fact_key(r.new), r.target.key)}
+    out = []
+    for e in standing:
+        if not (e.current and e.against and e.auto) or e.key in handled or trail.blocked(e.key):
+            continue
+        targets = [x for x in clashes(e.text, standing) if not x.current]
+        pinned = [x for x in targets if not x.auto]
+        heard = conversations(trail.evidence(e.key))
+        if not targets or (pinned and heard < MIN_CONVERSATIONS):
+            continue
+        target = pinned[0] if pinned else targets[0]
+        out.append(Replacement(e.text, target, [e] + [x for x in targets if x.auto and x is not target],
+                               e.day, "", None, heard))
+        handled |= {e.key, target.key}
     return out
 
 
@@ -1248,7 +2076,7 @@ def _report(r: dict) -> None:
         f" promoted to the durable layer: {len(r['promoted'])},"
         f" expired: {len(r['expired'])},"
         f" rejected: {len(r['suspicious'])},"
-        f" disputed — for the user to settle: {len(r['disputed'])},"
+        f" replaced: {len(r['replaced'])}, asleep: {len(r['slept'])}, woken: {len(r['woken'])},"
         f" standing facts that stopped checking out: {len(r['stale'])}")
     log(f"why: {r['powod']}")  # a run that added nothing says so — silence is not an answer
     log(f"durable layer: {r['stable_chars']}/{STABLE_LIMIT} characters")
@@ -1266,8 +2094,6 @@ def _report(r: dict) -> None:
         log(f"  - ? {fact}  (starszy niż {CURRENT_DAYS} dni, wpisany ręcznie — decyzja użytkownika)")
     for fact, missing in r["suspicious"]:
         log(f"  ? {fact}  (nie znaleziono: {', '.join(missing)})")
-    for fact, entry in r["disputed"]:
-        log(f"  <> {fact}  (sporne: przeczy wpisowi „{_quote(entry)}”)")
     for fact in r["over_limit"]:
         log(f"  = {fact}  (awans wstrzymany: nie mieści się w progu {STABLE_LIMIT} znaków"
             f" warstwy stałej)")
@@ -1279,12 +2105,53 @@ def _report(r: dict) -> None:
         log(f"listing put away in: {target}")
     for backup in r["backups"]:
         log(f"copy taken before the change: {backup}")
+    for line in r["report"]:  # the day's changes, each with the id that takes it back
+        log(f"meldunek: {line}")
+
+
+def _list_changes(day: str | None) -> None:
+    """The changes of one day (all of them without a day), newest last, marked when undone."""
+    records = read_journal()
+    undone = _undone(records)
+    shown = [r for r in records if "id" in r and (day is None or r.get("dzien") == day)]
+    if not shown:
+        log(f"no automatic changes{' on ' + day if day else ''}")
+    for r in shown:
+        mark = " (cofnieta)" if r["id"] in undone else ""
+        old = f"„{_quote(r['stare'], REPORT_QUOTE)}” -> " if r.get("stare") else ""
+        log(f"{r['id']}{mark} {r['rodzaj']}: {old}„{_quote(r['przedmiot'], REPORT_QUOTE)}”")
+
+
+def _undo_command(target: str) -> int:
+    r = undo(target)
+    if r["status"] in ("brak", "juz-cofniete"):
+        log(r["note"])
+        return 1
+    log(f"undone: {', '.join(r['undone'])}")
+    for item in r["exact"]:
+        log(f"  = {item}  (restored byte for byte from the copy taken before the change)")
+    for item in r["by_content"]:
+        log(f"  ~ {item}  (the file changed since — reversed entry by entry)")
+    for item in r["problems"]:
+        log(f"  ! {item}")
+    return 0 if r["status"] == "ok" else 2
 
 
 def main(argv: list[str] | None = None) -> int:
     argv = sys.argv[1:] if argv is None else argv
     dry_run = bool({"--proba", "--dry-run"} & set(argv))
     try:
+        for flag in ("--cofnij", "--zmiany"):
+            if flag in argv:
+                value = argv[argv.index(flag) + 1:argv.index(flag) + 2]
+                if flag == "--zmiany":
+                    _list_changes(value[0] if value else None)
+                    return 0
+                if not value:
+                    log("--cofnij needs a change id (e.g. Z-260924-1) or a day (RRRR-MM-DD);"
+                        " the changes: --zmiany")
+                    return 1
+                return _undo_command(value[0])
         r = run(dry_run=dry_run)
     except Exception as e:  # a scheduled task must end with a readable line, not a traceback
         log(f"verifying the facts failed: {e!r}")

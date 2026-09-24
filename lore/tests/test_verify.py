@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import re
+from datetime import datetime, timedelta
 from pathlib import Path
 
 import pytest
@@ -676,35 +677,46 @@ LIMIT_80 = "Tytuły na eBayu mają limit 80 znaków."
 LIMIT_55 = "Tytuły na eBayu mają limit 55 znaków."
 
 
-def test_a_contradicting_fact_stays_and_quotes_what_it_contradicts(sandbox):
+def durable_part(sandbox) -> str:
+    """'## Co wiem' without "### Bieżące" — what every session reads as settled."""
+    text = rules_text(sandbox).split("## Co wiem")[1].split(verify.GUARD_MARKER)[0]
+    return text.split("### Bieżące")[0] + text.split("### Bieżące")[1].split("###", 1)[1]
+
+
+def test_a_newer_version_of_a_pinned_entry_waits_in_the_current_layer_not_in_a_queue(sandbox):
+    standing(sandbox, LIMIT_80)  # written by hand — pinned
+    waiting_room(sandbox, entry(LIMIT_55))
+
+    r = verify.run(day="2026-09-16")
+
+    assert r["replaced"] == [] and r["disputed"] == [] and r["pending"] == 1
+    assert r["approved"] == [LIMIT_55]
+    # it waits with a note of what it contradicts — in the knowledge, not in a queue for the user
+    assert f"- [2026-09-16] {LIMIT_55} (przeczy: „{LIMIT_80}”)" in subsection(sandbox, "### Bieżące")
+    assert waiting(sandbox) == []
+    s = state(sandbox)
+    assert s["sporne"] == "0" and s["czeka_na_druga_rozmowe"] == "1" and s["czeka"] == "0"
+
+
+def test_one_conversation_never_swaps_out_a_pinned_entry(sandbox):
     standing(sandbox, LIMIT_80)
     waiting_room(sandbox, entry(LIMIT_55))
 
-    r = verify.run()
+    verify.run(day="2026-09-16")
 
-    assert r["approved"] == [] and r["disputed"] == [(LIMIT_55, LIMIT_80)]
-    assert waiting(sandbox) == [
-        f"- [?] [2026-09-16] {LIMIT_55} (sporne: przeczy wpisowi „{LIMIT_80}”)"]
-
-
-def test_a_contradicting_fact_never_reaches_the_rules(sandbox):
-    standing(sandbox, LIMIT_80)
-    waiting_room(sandbox, entry(LIMIT_55))
-
-    verify.run()
-
-    assert "55 znaków" not in rules_text(sandbox)
-    assert rules_text(sandbox).count("Tytuły na eBayu") == 1
+    assert f"- {LIMIT_80}" in subsection(sandbox, "### Nad czym pracuje")
+    assert "55 znaków" not in durable_part(sandbox)
 
 
 def test_a_flipped_negation_counts_as_a_contradiction(sandbox):
     # the fixture already says "Nie jest programistą i nie chce nim być."
     waiting_room(sandbox, entry("Jest programistą i chce nim być."))
 
-    r = verify.run()
+    r = verify.run(day="2026-09-16")
 
-    assert [f for f, _ in r["disputed"]] == ["Jest programistą i chce nim być."]
-    assert r["disputed"][0][1] == "Nie jest programistą i nie chce nim być."
+    assert r["pending"] == 1
+    assert "Jest programistą i chce nim być. (przeczy: „Nie jest programistą i nie chce nim być.”)" \
+        in subsection(sandbox, "### Bieżące")
 
 
 def test_a_swapped_path_counts_as_a_contradiction(sandbox):
@@ -712,65 +724,70 @@ def test_a_swapped_path_counts_as_a_contradiction(sandbox):
     standing(sandbox, f"Robot do Alibaby leży w `{old}`.")
     waiting_room(sandbox, entry(f"Robot do Alibaby leży w `{new}`."))
 
-    r = verify.run()
+    r = verify.run(day="2026-09-16")
 
-    assert r["approved"] == [] and len(r["disputed"]) == 1
-    assert r["disputed"][0][1] == f"Robot do Alibaby leży w `{old}`."
+    assert r["pending"] == 1 and r["replaced"] == []
+    assert "`. (przeczy: „Robot do Alibaby leży w `" in subsection(sandbox, "### Bieżące")
 
 
-def test_a_fact_about_something_else_is_not_called_disputed(sandbox):
-    """The negative probe: a false alarm here sends the user back to the queue we just abolished."""
+def test_a_fact_about_something_else_is_not_called_a_contradiction(sandbox):
+    """The negative probe: a false clash here would swap out a healthy entry."""
     standing(sandbox, LIMIT_80)
     waiting_room(sandbox, entry("Tytuły na Amazonie mają limit 200 znaków."))
 
-    r = verify.run()
+    r = verify.run(day="2026-09-16")
 
-    assert r["disputed"] == [] and r["approved"] == ["Tytuły na Amazonie mają limit 200 znaków."]
+    assert r["replaced"] == [] and r["pending"] == 0
+    assert r["approved"] == ["Tytuły na Amazonie mają limit 200 znaków."]
+    assert "przeczy" not in rules_text(sandbox)
 
 
 def test_a_short_sentence_never_raises_a_contradiction(sandbox):
     standing(sandbox, "Redis nie działa.")
     waiting_room(sandbox, entry("Redis działa."))
 
-    r = verify.run()
+    r = verify.run(day="2026-09-16")
 
-    assert r["disputed"] == []  # two words of subject is any sentence at all — pure false alarm
+    # two words of subject is any sentence at all — pure false alarm
+    assert r["replaced"] == [] and r["pending"] == 0
 
 
-def test_a_disputed_entry_is_not_marked_twice(sandbox):
+def test_a_waiting_entry_is_not_written_twice(sandbox):
     standing(sandbox, LIMIT_80)
     waiting_room(sandbox, entry(LIMIT_55))
 
-    verify.run()
-    after_first = verify.CANDIDATES_PATH.read_text(encoding="utf-8")
-    verify.run()
+    verify.run(day="2026-09-16")
+    after_first = rules_text(sandbox)
+    r = verify.run(day="2026-09-17")
 
-    assert verify.CANDIDATES_PATH.read_text(encoding="utf-8") == after_first
-    assert waiting(sandbox)[0].count("sporne") == 1
+    assert rules_text(sandbox) == after_first and r["pending"] == 1
+    assert rules_text(sandbox).count(LIMIT_55) == 1
 
 
 def test_a_long_entry_is_quoted_short(sandbox):
-    """The quote points at the entry — copying it whole would fatten the waiting room instead."""
+    """The note points at the entry — the current layer is sent with every session."""
     old = existing(sandbox, "bardzo-dlugi-plik-robota-alibaby-chodzacego-co-noc.js")
     new = existing(sandbox, "nowy.js")
     long_fact = f"Robot do Alibaby leży w `{old}`."
-    assert len(long_fact) > verify.QUOTE_LIMIT  # otherwise the test is checking nothing
+    assert len(long_fact) > verify.PENDING_QUOTE_LIMIT  # otherwise the test is checking nothing
     standing(sandbox, long_fact)
     waiting_room(sandbox, entry(f"Robot do Alibaby leży w `{new}`."))
 
-    verify.run()
+    verify.run(day="2026-09-16")
 
-    quoted = waiting(sandbox)[0].split("„")[1].split("”")[0]
-    assert quoted.endswith("…") and len(quoted) <= verify.QUOTE_LIMIT + 1
+    quoted = subsection(sandbox, "### Bieżące").split("„")[1].split("”")[0]
+    assert quoted.endswith("…") and len(quoted) <= verify.PENDING_QUOTE_LIMIT + 1
 
 
-def test_two_candidates_of_one_run_can_contradict_each_other(sandbox):
+def test_two_candidates_of_one_run_settle_it_between_themselves_the_later_wins(sandbox):
     waiting_room(sandbox, entry(LIMIT_80), entry(LIMIT_55))
 
-    r = verify.run()
+    r = verify.run(day="2026-09-16")
 
     assert r["approved"] == [LIMIT_80]
-    assert r["disputed"] == [(LIMIT_55, LIMIT_80)]
+    assert [(old, new) for old, new, _ in r["replaced"]] == [(LIMIT_80, LIMIT_55)]
+    assert LIMIT_55 in subsection(sandbox, "### Bieżące") and LIMIT_80 not in rules_text(sandbox)
+    assert f"{LIMIT_80} — zastąpione 2026-09-16 przez: {LIMIT_55}" in history(sandbox)
 
 
 # ---------------------------------------------------------------- the ceiling of the durable layer
@@ -950,14 +967,19 @@ def test_the_run_leaves_a_summary_the_cycle_can_show(sandbox):
     verify.run(day="2026-09-17")
 
     s = state(sandbox)
-    assert s["data"] == "2026-09-17" and s["dopisane"] == "2"
+    # the 55-character version contradicts a pinned entry: it came in, to wait for a second
+    # conversation in the current layer — nothing is left for the user to settle
+    assert s["data"] == "2026-09-17" and s["dopisane"] == "3"
     # the old keys keep their names for aktualizuj-wiedze.ps1: "stala" is now what was promoted
-    assert s["stala"] == "0" and s["biezaca"] == "2" and s["referencyjna"] == "0"
-    assert s["weszlo_do_biezacej"] == "2" and s["awansowane_do_stalej"] == "0"
+    assert s["stala"] == "0" and s["biezaca"] == "3" and s["referencyjna"] == "0"
+    assert s["weszlo_do_biezacej"] == "3" and s["awansowane_do_stalej"] == "0"
     assert s["wygasle"] == "0" and s["awans_odlozony_limitem"] == "0"
-    assert s["odrzucone"] == "1" and s["sporne"] == "1" and s["czeka"] == "2"
+    assert s["odrzucone"] == "1" and s["sporne"] == "0" and s["czeka"] == "1"
+    assert s["zastapione"] == "0" and s["uspione"] == "0" and s["obudzone"] == "0"
+    assert s["czeka_na_druga_rozmowe"] == "1" and s["meldunek"] == "bez zmian"
     assert s["prog_stalej"].endswith(f"/{verify.STABLE_LIMIT}")
-    assert s["powod"] == "dopisano 2 faktow (do biezacej 2, awans do stalej 0)"
+    assert s["powod"] == ("dopisano 3 faktow (do biezacej 3, awans do stalej 0);"
+                          " 1 czeka na druga rozmowe (przeczy przypietemu)")
     # how far the contradiction check reached — a guarantee nobody can size is no guarantee
     assert int(s["porownane_wpisy"]) == 3
 
@@ -1226,3 +1248,349 @@ def test_a_dry_run_neither_promotes_nor_expires(sandbox):
     # both would happen — and nothing did
     assert r["promoted"] == [TWO_MACHINES] and r["expired"] == ["Trwa przenoszenie magazynu."]
     assert rules_text(sandbox) == before and trail(sandbox) == trail_before
+
+
+# ---------------------------------------------------------------- the durable layer refreshes itself
+#
+# Every safeguard below has a twin "probe": the same scenario with the safeguard switched off,
+# showing that the test really sees the difference. A test that passes either way checks nothing.
+
+PROMOTED_ON = "2026-09-17"
+
+
+def later(day: str, days: int) -> str:
+    return (datetime.strptime(day, "%Y-%m-%d") + timedelta(days=days)).strftime("%Y-%m-%d")
+
+
+def history(sandbox) -> str:
+    p = sandbox / "wiedza" / verify.HISTORY_NAME
+    return p.read_text(encoding="utf-8") if p.exists() else ""
+
+
+def dormant(sandbox) -> str:
+    p = sandbox / "wiedza" / facts.DORMANT_NAME
+    return p.read_text(encoding="utf-8") if p.exists() else ""
+
+
+def raw(path: Path) -> bytes | None:
+    return path.read_bytes() if path.exists() else None
+
+
+def promote(sandbox, fact: str = TWO_MACHINES, label: str = "stala/uzytkownik") -> None:
+    """A fact the AUTOMATON put into the durable layer: heard in two conversations, promoted."""
+    heard_twice(fact, label)
+    waiting_room(sandbox, entry(fact, label))
+    assert verify.run(day=PROMOTED_ON)["promoted"] == [fact]
+
+
+def sleep_scenario(sandbox) -> dict:
+    promote(sandbox)
+    assert verify.run(day=later(PROMOTED_ON, 90))["slept"] == []  # 90 days — still in force
+    return verify.run(day=later(PROMOTED_ON, 91))
+
+
+def test_an_automatons_fact_unconfirmed_for_90_days_falls_asleep(sandbox):
+    r = sleep_scenario(sandbox)
+
+    assert verify.SLEEP_DAYS == 90  # the number the test is sized for
+    assert r["slept"] == [TWO_MACHINES]
+    assert TWO_MACHINES not in rules_text(sandbox)
+    # not lost: it moved to the reference layer, with the day, its subsection and the change id
+    line = [x for x in dormant(sandbox).splitlines() if TWO_MACHINES in x]
+    assert len(line) == 1 and line[0].startswith(f"- {later(PROMOTED_ON, 91)} | O użytkowniku | U-")
+    assert f"{TWO_MACHINES} — uśpione" in history(sandbox) and "| uśpiony |" in trail(sandbox)
+    s = state(sandbox)
+    assert s["uspione"] == "1" and s["meldunek_1"].startswith("U-")
+
+
+def test_probe_the_sleep_test_notices_when_nothing_falls_asleep(sandbox, monkeypatch):
+    monkeypatch.setattr(verify, "SLEEP_DAYS", 10_000)  # the refresh switched off
+    promote(sandbox)
+
+    r = verify.run(day=later(PROMOTED_ON, 91))
+
+    assert r["slept"] == [] and TWO_MACHINES in subsection(sandbox, "### O użytkowniku")
+
+
+BAN = "Zakaz uruchamiania next build na maszynie biurowej."
+
+
+def pinned_scenario(sandbox) -> dict:
+    standing(sandbox, BAN)  # written by hand: no event of the automaton behind it
+    heard(BAN, "stala/praca", "rozmowa-a", day="2026-01-05")  # and last mentioned a year ago
+    return verify.run(day="2026-12-31")
+
+
+def test_a_pinned_fact_never_falls_asleep(sandbox):
+    """A trap or a ban works without being mentioned — that is its whole point."""
+    r = pinned_scenario(sandbox)
+
+    assert r["slept"] == [] and f"- {BAN}" in subsection(sandbox, "### Nad czym pracuje")
+    assert dormant(sandbox) == ""
+
+
+def test_probe_the_pinned_test_notices_a_pinned_fact_falling_asleep(sandbox, monkeypatch):
+    monkeypatch.setattr(verify.Trail, "is_auto", lambda self, e: True)  # nothing pinned any more
+
+    r = pinned_scenario(sandbox)
+
+    assert r["slept"] == [BAN] and BAN not in rules_text(sandbox)
+
+
+def test_an_entry_written_straight_into_the_durable_layer_in_the_old_week_is_the_automatons(sandbox):
+    standing(sandbox, TWO_MACHINES)
+    trail_lines(sandbox, f"- 2026-09-20 | wpisany | stala/uzytkownik -> CLAUDE.md"
+                         f" | wyłowiony 2026-09-20 | {TWO_MACHINES}")
+
+    assert verify.run(day=later("2026-09-20", 91))["slept"] == [TWO_MACHINES]
+
+
+def wake_scenario(sandbox) -> dict:
+    sleep_scenario(sandbox)
+    day = later(PROMOTED_ON, 100)
+    # known to the harvest (it reads uspione.md) — so it leaves a sighting, not a new candidate
+    heard(TWO_MACHINES, "stala/uzytkownik", "rozmowa-c", day=day, again=True)
+    return verify.run(day=day)
+
+
+def test_a_dormant_fact_heard_again_wakes_up(sandbox):
+    r = wake_scenario(sandbox)
+
+    assert r["woken"] == [TWO_MACHINES]
+    assert f"- {TWO_MACHINES}" in subsection(sandbox, "### O użytkowniku")
+    assert TWO_MACHINES not in dormant(sandbox)
+    assert state(sandbox)["meldunek_1"].startswith("O-")
+    # heard again — the 90 days start over
+    assert verify.run(day=later(PROMOTED_ON, 101))["slept"] == []
+
+
+def test_probe_the_wake_test_notices_a_fact_that_never_wakes(sandbox, monkeypatch):
+    monkeypatch.setattr(verify, "read_dormant", lambda lines: [])  # nothing is read back
+
+    r = wake_scenario(sandbox)
+
+    assert r["woken"] == [] and TWO_MACHINES not in rules_text(sandbox)
+
+
+def test_a_dormant_fact_nobody_mentions_stays_asleep(sandbox):
+    sleep_scenario(sandbox)
+
+    r = verify.run(day=later(PROMOTED_ON, 200))
+
+    assert r["woken"] == [] and TWO_MACHINES in dormant(sandbox)
+    assert TWO_MACHINES not in rules_text(sandbox)
+
+
+# ---------------------------------------------------------------- the newer version wins
+
+def auto_clash_scenario(sandbox) -> dict:
+    promote(sandbox, LIMIT_80, "stala/firma")  # the automaton's entry
+    waiting_room(sandbox, entry(LIMIT_55, "stala/firma", day="2026-09-18"))  # one conversation
+    return verify.run(day="2026-09-18")
+
+
+def test_a_newer_version_replaces_the_automatons_entry_at_once(sandbox):
+    r = auto_clash_scenario(sandbox)
+
+    [(old, new, change)] = r["replaced"]
+    assert (old, new) == (LIMIT_80, LIMIT_55) and change.startswith("Z-260918-")
+    assert f"- {LIMIT_55}" in subsection(sandbox, "### O firmie")  # in its place, undated
+    assert LIMIT_80 not in rules_text(sandbox)
+    # the loser does not vanish: it is in the history, with the id that brings it back
+    assert f"- [{change}] {LIMIT_80} — zastąpione 2026-09-18 przez: {LIMIT_55}" in history(sandbox)
+    s = state(sandbox)
+    assert s["zastapione"] == "1" and s["meldunek_1"] == f"{change} zmienilem: „{LIMIT_80}” -> „{LIMIT_55}”"
+
+
+def test_probe_the_replacement_test_notices_when_the_newer_version_does_not_win(sandbox,
+                                                                                  monkeypatch):
+    monkeypatch.setattr(verify.Trail, "is_auto", lambda self, e: False)  # everything pinned
+
+    r = auto_clash_scenario(sandbox)
+
+    assert r["replaced"] == [] and f"- {LIMIT_80}" in subsection(sandbox, "### O firmie")
+
+
+def pinned_clash_scenario(sandbox, second_conversation: str = "rozmowa-b") -> tuple[dict, dict]:
+    standing(sandbox, LIMIT_80)  # pinned
+    heard(LIMIT_55, "stala/firma", "rozmowa-a", day="2026-09-16")
+    waiting_room(sandbox, entry(LIMIT_55, "stala/firma"))
+    first = verify.run(day="2026-09-16")
+    heard(LIMIT_55, "stala/firma", second_conversation, day="2026-09-17", again=True)
+    return first, verify.run(day="2026-09-17")
+
+
+def test_a_pinned_entry_gives_way_only_to_a_version_heard_in_two_conversations(sandbox):
+    first, second = pinned_clash_scenario(sandbox)
+
+    assert first["replaced"] == [] and first["pending"] == 1  # one conversation: it waits
+    [(old, new, change)] = second["replaced"]  # the second one: it wins
+    assert (old, new) == (LIMIT_80, LIMIT_55) and second["promoted"] == []
+    assert f"- {LIMIT_55}" in subsection(sandbox, "### Nad czym pracuje")  # in the pinned one's place
+    assert LIMIT_80 not in durable_part(sandbox)
+    assert LIMIT_55 not in subsection(sandbox, "### Bieżące") and second["pending"] == 0
+    assert f"{LIMIT_80} — zastąpione 2026-09-17 przez: {LIMIT_55}" in history(sandbox)
+
+
+def test_the_same_conversation_twice_does_not_swap_out_a_pinned_entry(sandbox):
+    _, second = pinned_clash_scenario(sandbox, second_conversation="rozmowa-a")
+
+    assert second["replaced"] == [] and second["pending"] == 1
+    assert f"- {LIMIT_80}" in subsection(sandbox, "### Nad czym pracuje")
+
+
+def test_probe_the_pinned_clash_test_notices_one_conversation_being_enough(sandbox, monkeypatch):
+    monkeypatch.setattr(verify, "MIN_CONVERSATIONS", 1)  # the protection of pinned entries off
+
+    first, _ = pinned_clash_scenario(sandbox)
+
+    assert [(old, new) for old, new, _ in first["replaced"]] == [(LIMIT_80, LIMIT_55)]
+
+
+def test_an_old_disputed_entry_is_settled_by_the_new_rule(sandbox):
+    """The queue from before the change is not left for the user — it is run through once."""
+    promote(sandbox, LIMIT_80, "stala/firma")
+    verify.CANDIDATES_PATH.write_text(
+        CANDIDATES_HEADER + f"- [?] [2026-09-18] (stala/firma) {LIMIT_55}"
+                            f" (sporne: przeczy wpisowi „{LIMIT_80}”)\n", encoding="utf-8")
+
+    r = verify.run(day="2026-09-18")
+
+    assert [(old, new) for old, new, _ in r["replaced"]] == [(LIMIT_80, LIMIT_55)]
+    assert waiting(sandbox) == [] and "sporne" not in rules_text(sandbox)
+
+
+def test_an_old_disputed_entry_against_a_pinned_one_waits_in_the_current_layer(sandbox):
+    standing(sandbox, LIMIT_80)
+    verify.CANDIDATES_PATH.parent.mkdir(parents=True, exist_ok=True)
+    verify.CANDIDATES_PATH.write_text(
+        CANDIDATES_HEADER + f"- [?] [2026-09-16] {LIMIT_55} (sporne: przeczy wpisowi"
+                            f" „{LIMIT_80}”)\n", encoding="utf-8")
+
+    r = verify.run(day="2026-09-16")
+
+    assert r["pending"] == 1 and waiting(sandbox) == []
+    assert f"- [2026-09-16] {LIMIT_55} (przeczy: „{LIMIT_80}”)" in subsection(sandbox, "### Bieżące")
+
+
+# ---------------------------------------------------------------- "cofnij"
+
+def knowledge_files(sandbox) -> list[Path]:
+    return [sandbox / "CLAUDE.md", codex_path(sandbox), sandbox / "wiedza" / facts.DORMANT_NAME]
+
+
+def test_undo_puts_a_sleep_back_byte_for_byte(sandbox):
+    codex_file(sandbox)
+    promote(sandbox)
+    before = [raw(p) for p in knowledge_files(sandbox)]
+    day = later(PROMOTED_ON, 91)
+    r = verify.run(day=day)
+    assert r["slept"] == [TWO_MACHINES] and [raw(p) for p in knowledge_files(sandbox)] != before
+
+    u = verify.undo(r["changes"][0], day=day)
+
+    assert u["status"] == "ok" and u["by_content"] == [] and u["problems"] == []
+    # both instruction files as they were, and uspione.md — which the sleep created — gone again
+    assert [raw(p) for p in knowledge_files(sandbox)] == before
+    assert state(sandbox)["meldunek"] == "bez zmian"
+    # the undo counts as "I want it": the next run does not put it to sleep again at once
+    assert verify.run(day=later(day, 1))["slept"] == []
+
+
+def test_probe_the_undo_test_notices_an_undo_that_does_nothing(sandbox, monkeypatch):
+    monkeypatch.setattr(verify, "_undo_one", lambda rec, out: "dokladnie")
+    promote(sandbox)
+    before = raw(sandbox / "CLAUDE.md")
+    r = verify.run(day=later(PROMOTED_ON, 91))
+
+    verify.undo(r["changes"][0], day=later(PROMOTED_ON, 91))
+
+    assert raw(sandbox / "CLAUDE.md") != before
+
+
+def test_undo_of_a_whole_day_takes_every_change_of_it_back_byte_for_byte(sandbox):
+    codex_file(sandbox)
+    standing(sandbox, LIMIT_80)  # pinned, in CLAUDE.md only
+    for fact, label in ((LIMIT_55, "stala/firma"), (TWO_MACHINES, "stala/uzytkownik")):
+        heard(fact, label, "rozmowa-a", day="2026-09-16")
+    waiting_room(sandbox, entry(LIMIT_55, "stala/firma"), entry(TWO_MACHINES, "stala/uzytkownik"))
+    verify.run(day="2026-09-16")
+    before = [raw(p) for p in knowledge_files(sandbox)]
+    for fact, label in ((LIMIT_55, "stala/firma"), (TWO_MACHINES, "stala/uzytkownik")):
+        heard(fact, label, "rozmowa-b", day="2026-09-17", again=True)
+    r = verify.run(day="2026-09-17")
+    assert [c[0] for c in r["changes"]] == ["Z", "A"]  # a replacement and a promotion, one day
+
+    u = verify.undo("2026-09-17", day="2026-09-17")
+
+    assert u["undone"] == list(reversed(r["changes"])) and u["exact"] and u["problems"] == []
+    assert [raw(p) for p in knowledge_files(sandbox)] == before
+    # the next run does not redo on the same evidence what the user has just taken back
+    r = verify.run(day="2026-09-18")
+    assert r["replaced"] == [] and r["promoted"] == []
+    assert [raw(p) for p in knowledge_files(sandbox)] == before
+
+
+def test_undo_after_a_later_edit_reverses_the_entries_instead_of_overwriting_the_file(sandbox):
+    [(_, _, change)] = auto_clash_scenario(sandbox)["replaced"]
+    (sandbox / "CLAUDE.md").write_text(rules_text(sandbox).replace(
+        "- Sprzedaje produkty do aromaterapii.",
+        "- Sprzedaje produkty do aromaterapii.\n- Nowy wpis użytkownika."), encoding="utf-8")
+
+    u = verify.undo(change, day="2026-09-19")
+
+    assert u["by_content"] and u["problems"] == []
+    assert f"- {LIMIT_80}" in subsection(sandbox, "### O firmie")
+    assert LIMIT_55 not in rules_text(sandbox) and "- Nowy wpis użytkownika." in rules_text(sandbox)
+
+
+def test_the_undo_command_takes_an_id_and_refuses_what_it_does_not_know(sandbox):
+    [(_, _, change)] = auto_clash_scenario(sandbox)["replaced"]
+
+    assert verify.main(argv=["--cofnij", change.lower()]) == 0
+    assert f"- {LIMIT_80}" in subsection(sandbox, "### O firmie")
+    assert verify.main(argv=["--cofnij", change]) == 1  # already undone — says so, changes nothing
+    assert verify.main(argv=["--cofnij", "Z-000000-9"]) == 1
+    assert verify.main(argv=["--cofnij"]) == 1
+    assert verify.main(argv=["--zmiany"]) == 0
+    assert f"- [{change}] cofnięte" in history(sandbox)
+
+
+# ---------------------------------------------------------------- the daily report
+
+def test_a_day_without_changes_says_so_in_one_line(sandbox):
+    verify.run(day="2026-09-17")
+
+    s = state(sandbox)
+    assert s["meldunek"] == "bez zmian" and "meldunek_1" not in s
+
+
+def test_probe_the_report_test_notices_a_silent_report(sandbox, monkeypatch):
+    monkeypatch.setattr(verify, "_report_state", lambda lines: [])
+
+    verify.run(day="2026-09-17")
+
+    assert "meldunek" not in state(sandbox)  # silence — exactly what the test above flags
+
+
+def test_the_report_names_each_change_with_the_id_that_takes_it_back(sandbox):
+    [(_, _, change)] = auto_clash_scenario(sandbox)["replaced"]
+
+    s = state(sandbox)
+    assert s["meldunek"].startswith("zmienilem 1, uspilem 0, obudzilem 0, awansowalem 0")
+    assert "--cofnij" in s["meldunek"] and s["meldunek_1"].startswith(f"{change} zmienilem")
+    assert "meldunek_2" not in s
+
+
+def test_a_report_too_long_says_so_at_its_head(sandbox, monkeypatch):
+    monkeypatch.setattr(verify, "REPORT_LINES", 1)
+    first, second = "Użytkownik lubi herbatę z miodem.", "Użytkownik pije kawę bez cukru."
+    heard_twice(first)
+    heard_twice(second)
+    waiting_room(sandbox, entry(first), entry(second))
+
+    verify.run(day="2026-09-17")
+
+    s = state(sandbox)
+    assert s["meldunek"].startswith("UWAGA: 2 zmian, pokazuje 1")
+    assert "meldunek_1" in s and "meldunek_2" not in s
