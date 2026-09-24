@@ -591,23 +591,91 @@ function Rachunek-Rozbicie {
   return ,$linie
 }
 
-# Jedna linia i kod wyjscia: 0 = nic nie jest ucinane i zaden prog nie przekroczony,
-# 1 = jedno z dwojga. Progi siedza w koszt-pamieci.ps1 razem z uzasadnieniem -
-# nadzorca ich NIE powtarza, bo drugi komplet liczb zaczalby klamac przy pierwszej
-# zmianie tamtych.
+# Rachunek za pamiec jednym wywolaniem: narzedzia\koszt-pamieci.ps1 -Dane oddaje
+# linie (te sama, co -Zwiezle), alarmy z waga i okresem, ocene kosztu nauki
+# (zwykly dzien czy nadrabianie) i dni do wykresu - w liniach "klucz: wartosc".
+# Kod wyjscia: 0 = nic nie jest ucinane i zaden CZERWONY prog nie przekroczony,
+# 1 = jedno z dwojga; zolta informacja kodu nie podnosi. Progi siedza
+# w koszt-pamieci.ps1 razem z uzasadnieniem - nadzorca ich NIE powtarza, bo drugi
+# komplet liczb zaczalby klamac przy pierwszej zmianie tamtych.
 function Linia-Rachunku {
   $skrypt = Join-Path $script:NadzZrodlo "narzedzia\koszt-pamieci.ps1"
-  $r = Wolaj-Skrypt $skrypt @("-KatalogDomowy", ('"' + $script:NadzDom + '"'), "-Zrodlo", ('"' + $script:NadzZrodlo + '"'), "-Zwiezle", "-Zwykly") 120
-  $w = [pscustomobject]@{ Linia = $null; Kod = $null; Powod = "" }
+  $r = Wolaj-Skrypt $skrypt @("-KatalogDomowy", ('"' + $script:NadzDom + '"'), "-Zrodlo", ('"' + $script:NadzZrodlo + '"'), "-Dane", "-Zwykly") 120
+  $w = [pscustomobject]@{ Linia = $null; Kod = $null; Powod = ""; Klucze = [ordered]@{} }
   if (-not $r.ok) {
     $w.Powod = $r.powod
     return $w
   }
-  $linie = @(($r.tekst -split '\r?\n') | Where-Object { "$_".Trim() })
-  if ($linie.Count -gt 0) { $w.Linia = $linie[0].Trim() }
+  $w.Klucze = Klucze-Z-Tekstu $r.tekst
   $w.Kod = $r.kod
-  if (-not $w.Linia) { $w.Powod = "koszt-pamieci.ps1 -Zwiezle nic nie wypisal (kod $($r.kod))" }
+  if ($w.Klucze.Contains("linia")) { $w.Linia = "$($w.Klucze['linia'])".Trim() }
+  if (-not $w.Linia) {
+    $w.Powod = "koszt-pamieci.ps1 -Dane nie oddal linii rachunku (kod $($r.kod))"
+    if ($r.powod) { $w.Powod = $w.Powod + " - " + $r.powod }
+  }
   return $w
+}
+
+# Odczyt pojedynczych kluczy z odpowiedzi -Dane. Brak klucza i smiec to $null /
+# pusty tekst - "nie wiem", nigdy zero.
+function Liczba-Z-Klucza($k, [string]$klucz) {
+  if (-not $k) { return $null }
+  $v = "$($k[$klucz])".Trim()
+  if ($v -match '^-?\d+$') { return [long]$v }
+  return $null
+}
+
+function Tekst-Z-Klucza($k, [string]$klucz) {
+  if (-not $k) { return "" }
+  return "$($k[$klucz])".Trim()
+}
+
+# Alarmy policzone w koszt-pamieci.ps1 - surowe, bez ogonkow. Po polsku ubiera
+# je Alarm-Z-Rachunku nizej; tu tylko je wyjmujemy.
+function Alarmy-Rachunku($rachunek) {
+  $lista = @()
+  if ((-not $rachunek) -or (-not $rachunek.Klucze)) { return ,$lista }
+  $k = $rachunek.Klucze
+  $ile = Liczba-Z-Klucza $k "alarmy"
+  if ($null -eq $ile) { return ,$lista }
+  for ($i = 1; $i -le $ile; $i++) {
+    $lista += [pscustomobject]@{
+      Temat  = (Tekst-Z-Klucza $k "alarm.$i.temat")
+      Waga   = (Tekst-Z-Klucza $k "alarm.$i.waga")
+      Liczba = (Liczba-Z-Klucza $k "alarm.$i.liczba")
+      Prog   = (Liczba-Z-Klucza $k "alarm.$i.prog")
+      Okres  = (Tekst-Z-Klucza $k "alarm.$i.okres")
+      Krotko = (Tekst-Z-Klucza $k "alarm.$i.krotko")
+      Pelny  = (Tekst-Z-Klucza $k "alarm.$i.pelny")
+    }
+  }
+  return ,$lista
+}
+
+# Ocena ostatniego dnia nauki: zwykly dzien, nadrabianie, mieszany, nieznany -
+# policzona w koszt-pamieci.ps1 (Ocena-Cyklu), tu tylko odczytana.
+function Ocena-Nauki($rachunek) {
+  $k = $null
+  if ($rachunek) { $k = $rachunek.Klucze }
+  return [pscustomobject]@{
+    Rodzaj         = (Tekst-Z-Klucza  $k "cykl.rodzaj")
+    Data           = (Data-Lub-Nic (Tekst-Z-Klucza $k "cykl.data"))
+    Tokeny         = (Liczba-Z-Klucza $k "cykl.tokeny")
+    Wiadomosci     = (Liczba-Z-Klucza $k "cykl.wiadomosci")
+    ZakresOd       = (Tekst-Z-Klucza  $k "cykl.zakres_od")
+    ZakresDo       = (Tekst-Z-Klucza  $k "cykl.zakres_do")
+    Zwykle         = (Liczba-Z-Klucza $k "cykl.zwykle")
+    Nadrabianie    = (Liczba-Z-Klucza $k "cykl.nadrabianie")
+    Typowy         = (Liczba-Z-Klucza $k "cykl.typowy_dzien")
+    TypowychDni    = (Liczba-Z-Klucza $k "cykl.typowych_dni")
+    Prog           = (Liczba-Z-Klucza $k "cykl.prog")
+    Wzrosty        = (Liczba-Z-Klucza $k "cykl.wzrosty")
+    WzrostOd       = (Data-Lub-Nic (Tekst-Z-Klucza $k "cykl.wzrost_od"))
+    WzrostOdTokeny = (Liczba-Z-Klucza $k "cykl.wzrost_od_tokeny")
+    WzrostDo       = (Data-Lub-Nic (Tekst-Z-Klucza $k "cykl.wzrost_do"))
+    WzrostDoTokeny = (Liczba-Z-Klucza $k "cykl.wzrost_do_tokeny")
+    ProcWzrostu    = (Liczba-Z-Klucza $k "cykl.proc_wzrostu")
+  }
 }
 
 # ------------------------------------------------------------------ aktualizacja
@@ -661,8 +729,11 @@ function Aktualizuj {
 # Kazdy alarm ma TEMAT (po nim liczy sie "jeden na dobe"), TYTUL (do paska
 # powiadomienia) i TRESC, ktora mowi CO ZROBIC. Alarm bez porady uczy tylko
 # tego, zeby go zamykac nie czytajac.
-function Alarm([string]$temat, [string]$tytul, [string]$tresc) {
-  return [pscustomobject]@{ Temat = $temat; Tytul = $tytul; Tresc = $tresc }
+# WAGA ("pilne" / "uwaga" / "info") - pusta znaczy "wedlug tematu" (Waga-Alarmu).
+# PORADA - gotowe zdania dla czlowieka; pusta znaczy "odsiej je z tresci"
+# (Porada-Ludzka), tak jak dotad.
+function Alarm([string]$temat, [string]$tytul, [string]$tresc, [string]$waga = "", [string]$porada = "") {
+  return [pscustomobject]@{ Temat = $temat; Tytul = $tytul; Tresc = $tresc; Waga = $waga; Porada = $porada }
 }
 
 # Czy alarm o tym temacie juz dzis poszedl. Jeden na sprawe na dobe - inaczej
@@ -726,30 +797,43 @@ function Zbierz-Alarmy($cykl, $rachunek) {
       "$($script:NadzZrodlo)\narzedzia\cykl-dzienny.ps1 -Proba")
   }
 
-  # 2. i 3. Ucinanie i prog kosztu - jedno i drugie widac po kodzie 1
-  # z koszt-pamieci.ps1 -Zwiezle; rozroznia je slowo w tej samej linii.
-  if ($rachunek.Kod -eq 1 -and $rachunek.Linia) {
-    if ($rachunek.Linia -match 'UCINANE') {
-      $alarmy += Alarm "ucinane" "MegaRuchacz: część tekstu jest ucinana po cichu" (
-        "Skrócony tekst nie dochodzi do modelu, a nikt o tym nie mówi. " +
-        "Kliknij ikonę MegaRuchacza i rozwiń [Szczegóły] - tam widać, która pozycja nie mieści się w limicie. " +
-        "Najczęściej pomaga skrócenie sekcji 'Co wiem' w Twoim pliku z wiedzą. " +
-        "Rachunek mowi: $($rachunek.Linia). " +
-        "Plik do skrocenia: $($script:NadzDom)\.claude\CLAUDE.md")
-    } else {
-      $alarmy += Alarm "koszt" "MegaRuchacz: pamięć kosztuje więcej, niż powinna" (
-        "Kliknij ikonę MegaRuchacza i rozwiń [Szczegóły] - tam widać, która pozycja urosła. " +
-        "Rachunek mowi: $($rachunek.Linia). " +
-        "Progi i ich uzasadnienie sa w $($script:NadzZrodlo)\narzedzia\koszt-pamieci.ps1")
-    }
-  } elseif ($rachunek.Powod) {
+  # 2. Ucinanie - widac po kodzie 1 i slowie UCINANE w linii rachunku.
+  if (($rachunek.Kod -eq 1) -and $rachunek.Linia -and ($rachunek.Linia -match 'UCINANE')) {
+    $alarmy += Alarm "ucinane" "MegaRuchacz: część tekstu jest ucinana po cichu" (
+      "Skrócony tekst nie dochodzi do modelu, a nikt o tym nie mówi. " +
+      "Kliknij ikonę MegaRuchacza i otwórz zakładkę Szczegóły - tam widać, która pozycja nie mieści się w limicie. " +
+      "Najczęściej pomaga skrócenie sekcji 'Co wiem' w Twoim pliku z wiedzą. " +
+      "Rachunek mowi: $($rachunek.Linia). " +
+      "Plik do skrocenia: $($script:NadzDom)\.claude\CLAUDE.md")
+  }
+
+  # 3. Progi kosztu - KAZDY alarm osobno, z tym, ZA CO i ZA JAKI OKRES jest
+  # liczba. Do 24.09.2026 stal tu jeden zbiorczy "pamiec kosztuje wiecej, niz
+  # powinna", ktory za jednorazowe nadrabianie zaleglosci swiecil na czerwono
+  # i mowil o pamieci, choc chodzilo o nauke z rozmow. Zolte informacje (waga
+  # "info") ida osobna droga - Zbierz-Informacje - i nie wyskakuja w dymku.
+  $ocena = Ocena-Nauki $rachunek
+  $czerwonych = 0
+  foreach ($a in (Alarmy-Rachunku $rachunek)) {
+    if ($a.Waga -eq "info") { continue }
+    if ($a.Waga -eq "pilne") { $czerwonych++ }
+    $alarmy += Alarm-Z-Rachunku $a $ocena
+  }
+  # Kod 1 bez ucinania i bez ani jednego czerwonego alarmu na liscie znaczy, ze
+  # nie umiemy odczytac, co rachunek zglasza - mowimy to wprost, zamiast zgadywac.
+  if (($rachunek.Kod -eq 1) -and $rachunek.Linia -and ($rachunek.Linia -notmatch 'UCINANE') -and ($czerwonych -eq 0)) {
+    $alarmy += Alarm "koszt" "MegaRuchacz: rachunek zgłasza przekroczony próg" (
+      "Nie umiem odczytać, który próg - pełna treść jest w zakładce Szczegóły. " +
+      "Rachunek mowi: $($rachunek.Linia). " +
+      "Progi i ich uzasadnienie sa w $($script:NadzZrodlo)\narzedzia\koszt-pamieci.ps1") "uwaga"
+  }
+  if ((-not $rachunek.Linia) -and $rachunek.Powod) {
     $alarmy += Alarm "rachunek" "MegaRuchacz: nie umiem policzyć, ile kosztuje pamięć" (
       "Dopóki to trwa, nikt nie wie, ile kosztuje pamięć ani czy coś jest ucinane. " +
       "Powod: $($rachunek.Powod). " +
       "Sprawdz recznie: powershell -ExecutionPolicy Bypass -File " +
       "$($script:NadzZrodlo)\narzedzia\koszt-pamieci.ps1 -Rozbicie")
   }
-
   # 4. Straznik zanotowal wywrotke przy przebiegu, ktorego nikt nie ogladal.
   $wyw = Wywrotki-Straznika
   if ($wyw.Count -gt 0) {
@@ -858,6 +942,10 @@ function Trzy-Liczby($rachunek, $cykl) {
     Opis     = "Jedyne miejsce, w którym naprawdę płacisz za wywołanie modelu - reszta to doklejony tekst."
     Ogon     = ""
     Powod    = ""
+    # Za jaki okres i czy to nadrabianie - bez tego drogi dzien nadrabiania
+    # wygladal na karcie jak nowa norma. Waga koloruje tylko ten jeden napis.
+    Znacznik     = ""
+    ZnacznikWaga = ""
   }
 
   if (-not $rachunek -or -not $rachunek.Linia) {
@@ -888,6 +976,18 @@ function Trzy-Liczby($rachunek, $cykl) {
     $naDobe.Liczba = [long]$cykl.Koszt
     $kiedy = Dzien-Ludzko $cykl.KosztData
     if ($kiedy) { $naDobe.Ogon = "ostatnio $kiedy" } else { $naDobe.Ogon = "przy ostatnim przebiegu" }
+    $o = Ocena-Nauki $rachunek
+    $okres = Okres-Ludzko $o.ZakresOd $o.ZakresDo
+    switch ($o.Rodzaj) {
+      "nadrabianie" { $naDobe.Znacznik = "nadrabianie zaległości"; $naDobe.ZnacznikWaga = "info" }
+      "mieszany"    { $naDobe.Znacznik = "częściowo nadrabianie";  $naDobe.ZnacznikWaga = "info" }
+      "zwykly"      { $naDobe.Znacznik = "zwykły dzień";           $naDobe.ZnacznikWaga = "" }
+      "nieznany"    { $naDobe.Znacznik = "okres nieznany";         $naDobe.ZnacznikWaga = "uwaga" }
+    }
+    if ($okres -and $naDobe.Znacznik) { $naDobe.Znacznik = "$($naDobe.Znacznik), rozmowy z $okres" }
+    foreach ($a in (Alarmy-Rachunku $rachunek)) {
+      if (($a.Temat -eq "cykl-zwykly") -or ($a.Temat -eq "cykl-rosnie")) { $naDobe.ZnacznikWaga = "pilne" }
+    }
   } else {
     $naDobe.Powod = "nauka z rozmów nie policzyła jeszcze ani razu swojego kosztu"
     if ($cykl) {
@@ -896,6 +996,231 @@ function Trzy-Liczby($rachunek, $cykl) {
   }
 
   return ,@($naWiadomosc, $naSesje, $naDobe)
+}
+
+# ---------------------------------------------------- koszt nauki po ludzku
+
+# "~312 600" - liczba zaokraglona do setek, do tytulow. Tylda mowi, ze to
+# przyblizenie; pelna liczba stoi na karcie i w szczegolach.
+function Okolo($n) {
+  if ($null -eq $n) { return "?" }
+  return (Liczba-Ludzka ([long]([math]::Round([double]$n / 100.0) * 100)))
+}
+
+# "16-17.09" albo "28.08-02.09" (w oknie z polpauza) - okres, za ktory
+# zaplacono, jednym rzutem oka.
+function Okres-Ludzko([string]$od, [string]$doo) {
+  $a = Data-Lub-Nic $od
+  $b = Data-Lub-Nic $doo
+  if (-not $a) { return "" }
+  if ((-not $b) -or ($a.Date -eq $b.Date)) { return $a.ToString('dd.MM') }
+  if (($a.Month -eq $b.Month) -and ($a.Year -eq $b.Year)) { return ($a.ToString('dd') + "–" + $b.ToString('dd.MM')) }
+  return ($a.ToString('dd.MM') + "–" + $b.ToString('dd.MM'))
+}
+
+# Ile kosztuje zwykly dzien. Liczba pochodzi z koszt-pamieci.ps1 (typowa wartosc
+# z dni bez nadrabiania); gdy jej nie ma, mowimy to wprost - nie zgadujemy.
+function Zdanie-Zwyklego-Dnia($o) {
+  if ($o -and ($null -ne $o.Typowy) -and ($o.TypowychDni -gt 0)) {
+    $z = "z $($o.TypowychDni) dni"
+    if ($o.TypowychDni -eq 1) { $z = "z 1 dnia" }
+    return "zwykły dzień kosztuje ok. $(Okolo $o.Typowy) tokenów (typowa wartość $z bez nadrabiania)"
+  }
+  return "ile kosztuje zwykły dzień - jeszcze nie wiem, statystyka dopiero się zbiera"
+}
+
+function Z-Wielkiej([string]$t) {
+  if (-not $t) { return "" }
+  return $t.Substring(0, 1).ToUpper() + $t.Substring(1)
+}
+
+# Alarm z rachunku ubrany w zdania uzytkownika. KAZDY mowi trzy rzeczy: ZA CO
+# jest liczba (kazda wiadomosc, kazda sesja, nauka z rozmow), ZA JAKI OKRES
+# (stan na teraz albo konkretne dni) i CZY TO SIE POWTARZA. Pelna, surowa tresc
+# z koszt-pamieci.ps1 zostaje w szczegolach - nic nie ginie.
+function Alarm-Z-Rachunku($a, $o) {
+  $pelne = "Rachunek mowi: $($a.Krotko). $($a.Pelny) Progi i ich uzasadnienie sa w $($script:NadzZrodlo)\narzedzia\koszt-pamieci.ps1"
+  $waga = $a.Waga
+  if ($waga -eq "pilne") { $waga = "pilne" } elseif ($waga -eq "info") { $waga = "info" } else { $waga = "uwaga" }
+  $kiedy = "ostatnio"
+  if ($o -and $o.Data) { $kiedy = Dzien-Ludzko $o.Data }
+  $okres = ""
+  if ($o) { $okres = Okres-Ludzko $o.ZakresOd $o.ZakresDo }
+  $wiad = "nieznaną liczbę wiadomości"
+  if ($o -and ($null -ne $o.Wiadomosci)) {
+    $wiad = "$(Liczba-Ludzka $o.Wiadomosci) $(Odmiana ([int]$o.Wiadomosci) 'wiadomość' 'wiadomości' 'wiadomości')"
+  }
+  $zOkresu = ""
+  if ($okres) { $zOkresu = " z $okres" }
+  $tytul = ""
+  $porada = ""
+
+  switch ($a.Temat) {
+    "wiadomosc" {
+      $tytul = "MegaRuchacz: każda wiadomość dokleja ~$(Liczba-Ludzka $a.Liczba) tokenów"
+      $porada = ("To stan plików na teraz, nie koszt jednego dnia: tyle tekstu idzie do modelu z każdym Twoim zdaniem " +
+                 "(próg $(Liczba-Ludzka $a.Prog)). Która pozycja urosła - w zakładce Szczegóły.")
+    }
+    "sesja" {
+      $tytul = "MegaRuchacz: każda sesja startuje z ~$(Liczba-Ludzka $a.Liczba) tokenami"
+      $porada = ("To stan plików na teraz, nie koszt jednego dnia: tyle tekstu wchodzi przy każdym otwarciu sesji " +
+                 "(próg $(Liczba-Ludzka $a.Prog)). Najczęściej pomaga skrócenie sekcji 'Co wiem' w pliku z wiedzą. Co urosło - w zakładce Szczegóły.")
+    }
+    "udzial" {
+      $tytul = "MegaRuchacz: jedna pozycja to $($a.Liczba)% rachunku"
+      $porada = "Stan plików na teraz. Skracanie czegokolwiek innego nic nie da. Która to pozycja - w zakładce Szczegóły."
+    }
+    "wzrost" {
+      $m = [regex]::Match($a.Okres, '(\d\d\.\d\d)')
+      $od = "poprzedniego pomiaru"
+      if ($m.Success) { $od = $m.Groups[1].Value }
+      $tytul = "MegaRuchacz: start sesji urósł o $($a.Liczba)% od $od"
+      $porada = "Tyle więcej tekstu wchodzi teraz przy każdym otwarciu sesji niż przy pomiarze z $od. Co doszło - w zakładce Szczegóły."
+    }
+    "cykl-zwykly" {
+      $tytul = "MegaRuchacz: nauka $kiedy ~$(Okolo $a.Liczba) tokenów za zwykły dzień"
+      $porada = ("Przeczytała $wiad$zOkresu - rozmowy z jednego dnia, a nie nadrabianie zaległości - " +
+                 "i przekroczyła próg zwykłego dnia ($(Liczba-Ludzka $a.Prog)). Dla porównania: $(Zdanie-Zwyklego-Dnia $o). " +
+                 "Jak to zmniejszyć - w zakładce Szczegóły.")
+    }
+    "cykl-rosnie" {
+      $tytul = "MegaRuchacz: koszt nauki rośnie $($a.Liczba) dni z rzędu"
+      $zakres = ""
+      if ($o -and $o.WzrostOd -and $o.WzrostDo) {
+        $zakres = " Od $($o.WzrostOd.ToString('dd.MM')) do $($o.WzrostDo.ToString('dd.MM')): z ~$(Okolo $o.WzrostOdTokeny) do ~$(Okolo $o.WzrostDoTokeny) tokenów dziennie."
+      }
+      $ileProc = "wyraźnie"
+      if ($o -and ($null -ne $o.ProcWzrostu)) { $ileProc = "o co najmniej $($o.ProcWzrostu)%" }
+      $porada = "Zwykły dzień nauki (bez nadrabiania) drożeje dzień po dniu, za każdym razem $ileProc.$zakres To trend, nie jednorazowy skok."
+    }
+    "cykl-nadrabianie" {
+      # Brzmienie ze zlecenia uzytkownika: co konkretnie, za jaki okres i czy
+      # to sie powtarza - w tej kolejnosci.
+      $tytul = "MegaRuchacz: nauka z rozmów kosztowała $kiedy ~$(Okolo $a.Liczba) tokenów — bo nadrabiała zaległość"
+      $wTym = ""
+      if ($o -and ($o.Zwykle -gt 0)) { $wTym = " W tym ~$(Okolo $o.Zwykle) tokenów za świeże rozmowy." }
+      $porada = "Przeczytała $wiad$zOkresu.$wTym Jednorazowe nadrabianie, nie nowy stały koszt; $(Zdanie-Zwyklego-Dnia $o)."
+    }
+    "cykl-nieznany" {
+      $tytul = "MegaRuchacz: nauka $kiedy ~$(Okolo $a.Liczba) tokenów, okres nieznany"
+      $porada = ("Nauka nie zapisała, z których dni czytała rozmowy, więc nie umiem powiedzieć, czy to jednorazowe nadrabianie, " +
+                 "czy zwykły dzień (próg zwykłego dnia: $(Liczba-Ludzka $a.Prog)). Zakres zapisuje nowsza wersja modułu pamięci.")
+    }
+    "historia" {
+      if ($null -ne $a.Liczba) {
+        $tytul = "MegaRuchacz: dziennik kosztów nauki ma nieczytelne linie"
+        $porada = "$(Liczba-Ludzka $a.Liczba) $(Odmiana ([int]$a.Liczba) 'linia jest nieczytelna' 'linie są nieczytelne' 'linii jest nieczytelnych') - ich koszt nie wchodzi do statystyki. Szczegóły - w zakładce Szczegóły."
+      } else {
+        $tytul = "MegaRuchacz: historia kosztów nauki się nie zapisuje"
+        $porada = "Nauka sama to zgłasza, więc statystyka 7 i 30 dni jest niepełna. Co dokładnie - w zakładce Szczegóły."
+      }
+    }
+    default {
+      $tytul = "MegaRuchacz: $($a.Krotko)"
+      $porada = Porada-Ludzka $a.Pelny
+    }
+  }
+  return Alarm "koszt-$($a.Temat)" $tytul $pelne $waga $porada
+}
+
+# Zolte INFORMACJE z rachunku (dzis: nadrabianie zaleglosci). Osobno od alarmow,
+# bo alarmy ida takze na dymek - a informacja "to bylo jednorazowe" wyskakujaca
+# w zasobniku jak ostrzezenie bylaby dokladnie tym, na co uzytkownik sie
+# skarzyl 24.09.2026. W oknie stoja razem z alarmami, na zoltym tle.
+function Zbierz-Informacje($rachunek) {
+  $lista = @()
+  if (-not $rachunek) { return ,$lista }
+  $ocena = Ocena-Nauki $rachunek
+  foreach ($a in (Alarmy-Rachunku $rachunek)) {
+    if ($a.Waga -ne "info") { continue }
+    $lista += Alarm-Z-Rachunku $a $ocena
+  }
+  return ,$lista
+}
+
+# STATYSTYKA NAUKI DO OKNA: 30 dni, jeden element na dzien kalendarza (takze
+# dni bez nauki - wykres ma pokazac przerwe, a nie ja zwinac). Liczby i sumy
+# pochodza z koszt-pamieci.ps1 -Dane, ktory czyta dziennik przebiegow
+# (.koszt-historia.tsv) i podsumowanie (.koszt-podsumowanie.txt). Tu tylko
+# rozkladamy je na dni i ubieramy w zdania.
+#
+# Malo danych to NIE jest pusty wykres bez slowa: Uwaga mowi wprost, ze
+# statystyka dopiero sie zbiera i skad sa liczby.
+function Statystyka-Okna($rachunek) {
+  $s = [pscustomobject]@{
+    Dni = @(); DniZDanymi = 0; OknoDni = 30; Zrodlo = ""; Powod = ""
+    Suma7 = $null; Suma30 = $null; SumyZ = ""; Srednia = $null; SredniaDni = 0
+    Typowy = $null; TypowychDni = 0; Prog = $null; Uwaga = ""
+  }
+  if ((-not $rachunek) -or (-not $rachunek.Klucze) -or ($rachunek.Klucze.Count -eq 0)) {
+    $s.Powod = "nie udało się policzyć rachunku"
+    if ($rachunek -and $rachunek.Powod) { $s.Powod = $rachunek.Powod }
+    $s.Uwaga = "Statystyki nie ma, bo nie udało się policzyć rachunku. Powód jest w zakładce Szczegóły."
+    return $s
+  }
+  $k = $rachunek.Klucze
+  $okno = Liczba-Z-Klucza $k "stat.okno_dni"
+  if (($null -ne $okno) -and ($okno -gt 0)) { $s.OknoDni = [int]$okno }
+  $s.Zrodlo      = Tekst-Z-Klucza  $k "stat.zrodlo"
+  $s.Powod       = Tekst-Z-Klucza  $k "stat.powod"
+  $s.Suma7       = Liczba-Z-Klucza $k "stat.suma7"
+  $s.Suma30      = Liczba-Z-Klucza $k "stat.suma30"
+  $s.SumyZ       = Tekst-Z-Klucza  $k "stat.sumy_z"
+  $s.Srednia     = Liczba-Z-Klucza $k "stat.srednia"
+  $sd            = Liczba-Z-Klucza $k "stat.srednia_dni"
+  if ($null -ne $sd) { $s.SredniaDni = [int]$sd }
+  $s.Typowy      = Liczba-Z-Klucza $k "cykl.typowy_dzien"
+  $td            = Liczba-Z-Klucza $k "cykl.typowych_dni"
+  if ($null -ne $td) { $s.TypowychDni = [int]$td }
+  $s.Prog        = Liczba-Z-Klucza $k "cykl.prog"
+
+  $mapa = @{}
+  $ile = Liczba-Z-Klucza $k "stat.dni"
+  if ($null -eq $ile) { $ile = 0 }
+  for ($i = 1; $i -le $ile; $i++) {
+    $cz = @((Tekst-Z-Klucza $k "stat.dzien.$i") -split '\|')
+    if ($cz.Count -lt 5) { continue }
+    $mapa[$cz[0]] = $cz
+  }
+  $dzis = [datetime]::Today
+  $dni = @()
+  for ($i = $s.OknoDni - 1; $i -ge 0; $i--) {
+    $d = $dzis.AddDays(-$i)
+    $x = [pscustomobject]@{ Dzien = $d; Razem = [long]0; Zwykle = [long]0; Nadrabianie = [long]0; Nieznane = [long]0; Jest = $false }
+    $klucz = $d.ToString('yyyy-MM-dd')
+    if ($mapa.ContainsKey($klucz)) {
+      $cz = $mapa[$klucz]
+      $x.Razem       = Na-Liczbe $cz[1]
+      $x.Zwykle      = Na-Liczbe $cz[2]
+      $x.Nadrabianie = Na-Liczbe $cz[3]
+      $x.Nieznane    = Na-Liczbe $cz[4]
+      $x.Jest = $true
+      $s.DniZDanymi++
+    }
+    $dni += $x
+  }
+  $s.Dni = $dni
+
+  if ($s.DniZDanymi -eq 0) {
+    if ($s.Zrodlo -eq "historia") {
+      $s.Uwaga = "W ostatnich $($s.OknoDni) dniach nauka nie kosztowała nic - nie ma czego pokazać na wykresie."
+    } else {
+      $s.Uwaga = "Statystyka dopiero się zbiera: nie ma jeszcze historii kosztów nauki. Pierwszy słupek pojawi się po najbliższej nauce z rozmów."
+    }
+  } elseif ($s.Zrodlo -eq "plik-dnia") {
+    $s.Uwaga = ("Historii przebiegów jeszcze nie ma - pokazuję tylko ostatni pomiar ($($s.DniZDanymi) " +
+                "$(Odmiana $s.DniZDanymi 'dzień' 'dni' 'dni')). Statystyka rośnie z każdym dniem nauki.")
+  } elseif ($s.DniZDanymi -lt 7) {
+    $s.Uwaga = ("Statystyka dopiero się zbiera: $($s.DniZDanymi) $(Odmiana $s.DniZDanymi 'dzień' 'dni' 'dni') z danymi. " +
+                "Rośnie z każdym dniem nauki.")
+  }
+  return $s
+}
+
+function Na-Liczbe($t) {
+  $v = "$t".Trim()
+  if ($v -match '^\d+$') { return [long]$v }
+  return [long]0
 }
 
 # ZMIANY W PAMIECI Z OSTATNIEJ NAUKI. Pisze je modul pamieci (lore\lore\verify.py,
@@ -1132,7 +1457,9 @@ function Linie-Stanu($wersja, $cykl, $przeliczanie) {
 # Czerwony czy zolty. PROG Z UZASADNIENIEM, nie kolor z powietrza:
 #   CZERWONY - cos jest zepsute albo kosztuje i jest konkretna rzecz do zrobienia
 #              (nauka stoi, tekst jest ucinany, rachunek nad progiem, straznik sie wywrocil);
-#   ZOLTY    - czegos NIE WIEMY i trzeba to sprawdzic, ale nic sie jeszcze nie pali.
+#   ZOLTY    - czegos NIE WIEMY i trzeba to sprawdzic, ale nic sie jeszcze nie pali;
+#   ZOLTY "info" - wiemy, co sie stalo, i nic nie trzeba robic (np. nauka nadrabiala
+#              zaleglosc). Waga niesiona przez sam alarm wygrywa z tym tematem.
 # Wszystko inne zostaje neutralne. Tecza uczy ignorowania kolorow.
 function Waga-Alarmu([string]$temat) {
   if ($temat -eq "rachunek") { return "uwaga" }
