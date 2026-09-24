@@ -996,6 +996,11 @@ if ($JestOpencode) {
   $linieWersji += "opencode.wersja: $wersja"
   $linieWersji += "opencode.data: $teraz"
 }
+# Wdrozenie wymuszone mimo instalacji globalnej: straznik zdejmuje hooki projektowe
+# jako duplikat globalnych - ale nie tu, gdzie uzytkownik chcial ich wprost.
+if ($WymusProjektowo -and (Test-Path $MarkerGlobalny)) {
+  $linieWersji += "projektowo: wymuszone"
+}
 [System.IO.File]::WriteAllText((Join-Path $Projekt ".claude\megaruchacz-wersja.txt"),
   (($linieWersji -join "`r`n") + "`r`n"), (New-Object System.Text.UTF8Encoding($false)))
 Write-Host "OK  .claude\megaruchacz-wersja.txt (wersja $wersja, commit $commit)"
