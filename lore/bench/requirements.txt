@@ -1,0 +1,12 @@
+# Benchmark only - NOT part of the Lore install. Put it in a separate, throw-away venv:
+#   uv venv <tmp>\venv --python 3.12
+#   uv pip install --python <tmp>\venv\Scripts\python.exe -r requirements.txt
+#   uv pip install --python <tmp>\venv\Scripts\python.exe torch --index-url https://download.pytorch.org/whl/cpu
+# torch/transformers/optimum are needed only by prepare.py (one-off PyTorch -> ONNX export);
+# the measurement itself runs on ONNX Runtime, the same engine production uses via fastembed.
+fastembed==0.8.0
+onnxruntime==1.30.0
+numpy
+transformers>=4.50,<5
+optimum-onnx
+onnx
