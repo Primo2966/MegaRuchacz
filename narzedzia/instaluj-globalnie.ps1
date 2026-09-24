@@ -6,7 +6,14 @@
 #               ~/.config/opencode/plugins/mr-log.js
 #   Claude Code ~/.claude/agents/*.md               cztery role
 #               ~/.claude/megaruchacz-mr-log.js     rejestr workerow
-#               ~/.claude/settings.json             DOPISANE hooki SubagentStart/Stop
+#               ~/.claude/mr/orchestrator-reminder.json  ladunek przypomnienia
+#               ~/.claude/settings.json             JEDEN komplet hookow: straznik
+#                                                   (SessionStart), przypomnienie.js
+#                                                   (UserPromptSubmit), rejestr
+#                                                   (SubagentStart/Stop). Uklada je
+#                                                   straznik-zasad.ps1 -NaprawGlobalne;
+#                                                   ponowne uruchomienie naprawia
+#                                                   (duplikaty, stare "cat"), nie dubluje.
 #   Codex       ~/.codex/AGENTS.md                  blok zasad kierownika
 #               ~/.codex/hooks.json                 DOPISANE hooki rejestru
 #   wspolne     ~/.claude/CLAUDE.md i ~/.codex/AGENTS.md - blok zasad kierownika
@@ -209,6 +216,21 @@ $JestOpencode = ($null -ne $Opencode) -or (Test-Path $DomOpencode)
 $PlikZasad = Join-Path $Zrodlo "szablony-opencode\zasady-kierownika.md"
 if (-not (Test-Path $PlikZasad)) { Write-Error "Brak szablonu zasad: $PlikZasad"; exit 1 }
 $TrescZasad = (Czytaj $PlikZasad).Trim()
+# Hooki Claude Code uklada i naprawia straznik (tryb -NaprawGlobalne / -UsunGlobalne).
+$Straznik = Join-Path $Zrodlo "narzedzia\straznik-zasad.ps1"
+if (-not (Test-Path $Straznik)) { Write-Error "Brak straznika: $Straznik"; exit 1 }
+
+# Ile hookow na danym zdarzeniu ma polecenie pasujace do wzorca. -1 = plik nie jest JSON-em.
+function Policz-Hooki($plik, $zdarzenie, $wzor) {
+  if (-not (Test-Path $plik)) { return 0 }
+  try { $s = (Czytaj $plik).TrimStart([char]0xFEFF) | ConvertFrom-Json } catch { return -1 }
+  if ($null -eq $s.hooks -or -not ($s.hooks.PSObject.Properties.Name -contains $zdarzenie)) { return 0 }
+  $n = 0
+  foreach ($g in @($s.hooks.$zdarzenie)) {
+    foreach ($h in @($g.hooks)) { if ($h -and ("" + $h.command) -match $wzor) { $n++ } }
+  }
+  return $n
+}
 
 Write-Host ""
 Write-Host "=== MegaRuchacz - instalacja GLOBALNA ===" -ForegroundColor Cyan
@@ -251,10 +273,16 @@ if ($Usun) {
     if (Test-Path $p) { if ($Proba) { Write-Host "PROBA  usunalbym $p" } else { Remove-Item $p -Force; Write-Host "OK  usuniete $p" } }
   }
   if (Test-Path $Marker) { if ($Proba) { Write-Host "PROBA  usunalbym $Marker" } else { Remove-Item $Marker -Force; Write-Host "OK  usuniety znacznik instalacji globalnej" } }
+  # Hooki MegaRuchacza w ~/.claude/settings.json - bez nich straznik chodzilby dalej
+  # w kazdym projekcie. Cudze hooki (np. Orki) zostaja.
+  $argiU = @{ UsunGlobalne = $true; Zrodlo = $Zrodlo; KatalogDomowy = $KatalogDomowy }
+  if ($Proba) { $argiU.Proba = $true }
+  $global:LASTEXITCODE = 0
+  & $Straznik @argiU
+  if ($LASTEXITCODE -ne 0) { Write-Host "BLAD  hookow MegaRuchacza w ~/.claude/settings.json nie udalo sie zdjac (powod wyzej)" -ForegroundColor Red }
   Write-Host ""
-  Write-Host "Gotowe. Hooki rejestru w settings.json/hooks.json zostaja - nastepne ich"
-  Write-Host "uruchomienie nie znajdzie skryptu i nic nie dopisze. Wyczyscic je mozna"
-  Write-Host "recznie, jesli przeszkadzaja."
+  Write-Host "Gotowe. Hooki rejestru Codeksa w ~/.codex/hooks.json zostaja - nastepne ich"
+  Write-Host "uruchomienie nic nie dopisze. Wyczyscic je mozna recznie, jesli przeszkadzaja."
   exit 0
 }
 
@@ -289,11 +317,20 @@ if ($JestClaude) {
   $celLog = Join-Path $DomClaude "megaruchacz-mr-log.js"
   if ($Proba) { Write-Host "PROBA  rejestr Claude -> $celLog" }
   else { New-Item -ItemType Directory -Force -Path $DomClaude | Out-Null; Copy-Item $srcLog $celLog -Force; Write-Host "OK  rejestr Claude -> $celLog" }
-  $abs = $celLog -replace '\\','/'
-  $gStart = [pscustomobject]@{ hooks = @([pscustomobject]@{ type = "command"; command = "node `"$abs`""; timeout = 5; statusMessage = "MegaRuchacz: wpis do rejestru pracy" }) }
-  $gStop  = [pscustomobject]@{ hooks = @([pscustomobject]@{ type = "command"; command = "node `"$abs`" stop"; timeout = 5; statusMessage = "MegaRuchacz: wpis do rejestru pracy" }) }
-  [void](Dopisz-Hook (Join-Path $DomClaude "settings.json") "hooks" "SubagentStart" $gStart "megaruchacz-mr-log.js")
-  [void](Dopisz-Hook (Join-Path $DomClaude "settings.json") "hooks" "SubagentStop"  $gStop  "megaruchacz-mr-log.js")
+  # Hooki Claude Code: JEDEN komplet - straznik na SessionStart, przypomnienie przez
+  # narzedzia\przypomnienie.js (z "|| cat" na brak node'a), jeden rejestr na
+  # SubagentStart/Stop. Robi to straznik, tym samym kodem, ktorym pilnuje ich potem
+  # przy kazdym starcie sesji - dlatego ponowne uruchomienie instalatora naprawia
+  # istniejaca instalacje (duplikaty, stare "cat") i niczego nie dubluje. Cudze
+  # hooki (np. Orki) zostaja nietkniete co do znaku; przed zapisem kopia .bak-<data>.
+  $argi = @{ NaprawGlobalne = $true; Zrodlo = $Zrodlo; KatalogDomowy = $KatalogDomowy }
+  if ($Proba) { $argi.Proba = $true }
+  $global:LASTEXITCODE = 0
+  & $Straznik @argi
+  if ($LASTEXITCODE -ne 0) {
+    Write-Host "BLAD  hooki w ~/.claude/settings.json - straznik ich nie uporzadkowal (powod wyzej)" -ForegroundColor Red
+    $script:Bledy += "hooki Claude Code w ~/.claude/settings.json"
+  }
   # Worktree: izolacja rownoleglych zadan w Claude Code. To ustawienie jest
   # projektowe, ale globalne tez dziala - kazdy projekt je dostaje.
   Ustaw-Klucz-Json (Join-Path $DomClaude "settings.json") "worktree" ([pscustomobject]@{ baseRef = "fresh"; bgIsolation = "worktree" })
@@ -339,6 +376,19 @@ if ($JestClaude) {
   if (Test-Path (Join-Path $DomClaude "CLAUDE.md")) { $blokClaude = Czytaj (Join-Path $DomClaude "CLAUDE.md") }
   Sprawdz "blok zasad w ~/.claude/CLAUDE.md" ($blokClaude.Contains($POCZATEK)) "brak znacznika kierownika"
   Sprawdz "rejestr ~/.claude/megaruchacz-mr-log.js" (Test-Path (Join-Path $DomClaude "megaruchacz-mr-log.js")) "brak pliku"
+  if (-not $Proba) {
+    $ust = Join-Path $DomClaude "settings.json"
+    Sprawdz "ladunek przypomnienia ~/.claude/mr/orchestrator-reminder.json" (Test-Path (Join-Path $DomClaude "mr\orchestrator-reminder.json")) "brak pliku"
+    $n = Policz-Hooki $ust "SessionStart" 'straznik-zasad\.ps1'
+    Sprawdz "straznik na SessionStart (dokladnie jeden)" ($n -eq 1) "jest $n"
+    $n = Policz-Hooki $ust "UserPromptSubmit" 'orchestrator-reminder\.json'
+    $np = Policz-Hooki $ust "UserPromptSubmit" 'przypomnienie\.js(?![A-Za-z0-9])'
+    Sprawdz "przypomnienie przez przypomnienie.js (dokladnie jedno)" ($n -eq 1 -and $np -eq 1) "wpisow $n, przez skrypt $np"
+    foreach ($z in @("SubagentStart", "SubagentStop")) {
+      $n = Policz-Hooki $ust $z 'mr-log\.js(?![A-Za-z0-9])'
+      Sprawdz "rejestr na $z (dokladnie jeden)" ($n -eq 1) "jest $n"
+    }
+  }
 }
 if ($JestCodex) {
   $blokCodex = ""
