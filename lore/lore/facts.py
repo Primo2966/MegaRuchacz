@@ -1,6 +1,8 @@
 """Daily harvest of durable facts out of recent conversations.
 
-Reads the chunks indexed since the last run, asks a model for the facts together with the layer
+Reviews the user's messages indexed since the last run, hands the model ONLY the ones carrying the
+strongest signal — corrections, repetitions from another conversation, an explicit "zapamiętaj"
+(lore.selection decides, without a model) — and asks for the facts together with the layer
 each of them belongs to (durable / current / reference), and drops them into a waiting room
 (~/.claude/wiedza/kandydaci.md), grouped by that layer. This module never writes into the rules
 the agent obeys — that is lore.verify's job, and it does it by itself, once the fact has been
@@ -36,6 +38,7 @@ from datetime import datetime, timedelta, timezone
 
 from pathlib import Path
 
+from . import selection
 from .db import CLAUDE_HOME, DB_PATH, connect, log, ts_to_local
 
 KNOWLEDGE_DIR = CLAUDE_HOME / "wiedza"
@@ -45,7 +48,11 @@ MARKER_PATH = KNOWLEDGE_DIR / ".ostatnie-wyciaganie"
 # Czytaj-Znacznik, narzedzia\koszt-pamieci.ps1 -> Kolejka-Lore). Anything appended there would
 # quietly turn their marker into "never read anything".
 MARKER_ID_PATH = KNOWLEDGE_DIR / ".ostatnie-wyciaganie-id"
-DAY_ZERO_PATH = KNOWLEDGE_DIR / ".dzien-zero"  # when this machine started learning — see day_zero()
+# When this machine started learning with the SELECTION (lore.selection) — see day_zero(). A new
+# name on purpose: the old `.dzien-zero` was drawn for the read-everything harvest, and the user
+# decided (2026-09-24) that nothing from before the selection is caught up on. The old file is left
+# where it is, unread.
+DAY_ZERO_PATH = KNOWLEDGE_DIR / ".dzien-zero-wyboru"
 CANDIDATES_PATH = KNOWLEDGE_DIR / "kandydaci.md"
 COST_NAME = ".koszt-cyklu.txt"  # next to .cykl-stan, in the same 'klucz: wartosc' shape
 SOURCES_NAME = "zrodla.md"  # where every fact came from — written here and by lore.verify
@@ -89,14 +96,20 @@ SKIPPED_ROLES = frozenset({"tool", "result"})
 # (only the part after the colon was compared), and on 2026-09-24 briefs were 31% of what the model
 # was paid to read and 88% of the backlog — and every fact taken from them was the model's words
 # ABOUT the user filed as if the user had said them.
+#
+# The user's messages also live inside the glued chunks of the main session (role "conversation",
+# never "agent:conversation") — lore.selection cuts them out of there; see its docstring.
 HARVESTED_ROLES = frozenset({"user"})
 # Under the role "user", but not the human: a scheduled task opens its automated run with this tag,
 # and Claude Code writes that prompt into the transcript as if it had been typed. Only the START of
-# a chunk counts — the tag quoted inside a real message is the user talking about it.
-AUTOMATED_PREFIXES = ("<scheduled-task",)
-# the same rule in SQL, for the counting queries: exactly "user", minus the automated prompts
-HARVESTED_SQL = ("(" + " OR ".join(f"role = '{r}'" for r in sorted(HARVESTED_ROLES)) + ")"
-                 + "".join(f" AND ltrim(text) NOT LIKE '{p}%'" for p in AUTOMATED_PREFIXES))
+# a message counts — the tag quoted inside a real message is the user talking about it.
+AUTOMATED_PREFIXES = selection.AUTOMATED_PREFIXES
+# The same rule in SQL, for the counting queries: a `user` chunk minus the automated prompts, or a
+# glued chunk of the main session holding at least one turn of the user.
+HARVESTED_SQL = ("((" + " OR ".join(f"role = '{r}'" for r in sorted(HARVESTED_ROLES)) + ")"
+                 + "".join(f" AND ltrim(text) NOT LIKE '{p}%'" for p in AUTOMATED_PREFIXES)
+                 + f") OR (role = '{selection.MIXED_ROLE}' AND (text LIKE 'user: %'"
+                 + " OR instr(text, char(10) || char(10) || 'user: ') > 0))")
 MIN_FACT_CHARS = 10  # a single word is not a fact
 MODEL_TIMEOUT_S = 300
 
@@ -169,6 +182,20 @@ użytkownika, nie zadawaj pytań, nie proponuj działań, niczego nie zapisuj i 
 
 Treść każdego faktu po polsku, w jednej linii, bez numeracji, bez nagłówków i bez pogrubień.
 Jeśli nie ma ani jednego takiego faktu — zwróć pustą listę."""
+
+# What the daily harvest adds to PROMPT — the material is no longer "everything said yesterday" but
+# a handful of chosen messages with a reason and a scrap of context each (lore.selection). The
+# context line is the MODEL's words: without this paragraph the model would file its own earlier
+# claim as a fact about the user — exactly the one the user was correcting.
+SELECTION_NOTE = """
+
+Ten materiał to WYBRANE wiadomości użytkownika, nie cała rozmowa. Nagłówek każdej mówi, czemu ją
+wybrano: "poprawka" — użytkownik poprawia agenta; "powtorzenie" — mówił to już w innej rozmowie,
+czyli agent tego nie wiedział, a powinien; "zapamietaj" — wprost kazał to zapamiętać. Linia
+"model:" to koniec poprzedniej odpowiedzi agenta, podany tylko po to, żeby było wiadomo, co jest
+poprawiane — faktów NIGDY nie bierz z linii "model:", tylko z linii "user:". Przy poprawce faktem
+jest to, jak jest naprawdę według użytkownika, a nie to, co agent twierdził."""
+HARVEST_PROMPT = PROMPT + SELECTION_NOTE
 
 CANDIDATES_HEADER = """# Kandydaci do trwałej wiedzy
 
@@ -310,9 +337,9 @@ def day_zero() -> str:
     A fresh install finds years of transcripts on the disk and the indexer pulls all of them into
     the database within the hour. Without a floor the first harvest would walk that whole archive —
     conversations from before the tool existed, paid for in tokens, without anybody asking for it.
-    The line is drawn once, on the first run that gets this far: at the existing read marker when
-    there is one (an install caught in the middle of a backlog must not lose it), and at "now" on a
-    machine that has never harvested anything.
+    The line is drawn once, on the first run that gets this far, at "now" — also on a machine that
+    was harvesting before the selection existed: the user decided (2026-09-24) that its backlog is
+    let go rather than caught up on. What falls behind the line is counted, never swallowed.
 
     A trial run writes it as well: the dry run exists to report the numbers the real run would give,
     and it cannot do that with the floor still undecided.
@@ -322,9 +349,7 @@ def day_zero() -> str:
         return saved
     if saved:
         log(f"unreadable {DAY_ZERO_PATH.name}: {saved!r} — drawing the line again")
-    start = _saved(MARKER_PATH)
-    if not (start and _is_iso(start)):
-        start = iso_utc(datetime.now(timezone.utc))
+    start = iso_utc(datetime.now(timezone.utc))
     try:
         KNOWLEDGE_DIR.mkdir(parents=True, exist_ok=True)
         DAY_ZERO_PATH.write_text(start + "\n", encoding="utf-8")
@@ -340,26 +365,19 @@ MAX_NAMED_SESSIONS = 3  # beyond that the trail says "and others" — it is a po
 
 
 @dataclass
-class Piece:
-    """One row of the window: what it says, when it was said, when it landed, and where it sits."""
-    chunk_id: int
-    said: str  # `ts` — the moment of the conversation
-    landed: str  # `indexed_at` — the moment it entered the database
-    session: str  # the conversation it was read out of — this is what the trail points at
-    text: str
-
-
-@dataclass
 class Material:
     texts: list[str] = field(default_factory=list)  # chronological
     chars: int = 0
-    last_ts: str = ""  # indexing stamp of the last chunk taken — where the marker goes
+    last_ts: str = ""  # indexing stamp of the last chunk reviewed — where the marker goes
     last_id: int | None = None  # and its id, so the next run starts exactly here
     sessions: list[str] = field(default_factory=list)  # the conversations it was read out of
-    pending: int = 0  # chunks left for the next runs
+    pending: int = 0  # chosen messages left for the next runs
     pending_chars: int = 0
     in_range: int = 0  # rows the window matched, every role
-    candidates: int = 0  # of those, the ones a harvest is allowed to read (HARVESTED_ROLES)
+    reviewed: int = 0  # the user's messages among them (lore.selection.messages)
+    candidates: int = 0  # of those, the ones chosen for the model (lore.selection.choose)
+    reasons: dict = field(default_factory=dict)  # why they were chosen — one message may have two
+    duplicates: int = 0  # chosen twice in one window (a conversation stored twice), sent once
     late: int = 0  # taken although their stamp sits BEHIND the marker — the hole, measured
     before_zero: int = 0  # never harvested at all: indexed before day zero
     first_said: str = ""  # the conversation dates of what really went to the model
@@ -393,60 +411,69 @@ class Material:
         return max(0, self.candidates - len(self.texts) - self.pending)
 
 
-def said_by_user(role: str, text: str) -> bool:
-    """Whether a chunk is the human speaking — the only thing the harvest and the dig may read."""
-    return role in HARVESTED_ROLES and not text.lstrip().startswith(AUTOMATED_PREFIXES)
+def collect(conn: sqlite3.Connection, marker: Marker, zero: str = "",
+            echoes: "selection.Echoes | None" = None) -> Material:
+    """The user's messages the marker has not reviewed yet — and of them only the CHOSEN ones, the
+    oldest first up to the cap.
 
-
-def collect(conn: sqlite3.Connection, marker: Marker, zero: str = "") -> Material:
-    """Chunks the marker has not read yet, OLDEST first up to the cap.
-
-    Oldest first on purpose: the marker moves exactly as far as we got, so a backlog after a few
-    days away is worked off run by run instead of being silently skipped over.
+    Every message of the window is reviewed; only the ones lore.selection picks (a correction, a
+    repetition, "zapamiętaj") are handed over. The marker moves past everything reviewed — a message
+    that was not chosen is not waiting for anything — but stops before the first CHOSEN message that
+    did not fit, so a backlog of chosen ones is worked off run by run instead of skipped.
 
     `zero` is day zero — the moment this machine started learning. Everything indexed before it is
-    left alone (and counted, never swallowed): that is the archive from before the tool existed.
+    left alone (and counted, never swallowed).
     """
     where, args = marker.window()
     floor = f" AND {INDEXED} >= ?" if zero else ""
     rows = conn.execute(
-        f"SELECT id, ts, session, role, text, {INDEXED} FROM chunks WHERE ({where}){floor}"
-        f" ORDER BY {INDEXED}, id",
+        f"SELECT id, ts, session, file, line, part, role, text, {INDEXED} FROM chunks"
+        f" WHERE ({where}){floor} ORDER BY {INDEXED}, id",
         (*args, zero) if zero else args,
     ).fetchall()
-    kept = [
-        Piece(cid, ts, landed, session, f"[{ts_to_local(ts)}] {role}: {text}")
-        for cid, ts, session, role, text, landed in rows
-        if said_by_user(role, text)
-    ]
-    material = Material(in_range=len(rows), candidates=len(kept))
+    choice = selection.choose(conn, rows, echoes)
+    kept = choice.chosen
+    material = Material(in_range=len(rows), reviewed=len(choice.reviewed), candidates=len(kept),
+                        reasons=dict(choice.counts()), duplicates=choice.duplicates)
     if marker.chunk_id is not None:  # only the id half of the window can bring such a row in
-        material.late = sum(1 for piece in kept if piece.landed <= marker.stamp)
+        material.late = sum(1 for msg in kept if msg.landed <= marker.stamp)
     material.before_zero = _before_zero(conn, where, args, zero)
+    pieces = [msg.piece() for msg in kept]
     taken = 0
-    for piece in kept:
-        if material.chars + len(piece.text) > MAX_INPUT_CHARS:
+    for piece in pieces:
+        if material.chars + len(piece) > MAX_INPUT_CHARS:
             break
-        material.texts.append(piece.text)
-        material.chars += len(piece.text)
-        material.last_ts, material.last_id = piece.landed, piece.chunk_id
+        material.texts.append(piece)
+        material.chars += len(piece)
         taken += 1
     taken += _align_to_turn(material, kept, taken)
     # the oldest and the newest CONVERSATION date of what was taken — "przeczytane X wiadomości
     # z okresu od-do". Not the first and the last of the list: the list runs in indexing order,
     # and a late transcript lands among chunks that were said after it.
-    said = sorted(piece.said for piece in kept[:taken])
+    said = sorted(msg.said for msg in kept[:taken])
     material.first_said = said[0] if said else ""
     material.last_said = said[-1] if said else ""
-    rest = kept[taken:]
-    material.pending = len(rest)
-    material.pending_chars = sum(len(p.text) for p in rest)
+    material.pending = len(kept) - taken
+    material.pending_chars = sum(len(p) for p in pieces[taken:])
+    _reviewed_up_to(material, rows, kept[taken:])
     # the other half of the trail: the conversations this batch was read out of. The window it
     # covers is first_said..last_said, set just above — see Material.source().
-    for piece in kept[:taken]:
-        if piece.session and piece.session not in material.sessions:
-            material.sessions.append(piece.session)
+    for msg in kept[:taken]:
+        if msg.session and msg.session not in material.sessions:
+            material.sessions.append(msg.session)
     return material
+
+
+def _reviewed_up_to(material: Material, rows: list, waiting: list) -> None:
+    """Where the marker goes: the last row before the first chosen message still waiting — or the
+    end of the window when nothing waits. Rows past it are reviewed again next time, which costs a
+    look and nothing else; a row the marker jumped over would be lost for good."""
+    stop = len(rows)
+    if waiting:
+        stop = next(i for i, row in enumerate(rows) if row[0] == waiting[0].chunk_id)
+    if stop:
+        last = rows[stop - 1]
+        material.last_ts, material.last_id = last[8], last[0]
 
 
 def _before_zero(conn: sqlite3.Connection, where: str, args: tuple, zero: str) -> int:
@@ -454,6 +481,7 @@ def _before_zero(conn: sqlite3.Connection, where: str, args: tuple, zero: str) -
 
     Said out loud rather than dropped in silence: it is knowledge lying in the archive that we
     deliberately do not use, and the user may one day want it dug out on purpose (lore.mining).
+    Counted in chunks holding a message of the user (HARVESTED_SQL) — a glued chunk may hold two.
     """
     if not zero:
         return 0
@@ -464,14 +492,14 @@ def _before_zero(conn: sqlite3.Connection, where: str, args: tuple, zero: str) -
     return int(row[0] or 0)
 
 
-def _align_to_turn(material: Material, kept: list[Piece], taken: int) -> int:
+def _align_to_turn(material: Material, kept: list, taken: int) -> int:
     """Moves the cut onto a turn boundary, so one turn is not split between two prompts.
 
-    Parts of one turn share a `ts`. Nothing is lost when the cut does fall inside one — the marker
-    carries the id of the last chunk taken, so the tail is the first thing the next run sees — but a
-    half turn read out of context is worth less to the model, so we push the cut back.
+    Messages of one turn — or of one glued chunk — share a `ts`. A cut inside one would send the
+    first half now and the whole chunk again next time (the marker stops before the chunk of the
+    first message still waiting), so the cut is pushed back.
 
-    Returns how many chunks go back to the backlog (a negative number), or 0 when nothing moves.
+    Returns how many messages go back to the backlog (a negative number), or 0 when nothing moves.
     """
     if taken == 0 or taken == len(kept) or kept[taken - 1].said != kept[taken].said:
         return 0
@@ -484,8 +512,7 @@ def _align_to_turn(material: Material, kept: list[Piece], taken: int) -> int:
         return 0
     del material.texts[back:]
     material.chars = sum(len(t) for t in material.texts)
-    material.last_ts, material.last_id = kept[back - 1].landed, kept[back - 1].chunk_id
-    return back - taken  # negative: those chunks go back to the backlog
+    return back - taken  # negative: those messages go back to the backlog
 
 
 # ---------------------------------------------------------------- the tool that carries the model
@@ -630,6 +657,11 @@ def ask_model(material: str, instruction: str = PROMPT) -> str:
         return answer
     finally:
         shutil.rmtree(empty, ignore_errors=True)
+
+
+def ask_harvest(material: str) -> str:
+    """The daily harvest's call: the base instruction plus what the chosen material is."""
+    return ask_model(material, instruction=HARVEST_PROMPT)
 
 
 # ---------------------------------------------------------------- what the day cost
@@ -1064,6 +1096,199 @@ def _anomaly(rows: list[dict[str, str]]) -> str:
             f" (dzień {saved.get('data', '?')}) — historia przebiegów się nie zapisuje")
 
 
+# ---------------------------------------------------------------- is the learning worth it
+
+# The user judges the selection after two weeks, by numbers: how much was reviewed, how much of it
+# was chosen and why, how much went to the model, how many facts came out — and whether those facts
+# SURVIVED. The pass numbers exist nowhere else, so every pass that reviewed anything leaves one line
+# in its own journal (the cost journal above counts only passes that called the model, and a pass
+# that chose nothing is exactly the one this measurement has to see). The survival of the facts is
+# NOT kept a second time: it is counted from the trail lore.verify already writes (wiedza/zrodla.md)
+# and from the knowledge files themselves.
+LEARNING_JOURNAL_NAME = ".nauka-przebiegi.tsv"
+LEARNING_NAME = ".nauka-skutecznosc.txt"  # 'klucz: wartosc', for the supervisor to show
+LEARNING_COLUMNS = ("kiedy", "przejrzane", "wybrane", "poprawki", "powtorzenia", "zapamietaj",
+                    "do_modelu", "znaki_materialu", "znaki_wyslane", "fakty")
+LEARNING_DAYS = 14  # the span the user asked to judge by
+_REASON_COLUMNS = {selection.CORRECTION: "poprawki", selection.REPETITION: "powtorzenia",
+                   selection.REMEMBER: "zapamietaj"}
+# What happened to a fact, as read off the trail — the last event decides. The names are the keys of
+# the summary, so they are Polish and without diacritics like every other state file.
+SURVIVAL_KEYS = ("wylowione", "wpisane", "nadal_w_wiedzy", "zastapione", "cofniete", "wygasle",
+                 "uspione", "zniknely_bez_sladu", "nie_weszly")
+# the files in wiedza/ that are bookkeeping, not knowledge — a fact "found" there is not in force
+_NOT_KNOWLEDGE = {CANDIDATES_PATH.name, SOURCES_NAME, "historia-zmian.md", DORMANT_NAME, "README.md"}
+
+
+def learning_journal_path() -> Path:
+    return KNOWLEDGE_DIR / LEARNING_JOURNAL_NAME
+
+
+def learning_path() -> Path:
+    return KNOWLEDGE_DIR / LEARNING_NAME
+
+
+def record_learning(material: Material, found: int, sent: int = 0, when: str | None = None) -> None:
+    """One line per pass that reviewed anything, then the summary counted again out of the journal.
+
+    Like the cost history it must never cost the harvest itself, and never go quiet either: a line
+    that cannot be written lands in the log and under `nieprawidlowosc` in the summary.
+    """
+    when = when or datetime.now().strftime("%Y-%m-%d %H:%M")
+    row = {"kiedy": when, "przejrzane": material.reviewed, "wybrane": material.candidates,
+           **{col: material.reasons.get(reason, 0) for reason, col in _REASON_COLUMNS.items()},
+           "do_modelu": len(material.texts), "znaki_materialu": material.chars,
+           "znaki_wyslane": max(0, sent), "fakty": max(0, found)}
+    problem = ""
+    try:
+        rows = _append_learning(row) if material.reviewed else _read_learning()
+    except OSError as e:
+        problem = f"nie udało się dopisać przebiegu {when} do {LEARNING_JOURNAL_NAME}: {e}"
+        log(problem)
+        rows = _read_learning()
+    try:
+        write_learning_summary(rows, problem=problem)
+    except OSError as e:
+        log(f"the learning summary was not written to {LEARNING_NAME}: {e}")
+
+
+def _append_learning(row: dict) -> list[dict[str, str]]:
+    KNOWLEDGE_DIR.mkdir(parents=True, exist_ok=True)
+    path = learning_journal_path()
+    header = "" if path.exists() and path.stat().st_size else "\t".join(LEARNING_COLUMNS) + "\n"
+    with open(path, "a", encoding="utf-8", newline="\n") as f:
+        f.write(header + "\t".join(" ".join(str(row.get(c, "")).split()) for c in LEARNING_COLUMNS)
+                + "\n")
+    rows = _read_learning()
+    kept = trim_journal(rows)  # the same two limits as the cost history
+    if len(kept) != len(rows):
+        body = "".join("\t".join(r.get(c, "") for c in LEARNING_COLUMNS) + "\n" for r in kept)
+        path.write_text("\t".join(LEARNING_COLUMNS) + "\n" + body, encoding="utf-8", newline="\n")
+    return kept
+
+
+def _read_learning() -> list[dict[str, str]]:
+    """The journal read back; a line that does not fit is skipped out loud, never guessed at."""
+    out = []
+    for line in _lines(learning_journal_path()):
+        if not line.strip() or line.startswith(LEARNING_COLUMNS[0]):
+            continue
+        fields = line.split("\t")
+        if len(fields) != len(LEARNING_COLUMNS):
+            log(f"{LEARNING_JOURNAL_NAME}: a line with {len(fields)} of {len(LEARNING_COLUMNS)}"
+                f" columns was skipped: {line[:80]}")
+            continue
+        out.append(dict(zip(LEARNING_COLUMNS, fields)))
+    return out
+
+
+def write_learning_summary(rows: list[dict[str, str]], problem: str = "",
+                           now: str | None = None) -> None:
+    KNOWLEDGE_DIR.mkdir(parents=True, exist_ok=True)
+    now = now or datetime.now().strftime("%Y-%m-%d %H:%M")
+    pairs = summarize_learning(rows, now, problem)
+    learning_path().write_text("".join(f"{k}: {v}\n" for k, v in pairs.items()),
+                               encoding="utf-8", newline="\n")
+
+
+def summarize_learning(rows: list[dict[str, str]], now: str, problem: str = "") -> dict[str, str]:
+    """The pairs the supervisor shows. `zaktualizowano` moves on every real pass, even one that
+    reviewed nothing — a stale stamp then says by itself that the harvest stopped running."""
+    today = now[:10]
+    since = _days_back(today, LEARNING_DAYS - 1)
+    out = {"zaktualizowano": now, "nieprawidlowosc": problem}
+    last = rows[-1] if rows else {}
+    out.update({f"ostatni.{c}": last.get(c, "") for c in LEARNING_COLUMNS})
+    inside = [r for r in rows if r.get("kiedy", "")[:10] >= since]
+    prefix = f"dni{LEARNING_DAYS}."
+    out.update({prefix + "od": since, prefix + "do": today, prefix + "przebiegi": str(len(inside))})
+    sums = {c: sum(_number(r, c) for r in inside) for c in LEARNING_COLUMNS[1:]}
+    out.update({prefix + c: str(v) for c, v in sums.items()})
+    # a share needs its base next to it: "wybrane 4%" of 12 messages is not "4%" of 1 200
+    share = 100 * sums["wybrane"] / sums["przejrzane"] if sums["przejrzane"] else 0.0
+    out[prefix + "odsetek_wybranych"] = f"{share:.1f}%"
+    try:
+        survival = fact_survival(today)
+    except OSError as e:
+        survival = {}
+        out["nieprawidlowosc"] = out["nieprawidlowosc"] or f"przeżywalność faktów nie policzona: {e}"
+    out["fakty14.od"] = since
+    out.update({f"fakty14.{k}": str(survival.get(k, 0)) for k in SURVIVAL_KEYS})
+    return out
+
+
+def fact_survival(today: str, days: int = LEARNING_DAYS) -> dict[str, int]:
+    """What became of the facts first fished out in the last `days` days, counted off the trail.
+
+    The last event of a fact decides: written / promoted / woken / the winner of a clash = in the
+    knowledge; replaced, undone, expired, put to sleep = the named outcome. "In the knowledge" is
+    then checked against the files themselves: an entry the trail says is there, but nobody can
+    find, was removed by hand — counted as `zniknely_bez_sladu` instead of passing for alive.
+    """
+    from . import verify  # here: verify imports this module, so it is complete only at call time
+
+    since = _days_back(today, days - 1)
+    first: dict = {}  # fact key -> first sighting day, only for facts first seen inside the span
+    state: dict = {}
+    ever_in: set = set()
+    for line in _lines(KNOWLEDGE_DIR / SOURCES_NAME):
+        if not line.startswith("- "):
+            continue
+        parts = line[2:].split(" | ")
+        if len(parts) < 5:
+            continue
+        day, event, detail = parts[0].strip(), parts[1].strip(), parts[2].strip()
+        # the fact is everything after the fixed fields — the same reading as verify.read_trail
+        whole = len(parts) >= 6 and parts[4].startswith(SESSIONS_FIELD)
+        key = verify.fact_key(" | ".join(parts[5:] if whole else parts[4:]))
+        if event == SIGHTED:
+            if key not in first and day >= since:
+                first[key] = day
+            continue
+        if key not in first:
+            continue
+        if event in (verify.WRITTEN, verify.PROMOTED, verify.WOKEN, verify.REPLACED_BY):
+            state[key] = "in"
+            ever_in.add(key)
+        elif event == verify.REPLACED:
+            state[key] = "zastapione"
+        elif event == verify.EXPIRED:
+            state[key] = "wygasle"
+        elif event == verify.SLEPT:
+            state[key] = "uspione"
+        elif event == verify.UNDONE:
+            state[key] = "in" if detail.startswith(verify.CHANGE_KINDS["U"]) else "cofniete"
+    present = _knowledge_keys(verify.fact_key)
+    out = dict.fromkeys(SURVIVAL_KEYS, 0)
+    out["wylowione"] = len(first)
+    out["wpisane"] = len(ever_in)
+    for key in first:
+        last = state.get(key)
+        if last is None:
+            out["nie_weszly"] += 1
+        elif last == "in":
+            out["nadal_w_wiedzy" if key in present else "zniknely_bez_sladu"] += 1
+        else:
+            out[last] += 1
+    return out
+
+
+def _knowledge_keys(key_of) -> set:
+    """The keys of every line standing in the knowledge: the rules files and the reference files."""
+    paths = [*instruction_paths(), *sorted(KNOWLEDGE_DIR.glob("*.md"))]
+    keys = set()
+    for path in paths:
+        if path.parent == KNOWLEDGE_DIR and path.name in _NOT_KNOWLEDGE:
+            continue
+        for line in _lines(path):
+            text = PENDING_NOTE.sub("", _BULLET.sub("", line).strip())
+            if text:
+                keys.add(key_of(_LEADING_DAY.sub("", text)))
+    return keys
+
+
+
+
 @dataclass
 class Fact:
     """A fact with the shelf it belongs to — the layer decides where the human moves it later."""
@@ -1271,13 +1496,14 @@ def _empty_run() -> dict:
     A function, not a constant: the two lists would otherwise be shared between all the runs of
     one process.
     """
-    return {"chunks": 0, "chars": 0, "pending": 0, "runs_left": 0, "in_range": 0, "candidates": 0,
-            "late": 0, "missing": 0, "before_zero": 0, "from": "", "to": "",
-            "facts": [], "added": []}
+    return {"chunks": 0, "chars": 0, "pending": 0, "runs_left": 0, "in_range": 0, "reviewed": 0,
+            "candidates": 0, "reasons": {}, "duplicates": 0, "late": 0, "missing": 0,
+            "before_zero": 0, "from": "", "to": "", "facts": [], "added": []}
 
 
-def run(dry_run: bool = False, ask=ask_model, conn: sqlite3.Connection | None = None) -> dict:
-    """One pass: material -> model -> waiting room. Never raises on missing data, only reports it."""
+def run(dry_run: bool = False, ask=ask_harvest, conn: sqlite3.Connection | None = None) -> dict:
+    """One pass: review -> choice -> model -> waiting room. Never raises on missing data, only
+    reports it."""
     start_pass()  # this pass gets its own line in the history — catch_up calls us several times
     marker = since_marker()
     own = conn is None
@@ -1296,15 +1522,22 @@ def run(dry_run: bool = False, ask=ask_model, conn: sqlite3.Connection | None = 
     out = {**_empty_run(), "status": "ok", "since": marker.stamp, "day_zero": zero,
            "chunks": len(material.texts), "chars": material.chars, "pending": material.pending,
            "runs_left": material.runs_left(), "in_range": material.in_range,
-           "candidates": material.candidates, "late": read.late, "missing": read.missing,
-           "before_zero": read.before_zero, "from": read.first, "to": read.last}
+           "reviewed": material.reviewed, "candidates": material.candidates,
+           "reasons": material.reasons, "duplicates": material.duplicates, "late": read.late,
+           "missing": read.missing, "before_zero": read.before_zero, "from": read.first,
+           "to": read.last}
     if not material.texts:
         out["status"] = "no-material"
-        out["note"] = f"nothing indexed after {marker.stamp}"
-        # a run that read nothing has nothing to add up — unless it has something to WARN about,
-        # and then the number has to reach the cycle, not only the log
-        if not dry_run and (read.before_zero or read.late or read.missing):
-            record_cost(read=read)
+        out["note"] = (f"{material.reviewed} messages of the user reviewed since {marker.stamp},"
+                       f" none of them a correction, a repetition or a 'zapamiętaj'"
+                       if material.reviewed else f"nothing indexed after {marker.stamp}")
+        if not dry_run:
+            # a run that read nothing has nothing to add up — unless it has something to WARN about,
+            # and then the number has to reach the cycle, not only the log
+            if read.before_zero or read.late or read.missing:
+                record_cost(read=read)
+            record_learning(material, found=0)
+            _move_marker(material, marker, zero)  # reviewed is read: it does not wait for anything
         return out
     if dry_run:
         out["status"] = "dry-run"
@@ -1312,18 +1545,30 @@ def run(dry_run: bool = False, ask=ask_model, conn: sqlite3.Connection | None = 
         out["model_available"] = cli is not None
         out["model_cli"] = cli.name if cli else ""
         return out
+    sent_before = _PASS.sent
     out["facts"] = parse_facts(ask(material.joined()))
     out["added"] = append_facts(out["facts"], source=material.source(), sessions=material.sessions)
+    record_learning(material, found=len(out["facts"]), sent=_PASS.sent - sent_before)
     record_cost(found=len(out["facts"]), read=read)  # the call was counted inside ask_model
     # and the same numbers once more, as one line of the history. Only the passes that got this
     # far leave a line: a pass that found no material called nobody and cost nothing, and a row of
     # zeros would only pull the averages the user reads down towards nothing.
     record_pass()
-    write_marker(material.marker())  # exactly as far as we got, so the next run picks up from here
+    _move_marker(material, marker, zero)  # exactly as far as we got, so the next run picks up here
     return out
 
 
-def catch_up(runs: int = 1, dry_run: bool = False, ask=ask_model,
+def _move_marker(material: Material, marker: Marker, zero: str) -> None:
+    """After a real pass: as far as the review got. A pass that found nothing after day zero, but a
+    backlog before it, still moves the marker up to day zero — that backlog was let go on purpose
+    (see day_zero), and it was counted out loud once; counting it again every day would be noise."""
+    if material.last_ts:
+        write_marker(material.marker())
+    elif zero and material.before_zero and marker.stamp < zero:
+        write_marker(Marker(zero))
+
+
+def catch_up(runs: int = 1, dry_run: bool = False, ask=ask_harvest,
              conn: sqlite3.Connection | None = None) -> list[dict]:
     """Up to `runs` passes in a row, stopping early once the backlog is worked off."""
     out = []
@@ -1359,7 +1604,9 @@ def _report(r: dict) -> None:
         log(r["note"])
         _controls(r)
         return
-    log(f"material: {r['chunks']} chunks, {r['chars']} characters indexed after {r['since']}"
+    why = ", ".join(f"{k} {v}" for k, v in sorted(r["reasons"].items()))
+    log(f"reviewed {r['reviewed']} messages of the user indexed after {r['since']}, chosen"
+        f" {r['candidates']} ({why}); to the model: {r['chunks']} of them, {r['chars']} characters"
         f" (messages from {r['from']} to {r['to']})")
     _controls(r)
     if r["status"] == "dry-run":
@@ -1373,7 +1620,7 @@ def _report(r: dict) -> None:
         for fact in r["added"]:
             log(f"  + ({fact.label()}) {fact.text}")
     if r["pending"]:
-        log(f"backlog: {r['pending']} chunks waiting, about {r['runs_left']} more run(s)"
+        log(f"backlog: {r['pending']} chosen messages waiting, about {r['runs_left']} more run(s)"
             f" — catch up with:  -Nadrabiaj {r['runs_left']}")
 
 
