@@ -99,6 +99,13 @@ Nie dotyczy to problemów na głębokość (patrz niżej) — tam dzielenie szko
 > `git -C` / `GIT_DIR`. To gwarancja mechanizmu, nie konwencja, której model może
 > nie dotrzymać.
 >
+> **Uzupełnienie 2026-09-25:** w kopii roboczej izolacja blokuje też **każde**
+> wywołanie `powershell` z narzędzia Bash — nawet `powershell -Command "1+1"`
+> („cannot be shown not to run git”). Worker w worktree nie przetestuje więc
+> skryptu `.ps1`. Zadanie, którego kryterium to uruchomienie PowerShella
+> (nadzorca, `koszt-pamieci.ps1`, straznik), idzie **bez worktree**, jedno naraz,
+> z `git add` wyłącznie wskazanych plików — albo testy puszcza kierownik po scaleniu.
+>
 > Narzędzia się zmieniają, a zasady zapisane raz zostają na zawsze. Jeśli
 > **kiedykolwiek zaobserwujesz, że coś działa inaczej, niż mówi to twierdzenie** —
 > powiedz o tym użytkownikowi wprost, jednym zdaniem, zamiast po cichu dostosować
