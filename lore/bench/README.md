@@ -2,7 +2,7 @@
 
 Badanie, nie część produkcji. Nic stąd nie jest importowane przez `lore/lore/*`, nic nie pisze
 do prawdziwej bazy ani do `~/.claude` / `~/.lore` (skrypty odmawiają startu, gdy katalog roboczy
-leży w środku któregoś z nich). Wynik ostatniego przebiegu: `.claude/raporty/pamiec-test-modeli.md`.
+leży w środku któregoś z nich). Wynik ostatniego przebiegu: `.megaruchacz/raporty/pamiec-test-modeli.md`.
 
 ## Co jest porównywane
 

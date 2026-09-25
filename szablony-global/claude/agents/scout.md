@@ -1,7 +1,7 @@
 ---
 name: scout
 description: Worker do rozpoznania kodu — szuka plików, symboli i wzorców i wraca ze zwięzłym raportem. Używaj, gdy trzeba ustalić GDZIE coś jest, zanim cokolwiek zmienisz.
-tools: Read, Grep, Glob, Bash
+tools: Read, Grep, Glob, Bash, Edit, Write
 model: sonnet
 ---
 

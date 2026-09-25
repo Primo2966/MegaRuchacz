@@ -24,9 +24,10 @@ W zestawie jest też **Lore — przeszukiwalna pamięć wszystkich Twoich rozmó
 
 | Co | Do czego |
 |---|---|
-| `CLAUDE.md` | zasady kierownika — serce modułu `workerzy` |
+| `szablony-global/claude/zasady-kierownika.md` | zasady kierownika dla Claude Code — serce modułu `workerzy` |
+| `CLAUDE.md` | reguły budowania samego narzędzia (tylko to repo) |
 | `zasady-globalne.md` | zasady wpisywane do plików instrukcji narzędzi AI |
-| `.claude/agents/` | prompty czterech ról: implementer, scout, verifier, zastępca |
+| `szablony-global/claude/agents/` | prompty czterech ról: implementer, scout, verifier, zastępca |
 | `szablony-codex/` | to samo dla Codeksa: role, zasady kierownika, hooki |
 | `szablony-opencode/` | to samo dla opencode: role, zasady kierownika, wtyczka rejestru |
 | `lore/` | moduł `pamiec` — serwer MCP z przeszukiwalną pamięcią rozmów |
@@ -83,8 +84,10 @@ trzech** narzędziach naraz — nie wdrażasz nic po kolei:
 - **opencode** — role w `~/.config/opencode/agents`, wtyczka rejestru w `~/.config/opencode/plugins`;
 - **Claude Code** — role w `~/.claude/agents`, rejestr i hooki w `~/.claude/settings.json`;
 - **Codex** — zasady w `~/.codex/AGENTS.md`, rejestr i hooki w `~/.codex/hooks.json`;
-- **zasady** dla wszystkich trzech lecą przez `~/.claude/CLAUDE.md` (Claude Code i opencode)
-  oraz `~/.codex/AGENTS.md` (Codex).
+- **zasady** lecą przez `~/.claude/CLAUDE.md` (Claude Code i opencode) oraz
+  `~/.codex/AGENTS.md` (Codex) — każdy plik w wariancie swojego narzędzia: wersja dla
+  Claude Code tam, gdzie Claude Code pracuje, wersja opencode/Codex w `AGENTS.md`
+  i na maszynie bez Claude Code.
 
 Stan pracy — rejestr zadań i mapa projektu — zostaje **w projekcie**, w `.megaruchacz\`.
 Zakłada go pierwszy worker, gdy zajdzie potrzeba, więc nic nie zalega w projektach,
@@ -462,7 +465,7 @@ który milknie razem z tym, czego pilnuje, jest bezużyteczny. W oknie:
 polski model `sdadas/mmlw-retrieval-roberta-base` (~500 MB, liczony lokalnie).
 Zmierzony 2026-09-24 na 60 pytaniach z rozmów autora: trafienie w pierwszej
 dziesiątce w 90% pytań wobec 80% poprzedniego `multilingual-e5-small` — lepiej
-także po niemiecku i angielsku (`.claude/raporty/pamiec-test-modeli.md`).
+także po niemiecku i angielsku (`.megaruchacz/raporty/pamiec-test-modeli.md`).
 Automat doklejający fragmenty do wiadomości szuka **samym pełnym tekstem**, bo musi
 się zmieścić w ułamku sekundy — trafia więc tylko przy wspólnych słowach, a próg
 trafności jest ostry: lepiej nic niż szum. Pomija bieżącą rozmowę i nie dokleja

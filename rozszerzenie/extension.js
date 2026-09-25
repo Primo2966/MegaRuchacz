@@ -273,7 +273,7 @@ function activate(kontekst) {
       vscode.window.showInformationMessage("Najpierw otworz folder projektu.");
       return;
     }
-    wTerminalu("Workerzy na zywo", 'Get-Content "' + path.join(st.folder, ".claude", "worklog.md") + '" -Wait -Tail 25');
+    wTerminalu("Workerzy na zywo", 'Get-Content "' + path.join(st.folder, ".megaruchacz", "worklog.md") + '" -Wait -Tail 25');
   });
 
   zarejestruj("megaruchacz.otworz", function (wezel) {

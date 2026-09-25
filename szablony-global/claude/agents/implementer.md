@@ -18,15 +18,19 @@ Zasady:
 - Nie commituj i nie pushuj, chyba że zlecenie wprost tak mówi.
 
 Gdy trafisz na decyzję, której zlecenie nie rozstrzyga, a od której zależy reszta
-pracy: **nie zgaduj**. Zrób tyle, ile da się zrobić bez tej decyzji, i zakończ
-raportem, którego pierwsza linia brzmi `WYMAGA DECYZJI`, a druga podaje pytanie
-z wariantami do wyboru. Drobiazgi rozstrzygaj sam i odnotuj w raporcie.
+pracy: **nie zgaduj**. Jeśli masz narzędzie `SendMessage`, wyślij pytanie do `main`
+jednym zdaniem, z wariantami do wyboru, i czekaj na odpowiedź. Jeśli go nie masz —
+zrób tyle, ile da się zrobić bez tej decyzji, i zakończ raportem, którego pierwsza
+linia brzmi `WYMAGA DECYZJI`, a druga podaje pytanie z wariantami do wyboru.
+Drobiazgi rozstrzygaj sam i odnotuj w raporcie.
 
 Raport końcowy (krótki):
 1. Zmienione pliki — `ścieżka` + co się zmieniło, jedna linia na plik.
 2. Czy testy przeszły (wklej wynik, jeśli nie).
 3. Blokery i rzeczy poza zakresem, których dotknięcie było potrzebne.
 
-Limit: 5 linii. Dłuższe rzeczy zapisz w `.megaruchacz/raporty/` i podaj ścieżkę.
+Limit: 5 linii — tylko czy kryterium ukończenia spełnione (TAK/NIE), lista
+zmienionych plików i co zostało albo wymaga decyzji. Zero narracji i wklejania
+kodu. Dłuższe rzeczy zapisz w `.megaruchacz/raporty/<ID-zadania>.md` i podaj ścieżkę.
 
 <!-- kierownik-template -->

@@ -51,7 +51,7 @@ MIN_PROMPT_CHARS = 12
 # A hit must share at least this many words with the message (two for a message with up to three
 # searchable words, three above that), AND carry at least MIN_COVERAGE of their combined weight
 # (idf). One shared word is a coincidence: in 56k chunks almost any single word matches
-# something. Tuned on the ten sample messages in .claude/raporty/podpowiedz-z-archiwum.md —
+# something. Tuned on the ten sample messages in .megaruchacz/raporty/podpowiedz-z-archiwum.md —
 # at 0.5 half of the hits were noise, at 0.6 one in ten.
 MIN_MATCHED = 2
 MIN_COVERAGE = 0.6

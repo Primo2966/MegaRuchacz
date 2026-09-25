@@ -46,7 +46,7 @@ nic przed fragmentem; e5 — `query:`/`passage:`.
 z eksportu `dawidplaskowski/mmlw-retrieval-roberta-base_onnx`, przypiętego do jednego commita
 i sumy sha256 każdego pliku — podmieniony plik jest odrzucany, nie używany. Pomiar z 2026-09-24
 na 60 pytaniach z rozmów autora: top10 90% wobec 80% dla e5-small, lepiej także po niemiecku
-i angielsku — `.claude/raporty/pamiec-test-modeli.md`, kod pomiaru w `lore/bench/`.
+i angielsku — `.megaruchacz/raporty/pamiec-test-modeli.md`, kod pomiaru w `lore/bench/`.
 
 **Automatyczne przypomnienie** (`lore/recall.py`, wołane przez `narzedzia/przypomnienie.js`
 przy każdej wiadomości): samo FTS5, bez modelu wektorowego (budżet < 1 s), najwyżej 2 fragmenty,

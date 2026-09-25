@@ -338,7 +338,6 @@ Write-Host "Projekt docelowy: $Projekt"
 Write-Host ""
 Write-Host "1) W projekcie, w katalogu .claude\ (w wiekszosci repo jest on w .gitignore):"
 Write-Host "   agents\*.md                 definicje czterech rol workerow"
-Write-Host "   worklog.md, mapa.md         pliki stanu: rejestr zadan i mapa projektu"
 Write-Host "   megaruchacz-zasady.md       zasady pracy kierownika"
 Write-Host "   megaruchacz-sesja.json      gotowy ladunek dla hooka startowego"
 Write-Host "   orchestrator-reminder.json  krotkie przypomnienie przy kazdym poleceniu; gdy stoi"
@@ -348,6 +347,8 @@ Write-Host "   mr-log.js                   dopisuje do rejestru start i koniec w
 Write-Host "   megaruchacz-wersja.txt      wersja wdrozenia, zeby dalo sie je aktualizowac"
 Write-Host "   settings.json               DOPISANE HOOKI - uruchamiane przy kazdej sesji"
 Write-Host "                               i przy kazdym wyslanym poleceniu, plus worktree"
+Write-Host "   Obok, w katalogu .megaruchacz\ (jeden dla wszystkich narzedzi):"
+Write-Host "   worklog.md, mapa.md         pliki stanu: rejestr zadan i mapa projektu"
 Write-Host "   Zaden sledzony plik repozytorium nie zostanie ruszony. Gdy cos nadpisujemy,"
 Write-Host "   kopia zapasowa laduje obok, z data w nazwie."
 Write-Host ""
@@ -478,8 +479,8 @@ if (-not (Test-Path (Join-Path $Projekt ".git"))) {
   Write-Host "UWAGA  to nie jest repozytorium git - worktree (izolacja rownoleglych zadan) nie zadziala" -ForegroundColor Yellow
 }
 
-# 1. Workerzy
-Get-ChildItem (Join-Path $Zrodlo ".claude\agents\*.md") | ForEach-Object {
+# 1. Workerzy - te same role co w instalacji globalnej (jedno zrodlo, szablony-global)
+Get-ChildItem (Join-Path $Zrodlo "szablony-global\claude\agents\*.md") | ForEach-Object {
   $cel = Join-Path $Projekt ".claude\agents\$($_.Name)"
   if (Test-Path $cel) {
     if (-not ((Get-Content $cel -Raw) -match "kierownik-template")) {
@@ -491,19 +492,26 @@ Get-ChildItem (Join-Path $Zrodlo ".claude\agents\*.md") | ForEach-Object {
 }
 Write-Host "OK  workerzy -> .claude\agents\"
 
-# 2. Pliki stanu - tylko gdy ich nie ma
+# 2. Pliki stanu - tylko gdy ich nie ma. W .megaruchacz\, tak jak w instalacji
+# globalnej i u Codeksa/opencode: jeden rejestr i jedna mapa na projekt, niezaleznie
+# od narzedzia. Zakladamy je puste - rejestr i mapa zrodla to stan TEGO repo, nie wzor.
+$katStanu = Join-Path $Projekt ".megaruchacz"
+New-Item -ItemType Directory -Force -Path $katStanu | Out-Null
 foreach ($f in @("worklog.md","mapa.md")) {
-  $celStanu = Join-Path $Projekt ".claude\$f"
+  $celStanu = Join-Path $katStanu $f
   if (-not (Test-Path $celStanu)) {
-    Copy-Item (Join-Path $Zrodlo ".claude\$f") $celStanu
-    Write-Host "OK  .claude\$f (nowy)"
+    $pusty = "# Rejestr pracy`r`n`r`n"
+    if ($f -eq "mapa.md") { $pusty = "# Mapa projektu`r`n`r`n_(pusto - pierwszy scout ma tu dopisac, co gdzie lezy)_`r`n" }
+    [System.IO.File]::WriteAllText($celStanu, $pusty, (New-Object System.Text.UTF8Encoding($false)))
+    Write-Host "OK  .megaruchacz\$f (nowy)"
   } else {
-    Write-Host "--  .claude\$f juz istnieje, zostawiam"
+    Write-Host "--  .megaruchacz\$f juz istnieje, zostawiam"
   }
 }
 
-# 3. Zasady + payloady dla hookow - wszystko w .claude, nic do repo
-Copy-Item (Join-Path $Zrodlo "CLAUDE.md") (Join-Path $Projekt ".claude\megaruchacz-zasady.md") -Force
+# 3. Zasady + payloady dla hookow - wszystko w .claude, nic do repo. Zasady te same
+# co w bloku globalnym (szablony-global\claude\zasady-kierownika.md).
+Copy-Item (Join-Path $Zrodlo "szablony-global\claude\zasady-kierownika.md") (Join-Path $Projekt ".claude\megaruchacz-zasady.md") -Force
 Copy-Item (Join-Path $Zrodlo ".claude\orchestrator-reminder.json") (Join-Path $Projekt ".claude") -Force
 Copy-Item (Join-Path $Zrodlo ".claude\mr-log.js") (Join-Path $Projekt ".claude") -Force
 Write-Host "OK  .claude\megaruchacz-zasady.md + przypomnienie dla hooka"
@@ -1029,14 +1037,17 @@ Write-Host ""
 Write-Host "--- samosprawdzenie ---"
 
 $wymagane = @("megaruchacz-zasady.md","orchestrator-reminder.json",
-              "mr-log.js","worklog.md","mapa.md","megaruchacz-wersja.txt")
+              "mr-log.js","megaruchacz-wersja.txt")
 # Pliki skladane node'em. Bez niego ich nie ma i nie udajemy, ze sa - ale to
 # porazka tylko tam, gdzie w ogole moglyby do czegos sluzyc.
 if ($Node) { $wymagane += @("megaruchacz-sesja.json","settings.json") }
 foreach ($plik in $wymagane) {
   Sprawdz ".claude\$plik" (Test-Path (Join-Path $Projekt ".claude\$plik")) "plik nie powstal"
 }
-Get-ChildItem (Join-Path $Zrodlo ".claude\agents\*.md") | ForEach-Object {
+foreach ($plik in @("worklog.md","mapa.md")) {
+  Sprawdz ".megaruchacz\$plik" (Test-Path (Join-Path $Projekt ".megaruchacz\$plik")) "plik nie powstal"
+}
+Get-ChildItem (Join-Path $Zrodlo "szablony-global\claude\agents\*.md") | ForEach-Object {
   Sprawdz ".claude\agents\$($_.Name)" (Test-Path (Join-Path $Projekt ".claude\agents\$($_.Name)")) "plik nie powstal"
 }
 Nie-Sprawdzono "obecnosc plikow w .claude\ potwierdza tylko zapis na dysku - nie to, ze Claude Code je wczyta"

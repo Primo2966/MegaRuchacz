@@ -1,4 +1,5 @@
-// Dopisuje linie do .claude/worklog.md przy starcie i koncu kazdego workera
+// Dopisuje linie do .megaruchacz/worklog.md przy starcie i koncu kazdego workera
+// (ten sam rejestr co w instalacji globalnej i u Codeksa/opencode)
 // ORAZ aktualizuje wspolny rejestr okien, z ktorego korzysta panel nadzoru.
 // Wolany przez hooki SubagentStart / SubagentStop.
 const fs = require("fs");
@@ -21,7 +22,9 @@ process.stdin.on("end", () => {
 
   // --- 1. rejestr czytelny dla czlowieka ---
   try {
-    const plik = path.join(katalog, ".claude", "worklog.md");
+    const dir = path.join(katalog, ".megaruchacz");
+    if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
+    const plik = path.join(dir, "worklog.md");
     if (!fs.existsSync(plik)) fs.writeFileSync(plik, "# Rejestr pracy\n\n");
     fs.appendFileSync(plik, "- " + czas + "  " + (koniec ? "KONIEC " : "START  ") + kto + (co ? " | " + co : "") + "\n");
   } catch { /* rejestr to wygoda, nie moze wywrocic sesji */ }

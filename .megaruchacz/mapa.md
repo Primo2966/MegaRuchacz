@@ -131,16 +131,42 @@ Dokumentacja zrodlowa: repo `openai/codex/docs/*.md` to same odsylacze; tresc je
   `http://127.0.0.1:%ORCA_AGENT_HOOK_PORT%/hook/codex`, nie zwraca `additionalContext`.
   Obok `claude-hook.cmd` i `claude-statusline.cmd` - analogiczne dla Claude Code.
 
+## Zasady kierownika - zrodla i warianty (od 0.21.0, raport P5/P6)
+
+- `szablony-global/claude/zasady-kierownika.md` - ZRODLO PRAWDY zasad kierownika w wersji dla
+  Claude Code (praca w tle, worktree, SendMessage). Idzie do bloku `MegaRuchacz:kierownik`
+  w `~/.claude/CLAUDE.md` (instaluj-globalnie.ps1, gdy Claude Code na maszynie pracuje =
+  jest `~/.claude/history.jsonl` albo `~/.claude.json`) i do `.claude/megaruchacz-zasady.md`
+  wdrozen per projekt (wdroz.ps1 sekcja 3, straznik `Nanies-Poprawki`).
+- `szablony-opencode/zasady-kierownika.md` - wariant opencode/Codex: `~/.codex/AGENTS.md`
+  (zawsze, jak dotad) i `~/.claude/CLAUDE.md` na maszynie bez Claude Code (domowa).
+  Wymuszenie: `instaluj-globalnie.ps1 -WariantZasad claude|opencode`.
+- `szablony-codex/zasady-kierownika.md` - wariant dla wdrozen Codeksa per projekt (AGENTS.md
+  projektu); instalacja globalna go NIE uzywa.
+- opencode (1.18.32, sprawdzone w binarce) czyta globalnie PIERWSZY istniejacy z
+  `~/.config/opencode/AGENTS.md` i `~/.claude/CLAUDE.md` - na biurowej dostaje wiec wariant
+  Claude Code. Rozdzielenie wymaga wlasnego pliku razem z "Co wiem" i blokiem Lore.
+- `C:\dev\claude-worker\CLAUDE.md` - tylko reguly repo ("Cisza jest zakazana"); nie jest
+  juz szablonem niczego.
+- Role Claude Code: jedno zrodlo `szablony-global/claude/agents/*.md` (instalator ->
+  `~/.claude/agents/`, wdroz -> `.claude/agents/` projektu). Limit raportu i zasada
+  "WYMAGA DECYZJI / SendMessage" stoja w rolach, nie w zasadach kierownika.
+- Stan pracy w KAZDYM trybie: `<projekt>/.megaruchacz/` (`worklog.md`, `mapa.md`, `raporty/`).
+  W innych repo na biurowej leza jeszcze stare `.claude/` z mapami sprzed 0.19.0
+  (Aliebaba-Primo, WMS_Official, amazon-helper, ecommerce-helper) - nikt ich nie przeniosl.
+
 ## Tryb workerow: na czym stoi w Claude Code (inwentarz 2026-09-17)
 
 Bez numerow linii - te same powody co wyzej. Sekcje we `wdroz.ps1` sa ponumerowane
 komentarzami ("# 1. Workerzy", "# 4. settings.json" itd.), wiec szukaj po nich.
 
-- `wdroz.ps1`, sekcja "1. Workerzy" - kopiuje `.claude/agents/*.md` (4 role: implementer,
+- `wdroz.ps1`, sekcja "1. Workerzy" - kopiuje `szablony-global/claude/agents/*.md` do
+  `.claude/agents/` projektu (4 role: implementer,
   scout, verifier, zastepca); nadpisuje cudze pliki dopiero po kopii zapasowej,
   rozpoznaje swoje po znaczniku `kierownik-template`.
-- `wdroz.ps1`, sekcja "2. Pliki stanu" - `worklog.md` i `mapa.md` tylko gdy ich nie ma.
-  Sekcja "3. Zasady + payloady": `CLAUDE.md` zrodla -> `.claude/megaruchacz-zasady.md`,
+- `wdroz.ps1`, sekcja "2. Pliki stanu" - puste `.megaruchacz/worklog.md` i `mapa.md`, tylko
+  gdy ich nie ma. Sekcja "3. Zasady + payloady": `szablony-global/claude/zasady-kierownika.md`
+  -> `.claude/megaruchacz-zasady.md`,
   plus `orchestrator-reminder.json` i `mr-log.js`, a node sklada
   `.claude/megaruchacz-sesja.json`: JSON z `hookSpecificOutput.additionalContext`
   = cala tresc zasad (ladunek hooka SessionStart).
@@ -158,10 +184,10 @@ komentarzami ("# 1. Workerzy", "# 4. settings.json" itd.), wiec szukaj po nich.
   `.codex/` rekurencyjnie tylko do odczytu. Start i koniec workera dopisuje
   `narzedzia/mr-log-codex.js`.
 - `.claude/mr-log.js` - wolany z SubagentStart/SubagentStop; czyta payload ze stdin (`agent_type`,
-  `description`), dopisuje linie START/KONIEC do `.claude/worklog.md` i aktualizuje rejestr okien
+  `description`), dopisuje linie START/KONIEC do `.megaruchacz/worklog.md` (od 0.21.0) i aktualizuje rejestr okien
   `<rodzic-repo>/.mr-okna/<ID>.json` (pola `aktywni`, `lacznie`, `puls`) dla panelu nadzoru.
   Zwraca `{"suppressOutput":true}`.
-- `.claude/agents/*.md` - naglowek YAML: `name`, `description`, `tools` (lista narzedzi po przecinku),
+- `szablony-global/claude/agents/*.md` (od 0.21.0 jedyne zrodlo rol Claude Code; kopie w `.claude/agents/` repo usuniete) - naglowek YAML: `name`, `description`, `tools` (lista narzedzi po przecinku),
   opcjonalnie `model` (scout/verifier: sonnet) i `effort: high`. Reszta pliku to prompt roli.
   scout ma `tools: Read, Grep, Glob, Bash, Edit` (Edit wylacznie po to, zeby dopisywac do mapy).
 - `CLAUDE.md` (korzen) opiera sie na: Agent tool z `run_in_background`, `isolation:"worktree"`
@@ -316,7 +342,7 @@ workera pochodzi z aktywnego Dispatcha, nie z tytulu terminala ani widocznego pa
 - Pokrycie jest realne w trzech miejscach: limit raportu (Orca: 3 zdania + `--report-path`),
   samowystarczalne zlecenie (Orca: Task-spec contract) i pytanie blokujace
   (Orca: `ask`/`reply`, MegaRuchacz: `SendMessage` do `main`).
-- Czego Orca NIE MA: mapy projektu (odpowiednika `.claude/mapa.md`), reguly "kiedy NIE
+- Czego Orca NIE MA: mapy projektu (odpowiednika `.megaruchacz/mapa.md`), reguly "kiedy NIE
   rozdawac" (debugowanie, jedna gleboka zmiana, drobiazg) ani obowiazku commita przed
   kasowaniem kopii roboczej. `task-list --ready` jest nazwane "external memory", ale to
   pamiec o ZADANIACH, nie o tym, gdzie co lezy w repo.
@@ -350,3 +376,210 @@ workera pochodzi z aktywnego Dispatcha, nie z tytulu terminala ani widocznego pa
 - Codex/OpenAI: odczyt z bufora 0.1x, zapis 1.25x przez API (GPT-5.6+), w rozliczeniu kredytami Codeksa brak doplaty za zapis;
   bufor zyje 30 min od ostatniego uzycia. Zrodla: `https://developers.openai.com/api/docs/guides/prompt-caching.md`,
   `https://developers.openai.com/codex/pricing.md`. Transkryptow Codeksa (`~\.codex\sessions`) na tej maszynie NIE MA.
+
+## Warstwy pamieci (inwentarz 2026-09-25)
+
+Maszyna biurowa jest w TRYBIE GLOBALNYM od 0.19.0 (znacznik `~\.claude\.megaruchacz-global`,
+tresc: `zrodlo/wersja/data`). To zmienia gdzie leza hooki: PROJEKTOWY `.claude/settings.json`
+(`C:\dev\claude-worker\.claude\settings.json`) ma dzis TYLKO `{"hooks": {}, "worktree": {...}}` -
+wszystkie hooki MegaRuchacza siedza w GLOBALNYM `C:\Users\Primo\.claude\settings.json` i odpalaja
+sie w KAZDYM projekcie Claude Code na tej maszynie, nie tylko w `claude-worker`. Funkcja
+`Projekt-Bez-Hookow` w `straznik-zasad.ps1` (ok. l.1122) to pilnuje; wyjatek to
+`megaruchacz-wersja.txt` z `projektowo: wymuszone` (flaga `wdroz.ps1 -WymusProjektowo`).
+
+### Raz na sesje (start), wczytywane automatycznie
+
+- `C:\dev\claude-worker\CLAUDE.md` (od 0.21.0 ~1,7 tys. znakow: tylko reguly tego repo,
+  "Cisza jest zakazana"; wczesniej ~15,5 tys. z pelnymi zasadami) - natywny mechanizm
+  Claude Code (projekt), STALY, pisze czlowiek + git.
+- `C:\Users\Primo\.claude\CLAUDE.md` (~21,5 tys. znakow) - natywny mechanizm, w KAZDYM
+  projekcie na maszynie. Trzy podwarstwy w jednym pliku:
+  - sekcja "Co wiem" poza "Biezace" - STALA, sufit 8000 znakow, awansuje z "Biezace"
+    gdy fakt padnie w dwoch rozmowach; pisze czlowiek recznie + automat `aktualizuj-wiedze.ps1`.
+  - "Co wiem" > "Biezace" - TYMCZASOWA, format `- [RRRR-MM-DD] tresc`, wpis starszy niz
+    14 dni podejrzany; pisze `wyciagnij-fakty.ps1` (wylawia fakty) + `aktualizuj-wiedze.ps1`
+    (wpisuje/awansuje), oba orkiestrowane przez `narzedzia\cykl-dzienny.ps1`.
+  - bloki `<!-- MegaRuchacz:start/koniec -->` i `<!-- MegaRuchacz:kierownik:start/koniec -->` -
+    STALA kopia zasad narzedzia. Blok `MegaRuchacz:start` (Lore/Wiedza) utrzymuje automat
+    `Pilnuj-Zasad` w `straznik-zasad.ps1` (SessionStart); blok `kierownik` wpisuje WYLACZNIE
+    `narzedzia\instaluj-globalnie.ps1` i nikt go potem nie odtwarza. Od 0.19.0 to JEDYNA droga, ktora zasady "kierownika" dostaja sie do
+    modelu przy starcie sesji Claude Code w trybie globalnym (patrz nizej - stary hook
+    JSON jest martwy).
+- Hook `SessionStart -> narzedzia/straznik-zasad.ps1`, zarejestrowany w GLOBALNYM
+  `settings.json`. Odpala sie raz na sesje w KAZDYM projekcie. Sam NIC nie wstrzykuje do
+  kontekstu w normalnym przebiegu (nie zwraca `additionalContext`) - zarzadza wersja/
+  poprawkami narzedzia i utrzymuje blok w CLAUDE.md (patrz wyzej).
+- `C:\Users\Primo\.claude\mr\megaruchacz-sesja.json` (globalny, ~6,4 tys. znakow) - ladunek
+  `hookSpecificOutput.additionalContext` budowany funkcja `Zbuduj-Sesje` w `straznik-zasad.ps1`
+  (wywolywana przy kazdym przebiegu strażnika). **W TRYBIE GLOBALNYM WYGLADA NA MARTWY**:
+  zaden hook (ani globalny, ani projektowy) go dzis nie czyta - `Napraw-Hooki` dopisuje
+  `cat ... megaruchacz-sesja.json` tylko projektom BEZ trybu globalnego. Zmiennik ZMIANY.md
+  0.20.0: "Bez podwojnych hookow: przypomnienie i zasady wchodza raz, nie dwa" - potwierdza
+  ze usuniecie bylo celowe, plik po prostu zostal (funkcja go wciaz odswieza, ale nikt nie czyta).
+  NIEPOTWIERDZONE u zrodla: czy to zamierzony stan koncowy, czy osierocony efekt uboczny.
+- `C:\Users\Primo\.claude\projects\C--dev-claude-worker\memory\` - natywny katalog pamieci
+  Claude Code dla tego projektu. ISTNIEJE, ale jest PUSTY (0 plikow) - nieuzywana warstwa.
+
+### Kazda wyslana wiadomosc (UserPromptSubmit)
+
+- Hook `UserPromptSubmit -> narzedzia/przypomnienie.js`, zarejestrowany w GLOBALNYM
+  `settings.json`, wskazuje na GLOBALNY ladunek `C:\Users\Primo\.claude\mr\orchestrator-reminder.json`
+  (725 znakow, tresc statyczna "TRYB MEGARUCHACZA..."). Odpala sie przy KAZDEJ wiadomosci,
+  w KAZDYM projekcie Claude Code na tej maszynie (nie tylko `claude-worker`). Projekt ma
+  TEZ wlasna kopie `C:\dev\claude-worker\.claude\orchestrator-reminder.json` (725 znakow) -
+  ale ta NIE jest uzywana przez zaden aktywny hook w trybie globalnym (martwa/rezerwowa).
+- Skrypt `przypomnienie.js` dokleja do tego ladunku DYNAMICZNIE, przy kazdym wywolaniu:
+  - linie o stanie cyklu wiedzy z `C:\Users\Primo\.claude\wiedza\.cykl-postep` (limit 300
+    znakow), tylko gdy cykl akurat pracuje albo wlasnie skonczyl (znika po pierwszym pokazaniu);
+  - 1-2 fragmenty z Lore ("Z ARCHIWUM", do 450 znakow), dobrane przez `lore\lore\recall.py`
+    (FTS5) do tresci biezacej wiadomosci; pamiec "juz pokazane w tej sesji" w
+    `C:\Users\Primo\.claude\wiedza\.archiwum-stan.json`;
+  - ewentualny alarm awarii Lore (nowa przyczyna albo co 6h).
+  Wszystko to TYMCZASOWE tresci doklejane per-wiadomosc, nie zapisuja sie nigdzie trwale
+  poza plikami stanu wyzej.
+
+### Na zadanie (czytane narzedziem, NIE wstrzykiwane automatycznie)
+
+- `.megaruchacz/mapa.md` (`C:\dev\claude-worker\.megaruchacz\mapa.md`, od 0.21.0) - mapa projektu; brak hooka,
+  ktory by ja wczytywal - czyta ja model tylko gdy sam siegnie po Read/Grep (instrukcja w
+  bloku kierownika "sprawdz mape zanim wyslesz scouta"). Pisze scout (dopisuje) + kierownik.
+- `.megaruchacz/worklog.md` (`C:\dev\claude-worker\.megaruchacz\worklog.md`, od 0.21.0 jeden rejestr) - rejestr zadan, tez bez
+  hooka wczytujacego; pisze automat `C:\Users\Primo\.claude\megaruchacz-mr-log.js`
+  (SubagentStart/SubagentStop, globalny - projektowy `.claude\mr-log.js` to szablon
+  wdrozen per projekt, w tym repo nieuzywany) + kierownik recznie.
+- Pliki w `C:\Users\Primo\.claude\wiedza\` (`amazon-ebay.md`, `maszyny.md`, `struktura-sku.md`,
+  `zrodla.md`, `kandydaci.md` i pliki stanu `.cykl-*`, `.archiwum-stan.json`, `.wiedza-stan.txt`
+  itd.) - STALE dane referencyjne, czytane tylko gdy rozmowa ich dotyczy (odsylacze w sekcji
+  "Dane referencyjne" globalnego CLAUDE.md). Pisze automat cyklu + czlowiek recznie.
+- Lore przez narzedzia MCP `lore_search` / `lore_context` - wywolywane przez model NA ZADANIE
+  (instrukcja: jedno wyszukanie na start niebanalnego zadania). Baza:
+  `C:\Users\Primo\.claude\lore.db` (SQLite, ~425 MB), obejmuje transkrypty wszystkich sesji
+  Claude Code na maszynie. To osobna droga do Lore niz automatyczne doklejanie w
+  `przypomnienie.js` wyzej (tamto uzywa `recall.py`/FTS5, to uzywa serwera MCP `lore`).
+
+### Automaty w tle (karmia powyzsze warstwy, same nic nie wstrzykuja)
+
+- `narzedzia/wyciagnij-fakty.ps1` + `narzedzia/aktualizuj-wiedze.ps1`, orkiestrowane przez
+  `narzedzia/cykl-dzienny.ps1` (rejestruje zadanie Harmonogramu `LoreCykl` + zadanie
+  ponawiania, nazwa w zmiennej `$NazwaZadania` w `cykl-dzienny.ps1`). Dzis (2026-09-25)
+  wyloawiaja i wpisuja fakty do CLAUDE.md (patrz wyzej). **NIEPOTWIERDZONE**: zadanie
+  `LoreCykl` NIE wystapilo w `Get-ScheduledTask` przy tym rozpoznaniu (widac tylko
+  `LoreIndex`, `LoreKoszt`, `MegaRuchaczNadzorca`), mimo ze
+  `C:\Users\Primo\.claude\wiedza\.cykl-stan` pokazuje udany przebieg dzis o 08:02 - nie
+  sprawdzono, czy zadanie dziala pod inna nazwa, jednorazowo, czy zostalo odinstalowane.
+- `narzedzia/koszt-pamieci.ps1` - audyt sufitow i rachunek kosztu (na wiadomosc / na sesje /
+  na cykl, rozne "pieniadze", nie sumuja sie). Zadanie Harmonogramu `LoreKoszt` (POTWIERDZONE:
+  `Ready`), codziennie 08:15, wynik do `C:\Users\Primo\.claude\wiedza\koszt-ostatni.txt`. Przy
+  `-Projekt <kat>` mierzy ladunki hookow spod SCIEZKI PROJEKTOWEJ (`.claude\megaruchacz-sesja.json`,
+  `.claude\orchestrator-reminder.json`) - w trybie globalnym te pliki projektowe czesto NIE
+  sa tymi faktycznie uzywanymi (patrz wyzej: prawdziwe ladunki leza w `~\.claude\mr\`), wiec
+  rachunek `-Projekt` na tej maszynie moze pokazywac inny plik niz ten, ktory naprawde leci.
+- Zadanie Harmonogramu `LoreIndex` (POTWIERDZONE: `Ready`) - istnieje, tresci skryptu nie
+  sprawdzono w tym rozpoznaniu.
+- Zadanie Harmonogramu `MegaRuchaczNadzorca` (POTWIERDZONE: `Running`) - aplikacja
+  zasobnika/nadzorcy wspomniana w zleceniach jako cel przyszlego podgladu warstw pamieci;
+  jej plikow (`zasobnik\...`) nie przegladano w tym rozpoznaniu.
+
+### Czego NIE sprawdzono / niepotwierdzone w tym przebiegu
+
+- Czy `LoreCykl` (i zadanie ponawiania) jest realnie zarejestrowane w Harmonogramie - patrz wyzej.
+- Tresc i dzialanie `zasobnik\nadzorca.ps1` oraz `zasobnik\stan-nadzorcy.ps1` (wspomniany w
+  `koszt-pamieci.ps1` jako odbiorca `-Dane`) - nie czytano w tym rozpoznaniu.
+- Tresc `narzedzia/wyciagnij-fakty.ps1`, `aktualizuj-wiedze.ps1`, `lore\lore\recall.py`,
+  `lore\lore\facts.py`, `lore\lore\index.py` - istnienie i role potwierdzone przez odwolania
+  w innych skryptach, tresci samych plikow nie czytano.
+- Czy `megaruchacz-sesja.json` w `~\.claude\mr\` jest zamierzonym reliktem czy bledem
+  wdrozenia 0.19.0/0.20.0 - do potwierdzenia u zrodla albo w kolejnym rozpoznaniu.
+
+## Nadzorca (zasobnik) - budowa okna
+
+- `zasobnik/nadzorca.ps1` - okno WinForms (PowerShell 5.1, `System.Windows.Forms`
+  + `System.Drawing`, opcjonalnie `System.Windows.Forms.DataVisualization` dla
+  wykresu, z wlasnym rysowaniem slupkow jako fallback). `zasobnik/stan-nadzorcy.ps1`
+  jest DOTSOURCE'owany (`. (Join-Path $PSScriptRoot "stan-nadzorcy.ps1")`) - to NIE
+  jest osobny proces, dzieli scope zmiennych `$script:` z nadzorca.ps1.
+- OKNO MA DWA WIDOKI, nie zakladki `TabControl`: `Pokaz-Widok([string]$nazwa)`
+  przelacza widocznosc dwoch panelow (`$script:WidokPrzeglad` / `$script:WidokSzczegoly`,
+  oba `Dock = Fill`, jeden na wierzchu drugiego) i styl dwoch przyciskow-przelacznikow
+  `$script:BPrzeglad` / `$script:BSzczegoly` (funkcja `Przycisk-Przelacznika`,
+  `Styl-Przelacznika`). Przelacznik siedzi w panelu `$przel` w prawym gornym rogu
+  naglowka (`$script:Naglowek`, budowany w `Pokaz-Okno`).
+  ABY DODAC TRZECI WIDOK ("Warstwy pamieci"): dodac trzeci panel `Dock=Fill`
+  (analogicznie do `$script:WidokSzczegoly`), trzeci przycisk w `$przel` (trzeba
+  poszerzyc `$przel.Size` i `$script:SzerOkna` na tyle, zeby zmiescily sie 3
+  przyciski), rozszerzyc `Pokaz-Widok` o trzeci przypadek i dodac czyszczenie
+  zmiennej w `Add_FormClosed`.
+- JEDYNA kontrolka do wyswietlania dluzszego tekstu to `System.Windows.Forms.TextBox`
+  (`Multiline=$true, ReadOnly=$true, ScrollBars=Both`) - `$script:PoleSzczegoly`,
+  napelniana przez `Napelnij-Szczegoly` -> `Zbuduj-Szczegoly` (skleja `$script:Dane`,
+  `$script:Wywrotki`, `$script:Rozbicie` w jeden String[] linii). W CALYM PLIKU
+  NIE MA `ListView` ani `ListBox` ani `TreeView` - lista klikalna do podgladu
+  plikow (potrzebna do "Warstw pamieci") bylaby PIERWSZYM uzyciem takiej kontrolki
+  w tym oknie; trzeba dopisac obsluge `Add_Click`/`Add_SelectedIndexChanged` od zera.
+- PRZEPLYW DANYCH: `Zbierz-Wszystko $zSieci $zKolejka` (w `stan-nadzorcy.ps1`) zwraca
+  JEDEN obiekt `[pscustomobject]` (pole `$script:Dane`), ktory woła m.in.
+  `Stan-Wersji`, `Stan-Cyklu`, `Rachunek-Rozbicie`, `Stan-Zmian-Pamieci` -
+  wszystko w PROCESIE nadzorcy (funkcje sa dotsource'owane, nie API/JSON).
+  WYJATEK: `Rachunek-Rozbicie` i `Linia-Rachunku` NIE licza same - wolaja
+  `narzedzia/koszt-pamieci.ps1` jako ODDZIELNY PROCES (`Wolaj-Skrypt`, timeout 120 s)
+  z przelacznikiem `-Rozbicie` albo `-Dane -Zwykly`, i dostaja z powrotem GOTOWY TEKST
+  (linie do wyswietlenia), nie strukture danych.
+- ODSWIEZANIE: `Odswiez-Dane` (bez sieci: `Zbierz-Wszystko $false $true`) wolane
+  przez `Zaplanuj-Przeliczenie` - jednorazowy `System.Windows.Forms.Timer` 150 ms
+  odpalany w `Pokaz-Okno` przy KAZDYM otwarciu okna. NIE MA petli/timera dzialajacego
+  w tle podczas gdy okno stoi otwarte - dane sa swieze tylko na wejsciu do okna.
+  Osobno jest `Dozor` (funkcja w nadzorca.ps1, l.660) - petla NotifyIcon z timerem
+  co `-Minut` (domyslnie 15) do dymkow/alarmow, niezalezna od okna.
+- CZY LISTA "WARSTW PAMIECI" JUZ ISTNIEJE JAKO DANE: CZESCIOWO. W
+  `narzedzia/koszt-pamieci.ps1` (funkcja glowna, ok. l.1364-1435) budowane sa
+  tablice `$kubWiadomosc` i `$kubSesja` - kazdy element to `Pozycja(Nazwa, Znaki,
+  Skad, Rada, Krotka, Uwaga)`, gdzie `Skad` to SCIEZKA PLIKU (CLAUDE.md,
+  `.codex\AGENTS.md`, `.claude\megaruchacz-sesja.json`, `.claude\orchestrator-reminder.json`,
+  `szablony-codex\zasady-kierownika.md` itd.) - to i tak jest gotowa lista warstw
+  startowych/na-wiadomosc z ich plikami zrodlowymi. PROBLEM: `Pozycja` NIE niesie
+  tresci pliku (tylko `Nazwa/Znaki/Skad/Rada/Krotka/Uwaga`), a caly ten rachunek
+  jest dostepny z zewnatrz WYLACZNIE jako sformatowany TEKST przez `-Rozbicie`
+  albo `-Dane` (brak trybu `-Json`/strukturalnego). Osobno `Zmierz-Warstwy` (l.299)
+  liczy inny podzial - "Blok/Stala/Biezaca" WEWNATRZ CLAUDE.md (sekcje '## Co wiem'),
+  nie liste plikow.
+  WNIOSEK DLA IMPLEMENTACJI: zeby nowy widok w oknie mial klikalna liste plikow
+  bez liczenia czegos drugi raz, `koszt-pamieci.ps1` potrzebowalby NOWEGO trybu
+  wyjscia (np. `-Warstwy`) emitujacego `Nazwa|Skad|Znaki` per linia (albo JSON) z
+  kubSesja+kubWiadomosc+Zmierz-Warstwy - to jest decyzja projektowa, nie ma jej
+  dzis w kodzie.
+- KONWENCJE: `nadzorca.ps1` i `stan-nadzorcy.ps1` musza byc zapisane w UTF-8
+  ZE ZNACZNIKIEM BOM (bez BOM-u PowerShell 5.1 czyta je jako ANSI -> krzaki w
+  oknie; zdarzylo sie to juz dwa razy). Kod/komentarze bez polskich znakow,
+  ale TEKSTY WIDOCZNE W OKNIE MAJA POLSKIE ZNAKI. Nazwy funkcji/zmiennych
+  PascalCase-po-polsku z myslnikiem (`Zbuduj-Szczegoly`, `Pokaz-Widok`), zmienne
+  modulu w `$script:`.
+- URUCHOMIENIE / PRZELADOWANIE: brak instalacji-usluzenia w sensie kompilacji -
+  to zwykly skrypt .ps1. Do podgladu zmian bez ryzyka tokenow:
+  `powershell -ExecutionPolicy Bypass -File zasobnik\nadzorca.ps1 -Pokaz -Proba`
+  (`-Proba` blokuje `Ruszaj-Cykl`, wiec przycisk "Przeczytaj zalegle rozmowy" nic
+  nie wywoluje). W PRODUKCJI nadzorca chodzi jako STALY PROCES (ikona w zasobniku,
+  zarejestrowany w Harmonogramie Windows jako zadanie `MegaRuchaczNadzorca` przez
+  `zasobnik/zainstaluj-zasobnik.ps1`, uruchamiany `conhost.exe --headless
+  powershell.exe -WindowStyle Hidden`) - PO EDYCJI TRZEBA UBIC STARY PROCES
+  (`zainstaluj-zasobnik.ps1 -Usun` albo `Stop-Process`) i odpalic zadanie/proces
+  na nowo, inaczej ikona w zasobniku dalej dziala na starym kodzie wczytanym przy
+  starcie (skrypt nie przeladowuje sam siebie).
+- TESTY: BRAK dedykowanego pliku smoke/testu dla okna. Jedyne "testy" to tryby
+  wbudowane w `nadzorca.ps1`: `-Raz` (jeden przebieg dozoru bez petli, do
+  automatycznego sprawdzenia, kod wyjscia 1 gdy byl alarm), `-Raport` (sam wydruk
+  tresci okna na ekran tekstem, bez GUI), `-Proba` (nic nie zapisuje/nie wywoluje
+  modelu) + proby negatywne opisane w naglowku pliku (podstawiony pusty
+  `-KatalogDomowy`, podstawione pliki `.wiedza-stan.txt` / `.koszt-cyklu.txt` /
+  `.koszt-historia.tsv`). Brak automatycznego sprawdzenia UKLADU/dzialania samych
+  kontrolek WinForms (klikniecia, renderowanie) - to zawsze rece na `-Pokaz -Proba`.
+- RYZYKA dla nowej zakladki "Warstwy pamieci": (1) `$script:SzerOkna` i layout
+  naglowka sa liczone na sztywno pod DWA przyciski przelacznika - trzeci wymaga
+  przeliczenia szerokosci okna/panelu `$przel`; (2) `Add_FormClosed` musi dostac
+  wpis czyszczacy nowe zmienne `$script:...`, inaczej ponowne otwarcie okna po
+  zamknieciu bedzie odwolywac sie do martwych obiektow WinForms; (3) zrodlem
+  listy plikow NIE POWINIEN byc nowy, rownolegly kod liczacy sciezki raz jeszcze -
+  grozi rozjazdem z `koszt-pamieci.ps1`, gdy ktos zmieni tam liste warstw i zapomni
+  o duplikacie w oknie; (4) podglad TRESCI pliku (nie tylko sciezki) dla wpisow typu
+  "ladunek hooka" (`.claude\megaruchacz-sesja.json` itp.) wymaga wywolania
+  `Ladunek-Hooka` (wyciaga pole JSON), a NIE zwyklego odczytu pliku - inaczej podglad
+  pokazalby surowy JSON zamiast tekstu, ktory naprawde leci do modelu.

@@ -4,6 +4,30 @@ Każda zmiana wypychana na gita dostaje tu wpis. Numer rośnie wg zasady:
 pierwsza cyfra — przebudowa łamiąca zgodność, druga — nowa funkcja,
 trzecia — poprawka.
 
+## 0.21.0 — 2026-09-25
+
+- **Claude Code dostaje wreszcie swoje zasady kierownika.** Od 0.19.0 do każdej sesji
+  Claude Code szła wersja pisana dla opencode/Codeksa („rozdaj naraz i czekaj”, „nie ma
+  worktree”) — sprzeczna z tym, jak Claude Code naprawdę działa. Teraz instalator
+  wybiera wariant według narzędzia: `~/.claude/CLAUDE.md` dostaje wersję Claude Code
+  (nowe źródło: `szablony-global\claude\zasady-kierownika.md`), a `~/.codex/AGENTS.md`
+  i maszyna bez Claude Code — dotychczasową wersję opencode/Codex, bez zmian.
+  Wymuszenie: `instaluj-globalnie.ps1 -WariantZasad claude|opencode`.
+- **Jeden komplet zasad zamiast dwóch sprzecznych.** Projektowy `CLAUDE.md` tego repo
+  ma już tylko „Cisza jest zakazana”; zasady kierownika odchudzone (dublety wyrzucone,
+  wpadki z 16 i 25 września zostają). Start sesji w tym repo: ~11 940 → ~6 870 tokenów;
+  w innych projektach ~6 850 → ~6 290. Przypomnienie przy każdej wiadomości:
+  ~207 → ~115 tokenów.
+- **Rejestr, mapa i raporty w jednym miejscu: `.megaruchacz\`** — także we wdrożeniach
+  per projekt pod Claude Code. W tym repo mapa i rejestr kierownika przeniesione
+  i scalone.
+- **Role Claude Code z jednego źródła** (`szablony-global\claude\agents`): limit raportu
+  i „WYMAGA DECYZJI / SendMessage” stoją w rolach, scout ma narzędzie do zapisu mapy.
+- **Rachunek za pamięć liczy `CLAUDE.md` projektu** (przy `-Projekt`), a zakładka
+  warstw pokazuje mapę i rejestr z `.megaruchacz\`.
+- Instalator odmawia zapisu, gdy w pliku są dwa bloki kierownika (dubel), i sprawdza,
+  że blok jest dokładnie jeden i w dobrym wariancie.
+
 ## 0.20.1 — 2026-09-25
 
 - **Automat nie flaguje już ścieżek z drugiego komputera.** Ścieżka opisana jako

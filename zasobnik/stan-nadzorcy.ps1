@@ -951,7 +951,7 @@ function Dzien-Ludzko($data) {
 # "nic nie kosztuje" i byloby najdrozszym rodzajem ciszy w calym narzedziu.
 #
 # PODPISY MOWIA, JAK TO SIE NAPRAWDE PLACI (poprawione 24.09.2026 po pomiarze na
-# prawdziwych transkryptach, opis w .claude\mapa.md, sekcja "Koszt tekstu
+# prawdziwych transkryptach, opis w .megaruchacz\mapa.md, sekcja "Koszt tekstu
 # w kontekscie a pamiec podreczna modelu"). Stary podpis "Otwarcie nowej sesji
 # ... raz" wprowadzal w blad: tekst WCHODZI do rozmowy raz, ale model czyta cala
 # rozmowe przy kazdym swoim kroku (~10 krokow na jedna wiadomosc), tyle ze

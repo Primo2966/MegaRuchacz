@@ -3,7 +3,7 @@
 # Poza tym rozdziela trzy rachunki, ktore latwo ze soba pomylic: ile tokenow
 # dokleja sie do KAZDEJ wiadomosci (przypomnienie z hooka UserPromptSubmit),
 # ile wchodzi RAZ, przy starcie sesji (bloki zasad, w tym blok kierownika, +
-# warstwa stala i biezaca),
+# warstwa stala i biezaca, a z -Projekt takze CLAUDE.md projektu),
 # a ile kosztuje RAZ NA DOBE cykl wiedzy - czyli jedyne miejsce w tym narzedziu,
 # w ktorym naprawde wola sie model i wydaje tokeny uzytkownika. Dwa pierwsze to
 # TEKST doklejany do rozmowy, trzeci to PRAWDZIWE WYWOLANIE - i wlasnie dlatego
@@ -20,7 +20,9 @@
 #     -KatalogDomowy <kat>   podmiana bazy sciezek (domyslnie katalog domowy; testy)
 #     -Zrodlo <kat>          katalog narzedzia (domyslnie katalog nad tym skryptem)
 #     -Projekt <kat>         projekt z wdrozonym Codeksem: mierzymy wtedy ladunki
-#                            hookow, ktore tam naprawde leza, a nie same szablony
+#                            hookow, ktore tam naprawde leza, a nie same szablony;
+#                            pod Claude Code do startu sesji dochodzi wtedy
+#                            CLAUDE.md tego projektu
 #     -TylkoSufity           SAME sufity: kazda para (ladunek, limit) w jednej linii,
 #                            kod 1 gdy cokolwiek wystaje - do odpalenia po kazdej
 #                            zmianie zasad, bez czekania na reszte raportu
@@ -1567,12 +1569,20 @@ if ($w.Biezaca.Znaki -gt 0) {
 # kazdym starcie sesji - do 2026-09-25 rachunek ich nie liczyl, bo mierzyl
 # tylko blok glowny i sekcje "Co wiem". Pozycja na blok, klucz = nazwa bloku
 # (z tej tablicy bierze liczby tryb -Warstwy, zeby nie liczyc drugi raz).
+# Blok kierownika ma dwa warianty (od 0.21.0): Claude Code z
+# szablony-global\claude\zasady-kierownika.md i opencode/Codex z
+# szablony-opencode\zasady-kierownika.md. Rada "gdzie skracac" ma wskazac ten
+# szablon, z ktorego blok NAPRAWDE pochodzi - poznajemy go po naglowku wariantu.
+function Szablon-Kierownika($tekstBloku) {
+  if ("$tekstBloku" -match '\(opencode / Codex CLI\)') { return "szablony-opencode\zasady-kierownika.md" }
+  return "szablony-global\claude\zasady-kierownika.md"
+}
 $pozycjeBlokow = @{}
 foreach ($b in @($w.Bloki)) {
   if ($b.Znaki -le 0) { continue }
   if ($b.Nazwa -eq "kierownik") {
     $poz = Pozycja "zasady kierownika w CLAUDE.md (blok kierownik)" $b.Znaki $plikClaude `
-      "ten blok wgrywa narzedzia\instaluj-globalnie.ps1 - skracaj go w szablony-opencode\zasady-kierownika.md i wgraj ponownie, nie recznie" `
+      "ten blok wgrywa narzedzia\instaluj-globalnie.ps1 - skracaj go w $(Szablon-Kierownika $b.Tekst) i wgraj ponownie, nie recznie" `
       "zasady kierownika"
   } else {
     $poz = Pozycja "blok '$($b.Nazwa)' w CLAUDE.md" $b.Znaki $plikClaude `
@@ -1581,6 +1591,24 @@ foreach ($b in @($w.Bloki)) {
   }
   $kubSesja += $poz
   $pozycjeBlokow[$b.Nazwa] = $poz
+}
+
+# CLAUDE.md projektu - Claude Code wczytuje go sam na starcie kazdej sesji w tym
+# projekcie, obok globalnego. Do 0.21.0 rachunek go nie znal (raporty P4, P5),
+# a w C:\dev\claude-worker bylo to ~15 tys. znakow. Liczymy go TYLKO przy jawnym
+# -Projekt: bez niego rachunek jest "maszynowy" (tak liczy linie straznik na
+# starcie sesji) i nie wie, w ktorym projekcie sesja sie otworzy.
+if ($Projekt -and $jestClaude) {
+  $plikClaudeProjektu = Join-Path $Projekt "CLAUDE.md"
+  $toSamoCoGlobalny = ((Klucz-Sciezki $plikClaudeProjektu) -eq (Klucz-Sciezki $plikClaude))
+  if (-not $toSamoCoGlobalny) {
+    $claudeProjektu = Czytaj-Cicho $plikClaudeProjektu
+    if ($claudeProjektu) {
+      $kubSesja += Pozycja "CLAUDE.md projektu (Claude Code czyta go sam)" $claudeProjektu.Length $plikClaudeProjektu `
+        "to plik projektu - trzymaj w nim tylko reguly tego repo; zasady kierownika sa w bloku globalnym" `
+        "CLAUDE.md projektu"
+    }
+  }
 }
 
 # Codex czyta AGENTS.md SAM, bez zadnego hooka - to jego odpowiednik CLAUDE.md
@@ -1606,7 +1634,7 @@ if ($jestCodex) {
 # bo skracac trzeba je w dwoch roznych plikach.
 if ($zasadyCcTresc) {
   $kubSesja += Pozycja "zasady kierownika z hooka (Claude Code)" $zasadyCcTresc.Length $zasadyCcSkad `
-    "to zasady projektu wstrzykiwane hookiem - skracaj je w CLAUDE.md narzedzia i wgraj przez wdroz.ps1" `
+    "to zasady projektu wstrzykiwane hookiem - skracaj je w szablony-global\claude\zasady-kierownika.md i wgraj przez wdroz.ps1" `
     "zasady z hooka (CC)"
 }
 if ($zasadyWdrozone -and $zasadyTresc) {
@@ -1742,7 +1770,7 @@ if ($Warstwy) {
   foreach ($b in @($w.Bloki)) {
     if (-not $b.Nazwa) { continue }
     $kto = "automat Pilnuj-Zasad w narzedzia\straznik-zasad.ps1 (kopia zasad narzedzia)"
-    if ($b.Nazwa -eq "kierownik") { $kto = "instalator globalny (narzedzia\instaluj-globalnie.ps1, zrodlo: szablony-opencode\zasady-kierownika.md)" }
+    if ($b.Nazwa -eq "kierownik") { $kto = "instalator globalny (narzedzia\instaluj-globalnie.ps1, zrodlo: $(Szablon-Kierownika $b.Tekst))" }
     $sub = Warstwa ("claude-globalny-blok-" + $b.Nazwa) "blok zasad MegaRuchacza: $($b.Nazwa)" $plikClaude "start" "stala" `
       $kto "wchodzi na start sesji razem z calym plikiem; rachunek za start sesji liczy go jako osobna pozycje" `
       "podwarstwa" "claude-globalny"
@@ -1770,6 +1798,8 @@ if ($Warstwy) {
   $nr = 0
   foreach ($poz in @($kubSesja)) {
     if ($poz.Skad -eq $plikClaude) { continue }
+    # CLAUDE.md projektu stoi juz wyzej jako warstwa "claude-projekt"
+    if ($juz.ContainsKey((Klucz-Sciezki $poz.Skad))) { continue }
     $nr++
     $jsonowy = ("$($poz.Skad)" -like "*.json")
     $rodzaj = "plik"
@@ -1859,9 +1889,9 @@ if ($Warstwy) {
 
   # --- tylko na zadanie ---------------------------------------------------------
 
-  $lista += Z-Pliku (Warstwa "mapa" "mapa projektu" (Join-Path $katProjektu ".claude\mapa.md") "zadanie" "stala" `
+  $lista += Z-Pliku (Warstwa "mapa" "mapa projektu" (Join-Path $katProjektu ".megaruchacz\mapa.md") "zadanie" "stala" `
     "scout (dopisuje) + kierownik" "zaden hook jej nie wczytuje - model czyta ja sam, gdy siegnie po nia narzedziem")
-  $lista += Z-Pliku (Warstwa "worklog" "rejestr zadan (worklog)" (Join-Path $katProjektu ".claude\worklog.md") "zadanie" "tymczasowa" `
+  $lista += Z-Pliku (Warstwa "worklog" "rejestr zadan (worklog)" (Join-Path $katProjektu ".megaruchacz\worklog.md") "zadanie" "tymczasowa" `
     "automat megaruchacz-mr-log.js (start i koniec workera) + kierownik" "biezacy stan zadan; zaden hook go nie wczytuje - model czyta go sam")
 
   $wk = Warstwa "wiedza" "wiedza referencyjna (katalog)" $katWiedzy "zadanie" "stala" "cykl wiedzy + czlowiek recznie" `
