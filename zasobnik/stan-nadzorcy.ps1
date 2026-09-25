@@ -371,27 +371,37 @@ function Stan-Wersji([bool]$zSieci) {
   return $w
 }
 
+# Jeden wiersz szczegolow: etykieta po ludzku, wartosc i waga ("" / "uwaga" /
+# "pilne" / "szary"). Okno rysuje z tego dwie kolumny, wydruk -Raport - linie
+# "etykieta : wartosc". Jedna struktura dla obu, zeby sie nie rozjechaly.
+function Wiersz([string]$etykieta, [string]$wartosc, [string]$waga = "") {
+  return [pscustomobject]@{ Etykieta = $etykieta; Wartosc = $wartosc; Waga = $waga }
+}
+
+# Wersja narzedzia jako wiersze. Do 2026-09-25 byly to linie tekstu z zargonem
+# ("na gicie", "commitow") - teraz etykiety mowia po ludzku, a waga koloruje
+# tylko to, co naprawde czegos wymaga.
 function Opis-Wersji($w) {
   $lok = $w.Lokalna
-  if (-not $lok) { $lok = "NIE WIADOMO" }
-  $linie = @("  wersja na dysku : $lok")
+  $wagaLok = ""
+  if (-not $lok) { $lok = "nie wiadomo"; $wagaLok = "uwaga" }
+  $linie = @(Wiersz "Wersja na tym komputerze" $lok $wagaLok)
   if ($null -eq $w.Nowsza) {
     $powod = $w.Powod
-    if (-not $powod) { $powod = "nie ustalilem powodu - to samo w sobie jest usterka" }
-    $linie += "  na gicie        : NIE WIADOMO - $powod"
+    if (-not $powod) { $powod = "nie ustaliłem powodu - to samo w sobie jest usterką" }
+    $linie += Wiersz "Nowsza na serwerze" "nie wiadomo - $powod" "uwaga"
   } elseif ($w.Nowsza -le 0) {
-    $linie += "  na gicie        : nic nowszego"
+    $linie += Wiersz "Nowsza na serwerze" "nie ma, masz najnowszą"
   } else {
-    $slowo = if ($w.Nowsza -eq 1) { "zmiana czeka" } else { "zmian czeka" }
-    $linie += "  na gicie        : $($w.Nowsza) $slowo - przycisk [Aktualizuj] je pobierze"
+    $linie += Wiersz "Nowsza na serwerze" "czeka $($w.Nowsza) $(Odmiana ([int]$w.Nowsza) 'zmiana' 'zmiany' 'zmian') - pobierze je przycisk na dole okna" "uwaga"
   }
   if ($w.Nasze -gt 0) {
-    $linie += "  uwaga           : masz $($w.Nasze) wlasnych commitow ponad zdalna - aktualizacja odmowi scalenia"
+    $linie += Wiersz "Uwaga" "na tym komputerze jest $($w.Nasze) $(Odmiana ([int]$w.Nasze) 'własna zmiana' 'własne zmiany' 'własnych zmian'), których nie ma na serwerze - aktualizacja odmówi scalenia" "uwaga"
   }
   if ($w.Pobrano) {
-    $linie += "  sprawdzone      : $($w.Pobrano.ToString('yyyy-MM-dd HH:mm'))"
+    $linie += Wiersz "Ostatnio sprawdzone" "$($w.Pobrano.ToString('yyyy-MM-dd HH:mm'))"
   } else {
-    $linie += "  sprawdzone      : jeszcze ani razu w tej instalacji"
+    $linie += Wiersz "Ostatnio sprawdzone" "jeszcze ani razu w tej instalacji" "szary"
   }
   return ,$linie
 }
@@ -482,26 +492,28 @@ function Opis-Cyklu($c) {
   if ($c.Data) {
     $godzin = Godzin-Od-Cyklu $c
     $kiedy = "$($c.Data.ToString('yyyy-MM-dd HH:mm'))"
-    if ($godzin -lt 24) { $kiedy = "$kiedy (dzis, $godzin h temu)" }
-    else { $kiedy = "$kiedy ($([int]($godzin / 24)) dni temu)" }
-    $linie += "  ostatni przebieg: $kiedy"
+    $waga = ""
+    if ($godzin -lt 24) { $kiedy = "$kiedy (dziś, $godzin h temu)" }
+    else { $kiedy = "$kiedy ($([int]($godzin / 24)) dni temu)"; $waga = "uwaga" }
+    $linie += Wiersz "Ostatnia nauka" $kiedy $waga
     $st = $c.Status
-    if (-not $st) { $st = "NIE WIADOMO - w pliku nie ma klucza 'status'" }
-    $linie += "  jak poszedl     : $st"
-    if ($c.Opis) { $linie += "                    $($c.Opis)" }
+    $wagaSt = ""
+    if (-not $st) { $st = "nie wiadomo - w pliku stanu nie ma pola 'status'"; $wagaSt = "uwaga" }
+    $linie += Wiersz "Jak poszła" $st $wagaSt
+    if ($c.Opis) { $linie += Wiersz "" $c.Opis "szary" }
   } else {
-    $linie += "  ostatni przebieg: NIGDY albo nie do odczytania"
+    $linie += Wiersz "Ostatnia nauka" "nigdy albo nie da się tego odczytać" "pilne"
   }
-  if ($c.Pracuje) { $linie += "  teraz           : cykl wlasnie pracuje" }
+  if ($c.Pracuje) { $linie += Wiersz "Teraz" "nauka właśnie pracuje" }
 
   if ($null -ne $c.Kawalki) {
     $ogon = ""
-    if ($null -ne $c.Przebiegi) { $ogon = " ($($c.Przebiegi) porcji do modelu)" }
-    $linie += "  czeka w kolejce : $($c.Kawalki) kawalkow rozmow${ogon}"
+    if ($null -ne $c.Przebiegi) { $ogon = " ($($c.Przebiegi) $(Odmiana ([int]$c.Przebiegi) 'porcja' 'porcje' 'porcji') do modelu)" }
+    $linie += Wiersz "Czeka na przeczytanie" "$(Liczba-Ludzka $c.Kawalki) $(Odmiana ([int]$c.Kawalki) 'fragment rozmów' 'fragmenty rozmów' 'fragmentów rozmów')${ogon}"
   } elseif ($null -ne $c.Zaleglosc) {
-    $linie += "  czeka w kolejce : $($c.Zaleglosc) przebiegow wg ostatniego podsumowania (na zywo nie policzone)"
+    $linie += Wiersz "Czeka na przeczytanie" "$($c.Zaleglosc) $(Odmiana ([int]$c.Zaleglosc) 'porcja' 'porcje' 'porcji') według ostatniego podsumowania (na żywo nie policzone)" "uwaga"
   } else {
-    $linie += "  czeka w kolejce : NIE WIADOMO"
+    $linie += Wiersz "Czeka na przeczytanie" "nie wiadomo" "uwaga"
   }
 
   if ($null -ne $c.Koszt) {
@@ -509,12 +521,12 @@ function Opis-Cyklu($c) {
     if ($c.KosztData) { $kiedy = $c.KosztData.ToString('yyyy-MM-dd') }
     $ogon = ""
     if ($c.KosztOpis) { $ogon = " - $($c.KosztOpis)" }
-    $linie += "  ostatni koszt   : ~$(Liczba-Ludzka $c.Koszt) tokenow, ${kiedy}${ogon}"
-    $linie += "                    to PRAWDZIWE wywolanie modelu, osobno od rachunku wyzej"
+    $linie += Wiersz "Ostatni koszt nauki" "~$(Liczba-Ludzka $c.Koszt) tokenów, ${kiedy}${ogon}"
+    $linie += Wiersz "" "to PRAWDZIWE wywołanie modelu, osobno od rachunku za pamięć" "szary"
   } else {
-    $linie += "  ostatni koszt   : NIE POLICZONY ANI RAZU"
+    $linie += Wiersz "Ostatni koszt nauki" "jeszcze ani razu nie policzony" "uwaga"
   }
-  foreach ($p in $c.Powody) { $linie += "  !               : $p" }
+  foreach ($p in $c.Powody) { $linie += Wiersz "Czego nie wiem" "$p" "uwaga" }
   return ,$linie
 }
 
@@ -655,6 +667,101 @@ function Warstwy-Pamieci {
     $w.Uwagi += "koszt-pamieci.ps1 -Warstwy skonczyl z kodem $($r.kod)$(if ($r.powod) { ': ' + $r.powod })"
   }
   return $w
+}
+
+# OTWARCIE SESJI - CALOSC I UDZIAL MEGARUCHACZA. Calosci nie zgadujemy:
+# narzedzia\koszt-pamieci.ps1 -Start mierzy ja z transkryptow Claude Code
+# (pierwsza odpowiedz modelu w sesji, pole usage) i oddaje JSON z mediana
+# i liczba sesji, a obok czesc MegaRuchacza z tego samego rachunku, co reszta
+# okna. Tutaj tylko wywolanie i odczyt. Nieudany pomiar to Powod, ktory okno
+# pokazuje slowami "nie zmierzono, bo ..." - nigdy zero i nigdy 0%.
+function Pomiar-Startu {
+  $w = [pscustomobject]@{
+    Powod = ""; Sesje = $null; Workerzy = $null; Metoda = ""; Katalog = ""; DniWstecz = $null
+    MrSesja = $null; MrStart = $null; MrWiadomosc = $null; MrWorker = $null; Wygenerowano = ""
+  }
+  $skrypt = Join-Path $script:NadzZrodlo "narzedzia\koszt-pamieci.ps1"
+  $r = Wolaj-Skrypt $skrypt @("-KatalogDomowy", ('"' + $script:NadzDom + '"'), "-Zrodlo", ('"' + $script:NadzZrodlo + '"'), "-Start") 120
+  if (-not $r.ok) { $w.Powod = "pomiar się nie uruchomił ($($r.powod))"; return $w }
+  $tekst = "$($r.tekst)".Trim()
+  if (-not $tekst) {
+    $w.Powod = "koszt-pamieci.ps1 -Start nic nie wypisał (kod $($r.kod))"
+    if ($r.powod) { $w.Powod = $w.Powod + " - " + $r.powod }
+    return $w
+  }
+  $j = $null
+  try { $j = $tekst | ConvertFrom-Json }
+  catch {
+    Zanotuj-Wywrotke "odczyt pomiaru otwarcia sesji" $_
+    $w.Powod = "koszt-pamieci.ps1 -Start oddał coś, co nie jest JSON-em: $($_.Exception.Message)"
+    return $w
+  }
+  $w.Powod = "$($j.Powod)"
+  $w.Sesje = $j.Sesje
+  $w.Workerzy = $j.Workerzy
+  $w.Metoda = "$($j.Metoda)"
+  $w.Katalog = "$($j.Katalog)"
+  $w.DniWstecz = $j.DniWstecz
+  $w.Wygenerowano = "$($j.Wygenerowano)"
+  $w.MrSesja = $j.MegaRuchaczSesja
+  $w.MrStart = $j.MegaRuchaczStart
+  $w.MrWiadomosc = $j.MegaRuchaczWiadomosc
+  $w.MrWorker = $j.MegaRuchaczWorker
+  if ((-not $w.Powod) -and ((-not $w.Sesje) -or ($null -eq $w.Sesje.Mediana))) {
+    $w.Powod = "pomiar nie oddał mediany sesji (kod $($r.kod))"
+  }
+  return $w
+}
+
+# "3%" albo "mniej niż 1%" - zero procent czytaloby sie jak "nic", a to nie to samo.
+function Procent-Ludzko([double]$czesc, [double]$calosc) {
+  if ($calosc -le 0) { return "?" }
+  $p = 100.0 * $czesc / $calosc
+  if (($p -gt 0) -and ($p -lt 1)) { return "mniej niż 1%" }
+  return "$([int][math]::Round($p))%"
+}
+
+# Pomiar ubrany w zdania: jedna struktura dla karty w oknie i dla wydruku -Raport.
+# Zmierzone = $false znaczy, ze calosci nie ma - wtedy Powod mowi dlaczego,
+# a liczby calosci i procentu w ogole nie powstaja.
+function Opis-Startu($p) {
+  $o = [pscustomobject]@{
+    Zmierzone = $false; Powod = ""; Razem = $null; Mr = $null; Cc = $null
+    MrProc = ""; CcProc = ""; UdzialMr = $null; Sesji = 0; Podstawa = ""; Portfel = ""; Zakres = ""
+    Worker = $null; WorkerZdanie = ""
+  }
+  if (-not $p) { $o.Powod = "pomiaru nie było"; return $o }
+  if ($null -ne $p.MrSesja) { $o.Mr = [long]$p.MrSesja }
+  if ($p.Powod) { $o.Powod = $p.Powod; return $o }
+  if ($null -eq $o.Mr) { $o.Powod = "rachunek nie podał części MegaRuchacza"; return $o }
+  $o.Zmierzone = $true
+  $o.Razem = [long]$p.Sesje.Mediana
+  $o.Sesji = [int]$p.Sesje.Liczba
+  $o.Cc = [long][math]::Max(0, $o.Razem - $o.Mr)
+  $o.UdzialMr = [double]$o.Mr / [double][math]::Max(1, $o.Razem)
+  $o.MrProc = Procent-Ludzko $o.Mr $o.Razem
+  $o.CcProc = Procent-Ludzko $o.Cc $o.Razem
+  $o.Podstawa = "Zmierzone w transkryptach Claude Code: mediana z $($o.Sesji) $(Odmiana $o.Sesji 'ostatniej sesji' 'ostatnich sesji' 'ostatnich sesji') (z $($p.DniWstecz) dni)."
+  if (($null -ne $p.Sesje.Min) -and ($null -ne $p.Sesje.Max)) {
+    $o.Zakres = "Najmniejsza $(Okolo $p.Sesje.Min), największa $(Okolo $p.Sesje.Max) tokenów."
+  }
+  $o.Portfel = ("Ta paczka idzie do modelu przy każdej Twojej wiadomości (od drugiej zwykle z bufora, za ułamek ceny). " +
+                "Nawet bez MegaRuchacza sesja startowałaby z ~$(Okolo $o.Cc) tokenami, więc skracanie jego zasad " +
+                "oszczędzi najwyżej $($o.MrProc) - resztę waży sam Claude Code z opisami narzędzi.")
+  $wk = $p.Workerzy
+  if ($wk -and ($null -ne $wk.Mediana) -and ($wk.Liczba -gt 0)) {
+    $mrW = $null
+    if ($null -ne $p.MrWorker) { $mrW = [long]$p.MrWorker }
+    $o.Worker = [pscustomobject]@{ Razem = [long]$wk.Mediana; Mr = $mrW; Liczba = [int]$wk.Liczba }
+    $o.WorkerZdanie = "Start jednego workera: ~$(Okolo $wk.Mediana) tokenów"
+    if ($null -ne $mrW) { $o.WorkerZdanie += ", z tego MegaRuchacz ~$(Okolo $mrW) ($(Procent-Ludzko $mrW $wk.Mediana))" }
+    $o.WorkerZdanie += " - mediana z $($wk.Liczba) $(Odmiana ([int]$wk.Liczba) 'ostatniego workera' 'ostatnich workerów' 'ostatnich workerów')."
+  } else {
+    $pw = "brak danych"
+    if ($wk -and $wk.Powod) { $pw = $wk.Powod }
+    $o.WorkerZdanie = "Start jednego workera: nie zmierzono, bo $pw."
+  }
+  return $o
 }
 
 # Odczyt pojedynczych kluczy z odpowiedzi -Dane. Brak klucza i smiec to $null /
@@ -964,14 +1071,14 @@ function Dzien-Ludzko($data) {
 # zaczelaby klamac przy pierwszej zmianie. Gdy powstanie pomiar - tu jest miejsce.
 function Trzy-Liczby($rachunek, $cykl) {
   $naWiadomosc = [pscustomobject]@{
-    Naglowek = "Każda Twoja wiadomość dokleja"
+    Naglowek = "MegaRuchacz dokleja do każdej wiadomości"
     Liczba   = $null
     Opis     = "Przypomnienie zasad. Model czyta je potem przy każdym swoim kroku, ale z bufora, za ułamek ceny."
     Ogon     = "i zostają w rozmowie do końca"
     Powod    = ""
   }
   $naSesje = [pscustomobject]@{
-    Naglowek = "Na otwarcie sesji wchodzi"
+    Naglowek = "MegaRuchacz dokłada na otwarcie sesji"
     Liczba   = $null
     Opis     = "Wiedza o Tobie i o firmie. Wchodzi raz, ale model czyta ją przy każdym kroku - z bufora, za ułamek ceny."
     Ogon     = "i zostają w rozmowie do końca"
