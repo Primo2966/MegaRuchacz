@@ -1077,10 +1077,12 @@ function Nanies-Poprawki($zrodlo, $projekt) {
   $stempel = Get-Date -Format "yyyyMMdd-HHmmss"
   $cel = Join-Path $projekt ".claude"
   New-Item -ItemType Directory -Force -Path (Join-Path $cel "agents") | Out-Null
-  foreach ($p in @(Get-ChildItem (Join-Path $zrodlo ".claude\agents\*.md") -ErrorAction SilentlyContinue)) {
+  # Role i zasady z tych samych szablonow co instalacja globalna - jedno zrodlo.
+  # (Do 0.21.0 zasady szly z CLAUDE.md repo, ktory dzis ma juz tylko reguly repo.)
+  foreach ($p in @(Get-ChildItem (Join-Path $zrodlo "szablony-global\claude\agents\*.md") -ErrorAction SilentlyContinue)) {
     [void](Odswiez $p.FullName (Join-Path $cel "agents\$($p.Name)") $stempel)
   }
-  $zasadyZmienione = Odswiez (Join-Path $zrodlo "CLAUDE.md") (Join-Path $cel "megaruchacz-zasady.md") $stempel
+  $zasadyZmienione = Odswiez (Join-Path $zrodlo "szablony-global\claude\zasady-kierownika.md") (Join-Path $cel "megaruchacz-zasady.md") $stempel
   [void](Odswiez (Join-Path $zrodlo ".claude\mr-log.js") (Join-Path $cel "mr-log.js") $stempel)
   [void](Odswiez (Join-Path $zrodlo ".claude\orchestrator-reminder.json") (Join-Path $cel "orchestrator-reminder.json") $stempel)
   if ($zasadyZmienione -or -not (Test-Path (Join-Path $cel "megaruchacz-sesja.json"))) { Zbuduj-Sesje $cel }
@@ -1331,9 +1333,12 @@ function Uporzadkuj-Hooki($s, $wzory, [bool]$usun) {
         $rodzaj = Rodzaj-Hooka $h
         if (-not $rodzaj) { $noweHooki += ,$h; continue }
         $klucz = "$z|$rodzaj"
-        # "zasady" (cat ...megaruchacz-sesja.json) to w trybie globalnym duplikat:
-        # zasady kierownika ida juz blokiem w ~.claudeCLAUDE.md, wiec ten hook
-        # wstrzykiwal je drugi raz przy kazdej sesji. Sprawdzone 2026-09-24.
+        # "zasady" (cat ...megaruchacz-sesja.json) w trybie globalnym zdejmujemy:
+        # zasady kierownika ida blokiem w ~\.claude\CLAUDE.md. Od 0.21.0 ten blok
+        # to wersja dla Claude Code (szablony-global\claude\zasady-kierownika.md),
+        # wiec hook bylby prawdziwym duplikatem. UWAGA na historie: od 2026-09-24
+        # do 0.21.0 blok mial wersje opencode/Codex i ten hook NIE byl duplikatem,
+        # tylko jedyna wersja dla Claude Code - patrz raport P5.
         if ($usun -or $rodzaj -eq "zasady" -or $wybrane[$klucz].poz -ne "$gi|$hi") {
           $wynik.Usuniete += "$z/$rodzaj"
           $zmianaGrupy = $true

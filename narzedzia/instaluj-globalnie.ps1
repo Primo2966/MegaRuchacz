@@ -16,9 +16,19 @@
 #                                                   (duplikaty, stare "cat"), nie dubluje.
 #   Codex       ~/.codex/AGENTS.md                  blok zasad kierownika
 #               ~/.codex/hooks.json                 DOPISANE hooki rejestru
-#   wspolne     ~/.claude/CLAUDE.md i ~/.codex/AGENTS.md - blok zasad kierownika
-#               miedzy znaczniki MegaRuchacz:kierownik. Claude Code i opencode
-#               czytaja ~/.claude/CLAUDE.md, wiec zasady docieraja do obu.
+#   zasady      blok miedzy znacznikami MegaRuchacz:kierownik, w wariancie
+#               wlasciwym dla narzedzia, ktore dany plik czyta:
+#               ~/.claude/CLAUDE.md  <- szablony-global\claude\zasady-kierownika.md
+#                                       (Claude Code: praca w tle, worktree);
+#                                       na maszynie, na ktorej Claude Code nie
+#                                       pracuje, wariant opencode/Codex - ten plik
+#                                       czyta wtedy tylko opencode
+#               ~/.codex/AGENTS.md   <- szablony-opencode\zasady-kierownika.md
+#                                       (jak dotad, bez zmian)
+#               opencode czyta pierwszy istniejacy z ~/.config/opencode/AGENTS.md
+#               i ~/.claude/CLAUDE.md (sprawdzone w opencode 1.18.32) - na
+#               maszynie z Claude Code i opencode dostaje wiec wariant Claude Code.
+#               Wymuszenie wariantu: -WariantZasad claude|opencode.
 #   znacznik    ~/.claude/.megaruchacz-global       fakt instalacji globalnej
 #
 # Stan pracy (rejestr i mapa) zostaje w PROJEKCIE, w .megaruchacz\ - zaklada go
@@ -30,6 +40,9 @@
 #   -Usun        zdejmuje wszystko, co ta instalacja zalozyla
 #   -Proba       pokazuje plan, nic nie zapisuje
 #   -KatalogDomowy <kat>   do testow (podmienia baze ~\)
+#   -WariantZasad auto|claude|opencode   wariant bloku w ~/.claude/CLAUDE.md;
+#                auto (domyslnie) = claude, gdy Claude Code na tej maszynie pracuje
+#                (sa jego wlasne pliki: ~/.claude/history.jsonl albo ~/.claude.json)
 #
 # UWAGA: instalacja globalna ZASTEPUJE per-projektowa czesc rejestru. Jesli masz
 # gdzies wdroz.ps1, po instalacji globalnej uruchom go tam ponownie - wykryje
@@ -40,7 +53,9 @@ param(
   [string]$KatalogDomowy = $HOME,
   [switch]$BezPytania,
   [switch]$Usun,
-  [switch]$Proba
+  [switch]$Proba,
+  [ValidateSet("auto", "claude", "opencode")]
+  [string]$WariantZasad = "auto"
 )
 
 $Stempel = Get-Date -Format "yyyyMMdd-HHmmss"
@@ -88,7 +103,14 @@ function Wstaw-Blok($plik, $nazwa, $tresc) {
     catch { Write-Host "BLAD  $nazwa - nie umiem odczytac $plik jako UTF-8, nie ruszam" -ForegroundColor Red; $script:Bledy += $nazwa; return }
   }
   $nl = if ($stary.Contains("`r`n")) { "`r`n" } else { "`n" }
-  $blok = ($POCZATEK, $tresc.Trim(), $KONIEC) -join $nl
+  # Konce linii bloku jak w reszcie pliku - szablon w repo bywa CRLF (autocrlf),
+  # a plik docelowy LF; bez tego blok mieszalby oba rodzaje w jednym pliku.
+  $t = $tresc.Trim() -replace "`r`n", "`n"
+  if ($nl -eq "`r`n") { $t = $t -replace "`n", "`r`n" }
+  $blok = ($POCZATEK, $t, $KONIEC) -join $nl
+  # Dwa bloki to dubel, ktorego podmiana pierwszego nie usunie - glosno, bez zapisu.
+  $ile = ([regex]::Matches($stary, [regex]::Escape($POCZATEK))).Count
+  if ($ile -gt 1) { Write-Host "BLAD  $nazwa - w $plik jest $ile blokow kierownika (dubel), nie ruszam - usun nadmiarowe recznie" -ForegroundColor Red; $script:Bledy += $nazwa; return }
   $i = $stary.IndexOf($POCZATEK, [System.StringComparison]::Ordinal)
   $j = $stary.IndexOf($KONIEC, [System.StringComparison]::Ordinal)
   if (($i -ge 0) -xor ($j -ge 0)) { Write-Host "BLAD  $nazwa - tylko jeden znacznik w $plik, nie ruszam" -ForegroundColor Red; $script:Bledy += $nazwa; return }
@@ -213,9 +235,28 @@ $JestClaude   = ($null -ne $Claude)   -or (Test-Path $DomClaude)
 $JestCodex    = ($null -ne $Codex)    -or (Test-Path $DomCodex)
 $JestOpencode = ($null -ne $Opencode) -or (Test-Path $DomOpencode)
 
-$PlikZasad = Join-Path $Zrodlo "szablony-opencode\zasady-kierownika.md"
-if (-not (Test-Path $PlikZasad)) { Write-Error "Brak szablonu zasad: $PlikZasad"; exit 1 }
-$TrescZasad = (Czytaj $PlikZasad).Trim()
+# Zasady kierownika w dwoch wariantach - kazdy plik instrukcji dostaje ten, ktory
+# pasuje do narzedzia, ktore go czyta. Do 0.21.0 oba pliki dostawaly wariant
+# opencode/Codex, takze Claude Code (raport P5): "rozdaj naraz i czekaj", "nie ma
+# worktree", "worker nie moze pytac" - wszystko nieprawda pod Claude Code.
+$PlikZasadClaude   = Join-Path $Zrodlo "szablony-global\claude\zasady-kierownika.md"
+$PlikZasadOpencode = Join-Path $Zrodlo "szablony-opencode\zasady-kierownika.md"
+foreach ($p in @($PlikZasadClaude, $PlikZasadOpencode)) {
+  if (-not (Test-Path $p)) { Write-Error "Brak szablonu zasad: $p"; exit 1 }
+}
+$TrescZasadClaude   = (Czytaj $PlikZasadClaude).Trim()
+$TrescZasadOpencode = (Czytaj $PlikZasadOpencode).Trim()
+
+# Czy Claude Code na tej maszynie PRACUJE. Po plikach, ktore prowadzi sam - katalog
+# ~\.claude zaklada tez MegaRuchacz (Lore, wiedza), a na domowej maszynie claude.exe
+# lezy w PATH, choc Claude Code nie jest tam uzywany. To samo rozroznienie robia
+# straznik-zasad.ps1 (Cisza-Claude-Linia) i koszt-pamieci.ps1.
+$PracujeClaude = (Test-Path (Join-Path $KatalogDomowy ".claude\history.jsonl")) -or
+                 (Test-Path (Join-Path $KatalogDomowy ".claude.json"))
+$Wariant = $WariantZasad
+if ($Wariant -eq "auto") { $Wariant = if ($PracujeClaude) { "claude" } else { "opencode" } }
+$TrescZasadDomowa = if ($Wariant -eq "claude") { $TrescZasadClaude } else { $TrescZasadOpencode }
+$PlikZasadDomowy  = if ($Wariant -eq "claude") { $PlikZasadClaude } else { $PlikZasadOpencode }
 # Hooki Claude Code uklada i naprawia straznik (tryb -NaprawGlobalne / -UsunGlobalne).
 $Straznik = Join-Path $Zrodlo "narzedzia\straznik-zasad.ps1"
 if (-not (Test-Path $Straznik)) { Write-Error "Brak straznika: $Straznik"; exit 1 }
@@ -239,8 +280,8 @@ Write-Host "Katalog domowy: $KatalogDomowy"
 Write-Host "Zrodlo:         $Zrodlo"
 Write-Host ""
 Write-Host "Zainstaluje tryb kierownika dla narzedzi, ktore widze:"
-if ($JestClaude)   { Write-Host "  - Claude Code : role w ~/.claude/agents, rejestr + hooki w ~/.claude/settings.json, zasady w ~/.claude/CLAUDE.md" }
-if ($JestOpencode) { Write-Host "  - opencode    : role w ~/.config/opencode/agents, wtyczka rejestru w ~/.config/opencode/plugins, zasady przez ~/.claude/CLAUDE.md" }
+if ($JestClaude)   { Write-Host "  - Claude Code : role w ~/.claude/agents, rejestr + hooki w ~/.claude/settings.json, zasady w ~/.claude/CLAUDE.md (wariant: $Wariant)" }
+if ($JestOpencode) { Write-Host "  - opencode    : role w ~/.config/opencode/agents, wtyczka rejestru w ~/.config/opencode/plugins, zasady przez ~/.claude/CLAUDE.md (wariant: $Wariant)" }
 if ($JestCodex)    { Write-Host "  - Codex       : role w ~/.codex/agents, rejestr + hooki w ~/.codex/hooks.json, zasady w ~/.codex/AGENTS.md" }
 if (-not ($JestClaude -or $JestOpencode -or $JestCodex)) { Write-Host "  (zadnego nie widze)" -ForegroundColor Yellow }
 Write-Host ""
@@ -288,8 +329,21 @@ if ($Usun) {
 
 # =============================================================== ZASADY =======
 Write-Host "--- zasady kierownika (globalnie) ---"
-Wstaw-Blok (Join-Path $DomClaude "CLAUDE.md") "zasady w ~/.claude/CLAUDE.md" $TrescZasad
-if ($JestCodex) { Wstaw-Blok (Join-Path $DomCodex "AGENTS.md") "zasady w ~/.codex/AGENTS.md" $TrescZasad }
+$skadWariant = if ($WariantZasad -ne "auto") { "wymuszony -WariantZasad" } elseif ($PracujeClaude) { "Claude Code tu pracuje" } else { "Claude Code tu nie pracuje" }
+Write-Host "    ~/.claude/CLAUDE.md dostaje wariant: $Wariant ($skadWariant) - $PlikZasadDomowy"
+Wstaw-Blok (Join-Path $DomClaude "CLAUDE.md") "zasady w ~/.claude/CLAUDE.md" $TrescZasadDomowa
+if ($JestCodex) {
+  Write-Host "    ~/.codex/AGENTS.md dostaje wariant: opencode/Codex - $PlikZasadOpencode"
+  Wstaw-Blok (Join-Path $DomCodex "AGENTS.md") "zasady w ~/.codex/AGENTS.md" $TrescZasadOpencode
+}
+# opencode czyta ~/.claude/CLAUDE.md tylko wtedy, gdy nie ma ~/.config/opencode/AGENTS.md.
+# Wlasnego pliku mu nie zakladamy: przestalby wtedy widziec "Co wiem" i blok Lore.
+if ($JestOpencode -and $Wariant -eq "claude" -and -not (Test-Path (Join-Path $DomOpencode "AGENTS.md"))) {
+  Write-Host "UWAGA  opencode na tej maszynie czyta ten sam ~/.claude/CLAUDE.md, wiec dostanie zasady" -ForegroundColor Yellow
+  Write-Host "       w wariancie Claude Code. Osobny wariant dla opencode wymaga osobnego pliku" -ForegroundColor Yellow
+  Write-Host "       (~/.config/opencode/AGENTS.md) razem z 'Co wiem' i blokiem Lore - do decyzji." -ForegroundColor Yellow
+  Nie-Sprawdzono "opencode na tej maszynie dostaje zasady kierownika w wariancie Claude Code (czyta ten sam ~/.claude/CLAUDE.md)"
+}
 Write-Host ""
 
 # =============================================================== ROLE ========
@@ -374,7 +428,12 @@ foreach ($r in @("implementer","scout","verifier","zastepca")) {
 if ($JestClaude) {
   $blokClaude = ""
   if (Test-Path (Join-Path $DomClaude "CLAUDE.md")) { $blokClaude = Czytaj (Join-Path $DomClaude "CLAUDE.md") }
-  Sprawdz "blok zasad w ~/.claude/CLAUDE.md" ($blokClaude.Contains($POCZATEK)) "brak znacznika kierownika"
+  $ileBlokow = ([regex]::Matches($blokClaude, [regex]::Escape($POCZATEK))).Count
+  Sprawdz "blok zasad w ~/.claude/CLAUDE.md (dokladnie jeden)" ($ileBlokow -eq 1) "jest $ileBlokow"
+  if (-not $Proba) {
+    $pierwsza = ($TrescZasadDomowa -split "`r?`n")[0]
+    Sprawdz "blok w ~/.claude/CLAUDE.md w wariancie $Wariant" ($blokClaude.Contains($pierwsza)) "w pliku nie ma naglowka '$pierwsza'"
+  }
   Sprawdz "rejestr ~/.claude/megaruchacz-mr-log.js" (Test-Path (Join-Path $DomClaude "megaruchacz-mr-log.js")) "brak pliku"
   if (-not $Proba) {
     $ust = Join-Path $DomClaude "settings.json"

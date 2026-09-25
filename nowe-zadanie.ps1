@@ -49,7 +49,7 @@ $kolory = [ordered]@{
   "activityBar.background"      = $tlo
 }
 
-$plikLog = Join-Path $Folder ".claude\worklog.md"
+$plikLog = Join-Path $Folder ".megaruchacz\worklog.md"
 
 $zadania = [ordered]@{
   version = "2.0.0"

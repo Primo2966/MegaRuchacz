@@ -63,7 +63,7 @@ MODELS_DIR = DATA_HOME / MODELS_NAME
 class EmbedModel:
     """One embedding model Lore can run. The prefixes belong to the model, they are not a detail:
     each model was trained with its own, and a wrong one costs more quality than the model switch
-    gains (measured 2026-09-24, .claude/raporty/pamiec-test-modeli.md)."""
+    gains (measured 2026-09-24, .megaruchacz/raporty/pamiec-test-modeli.md)."""
 
     name: str             # what meta.embed_model records
     dim: int

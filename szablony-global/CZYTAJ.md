@@ -5,9 +5,9 @@ na cały komputer, dla wszystkich projektów i wszystkich trzech narzędzi naraz
 
 ## Co gdzie trafia
 
-- `claude/agents/*.md` → `~/.claude/agents/`. Role dla Claude Code. To samo co
-  `.claude/agents/*.md` w wdrożeniu per projekt, ale stan pracy w `.megaruchacz/`
-  (wspólny dla Claude Code, Codeksa i opencode), a nie w `.claude/`.
+- `claude/agents/*.md` → `~/.claude/agents/`. Role dla Claude Code — jedyne źródło:
+  te same pliki kopiuje `wdroz.ps1` do `.claude/agents/` wdrożenia per projekt.
+  Stan pracy w `.megaruchacz/` (wspólny dla Claude Code, Codeksa i opencode).
 - `claude/mr-log.js` → `~/.claude/megaruchacz-mr-log.js`. Rejestr workerów Claude
   Code; pisze do `<projekt>/.megaruchacz/worklog.md` i do `~/.claude/mr-okna/`
   (panel nadzoru). Hooki `SubagentStart`/`Stop` w `~/.claude/settings.json` wołają go.
@@ -19,8 +19,13 @@ na cały komputer, dla wszystkich projektów i wszystkich trzech narzędzi naraz
   (`-NaprawGlobalne` z instalatora, a potem sam przy każdym starcie sesji). Przy
   okazji zdejmuje z projektów stare hooki projektowe MegaRuchacza, które dublowały
   globalne (wyjątek: projekt wdrożony `wdroz.ps1 -WymusProjektowo`).
-- Zasady (`../szablony-opencode/zasady-kierownika.md`) → blok
-  `MegaRuchacz:kierownik` w `~/.claude/CLAUDE.md` i `~/.codex/AGENTS.md`.
+- Zasady kierownika → blok `MegaRuchacz:kierownik`, w wariancie narzędzia, które
+  plik czyta: `claude/zasady-kierownika.md` (wersja Claude Code, źródło prawdy)
+  → `~/.claude/CLAUDE.md`, gdy Claude Code na maszynie pracuje;
+  `../szablony-opencode/zasady-kierownika.md` → `~/.codex/AGENTS.md` (zawsze)
+  i → `~/.claude/CLAUDE.md` na maszynie bez Claude Code (czyta go wtedy opencode).
+  Ten sam `claude/zasady-kierownika.md` idzie do `.claude/megaruchacz-zasady.md`
+  wdrożeń per projekt (`wdroz.ps1`, strażnik).
 - Role opencode i Codeksa instalator bierze z `../szablony-opencode/agents/`
   i `../szablony-codex/agents/` — nie ma tu ich kopii, żeby się nie rozjechały.
 

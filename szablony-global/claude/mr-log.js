@@ -2,8 +2,8 @@
 // globalnej. Dopisuje START/KONIEC workera do `<projekt>/.megaruchacz/worklog.md`,
 // czyli tam, gdzie pisze go Codex i opencode - jedno miejsce dla wszystkich trzech.
 //
-// Rozni sie od `<projekt>/.claude/mr-log.js` tylko miejscem zapisu: tamten jest
-// czescia wdrozenia per projekt i pisze do `.claude/worklog.md`. Gdy dziala
+// Rejestr pisze tak samo jak `<projekt>/.claude/mr-log.js` z wdrozenia per projekt
+// (od 0.21.0 oba do `.megaruchacz/worklog.md`); rozni je rejestr okien. Gdy dziala
 // instalacja globalna, per-projektowe hooki rejestru powinny byc wylaczone,
 // zeby ten sam worker nie trafil do rejestru dwa razy.
 //
