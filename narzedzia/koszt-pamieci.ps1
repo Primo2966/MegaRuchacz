@@ -105,6 +105,9 @@ $ProgWzrostu    = 20
 # $AlarmNaSesje - wszystko, co wchodzi RAZ, przy starcie sesji. Dzisiaj okolo
 #   3 000 tokenow; 5 000 to zapas na rozrost wiedzy o uzytkowniku, ale juz nie
 #   na drugie tyle zasad.
+#   25.09.2026 (0.21.0): rachunek liczy wreszcie blok kierownika i CLAUDE.md
+#   projektu - zmierzone po odchudzeniu ~6 300 (inne projekty) i ~6 900 (repo
+#   MegaRuchacza). Prog 7 500 = ten stan + zapas na wiedze; decyzja uzytkownika.
 # $AlarmUdzialu - jedna pozycja zjadajaca wiecej niz tyle procent swojego
 #   rachunku. Nie chodzi o sam rozmiar, tylko o to, ze skracanie czegokolwiek
 #   innego nic nie da. Dzis najdrozsza pozycja (warstwa stala) ma 64%, wiec prog
@@ -151,7 +154,7 @@ $ProgWzrostu    = 20
 # $DniStatystyki - ile ostatnich dni pokazuje statystyka w oknie nadzorcy: tyle,
 #   ile dluzsze okno podsumowania w lore\lore\facts.py (WINDOWS = (7, 30)).
 $AlarmNaWiadomosc     = 300
-$AlarmNaSesje         = 5000
+$AlarmNaSesje         = 7500
 $AlarmUdzialu         = 70
 $MinPozycjiDoUdzialu  = 3
 $AlarmCyklu           = 350000
