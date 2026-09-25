@@ -2,7 +2,8 @@
 # bez odpowiedzi: CZY COS JEST UCINANE PO CICHU i CZY KOSZT ROSNIE NIEZAUWAZENIE.
 # Poza tym rozdziela trzy rachunki, ktore latwo ze soba pomylic: ile tokenow
 # dokleja sie do KAZDEJ wiadomosci (przypomnienie z hooka UserPromptSubmit),
-# ile wchodzi RAZ, przy starcie sesji (blok zasad + warstwa stala i biezaca),
+# ile wchodzi RAZ, przy starcie sesji (bloki zasad, w tym blok kierownika, +
+# warstwa stala i biezaca),
 # a ile kosztuje RAZ NA DOBE cykl wiedzy - czyli jedyne miejsce w tym narzedziu,
 # w ktorym naprawde wola sie model i wydaje tokeny uzytkownika. Dwa pierwsze to
 # TEKST doklejany do rozmowy, trzeci to PRAWDZIWE WYWOLANIE - i wlasnie dlatego
@@ -319,9 +320,13 @@ function Zmierz-Warstwy($plik) {
     BlokTekst    = ""
     StalaTekst   = ""
     BiezacaTekst = ""
-    # WSZYSTKIE bloki <!-- MegaRuchacz...:start/koniec -->, takze te, ktorych
-    # rachunek za start sesji nie liczy (np. blok kierownika) - lista, nie liczba
+    # Bloki nazwane <!-- MegaRuchacz:<nazwa>:start/koniec --> poza blokiem
+    # glownym (np. zasady kierownika z instaluj-globalnie.ps1). Kazdy to osobna
+    # pozycja rachunku za start sesji - wchodzi do modelu razem z calym plikiem.
     Bloki    = @()
+    # Nazwy blokow ze znacznikiem startu bez znacznika konca - takiego bloku nie
+    # umiemy odciac, wiec rachunek mowi o nim wprost zamiast go przemilczec
+    BlokiBezKonca = @()
   }
   if (-not (Test-Path -LiteralPath $plik)) { return $wynik }
 
@@ -336,18 +341,6 @@ function Zmierz-Warstwy($plik) {
   $wynik.Jest = $true
   $tekst = $tekst -replace "`r`n", "`n"
 
-  # Lista blokow tylko do odczytu - tekst ponizej zostaje nietkniety, wiec
-  # rachunek liczy dokladnie to samo, co przed dopisaniem tej listy.
-  $bloki = @()
-  foreach ($m in [regex]::Matches($tekst, '(?s)<!-- MegaRuchacz(?<n>(:[A-Za-z0-9_-]+)?):start -->.*?<!-- MegaRuchacz\k<n>:koniec -->')) {
-    $bloki += [pscustomobject]@{
-      Nazwa = $m.Groups['n'].Value.TrimStart(':')
-      Znaki = $m.Value.Length
-      Tekst = $m.Value
-    }
-  }
-  $wynik.Bloki = $bloki
-
   # blok zasad wycinamy z tekstu od razu: ma wlasny rachunek, a gdyby zostal,
   # doliczylby sie drugi raz do sekcji, w ktorej akurat siedzi
   $i = $tekst.IndexOf($ZnacznikStart, [System.StringComparison]::Ordinal)
@@ -358,6 +351,27 @@ function Zmierz-Warstwy($plik) {
     $wynik.Blok = Miara @($wynik.BlokTekst -split "`n")
     $tekst = $tekst.Remove($i, $dlugosc)
   }
+
+  # Bloki nazwane - z tego samego powodu wycinane PRZED podzialem na sekcje:
+  # blok kierownika stoi zaraz za "Co wiem" i jego znacznik startu doliczal sie
+  # dotad do warstwy stalej. Szukamy ich dopiero po wycieciu bloku glownego, wiec
+  # blok zagniezdzony w glownym nie policzy sie drugi raz.
+  $bloki = @()
+  $trafienia = @([regex]::Matches($tekst, '(?s)<!-- MegaRuchacz:(?<n>[A-Za-z0-9_-]+):start -->.*?<!-- MegaRuchacz:\k<n>:koniec -->'))
+  foreach ($m in $trafienia) {
+    $bloki += [pscustomobject]@{
+      Nazwa = $m.Groups['n'].Value
+      Znaki = $m.Value.Length
+      Tekst = $m.Value
+    }
+  }
+  # od konca, zeby wczesniejsze pozycje w tekscie sie nie przesunely
+  for ($k = $trafienia.Count - 1; $k -ge 0; $k--) {
+    $tekst = $tekst.Remove($trafienia[$k].Index, $trafienia[$k].Length)
+  }
+  $wynik.Bloki = $bloki
+  $wynik.BlokiBezKonca = @([regex]::Matches($tekst, '<!-- MegaRuchacz:(?<n>[A-Za-z0-9_-]+):start -->') |
+                           ForEach-Object { $_.Groups['n'].Value })
 
   $linie = @($tekst -split "`n")
 
@@ -1181,6 +1195,7 @@ function Powod-Pustej-Sesji($sciezkaClaude) {
 # tylko do linii maszynowej POMIAR - rachunek za start sesji sklada sie nizej
 # z pozycji, bo wchodzi do niego takze to, co nie lezy w CLAUDE.md
 $razemZnakow  = $w.Blok.Znaki + $w.Stala.Znaki + $w.Biezaca.Znaki
+foreach ($b in @($w.Bloki)) { $razemZnakow += $b.Znaki }
 
 # --- sufity: pomiary ---------------------------------------------------------
 
@@ -1206,6 +1221,87 @@ if ($agentsTresc -ne $null) {
 $jestCodex  = ($agentsTresc -ne $null)
 $jestClaude = ((Test-Path -LiteralPath (Join-Path $katKlaudii "history.jsonl")) -or
                (Test-Path -LiteralPath (Join-Path $KatalogDomowy ".claude.json")))
+
+# --- co naprawde czytaja hooki Claude Code -----------------------------------
+# Rachunek i tryb -Warstwy pytaja o to samo: ktory plik wczytuje hook. Do
+# 2026-09-25 wiedzial to tylko tryb -Warstwy, a rachunek zgadywal po sciezce -
+# i w trybie globalnym mierzyl kopie przypomnienia, ktorej zaden hook nie czyta.
+# Nieczytelny settings.json to nie cisza: idzie do Uwag (okno pokazuje je nad
+# lista, rachunek - przy pozycji, ktorej dotyczy).
+$script:UwagiWarstw = @()
+
+# Ten sam plik czytamy raz na zdarzenie - jego usterka ma trafic do Uwag raz.
+function Dodaj-Uwage($tekst) {
+  if (@($script:UwagiWarstw) -notcontains $tekst) { $script:UwagiWarstw += $tekst }
+}
+
+function Polecenia-Hookow($plik, $zdarzenie) {
+  $wynik = @()
+  if (-not (Test-Path -LiteralPath $plik -PathType Leaf)) { return $wynik }
+  $tekst = $null
+  try { $tekst = Czytaj $plik }
+  catch {
+    Dodaj-Uwage "nie da sie odczytac $plik ($($_.Exception.Message)) - nie wiem, co czytaja zapisane tam hooki"
+    return $wynik
+  }
+  $j = $null
+  try { $j = $tekst | ConvertFrom-Json }
+  catch {
+    Dodaj-Uwage "$plik nie jest poprawnym JSON-em ($($_.Exception.Message)) - nie wiem, co czytaja zapisane tam hooki"
+    return $wynik
+  }
+  if (-not $j -or -not $j.hooks) { return $wynik }
+  foreach ($grupa in @($j.hooks.$zdarzenie)) {
+    if (-not $grupa) { continue }
+    foreach ($h in @($grupa.hooks)) {
+      if (-not $h) { continue }
+      $wynik += ("" + $h.command + " " + $h.commandWindows)
+    }
+  }
+  return $wynik
+}
+
+function Klucz-Sciezki($sciezka) { return ("$sciezka" -replace '/', '\').ToLowerInvariant() }
+
+# Czy ktorys hook naprawde wczytuje ten plik - po pelnej sciezce w poleceniu,
+# z $CLAUDE_PROJECT_DIR podmienionym na katalog projektu.
+function Czy-Hook-Czyta($polecenia, $sciezka, $katProj) {
+  if (-not $sciezka) { return $false }
+  $cel = Klucz-Sciezki $sciezka
+  foreach ($pol in @($polecenia)) {
+    $t = "$pol"
+    if ($katProj) { $t = $t.Replace('$CLAUDE_PROJECT_DIR', $katProj) }
+    if ((Klucz-Sciezki $t).Contains($cel)) { return $true }
+  }
+  return $false
+}
+
+# Projekt, w ktorym ogladamy hooki. Bez -Projekt to katalog narzedzia -
+# tak samo wola ten skrypt nadzorca, ktory w zadnym projekcie nie siedzi.
+$katProjektu = $Projekt
+if (-not $katProjektu) { $katProjektu = $Zrodlo }
+$katProjektu = "$katProjektu".TrimEnd('\', '/')
+$trybGlobalny = Test-Path -LiteralPath (Join-Path $katKlaudii ".megaruchacz-global")
+
+$polStart = @()
+$polWiad  = @()
+foreach ($pu in @((Join-Path $katKlaudii "settings.json"), (Join-Path $katKlaudii "settings.local.json"),
+                  (Join-Path $katProjektu ".claude\settings.json"), (Join-Path $katProjektu ".claude\settings.local.json"))) {
+  $polStart += @(Polecenia-Hookow $pu "SessionStart")
+  $polWiad  += @(Polecenia-Hookow $pu "UserPromptSubmit")
+}
+
+# Ktory ladunek przypomnienia NAPRAWDE leci: ten, ktory hook UserPromptSubmit
+# podaje narzedzia\przypomnienie.js. Pierwszy trafiony wygrywa (globalny
+# settings.json jest czytany pierwszy).
+$przypUzywany = $null
+foreach ($pol in $polWiad) {
+  $m = [regex]::Match("$pol", 'przypomnienie\.js"?\s+(?:"(?<a>[^"]+)"|(?<a>\S+))')
+  if ($m.Success) {
+    $przypUzywany = ($m.Groups['a'].Value.Replace('$CLAUDE_PROJECT_DIR', $katProjektu) -replace '/', '\')
+    break
+  }
+}
 
 # Zasady wysylane Codeksowi na starcie sesji. Gdy podano projekt i lezy w nim
 # gotowy ladunek - mierzymy JEGO, bo to jest to, co naprawde leci. Bez projektu
@@ -1249,7 +1345,27 @@ if ($przypTresc) { $przypZnaki = $przypTresc.Length }
 # hooka), wiec nie jest to sufit, tylko pozycja w rachunku za wiadomosc.
 $przypCcTresc = $null
 $przypCcSkad  = $null
-if ($Projekt) {
+# Zdanie do wypisania przy rachunku, gdy liczba NIE pochodzi z pliku wskazanego
+# przez hook albo gdy tego pliku nie da sie zmierzyc - $null, gdy wszystko gra.
+$przypCcUwaga = $null
+# Tryb globalny (~\.claude\.megaruchacz-global): przypomnienie czyta hook
+# z globalnego settings.json, np. ~\.claude\mr\orchestrator-reminder.json - i TEN
+# plik mierzymy, a nie kopie w projekcie. Do 2026-09-25 rachunek mierzyl kopie;
+# liczby zgadzaly sie tylko dlatego, ze obie mialy akurat po 725 znakow.
+# Gdy hook wskazuje plik bez ladunku, do modelu nie leci nic - kopia zastepcza
+# podalaby wtedy liczbe, ktorej nikt nie wysyla, wiec jej nie bierzemy.
+$przypZHooka = ($trybGlobalny -and $przypUzywany)
+if ($przypZHooka) {
+  $t = Ladunek-Hooka $przypUzywany
+  if ($t) {
+    $przypCcTresc = $t; $przypCcSkad = $przypUzywany
+  } elseif (-not (Test-Path -LiteralPath $przypUzywany -PathType Leaf)) {
+    $przypCcUwaga = "hook UserPromptSubmit czyta $przypUzywany, a tego pliku nie ma - do wiadomosci nie dokleja sie nic"
+  } else {
+    $przypCcUwaga = "hook UserPromptSubmit czyta $przypUzywany, ale nie ma w nim pola hookSpecificOutput.additionalContext - do wiadomosci nie dokleja sie nic"
+  }
+}
+if ((-not $przypZHooka) -and $Projekt) {
   $p = Join-Path $Projekt ".claude\orchestrator-reminder.json"
   $t = Ladunek-Hooka $p
   if ($t) { $przypCcTresc = $t; $przypCcSkad = $p }
@@ -1260,10 +1376,16 @@ if ($Projekt) {
 # wdrozenie z samym Codeksem dostawalo w rachunku ladunek Claude'a wziety
 # z katalogu narzedzia - liczbe, ktorej nikt nikomu nie wysyla - a pozycja
 # Codeksa nie pokazywala sie nigdy (sprawdzone 2026-09-17).
-if (-not $przypCcTresc -and $jestClaude) {
+if ((-not $przypZHooka) -and (-not $przypCcTresc) -and $jestClaude) {
   $p = Join-Path $Zrodlo ".claude\orchestrator-reminder.json"
   $t = Ladunek-Hooka $p
   if ($t) { $przypCcTresc = $t; $przypCcSkad = $p }
+}
+# Tryb globalny bez hooka, ktory wskazuje przypomnienie (settings.json nieczytelny
+# albo hook zdjety) - liczba z kopii to zgadywanie i ma to byc napisane.
+if ($trybGlobalny -and (-not $przypUzywany) -and $przypCcTresc) {
+  $przypCcUwaga = "w trybie globalnym zaden hook UserPromptSubmit w settings.json nie wskazuje przypomnienia - liczona kopia zastepcza $przypCcSkad, moze nie trafiac do modelu wcale"
+  if (@($script:UwagiWarstw).Count -gt 0) { $przypCcUwaga += " (" + (@($script:UwagiWarstw) -join "; ") + ")" }
 }
 $przypCcZnaki = $null
 if ($przypCcTresc) { $przypCcZnaki = $przypCcTresc.Length }
@@ -1273,10 +1395,18 @@ if ($przypCcTresc) { $przypCcZnaki = $przypCcTresc.Length }
 # doliczony do rachunku podawalby koszt, ktorego nikt nie placi.
 $zasadyCcTresc = $null
 $zasadyCcSkad  = $null
+# W trybie globalnym zasady kierownika ida blokiem w ~\.claude\CLAUDE.md (liczony
+# nizej), a straznik zdejmuje hook "cat ...megaruchacz-sesja.json" jako duplikat.
+# Ladunek, ktorego zaden hook SessionStart nie czyta, doliczylby te same zasady
+# drugi raz - wiec wtedy go pomijamy i mowimy o tym w raporcie.
+$zasadyCcPominiete = $null
 if ($Projekt) {
   $p = Join-Path $Projekt ".claude\megaruchacz-sesja.json"
   $t = Ladunek-Hooka $p
-  if ($t) { $zasadyCcTresc = $t; $zasadyCcSkad = $p }
+  if ($t) {
+    if ($trybGlobalny -and -not (Czy-Hook-Czyta $polStart $p $katProjektu)) { $zasadyCcPominiete = $p }
+    else { $zasadyCcTresc = $t; $zasadyCcSkad = $p }
+  }
 }
 
 $sufity = @()
@@ -1432,6 +1562,26 @@ if ($w.Biezaca.Znaki -gt 0) {
     "skasuj wpisy starsze niz $DniWaznosci dni albo przenies te trwale do warstwy stalej" `
     "warstwa biezaca" $uwagaBiezaca
 }
+# Bloki nazwane w CLAUDE.md (dzis: zasady kierownika z instaluj-globalnie.ps1,
+# ~12 tys. znakow). Claude Code wczytuje CALY plik, wiec leca do modelu przy
+# kazdym starcie sesji - do 2026-09-25 rachunek ich nie liczyl, bo mierzyl
+# tylko blok glowny i sekcje "Co wiem". Pozycja na blok, klucz = nazwa bloku
+# (z tej tablicy bierze liczby tryb -Warstwy, zeby nie liczyc drugi raz).
+$pozycjeBlokow = @{}
+foreach ($b in @($w.Bloki)) {
+  if ($b.Znaki -le 0) { continue }
+  if ($b.Nazwa -eq "kierownik") {
+    $poz = Pozycja "zasady kierownika w CLAUDE.md (blok kierownik)" $b.Znaki $plikClaude `
+      "ten blok wgrywa narzedzia\instaluj-globalnie.ps1 - skracaj go w szablony-opencode\zasady-kierownika.md i wgraj ponownie, nie recznie" `
+      "zasady kierownika"
+  } else {
+    $poz = Pozycja "blok '$($b.Nazwa)' w CLAUDE.md" $b.Znaki $plikClaude `
+      "ten blok nalezy do narzedzia - skracaj go w zrodle i wgraj ponownie, nie recznie" `
+      (Skroc "blok $($b.Nazwa)" 20)
+  }
+  $kubSesja += $poz
+  $pozycjeBlokow[$b.Nazwa] = $poz
+}
 
 # Codex czyta AGENTS.md SAM, bez zadnego hooka - to jego odpowiednik CLAUDE.md
 # i najwiekszy staly koszt jego sesji. Do 2026-09-17 nie bylo go w ZADNYM
@@ -1479,7 +1629,8 @@ $tokSesja = Policz-Udzialy $kubSesja
 # Stany: jest / pusty / brak / blad (plik jest, ale nie do odczytania) /
 # nieaktywna (doklejka, ktora w tej chwili nic nie dokleja - to nie usterka).
 if ($Warstwy) {
-  $script:UwagiWarstw = @()
+  # $script:UwagiWarstw, $katProjektu, $trybGlobalny, $polStart, $polWiad
+  # i $przypUzywany sa policzone wyzej, przy rachunku - tu uzywamy tych samych.
 
   function Stan-Pliku($sciezka, [bool]$czytaj = $true) {
     $s = [pscustomobject]@{ Istnieje = $false; Stan = "brak"; Brak = ""; Znaki = $null; Bajty = $null; Zmieniony = $null }
@@ -1533,69 +1684,9 @@ if ($Warstwy) {
     return $wa
   }
 
-  # Polecenia hookow danego zdarzenia z jednego settings.json. Nieczytelny plik
-  # to nie cisza: idzie do Uwag, ktore okno pokazuje nad lista.
-  function Polecenia-Hookow($plik, $zdarzenie) {
-    $wynik = @()
-    if (-not (Test-Path -LiteralPath $plik -PathType Leaf)) { return $wynik }
-    $tekst = $null
-    try { $tekst = Czytaj $plik }
-    catch {
-      $script:UwagiWarstw += "nie da sie odczytac $plik ($($_.Exception.Message)) - nie wiem, co czytaja zapisane tam hooki"
-      return $wynik
-    }
-    $j = $null
-    try { $j = $tekst | ConvertFrom-Json }
-    catch {
-      $script:UwagiWarstw += "$plik nie jest poprawnym JSON-em ($($_.Exception.Message)) - nie wiem, co czytaja zapisane tam hooki"
-      return $wynik
-    }
-    if (-not $j -or -not $j.hooks) { return $wynik }
-    foreach ($grupa in @($j.hooks.$zdarzenie)) {
-      if (-not $grupa) { continue }
-      foreach ($h in @($grupa.hooks)) {
-        if (-not $h) { continue }
-        $wynik += ("" + $h.command + " " + $h.commandWindows)
-      }
-    }
-    return $wynik
-  }
-
-  function Klucz-Sciezki($sciezka) { return ("$sciezka" -replace '/', '\').ToLowerInvariant() }
-
-  # Czy ktorys hook naprawde wczytuje ten plik - po pelnej sciezce w poleceniu,
-  # z $CLAUDE_PROJECT_DIR podmienionym na katalog projektu.
-  function Czy-Hook-Czyta($polecenia, $sciezka, $katProj) {
-    if (-not $sciezka) { return $false }
-    $cel = Klucz-Sciezki $sciezka
-    foreach ($pol in @($polecenia)) {
-      $t = "$pol"
-      if ($katProj) { $t = $t.Replace('$CLAUDE_PROJECT_DIR', $katProj) }
-      if ((Klucz-Sciezki $t).Contains($cel)) { return $true }
-    }
-    return $false
-  }
-
   function Opis-Limitu($n, $plik) {
     if ($null -eq $n) { return "limitu nie znam (nie znalazlem go w $plik)" }
     return "do $n znakow"
-  }
-
-  # Projekt, w ktorym ogladamy warstwy. Bez -Projekt to katalog narzedzia -
-  # tak samo wola ten skrypt nadzorca, ktory w zadnym projekcie nie siedzi.
-  $katProjektu = $Projekt
-  if (-not $katProjektu) { $katProjektu = $Zrodlo }
-  $katProjektu = "$katProjektu".TrimEnd('\', '/')
-  $trybGlobalny = Test-Path -LiteralPath (Join-Path $katKlaudii ".megaruchacz-global")
-
-  # Co czytaja hooki - z settings.json globalnego i projektu. Od tego zalezy,
-  # czy ladunek hooka jest warstwa, czy lezacym bez uzytku plikiem.
-  $polStart = @()
-  $polWiad  = @()
-  foreach ($pu in @((Join-Path $katKlaudii "settings.json"), (Join-Path $katKlaudii "settings.local.json"),
-                    (Join-Path $katProjektu ".claude\settings.json"), (Join-Path $katProjektu ".claude\settings.local.json"))) {
-    $polStart += @(Polecenia-Hookow $pu "SessionStart")
-    $polWiad  += @(Polecenia-Hookow $pu "UserPromptSubmit")
   }
 
   $lista = @()
@@ -1646,16 +1737,18 @@ if ($Warstwy) {
     }
     $lista += $sub
   }
-  # Pozostale bloki MegaRuchacza (np. zasady kierownika). Rachunek za start
-  # sesji liczy wylacznie blok glowny - te wchodza do modelu razem z calym
-  # plikiem, ale w rachunku ich nie ma. Mowimy to wprost przy wierszu.
+  # Pozostale bloki MegaRuchacza (np. zasady kierownika) - liczby z tych samych
+  # pozycji rachunku za start sesji ($pozycjeBlokow), nic nie liczy sie drugi raz.
   foreach ($b in @($w.Bloki)) {
     if (-not $b.Nazwa) { continue }
+    $kto = "automat Pilnuj-Zasad w narzedzia\straznik-zasad.ps1 (kopia zasad narzedzia)"
+    if ($b.Nazwa -eq "kierownik") { $kto = "instalator globalny (narzedzia\instaluj-globalnie.ps1, zrodlo: szablony-opencode\zasady-kierownika.md)" }
     $sub = Warstwa ("claude-globalny-blok-" + $b.Nazwa) "blok zasad MegaRuchacza: $($b.Nazwa)" $plikClaude "start" "stala" `
-      "automat Pilnuj-Zasad w narzedzia\straznik-zasad.ps1 (kopia zasad narzedzia)" `
-      "wchodzi na start sesji razem z calym plikiem, ale rachunek za start sesji w koszt-pamieci.ps1 go NIE dolicza (liczy tylko blok glowny)" `
+      $kto "wchodzi na start sesji razem z calym plikiem; rachunek za start sesji liczy go jako osobna pozycje" `
       "podwarstwa" "claude-globalny"
     $sub.Istnieje = $true; $sub.Stan = "jest"; $sub.Znaki = $b.Znaki; $sub.Tokeny = Tokeny $b.Znaki
+    $pozB = $pozycjeBlokow[$b.Nazwa]
+    if ($pozB) { $sub.Znaki = $pozB.Znaki; $sub.Tokeny = $pozB.Tokeny }
     $sub.Bajty = $wGlob.Bajty; $sub.Zmieniony = $wGlob.Zmieniony; $sub.Tresc = $b.Tekst
     $lista += $sub
   }
@@ -1696,17 +1789,9 @@ if ($Warstwy) {
 
   # --- przy KAZDEJ wiadomosci ---------------------------------------------------
 
-  # Ktory ladunek przypomnienia NAPRAWDE leci: ten, ktory hook UserPromptSubmit
-  # podaje narzedzia\przypomnienie.js. Rachunek bez -Projekt liczy kopie
-  # z katalogu narzedzia - w trybie globalnym to nie jest plik, ktory czyta hook.
-  $przypUzywany = $null
-  foreach ($pol in $polWiad) {
-    $m = [regex]::Match("$pol", 'przypomnienie\.js"?\s+(?:"(?<a>[^"]+)"|(?<a>\S+))')
-    if ($m.Success) {
-      $przypUzywany = ($m.Groups['a'].Value.Replace('$CLAUDE_PROJECT_DIR', $katProjektu) -replace '/', '\')
-      break
-    }
-  }
+  # Ktory ladunek przypomnienia NAPRAWDE leci ($przypUzywany) - policzone wyzej,
+  # przy rachunku. W trybie globalnym rachunek mierzy wlasnie ten plik; poza nim
+  # moze mierzyc kopie w projekcie i wtedy mowimy to przy wierszu.
   $pozCC = @($kubWiadomosc | Where-Object { $_.Krotka -eq "przypomnienie Claude" }) | Select-Object -First 1
   $sciezkaPrzyp = $przypUzywany
   $opisPrzyp = "hook UserPromptSubmit (narzedzia\przypomnienie.js) dokleja ten ladunek do KAZDEJ wiadomosci"
@@ -1808,6 +1893,11 @@ if ($Warstwy) {
     }
     $lista += Z-Pliku (Warstwa ("wiedza-" + $pl.BaseName) $pl.Name $pl.FullName "zadanie" $tr "cykl wiedzy + czlowiek recznie" $op "plik" "wiedza")
   }
+  # Katalog ze stalymi plikami i tymczasowa poczekalnia to warstwa mieszana - tak
+  # samo jak globalny CLAUDE.md. Kolumna "Trwalosc" w oknie i zdanie nad lista
+  # maja mowic to samo.
+  $trWiedzy = @($lista | Where-Object { $_.Rodzic -eq "wiedza" } | ForEach-Object { $_.Trwalosc } | Select-Object -Unique)
+  if ($trWiedzy.Count -gt 1) { $wk.Trwalosc = "mieszana" }
 
   $lista += Z-Pliku (Warstwa "lore" "baza Lore (pamiec wszystkich rozmow)" $bazaLore "zadanie" "stala" `
     "indeksowanie Lore (lore\lore\index.py)" `
@@ -2246,7 +2336,9 @@ if ($Rozbicie) {
   # w tym rachunku brak liczby jest osobna wiadomoscia, a nie brakiem wiadomosci.
   $brakWiadomosc = $null
   if (@($kubWiadomosc).Count -eq 0) {
-    if (($przypZnaki -ne $null) -and (-not $jestCodex)) {
+    if ($przypCcUwaga) {
+      $brakWiadomosc = $przypCcUwaga
+    } elseif (($przypZnaki -ne $null) -and (-not $jestCodex)) {
       $brakWiadomosc = "nie ma ladunku hooka Claude Code (.claude\orchestrator-reminder.json), a przypomnienie Codeksa tej maszyny nie dotyczy"
     } else {
       $brakWiadomosc = "nie ma zadnego gotowego przypomnienia - ani .claude\orchestrator-reminder.json, ani $(Sciezka-Ludzka $plikPrzypWzor)"
@@ -2258,7 +2350,13 @@ if ($Rozbicie) {
   $blok = @()
   $blok += "MegaRuchacz - pamiec i koszty"
   $blok += Kubelek-Rozbicia "Przy KAZDEJ Twojej wiadomosci" $kubWiadomosc $tokWiadomosc $brakWiadomosc
+  if ($przypCcUwaga -and (@($kubWiadomosc).Count -gt 0)) {
+    $blok += ("  {0,-20} {1}" -f "", "UWAGA: $przypCcUwaga")
+  }
   $blok += Kubelek-Rozbicia "RAZ, przy starcie sesji" $kubSesja $tokSesja $brakSesja
+  foreach ($nb in @($w.BlokiBezKonca)) {
+    $blok += ("  {0,-20} {1}" -f "", "UWAGA: blok '$nb' w $(Sciezka-Ludzka $plikClaude) nie ma znacznika konca - nie umiem go policzyc.")
+  }
 
   # Przeterminowana wiedza jest gorsza niz jej brak - wyglada na aktualna.
   # Dlatego nie sama liczba w wierszu, tylko rzecz do zrobienia, wprost.
@@ -2558,8 +2656,13 @@ foreach ($s in (Sortuj-Sufity $sufity)) { Wiersz-Sufitu $s }
 
 Linia ""
 Linia "2. PRZY KAZDEJ Twojej wiadomosci - z czego sie sklada"
-Wypisz-Kubelek $kubWiadomosc $tokWiadomosc `
-  "Nie znalazlem zadnego przypomnienia - przy wiadomosci nie dokleja sie nic."
+$brakPrzyp = "Nie znalazlem zadnego przypomnienia - przy wiadomosci nie dokleja sie nic."
+if ($przypCcUwaga -and (@($kubWiadomosc).Count -eq 0)) { $brakPrzyp = "Przy wiadomosci nie dokleja sie nic: $przypCcUwaga." }
+Wypisz-Kubelek $kubWiadomosc $tokWiadomosc $brakPrzyp
+if ($przypCcUwaga -and (@($kubWiadomosc).Count -gt 0)) { Linia "  UWAGA: $przypCcUwaga." "Yellow" }
+if ($przypZHooka -and $przypCcTresc) {
+  Linia "  Plik przypomnienia wziety z hooka UserPromptSubmit w settings.json (tryb globalny) - to ten, ktory naprawde leci."
+}
 # Gdy Codex JEST, jego przypomnienie stoi juz w kubelku wyzej - powtarzanie go
 # tutaj sugerowaloby, ze to alternatywa, a nie druga pozycja tego samego rachunku.
 if ($przypCcZnaki -ne $null -and $przypZnaki -ne $null -and -not $jestCodex) {
@@ -2582,7 +2685,12 @@ if ($w.Jest -and (-not $w.MaSekcje)) {
 if ($w.Jest -and ($w.Blok.Znaki -eq 0)) {
   Linia "  (bloku zasad MegaRuchacza w tym pliku nie ma)"
 }
-if (-not $zasadyCcTresc -and -not $zasadyWdrozone) {
+foreach ($nb in @($w.BlokiBezKonca)) {
+  Linia "  UWAGA: blok '$nb' w $plikClaude ma znacznik startu bez znacznika konca - nie umiem go odciac ani policzyc." "Yellow"
+}
+if ($zasadyCcPominiete) {
+  Linia "  (nie doliczam $zasadyCcPominiete - w trybie globalnym zaden hook SessionStart go nie wczytuje, a zasady kierownika ida blokiem w CLAUDE.md, policzonym wyzej)"
+} elseif (-not $zasadyCcTresc -and -not $zasadyWdrozone) {
   Linia "  (zasad wstrzykiwanych hookiem nie doliczam: bez -Projekt widze tylko szablon, a szablon sam z siebie nic nie wysyla)"
 }
 Linia "  To wchodzi do kontekstu raz i siedzi w nim do konca sesji - nie jest wysylane ponownie przy kazdej wiadomosci."

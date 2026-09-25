@@ -1707,12 +1707,17 @@ function Rozmiar-Opisowy($wa) {
   return "nieznany"
 }
 
-# Jedno zdanie po ludzku nad lista. Liczy warstwy glowne wedlug tego, kiedy sie
-# wczytuja, a stale i tymczasowe - na najdrobniejszym poziomie (podwarstwy
-# CLAUDE.md i pliki wiedzy osobno), bo dopiero tam to rozroznienie ma sens.
+# Jedno zdanie po ludzku nad lista. KAZDA liczba w nim odnosi sie do tej samej
+# podstawy - warstw glownych (bez podwarstw i pojedynczych plikow wiedzy) - i kazdy
+# podzial sumuje sie do ich liczby. Do 2026-09-25 "kiedy" liczylo sie od warstw
+# glownych, a "stala/tymczasowa" od podwarstw: 12 warstw, a stalych i tymczasowych
+# razem 18 - dla czlowieka sprzecznosc. Warstwa, ktorej podwarstwy sa roznej
+# trwalosci (globalny CLAUDE.md, katalog wiedzy), liczy sie jako mieszana i zdanie
+# mowi wprost, co w niej jest tymczasowe.
 function Zdanie-Warstw($dw) {
   $wszystkie = @($dw.Warstwy)
   $glowne = @($wszystkie | Where-Object { -not $_.Rodzic })
+  $ile = $glowne.Count
   $czesci = @()
   foreach ($k in $KOLEJNOSC_KIEDY) {
     $n = @($glowne | Where-Object { $_.Kiedy -eq $k }).Count
@@ -1723,15 +1728,47 @@ function Zdanie-Warstw($dw) {
       "nieuzywane" { if ($n -gt 0) { $czesci += "$n $(Odmiana $n 'nieużywana' 'nieużywane' 'nieużywanych')" } }
     }
   }
-  $z = "$($glowne.Count) $(Odmiana $glowne.Count 'warstwa' 'warstwy' 'warstw') pamięci: " + ($czesci -join ", ") + "."
-  $rodzice = @{}
-  foreach ($x in $wszystkie) { if ($x.Rodzic) { $rodzice["$($x.Rodzic)"] = $true } }
-  $liscie = @($wszystkie | Where-Object { (-not $rodzice.ContainsKey("$($_.Id)")) -and ($_.Kiedy -ne "nieuzywane") })
-  $st = @($liscie | Where-Object { $_.Trwalosc -eq "stala" }).Count
-  $tm = @($liscie | Where-Object { $_.Trwalosc -eq "tymczasowa" }).Count
-  $z += " Stałych $st, tymczasowych $tm (podwarstwy CLAUDE.md i pliki wiedzy liczone osobno)."
-  $zle = @($wszystkie | Where-Object { ($_.Stan -eq "brak") -or ($_.Stan -eq "blad") }).Count
-  if ($zle -gt 0) { $z += " Brak pliku albo błąd odczytu: $zle - zaznaczone na czerwono." }
+  # "kiedy" spoza znanych czterech tez musi sie pokazac - inaczej suma sie nie zgodzi
+  $inne = @($glowne | Where-Object { $KOLEJNOSC_KIEDY -notcontains "$($_.Kiedy)" }).Count
+  if ($inne -gt 0) { $czesci += "$inne $(Odmiana $inne 'inna' 'inne' 'innych')" }
+  $z = "$ile $(Odmiana $ile 'warstwa' 'warstwy' 'warstw') pamięci: " + ($czesci -join ", ") + "."
+
+  # Trwalosc warstwy glownej: jej wlasna, a gdy ma podwarstwy roznej trwalosci - mieszana.
+  $st = 0; $tm = 0; $nz = 0
+  $mieszane = @()
+  foreach ($g in $glowne) {
+    $dzieci = @($wszystkie | Where-Object { "$($_.Rodzic)" -eq "$($g.Id)" })
+    $rodzaje = @($dzieci | ForEach-Object { "$($_.Trwalosc)" } | Select-Object -Unique)
+    $tr = "$($g.Trwalosc)"
+    if ($rodzaje.Count -gt 1) { $tr = "mieszana" }
+    switch ($tr) {
+      "stala"      { $st++ }
+      "tymczasowa" { $tm++ }
+      "mieszana" {
+        $tymcz = @($dzieci | Where-Object { $_.Trwalosc -eq "tymczasowa" } | ForEach-Object { "$($_.Nazwa)" })
+        if ($tymcz.Count -gt 0) { $mieszane += "$($g.Nazwa) - tymczasowe w niej tylko: $($tymcz -join ', ')" }
+        else { $mieszane += "$($g.Nazwa)" }
+      }
+      default { $nz++ }
+    }
+  }
+  $trw = @()
+  $trw += "$st $(Odmiana $st 'stała' 'stałe' 'stałych')"
+  $trw += "$tm $(Odmiana $tm 'tymczasowa' 'tymczasowe' 'tymczasowych')"
+  if ($mieszane.Count -gt 0) { $trw += "$($mieszane.Count) $(Odmiana $mieszane.Count 'mieszana' 'mieszane' 'mieszanych')" }
+  if ($nz -gt 0) { $trw += "$nz o nieznanej trwałości" }
+  $z += " Z tych $ile" + ": " + ($trw -join ", ")
+  if ($mieszane.Count -gt 0) { $z += " (" + ($mieszane -join "; ") + ")" }
+  $z += "."
+
+  # Braki tez na tej samej podstawie: warstwa glowna liczy sie raz, gdy brakuje
+  # jej samej albo ktorejkolwiek z jej podwarstw.
+  $zle = 0
+  foreach ($g in $glowne) {
+    $rodzina = @($g) + @($wszystkie | Where-Object { "$($_.Rodzic)" -eq "$($g.Id)" })
+    if (@($rodzina | Where-Object { ($_.Stan -eq "brak") -or ($_.Stan -eq "blad") }).Count -gt 0) { $zle++ }
+  }
+  if ($zle -gt 0) { $z += " Brak pliku albo błąd odczytu w $zle z $ile - zaznaczone na czerwono." }
   return $z
 }
 
