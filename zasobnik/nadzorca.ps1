@@ -49,6 +49,11 @@
 #    kosztu w samej etykiecie i pyta o zgode. 24.09.2026 jedno kliknieciem
 #    "Uruchom cykl teraz" poszlo 312 609 tokenow bez slowa ostrzezenia.
 #
+# 7. 25.09.2026 (P7): okno szersze (liczone z ekranu), karta "Otwarcie sesji"
+#    na Przegladzie (zmierzona calosc z transkryptow i udzial MegaRuchacza),
+#    Szczegoly jako karty sekcji zamiast jednego pola tekstu, podglad warstwy
+#    z dwiema kolumnami nad trescia.
+#
 # PRZYCISKU [ODSWIEZ] NIE MA I NIE MA GO BYC. Istnial tylko dlatego, ze okno
 # nie odswiezalo sie samo - byl obejsciem braku, nie funkcja. Dzis okno przelicza
 # sie przy kazdym otwarciu i przy kazdym przebiegu dozoru; recznemu sprawdzeniu
@@ -363,9 +368,9 @@ function Napisy-Przyciskow($d) {
 
 # Przod okna jako tekst: dokladnie te sekcje i w tej samej kolejnosci, co
 # w oknie. Ten wydruk jest jedynym sposobem sprawdzenia ukladu bez pulpitu.
-function Zbuduj-Przod($d, $problemy, $czas) {
+function Zbuduj-Przod($d, $problemy, $czas, $start) {
   $l = @()
-  $l += "MegaRuchacz - nadzorca                      [ Przegląd | Szczegóły ]   <- przełącznik widoków u góry okna"
+  $l += "MegaRuchacz - nadzorca                      [ Przegląd | Szczegóły | Warstwy pamięci ]   <- przełącznik widoków u góry okna"
   $stempel = "przed chwilą"
   if ($czas) { $stempel = $czas.ToString('yyyy-MM-dd HH:mm:ss') }
   $l += "liczby sprawdzone: $stempel  (okno przelicza je samo przy każdym otwarciu i co $Minut min)"
@@ -396,6 +401,22 @@ function Zbuduj-Przod($d, $problemy, $czas) {
     }
     $l += ""
   }
+
+  $l += "OTWARCIE SESJI   (w oknie: karta z dużą liczbą i paskiem - MegaRuchacz kontra sam Claude Code)"
+  $os = $null
+  try { $os = Opis-Startu $start } catch { Zanotuj-Wywrotke "otwarcie sesji do wydruku" $_ }
+  if (-not $os) {
+    $l += "  NIE UDALO SIE ZLOZYC - szczegoly w dzienniku nadzorcy"
+  } elseif (-not $os.Zmierzone) {
+    $l += "  nie zmierzono, bo $($os.Powod)."
+    if ($null -ne $os.Mr) { $l += "  sama część MegaRuchacza (z rachunku): ~$(Liczba-Ludzka $os.Mr) tokenów - procentu nie ma, bo nie ma całości" }
+  } else {
+    $l += "  Otwarcie sesji: ~$(Okolo $os.Razem) tokenów. Z tego MegaRuchacz: $(Okolo $os.Mr) ($($os.MrProc)) · Claude Code sam: $(Okolo $os.Cc) ($($os.CcProc))"
+    $l += "  $($os.Portfel)"
+    $l += "  $($os.Podstawa) $($os.Zakres)"
+    $l += "  $($os.WorkerZdanie)"
+  }
+  $l += ""
 
   $l += "ILE TO KOSZTUJE   (w oknie: trzy karty obok siebie)"
   $r = $null; $c = $null
@@ -466,8 +487,8 @@ function Zbuduj-Przod($d, $problemy, $czas) {
   $l += "  [$($n.Cykl)]$wl"
   $l += "      $($n.CyklOpis)"
   if ($n.Szacunek) { foreach ($z in $n.Szacunek.Podstawa) { $l += "      $z" } }
-  $l += "  [Przegląd] / [Szczegóły]  (przełącznik u góry)"
-  $l += "      Szczegóły - z czego to się składa i gdzie to leży - zajmują miejsce przeglądu. Nic nie uruchamiają i nic nie kosztują."
+  $l += "  [Przegląd] / [Szczegóły] / [Warstwy pamięci]  (przełącznik u góry)"
+  $l += "      Szczegóły i warstwy - z czego to się składa i gdzie to leży - zajmują miejsce przeglądu. Nic nie uruchamiają i nic nie kosztują."
   $l += "  [Zamknij okno]"
   $l += "      Okno znika, ikona w zasobniku zostaje i pilnuje dalej."
   return ,$l
@@ -517,113 +538,339 @@ function Tokeny-Albo-Brak($n) {
   return "~$(Liczba-Ludzka $n) tokenów"
 }
 
-# Szczegoly: wszystko to, co w starym oknie lezalo na wierzchu. Tu jest ich
-# miejsce - w zakladce Szczegoly, dla tego, kto ich szuka.
-function Zbuduj-Szczegoly($d, $wywrotkiNadzorcy, $rozbicie) {
-  $l = @()
-  $l += "SZCZEGÓŁY   (w oknie: zakładka Szczegóły, przełącznik u góry)"
-  $l += "zebrane $(Get-Date -Format 'yyyy-MM-dd HH:mm:ss')"
-  $l += "narzedzie      : $Zrodlo"
-  $l += "katalog domowy : $KatalogDomowy"
-  $l += ""
+# SZCZEGOLY JAKO SEKCJE, NIE SCIANA TEKSTU (przebudowane 25.09.2026). Uzytkownik:
+# "Szczegoly brzydko wygladaja". Do tej pory byl to jeden TextBox z liniami
+# "== NAGLOWEK ==" i dwukropkami. Teraz Sekcje-Szczegolow sklada LISTE SEKCJI
+# (tytul, jedno zdanie "co to jest", wiersze etykieta/wartosc, tabele) - okno
+# rysuje z niej karty, a wydruk -Raport ten sam tekst. Jedna struktura dla obu,
+# zeby wydruk nie mowil o czyms, czego w oknie nie ma.
+# Kolejnosc: najpierw to, co wymaga uwagi, potem pieniadze, potem stan, na koncu
+# gdzie co lezy. Informacje sa te same co wczesniej - nic nie wypadlo, tylko
+# stoja w porzadku i po ludzku.
 
-  $l += "== WERSJA NARZEDZIA =="
-  if ($d -and $d.Wersja) { $l += Opis-Wersji $d.Wersja }
-  else { $l += "  NIE UDALO SIE USTALIC - szczegoly w dzienniku nadzorcy" }
-  $l += ""
+function Nowa-Sekcja([string]$tytul, [string]$opis) {
+  return [pscustomobject]@{ Tytul = $tytul; Opis = $opis; Elementy = (New-Object System.Collections.ArrayList) }
+}
 
-  $l += "== RACHUNEK ZA PAMIEC, POZYCJA PO POZYCJI =="
-  $l += "   (liczy narzedzia\koszt-pamieci.ps1 -Rozbicie - to ten sam wydruk, nie druga kopia)"
-  if ($null -ne $rozbicie) { $l += @($rozbicie) }
-  else { $l += "  jeszcze nie policzone" }
-  $l += ""
+function Dodaj-Wiersze($s, $wiersze) {
+  foreach ($w in @($wiersze)) {
+    if ($w) { [void]$s.Elementy.Add([pscustomobject]@{ Rodzaj = "wiersz"; Etykieta = "$($w.Etykieta)"; Wartosc = "$($w.Wartosc)"; Waga = "$($w.Waga)" }) }
+  }
+}
 
-  $l += "== NAUKA Z ROZMOW (cykl wiedzy) =="
-  if ($d -and $d.Cykl) { $l += Opis-Cyklu $d.Cykl }
-  else { $l += "  NIE UDALO SIE ODCZYTAC - szczegoly w dzienniku nadzorcy" }
-  $l += ""
+function Dodaj-Wiersz($s, [string]$etykieta, [string]$wartosc, [string]$waga = "") {
+  Dodaj-Wiersze $s @(Wiersz $etykieta $wartosc $waga)
+}
 
-  # Skad sa liczby na wykresie - te same dni i sumy, co w oknie, plus zrodlo.
-  $l += "== NAUKA Z ROZMOW - HISTORIA KOSZTU (to, co na wykresie) =="
+function Dodaj-Tekst($s, [string]$tekst, [string]$waga = "") {
+  [void]$s.Elementy.Add([pscustomobject]@{ Rodzaj = "tekst"; Tekst = $tekst; Waga = $waga })
+}
+
+function Dodaj-Podtytul($s, [string]$tekst) {
+  [void]$s.Elementy.Add([pscustomobject]@{ Rodzaj = "podtytul"; Tekst = $tekst })
+}
+
+# Kolumna: @{ N = naglowek; S = szerokosc w oknie (0 = reszta); P = do prawej;
+# Pasek = wartosc to procent rysowany paskiem }. Wiersze: tablice napisow.
+function Dodaj-Tabele($s, $kolumny, $wiersze) {
+  $w = New-Object System.Collections.ArrayList
+  foreach ($r in @($wiersze)) { [void]$w.Add([string[]]@($r)) }
+  [void]$s.Elementy.Add([pscustomobject]@{ Rodzaj = "tabela"; Kolumny = @($kolumny); Wiersze = $w })
+}
+
+# koszt-pamieci.ps1 pisze samym ASCII (tak musi - patrz tamten plik). Do okna
+# oddajemy te same slowa z ogonkami, zeby "wiadomosci" nie wygladalo na usterke.
+# Tylko pelne slowa ze znanej listy - nieznane zostaja, jak byly.
+# Pary, nie slownik: klucze slownika w PowerShellu nie roznia wielkosci liter,
+# a "KAZDEJ" i "kazdej" to dwa rozne slowa w wydruku. Porownanie jest dokladne.
+$SLOWA_Z_OGONKAMI = @(
+  @("uczenie sie na wczesniejszych rozmowach", "nauka z wcześniejszych rozmów"),
+  @("KAZDEJ", "każdej"), @("kazdej", "każdej"), @("wiadomosci", "wiadomości"), @("wiadomosc", "wiadomość"),
+  @("tokenow", "tokenów"), @("RAZ NA DOBE", "raz na dobę"), @("RAZ", "raz"), @("uczenie sie", "nauka"),
+  @("wczesniejszych", "wcześniejszych"), @("stala", "stała"), @("biezaca", "bieżąca"), @("dzis", "dziś"),
+  @("wywolan", "wywołań"), @("faktow", "faktów"), @("zwykly", "zwykły"), @("dzien", "dzień"),
+  @("placona", "płacona"), @("wolaniem", "wołaniem"), @("wygasaja", "wygasają"), @("kosztuja", "kosztują"),
+  @("dopoki", "dopóki"), @("wpisow", "wpisów"), @("pamiec", "pamięć"), @("sciezka", "ścieżka"),
+  @("caly", "cały"), @("czesc", "część"), @("Biezace", "Bieżące"), @("rozmow", "rozmów"), @("zadan", "zadań"),
+  @("czlowiek", "człowiek"), @("recznie", "ręcznie"), @("sie", "się"), @("kazdej", "każdej"),
+  @("zaden", "żaden"), @("siega", "sięga"), @("narzedziami", "narzędziami")
+)
+function Po-Polsku([string]$t) {
+  if (-not $t) { return "" }
+  foreach ($p in $SLOWA_Z_OGONKAMI) {
+    $t = [regex]::Replace($t, "(?<![\p{L}])" + [regex]::Escape($p[0]) + "(?![\p{L}])", $p[1])
+  }
+  return $t
+}
+
+# Rozbicie z koszt-pamieci.ps1 -Rozbicie jako tabele: wiersz pozycji ma postac
+# "  nazwa  ####  1 234  54%  uwaga". Linia, ktora nie pasuje do wzorca, NIE
+# ginie - idzie jako zwykly tekst pod tabela, w tej samej kolejnosci.
+function Dodaj-Rozbicie($s, $rozbicie) {
+  $kol = @(@{ N = "Pozycja"; S = 250 }, @{ N = "Udział"; S = 170; Pasek = $true }, @{ N = "Tokeny"; S = 100; P = $true },
+           @{ N = ""; S = 60; P = $true }, @{ N = "Uwaga"; S = 0 })
+  $wiersze = @()
+  $zrzuc = {
+    if ($wiersze.Count -gt 0) { Dodaj-Tabele $s $kol $wiersze; Set-Variable -Name wiersze -Value @() -Scope 1 }
+  }
+  $pierwsza = $true
+  foreach ($linia in @($rozbicie)) {
+    $l = "$linia"
+    if (-not $l.Trim()) { continue }
+    if ($pierwsza -and ($l -match '^MegaRuchacz - ')) { $pierwsza = $false; continue }
+    $pierwsza = $false
+    $m = [regex]::Match($l, '^\s{2}(\S.*?)\s+([#|]+)\s+(\d[\d ]*\d|\d)(?:\s+(\d+)%)?(?:\s+(.*?))?\s*$')
+    if ($m.Success) {
+      $proc = ""
+      if ($m.Groups[4].Success) { $proc = $m.Groups[4].Value }
+      $pasek = $proc
+      if (-not $pasek) { $pasek = "100"; if ($m.Groups[2].Value -eq "|") { $pasek = "0" } }
+      $procTxt = ""
+      if ($proc) { $procTxt = "$proc%" }
+      $wiersze += ,@((Po-Polsku $m.Groups[1].Value.Trim()), $pasek, $m.Groups[3].Value, $procTxt, (Po-Polsku $m.Groups[5].Value.Trim()))
+      continue
+    }
+    & $zrzuc
+    if ($l -match '^\S') {
+      Dodaj-Podtytul $s (Z-Wielkiej (Po-Polsku $l.Trim()))
+    } else {
+      Dodaj-Tekst $s (Po-Polsku $l.Trim()) "szary"
+    }
+  }
+  & $zrzuc
+}
+
+function Sekcje-Szczegolow($d, $wywrotkiNadzorcy, $rozbicie, $start) {
+  $lista = @()
+
+  # 1. Co wymaga uwagi - pelna tresc, razem z komendami, ktorych nie ma na wierzchu.
+  $s = Nowa-Sekcja "Co wymaga uwagi - pełna treść" "To samo, co karty na górze Przeglądu, ale w całości: z nazwami plików i komendami."
+  $alarmy = @()
+  if ($d) { $alarmy = @($d.Alarmy) + @($d.Informacje) }
+  if ($alarmy.Count -eq 0) {
+    if ($d -and $d.Cykl -and $d.Rachunek) { Dodaj-Tekst $s "Nic nie wymaga uwagi." "dobrze" }
+    else { Dodaj-Tekst $s "Nie wiadomo - brakuje danych, więc alarmów nie policzyłem." "uwaga" }
+  } else {
+    foreach ($a in $alarmy) {
+      $waga = Waga-Z-Alarmu $a
+      $etyk = "Do sprawdzenia"; $kol = "uwaga"
+      if ($waga -eq "pilne") { $etyk = "Wymaga działania"; $kol = "pilne" }
+      elseif ($waga -eq "info") { $etyk = "Dla informacji"; $kol = "uwaga" }
+      Dodaj-Wiersz $s $etyk (Bez-Przedrostka $a.Tytul) $kol
+      Dodaj-Wiersz $s "" "$($a.Tresc)" "szary"
+    }
+  }
+  if ($d -and $d.Rachunek -and $d.Rachunek.Linia) {
+    Dodaj-Wiersz $s "Linia rachunku" "$($d.Rachunek.Linia)" "szary"
+    Dodaj-Wiersz $s "" "ta sama, którą strażnik pokazuje przy starcie sesji" "szary"
+  }
+  $lista += $s
+
+  # 2. Otwarcie sesji - skad liczby z karty na Przegladzie.
+  $s = Nowa-Sekcja "Otwarcie sesji - skąd ta liczba" "Ile tokenów wchodzi do modelu przy pierwszej wiadomości w sesji i jaka część z tego to MegaRuchacz."
+  $o = $null
+  try { $o = Opis-Startu $start } catch { Zanotuj-Wywrotke "opis otwarcia sesji do szczegolow" $_ }
+  if (-not $start) {
+    Dodaj-Tekst $s "Jeszcze nie zmierzone - pomiar rusza przy otwarciu okna." "szary"
+  } elseif (-not $o -or -not $o.Zmierzone) {
+    $pw = "nie wiadomo dlaczego"
+    if ($o -and $o.Powod) { $pw = $o.Powod }
+    Dodaj-Wiersz $s "Całość" "nie zmierzono, bo $pw" "uwaga"
+    if ($o -and ($null -ne $o.Mr)) { Dodaj-Wiersz $s "MegaRuchacz (rachunek)" "~$(Liczba-Ludzka $o.Mr) tokenów - bez całości nie ma z czego policzyć procentu" }
+  } else {
+    Dodaj-Wiersz $s "Razem na otwarcie" "~$(Liczba-Ludzka $o.Razem) tokenów (mediana z $($o.Sesji) sesji)"
+    Dodaj-Wiersz $s "MegaRuchacz" "~$(Liczba-Ludzka $o.Mr) tokenów ($($o.MrProc)) - $(Liczba-Ludzka $start.MrStart) na start + $(Liczba-Ludzka $start.MrWiadomosc) przypomnienia doklejonego do pierwszej wiadomości"
+    Dodaj-Wiersz $s "Claude Code sam" "~$(Liczba-Ludzka $o.Cc) tokenów ($($o.CcProc)) - jego instrukcje, opisy narzędzi (także z serwerów MCP), lista skilli"
+    if ($o.Worker) { Dodaj-Wiersz $s "Start workera" ($o.WorkerZdanie -replace '^Start jednego workera: ', '') }
+    else { Dodaj-Wiersz $s "Start workera" ($o.WorkerZdanie -replace '^Start jednego workera: ', '') "uwaga" }
+    Dodaj-Wiersz $s "Jak to zmierzone" ("W każdym transkrypcie Claude Code pierwsza odpowiedź modelu ma pole usage: suma input_tokens, " +
+      "cache_creation_input_tokens i cache_read_input_tokens to cały kontekst w tej chwili. Od tego odejmuję Twoją pierwszą wiadomość " +
+      "(jej znaki / 3) i biorę medianę z ostatnich sesji.") "szary"
+    Dodaj-Wiersz $s "" "Część MegaRuchacza to rachunek narzędzia (znaki / 3 - szacunek), całość to prawdziwe liczby z transkryptów." "szary"
+    Dodaj-Wiersz $s "Transkrypty" "$($start.Katalog)" "szary"
+    $ws = @()
+    foreach ($x in @(@($start.Sesje.Lista) | Sort-Object { "$($_.Kiedy)" } -Descending)) {
+      $kiedy = "$($x.Kiedy)"
+      $dt = Data-Lub-Nic $kiedy
+      if ($dt) { $kiedy = $dt.ToLocalTime().ToString('dd.MM HH:mm') }
+      $proj = ("$($x.Plik)" -split '\\')[0]
+      # katalog projektu w transkryptach to sciezka z myslnikami - bez litery dysku czyta sie lepiej
+      $proj = $proj -replace '^[A-Za-z]--', ''
+      $ws += ,@($kiedy, $proj, (Liczba-Ludzka $x.Kontekst), (Liczba-Ludzka $x.BezWiadomosci))
+    }
+    if ($ws.Count -gt 0) {
+      Dodaj-Podtytul $s "Sesje, z których jest mediana"
+      Dodaj-Tabele $s @(@{ N = "Kiedy"; S = 110 }, @{ N = "Projekt"; S = 0 }, @{ N = "Kontekst"; S = 110; P = $true }, @{ N = "Bez Twojej wiadomości"; S = 170; P = $true }) $ws
+    }
+    $ww = @()
+    foreach ($x in @(@($start.Workerzy.Lista) | Sort-Object { "$($_.Kiedy)" } -Descending)) {
+      $kiedy = "$($x.Kiedy)"
+      $dt = Data-Lub-Nic $kiedy
+      if ($dt) { $kiedy = $dt.ToLocalTime().ToString('dd.MM HH:mm') }
+      $ww += ,@($kiedy, "$($x.Rola)", (Liczba-Ludzka $x.BezWiadomosci))
+    }
+    if ($ww.Count -gt 0) {
+      Dodaj-Podtytul $s "Workerzy, z których jest mediana (bez treści zlecenia)"
+      Dodaj-Tabele $s @(@{ N = "Kiedy"; S = 110 }, @{ N = "Rola"; S = 140 }, @{ N = "Start"; S = 110; P = $true }) $ww
+    }
+  }
+  $lista += $s
+
+  # 3. Rachunek pozycja po pozycji.
+  $s = Nowa-Sekcja "Rachunek za pamięć, pozycja po pozycji" "Co MegaRuchacz dokleja do rozmowy i ile to waży. Liczy narzędzie koszt-pamieci (znaki podzielone przez 3 - szacunek)."
+  if ($null -ne $rozbicie) { Dodaj-Rozbicie $s $rozbicie }
+  else { Dodaj-Tekst $s "Jeszcze nie policzone." "szary" }
+  $lista += $s
+
+  # 4. Nauka z rozmow.
+  $s = Nowa-Sekcja "Nauka z rozmów" "Raz dziennie MegaRuchacz czyta Twoje rozmowy i wyciąga z nich fakty do pamięci. To jedyne miejsce, gdzie naprawdę woła model."
+  if ($d -and $d.Cykl) { Dodaj-Wiersze $s (Opis-Cyklu $d.Cykl) }
+  else { Dodaj-Tekst $s "Nie udało się odczytać - szczegóły w dzienniku nadzorcy." "uwaga" }
+  $lista += $s
+
+  # 5. Historia kosztu nauki - te same dni i sumy, co na wykresie, plus zrodlo.
+  $s = Nowa-Sekcja "Koszt nauki dzień po dniu" "Liczby, z których rysuje się wykres na Przeglądzie."
   $rach = $null
   if ($d) { $rach = $d.Rachunek }
   $st = $null
   try { $st = Statystyka-Okna $rach }
   catch { Zanotuj-Wywrotke "statystyka nauki do szczegolow" $_ }
   if ($st) {
-    $skad = "nie wiadomo"
+    $skad = "nie wiadomo"; $wagaSkad = "uwaga"
     switch ($st.Zrodlo) {
-      "historia"  { $skad = "dziennik przebiegow (.koszt-historia.tsv)" }
-      "plik-dnia" { $skad = "tylko ostatni pomiar (.koszt-cyklu.txt) - dziennika przebiegow jeszcze nie ma" }
-      "brak"      { $skad = "nic - $($st.Powod)" }
+      "historia"  { $skad = "dziennik przebiegów nauki (.koszt-historia.tsv)"; $wagaSkad = "" }
+      "plik-dnia" { $skad = "tylko ostatni pomiar (.koszt-cyklu.txt) - dziennika przebiegów jeszcze nie ma"; $wagaSkad = "uwaga" }
+      "brak"      { $skad = "nic - $($st.Powod)"; $wagaSkad = "uwaga" }
     }
-    $l += "  dni z             : $skad"
-    $sumy = "nie ma czego sumowac"
-    if ($st.SumyZ -eq "podsumowanie") { $sumy = "podsumowanie liczone przez sama nauke (.koszt-podsumowanie.txt)" }
-    elseif ($st.SumyZ -eq "dni") { $sumy = "zsumowane z dni ponizej (podsumowania nie ma)" }
-    $l += "  sumy 7/30 dni z   : $sumy"
-    $l += "  wykres            : $(Opis-Rysownika)"
-    $l += "  prog zwyklego dnia: $(Tokeny-Albo-Brak $st.Prog) (uzasadnienie na gorze narzedzia\koszt-pamieci.ps1)"
+    Dodaj-Wiersz $s "Dni wzięte z" $skad $wagaSkad
+    $sumy = "nie ma czego sumować"
+    if ($st.SumyZ -eq "podsumowanie") { $sumy = "podsumowanie liczone przez samą naukę (.koszt-podsumowanie.txt)" }
+    elseif ($st.SumyZ -eq "dni") { $sumy = "zsumowane z dni poniżej (podsumowania nie ma)" }
+    Dodaj-Wiersz $s "Sumy 7 i 30 dni" $sumy
+    Dodaj-Wiersz $s "Wykres" (Opis-Rysownika)
+    Dodaj-Wiersz $s "Próg zwykłego dnia" "$(Tokeny-Albo-Brak $st.Prog) - uzasadnienie na górze narzedzia\koszt-pamieci.ps1"
+    $dni = @()
     foreach ($x in @(@($st.Dni) | Where-Object { $_.Jest })) {
-      $l += ("    {0}  razem {1,9}   zwykly dzien {2,9}   nadrabianie {3,9}   okres nieznany {4,9}" -f `
-             $x.Dzien.ToString('yyyy-MM-dd'), (Liczba-Ludzka $x.Razem), (Liczba-Ludzka $x.Zwykle),
-             (Liczba-Ludzka $x.Nadrabianie), (Liczba-Ludzka $x.Nieznane))
+      $dni += ,@($x.Dzien.ToString('yyyy-MM-dd'), (Liczba-Ludzka $x.Razem), (Liczba-Ludzka $x.Zwykle), (Liczba-Ludzka $x.Nadrabianie), (Liczba-Ludzka $x.Nieznane))
     }
-    if ($st.Uwaga) { $l += "  $($st.Uwaga)" }
+    if ($dni.Count -gt 0) {
+      Dodaj-Tabele $s @(@{ N = "Dzień"; S = 120 }, @{ N = "Razem"; S = 110; P = $true }, @{ N = "Zwykły dzień"; S = 120; P = $true },
+                        @{ N = "Nadrabianie"; S = 120; P = $true }, @{ N = "Okres nieznany"; S = 130; P = $true }) $dni
+    } else {
+      Dodaj-Tekst $s "Jeszcze nie ma ani jednego dnia z kosztem." "szary"
+    }
+    if ($st.Uwaga) { Dodaj-Tekst $s "$($st.Uwaga)" "szary" }
   } else {
-    $l += "  NIE UDALO SIE ZLOZYC - szczegoly w dzienniku nadzorcy"
+    Dodaj-Tekst $s "Nie udało się złożyć - szczegóły w dzienniku nadzorcy." "uwaga"
   }
-  $l += ""
+  $lista += $s
 
-  # Surowy meldunek modulu pamieci - razem z komenda cofania, ktora na wierzchu
-  # jest zastapiona zdaniem "powiedz Claude'owi".
-  $l += "== ZMIANY W PAMIECI (meldunek ostatniej nauki) =="
+  # 6. Zmiany w pamieci - razem z komenda cofania, ktora na wierzchu jest zdaniem.
+  $s = Nowa-Sekcja "Zmiany w pamięci" "Co ostatnia nauka dopisała albo zmieniła w wiedzy o Tobie i o firmie."
   if ($d -and $d.Pamiec) {
     $pz = $d.Pamiec
-    $l += "  plik            : $($pz.Plik)"
-    if ($pz.Dzien) { $l += "  dzien nauki     : $($pz.Dzien.ToString('yyyy-MM-dd'))" }
-    if (-not $pz.Wiadomo) { $l += "  NIE WIADOMO     : $($pz.Powod)" }
-    if ($pz.Naglowek) { $l += "  meldunek        : $($pz.Naglowek)" }
-    foreach ($x in $pz.Zmiany) { $l += "                    $($x.Tresc)" }
-    $l += "  cofniecie       : uv --directory $Zrodlo\lore run python -m lore.verify --cofnij <id>"
+    if ($pz.Dzien) { Dodaj-Wiersz $s "Dzień nauki" "$($pz.Dzien.ToString('yyyy-MM-dd'))" }
+    if (-not $pz.Wiadomo) { Dodaj-Wiersz $s "Nie wiadomo" "$($pz.Powod)" "uwaga" }
+    if ($pz.Naglowek) { Dodaj-Wiersz $s "Meldunek" "$($pz.Naglowek)" }
+    foreach ($x in $pz.Zmiany) { Dodaj-Wiersz $s "" "$($x.Tresc)" }
+    Dodaj-Wiersz $s "Jak cofnąć" "powiedz Claude'owi: cofnij zmianę <id> - albo ręcznie:" "szary"
+    Dodaj-Wiersz $s "" "uv --directory $Zrodlo\lore run python -m lore.verify --cofnij <id>" "szary"
+    Dodaj-Wiersz $s "Plik" "$($pz.Plik)" "szary"
   } else {
-    $l += "  NIE UDALO SIE ODCZYTAC - szczegoly w dzienniku nadzorcy"
+    Dodaj-Tekst $s "Nie udało się odczytać - szczegóły w dzienniku nadzorcy." "uwaga"
   }
   if ($d -and $d.Przeliczanie -and $d.Przeliczanie.Plik) {
-    $l += "  przeliczanie    : jest plik $($d.Przeliczanie.Plik)"
-    if ($d.Przeliczanie.Powod) { $l += "                    $($d.Przeliczanie.Powod)" }
+    Dodaj-Wiersz $s "Przeliczanie archiwum" "jest plik $($d.Przeliczanie.Plik)"
+    if ($d.Przeliczanie.Powod) { Dodaj-Wiersz $s "" "$($d.Przeliczanie.Powod)" "szary" }
   }
-  $l += ""
+  $lista += $s
 
-  $l += "== ALARMY I INFORMACJE, PELNA TRESC RAZEM Z KOMENDAMI =="
-  $alarmy = @()
-  if ($d) { $alarmy = @($d.Alarmy) + @($d.Informacje) }
-  if ($alarmy.Count -eq 0) {
-    if ($d -and $d.Cykl -and $d.Rachunek) { $l += "  nic nie wymaga uwagi" }
-    else { $l += "  NIE WIADOMO - brakuje danych, wiec alarmow nie policzylem" }
-  } else {
-    foreach ($a in $alarmy) {
-      $waga = Waga-Z-Alarmu $a
-      $l += "  [$($a.Temat), $waga] $($a.Tytul)"
-      $l += "      $($a.Tresc)"
-    }
-  }
-  if ($d -and $d.Rachunek -and $d.Rachunek.Linia) {
-    $l += "  linia rachunku (ta sama, co widzi straznik przy starcie sesji):"
-    $l += "      $($d.Rachunek.Linia)"
-  }
-  $l += ""
+  # 7. Wersja.
+  $s = Nowa-Sekcja "Wersja MegaRuchacza" "Czy na serwerze czeka coś nowszego. Pobiera to przycisk na dole okna - za darmo."
+  if ($d -and $d.Wersja) { Dodaj-Wiersze $s (Opis-Wersji $d.Wersja) }
+  else { Dodaj-Tekst $s "Nie udało się ustalić - szczegóły w dzienniku nadzorcy." "uwaga" }
+  $lista += $s
 
-  $l += "== NADZORCA =="
+  # 8. Nadzorca i pliki.
+  $s = Nowa-Sekcja "Nadzorca i gdzie co leży" "Ślad samego nadzorcy (tej ikony w zasobniku) i ścieżki, gdyby trzeba było zajrzeć ręcznie."
   $stan = Czytaj-Klucze (Join-Path $KatalogDomowy ".claude\.megaruchacz-zasobnik.txt")
-  if ($stan["byl"]) { $l += "  ostatni dozor   : $($stan['byl']) (tryb $($stan['byl.tryb']))" }
-  else { $l += "  ostatni dozor   : brak zapisu - to pierwszy przebieg albo nie moge pisac do pliku stanu" }
-  if ($stan["cykl.ruszony"]) { $l += "  cykl startowany : $($stan['cykl.ruszony'])" }
+  if ($stan["byl"]) { Dodaj-Wiersz $s "Ostatni dozór" "$($stan['byl']) (tryb $($stan['byl.tryb']))" }
+  else { Dodaj-Wiersz $s "Ostatni dozór" "brak zapisu - to pierwszy przebieg albo nie mogę pisać do pliku stanu" "uwaga" }
+  if ($stan["cykl.ruszony"]) { Dodaj-Wiersz $s "Naukę ruszył" "$($stan['cykl.ruszony'])" }
   if (@($wywrotkiNadzorcy).Count -gt 0) {
-    $l += "  WYWROTKI Z POPRZEDNICH PRZEBIEGOW:"
-    foreach ($w in @($wywrotkiNadzorcy)) { $l += "      $w" }
+    foreach ($w in @($wywrotkiNadzorcy)) { Dodaj-Wiersz $s "Wywrotka" "$w" "pilne" }
+  } else {
+    Dodaj-Wiersz $s "Wywrotki" "żadnych od ostatniego startu"
   }
-  $l += "  dziennik        : $(Join-Path $KatalogDomowy '.claude\.megaruchacz-zasobnik.log')"
+  Dodaj-Wiersz $s "Dziennik nadzorcy" "$(Join-Path $KatalogDomowy '.claude\.megaruchacz-zasobnik.log')" "szary"
+  Dodaj-Wiersz $s "Narzędzie" "$Zrodlo" "szary"
+  Dodaj-Wiersz $s "Katalog domowy" "$KatalogDomowy" "szary"
+  Dodaj-Wiersz $s "Zebrane" "$(Get-Date -Format 'yyyy-MM-dd HH:mm:ss')" "szary"
+  $lista += $s
+
+  return ,$lista
+}
+
+# Te same sekcje jako tekst - dla wydruku -Raport, jedynego sprawdzenia bez pulpitu.
+function Tabela-Na-Tekst($el) {
+  $l = @()
+  $n = @($el.Kolumny).Count
+  $szer = @()
+  for ($i = 0; $i -lt $n; $i++) {
+    $k = $el.Kolumny[$i]
+    $m = "$($k.N)".Length
+    foreach ($r in $el.Wiersze) {
+      $v = "$($r[$i])"
+      if ($k.Pasek) { $v = "#" * [int][math]::Round([double]("0" + $v) / 5) }
+      if ($v.Length -gt $m) { $m = $v.Length }
+    }
+    $szer += [math]::Min($m, 60)
+  }
+  $fmt = {
+    param($wartosci)
+    $cz = @()
+    for ($i = 0; $i -lt $n; $i++) {
+      $v = "$($wartosci[$i])"
+      if ($i -eq $n - 1) { $cz += $v; continue }
+      if ($el.Kolumny[$i].P) { $cz += $v.PadLeft($szer[$i]) } else { $cz += $v.PadRight($szer[$i]) }
+    }
+    return ("    " + ($cz -join "  ")).TrimEnd()
+  }
+  $l += & $fmt @($el.Kolumny | ForEach-Object { "$($_.N)" })
+  foreach ($r in $el.Wiersze) {
+    $w = @()
+    for ($i = 0; $i -lt $n; $i++) {
+      $v = "$($r[$i])"
+      if ($el.Kolumny[$i].Pasek) { $v = "#" * [int][math]::Round([double]("0" + $v) / 5) }
+      $w += $v
+    }
+    $l += & $fmt $w
+  }
+  return ,$l
+}
+
+function Zbuduj-Szczegoly($d, $wywrotkiNadzorcy, $rozbicie, $start) {
+  $l = @()
+  $l += "SZCZEGÓŁY   (w oknie: zakładka Szczegóły - każda sekcja to osobna biała karta, najważniejsze na górze)"
+  $l += ""
+  foreach ($s in (Sekcje-Szczegolow $d $wywrotkiNadzorcy $rozbicie $start)) {
+    $l += "== $($s.Tytul.ToUpper()) =="
+    if ($s.Opis) { $l += "   $($s.Opis)" }
+    foreach ($e in $s.Elementy) {
+      switch ($e.Rodzaj) {
+        "wiersz" {
+          $zn = ""
+          if ($e.Waga -eq "pilne") { $zn = "[!] " } elseif ($e.Waga -eq "uwaga") { $zn = "[?] " }
+          if ($e.Etykieta) { $l += ("  {0,-24}: {1}{2}" -f $e.Etykieta, $zn, $e.Wartosc) }
+          else { $l += ("  {0,-24}  {1}{2}" -f "", $zn, $e.Wartosc) }
+        }
+        "tekst"    { $l += "  $($e.Tekst)" }
+        "podtytul" { $l += "  -- $($e.Tekst)" }
+        "tabela"   { $l += Tabela-Na-Tekst $e }
+      }
+    }
+    $l += ""
+  }
   return ,$l
 }
 
@@ -706,12 +953,14 @@ if ($Raz -or $Raport) {
   if ($Raport) {
     $d = Zbierz-Wszystko $true $true
     $probl = Zbierz-Problemy $d $stare "" ([datetime]::Now)
+    $start = $null
+    try { $start = Pomiar-Startu } catch { Zanotuj-Wywrotke "pomiar otwarcia sesji" $_ }
     $roz = @()
     try { $roz = Rachunek-Rozbicie }
     catch { Zanotuj-Wywrotke "rachunek za pamiec (rozbicie)" $_; $roz = @("  NIE UDALO SIE POLICZYC - szczegoly w dzienniku nadzorcy") }
-    Zbuduj-Przod $d $probl ([datetime]::Now) | ForEach-Object { Write-Output $_ }
+    Zbuduj-Przod $d $probl ([datetime]::Now) $start | ForEach-Object { Write-Output $_ }
     Write-Output ""
-    Zbuduj-Szczegoly $d $stare $roz | ForEach-Object { Write-Output $_ }
+    Zbuduj-Szczegoly $d $stare $roz $start | ForEach-Object { Write-Output $_ }
     Zapisz-Obecnosc "raport"
     exit 0
   }
@@ -753,12 +1002,14 @@ if ($Raz -or $Raport) {
   $d = Dozor $dymek $true $false
   Write-Output ""
   $probl = Zbierz-Problemy $d $stare "" ([datetime]::Now)
+  $start = $null
+  try { $start = Pomiar-Startu } catch { Zanotuj-Wywrotke "pomiar otwarcia sesji" $_ }
   $roz = @()
   try { $roz = Rachunek-Rozbicie }
   catch { Zanotuj-Wywrotke "rachunek za pamiec (rozbicie)" $_; $roz = @("  NIE UDALO SIE POLICZYC - szczegoly w dzienniku nadzorcy") }
-  Zbuduj-Przod $d $probl ([datetime]::Now) | ForEach-Object { Write-Output $_ }
+  Zbuduj-Przod $d $probl ([datetime]::Now) $start | ForEach-Object { Write-Output $_ }
   Write-Output ""
-  Zbuduj-Szczegoly $d $stare $roz | ForEach-Object { Write-Output $_ }
+  Zbuduj-Szczegoly $d $stare $roz $start | ForEach-Object { Write-Output $_ }
   if (@($d.Alarmy).Count -gt 0) { exit 1 }
   exit 0
 }
@@ -791,13 +1042,19 @@ $script:LPodtytul      = $null
 $script:BPrzeglad      = $null   # przelacznik [Przeglad | Szczegoly]
 $script:BSzczegoly     = $null
 $script:WidokPrzeglad  = $null   # karty - przewijane tylko wtedy, gdy ekran jest za niski
-$script:WidokSzczegoly = $null   # pole z pelnym tekstem szczegolow
+$script:WidokSzczegoly = $null   # karty sekcji szczegolow, przewijane
 $script:Root           = $null
 $script:PanelProblemy  = $null
 $script:PanelLiczby    = $null
 $script:KartaStat      = $null
 $script:PanelStan      = $null
-$script:PoleSzczegoly  = $null
+$script:ListaSzczegolow = $null  # karty sekcji w zakladce Szczegoly (od 25.09.2026 zamiast jednego pola tekstu)
+$script:KartaStart     = $null   # karta "Otwarcie sesji" na Przegladzie
+# Pomiar otwarcia sesji z transkryptow (Pomiar-Startu). Liczony przy otwarciu okna
+# i przy recznym przeliczeniu - nie w dozorze co kwadrans, bo nikt go wtedy nie oglada.
+$script:Start          = $null
+$script:UdzialStartu   = 0.0
+$script:PodgladInfo    = $null   # dwie kolumny nad trescia podgladu warstwy
 $script:BWarstwy       = $null   # trzeci przycisk przelacznika
 $script:WidokWarstwy   = $null   # warstwy pamieci: lista po lewej, podglad po prawej
 $script:LWarstwy       = $null   # jedno zdanie podsumowania nad lista
@@ -864,6 +1121,10 @@ $script:KolOsi    = [System.Drawing.Color]::FromArgb(200, 203, 208)
 $script:KolSlupek = [System.Drawing.Color]::FromArgb(92, 108, 130)
 $script:KolNadrab = [System.Drawing.Color]::FromArgb(214, 160, 52)
 $script:KolNiezn  = [System.Drawing.Color]::FromArgb(176, 182, 190)
+# Pasek otwarcia sesji: MegaRuchacz spokojnym niebieskim (to jedyny akcent
+# w oknie, ktory nie jest sygnalem ostrzezenia), Claude Code jasnoszarym tlem.
+$script:KolMr     = [System.Drawing.Color]::FromArgb(47, 95, 168)
+$script:KolCc     = [System.Drawing.Color]::FromArgb(214, 218, 224)
 $script:PioroRamki = New-Object System.Drawing.Pen($script:KolRamki)
 
 # Hierarchia robi sie krojem i wielkoscia, nie kolorem. Czcionki sa WSPOLNE dla
@@ -879,17 +1140,23 @@ $script:CzZwyklaGruba = New-Object System.Drawing.Font("Segoe UI Semibold", 9.75
 $script:CzMala        = New-Object System.Drawing.Font("Segoe UI", 8.75)
 $script:CzMalaGruba   = New-Object System.Drawing.Font("Segoe UI Semibold", 8.75)
 $script:CzStala       = New-Object System.Drawing.Font("Consolas", 9.5)
+$script:CzStalaMala   = New-Object System.Drawing.Font("Consolas", 9)
 
-# Szerokosci. Tresc ma 800 px: trzy karty kosztow po 256 z dwoma odstepami po 16.
-# Okno ma 866 px wnetrza: 24 marginesu z kazdej strony plus miejsce na pionowy
-# suwak, gdyby ekran byl za niski - wtedy suwak poziomy i tak sie nie pojawia,
-# a tekst wyjezdzajacy poza krawedz bylby ucieciem po cichu.
-$script:SzerTresc   = 800
-$script:SzerKarty   = 800
-$script:SzerKafelka = 256
+# Szerokosci - od 25.09.2026 liczone z ekranu, a nie na sztywno. Uzytkownik:
+# "wez cale te okna szersze zrob, bardziej czytelne". Okno ma do 1240 px wnetrza
+# (na 1920 i 2560 px szerokosci - tyle; na malym ekranie mniej, ale nigdy
+# szerzej niz obszar roboczy minus 80 px i nigdy wezej niz 900). Tresc to okno
+# minus marginesy po 28 px i 20 px na pionowy suwak, gdy ekran jest za niski -
+# suwak poziomy nie ma prawa sie pojawic, a tekst wyjezdzajacy poza krawedz
+# bylby ucieciem po cichu. Trzy karty kosztow dziela tresc po rowno.
+$script:ObszarEkranu = [System.Windows.Forms.Screen]::PrimaryScreen.WorkingArea
+$script:SzerOkna    = [int][math]::Max(900, [math]::Min(1240, $script:ObszarEkranu.Width - 80))
+$script:Margines    = 28
+$script:SzerTresc   = $script:SzerOkna - 2 * $script:Margines - 20
+$script:SzerKarty   = $script:SzerTresc
 $script:Odstep      = 16
-$script:SzerOkna    = 866
-$script:SzerEtykiety = 170   # lewa kolumna w karcie stanu
+$script:SzerKafelka = [int][math]::Floor(($script:SzerTresc - 2 * $script:Odstep) / 3)
+$script:SzerEtykiety = 220   # lewa kolumna w karcie stanu i w szczegolach
 
 # ZLAPANE 24.09.2026 NA PROBIE Z PRAWDZIWYM OKNEM, i to jest dokladnie ten rodzaj
 # usterki, dla ktorego istnieje zasada "cisza jest zakazana": proces startowany
@@ -961,8 +1228,8 @@ function Poziomy {
 function Nowa-Karta([int]$szerokosc) {
   $k = Pionowy $szerokosc
   $k.BackColor = $script:TloKarty
-  $k.Padding = New-Object System.Windows.Forms.Padding(16, 10, 16, 10)
-  $k.Margin = New-Object System.Windows.Forms.Padding(0, 0, 0, 10)
+  $k.Padding = New-Object System.Windows.Forms.Padding(22, 16, 22, 16)
+  $k.Margin = New-Object System.Windows.Forms.Padding(0, 0, 0, 14)
   $k.Add_Paint({ param($nadawca, $e) Obrysuj $nadawca $e })
   return $k
 }
@@ -998,12 +1265,12 @@ function Nowy-Przycisk([string]$napis) {
 
 # Jeden z dwoch przyciskow przelacznika [Przeglad | Szczegoly]: plaski, bez
 # ramki, wybrany jest bialy na szarym tle - jak przelacznik w ustawieniach Windows.
-function Przycisk-Przelacznika([string]$napis, [int]$x) {
+function Przycisk-Przelacznika([string]$napis, [int]$x, [int]$szer = 124) {
   $b = New-Object System.Windows.Forms.Button
   $b.Text = $napis
   $b.FlatStyle = [System.Windows.Forms.FlatStyle]::Flat
   $b.FlatAppearance.BorderSize = 0
-  $b.Size = New-Object System.Drawing.Size(104, 28)
+  $b.Size = New-Object System.Drawing.Size($szer, 32)
   $b.Location = New-Object System.Drawing.Point($x, 3)
   $b.Cursor = [System.Windows.Forms.Cursors]::Hand
   $b.TabStop = $false
@@ -1023,6 +1290,255 @@ function Styl-Przelacznika($b, [bool]$wybrany) {
     $b.Font = $script:CzZwykla
     $b.FlatAppearance.MouseOverBackColor = [System.Drawing.Color]::FromArgb(236, 238, 241)
   }
+}
+
+# --- klocki szczegolow (25.09.2026) --------------------------------------------
+# Z tych trzech klockow skladaja sie karty w zakladce Szczegoly: wiersz
+# "etykieta | wartosc", tabela z liczbami wyrownanymi do prawej i sama karta
+# sekcji z tytulem i jednym zdaniem "co to jest". Zawijanie zamiast ucinania -
+# tekst, ktory wyjezdza poza karte, bylby ucieciem po cichu.
+
+function Kolor-Wagi([string]$waga) {
+  switch ($waga) {
+    "pilne"  { return $script:KolPilne }
+    "uwaga"  { return $script:KolUwaga }
+    "szary"  { return $script:KolSzary }
+    "dobrze" { return $script:KolDobrze }
+  }
+  return $script:KolTekst
+}
+
+function Wiersz-Dwukolumnowy([string]$etykieta, [string]$wartosc, $kolor, [int]$szer, [int]$szerEtykiety) {
+  $w = Poziomy
+  $w.Margin = New-Object System.Windows.Forms.Padding(0, 0, 0, 5)
+  $e = Etykieta-Zawijana $etykieta $script:CzZwykla $script:KolSzary ($szerEtykiety - 12)
+  $e.MinimumSize = New-Object System.Drawing.Size($szerEtykiety, 0)
+  $e.UseMnemonic = $false
+  $w.Controls.Add($e)
+  $v = Etykieta-Zawijana $wartosc $script:CzZwykla $kolor ($szer - $szerEtykiety)
+  $v.UseMnemonic = $false
+  $w.Controls.Add($v)
+  return $w
+}
+
+# Tabela: TableLayoutPanel, kolumny o stalej szerokosci (ostatnia z zerem dostaje
+# reszte), liczby do prawej, cienka kreska pod kazdym wierszem. Kolumna "Pasek"
+# rysuje procent poziomym paskiem - udzial widac, zanim sie przeczyta liczbe.
+function Tabela-Kontrolka($el, [int]$szer) {
+  $t = New-Object System.Windows.Forms.TableLayoutPanel
+  $t.AutoSize = $true
+  $t.AutoSizeMode = [System.Windows.Forms.AutoSizeMode]::GrowAndShrink
+  $t.Margin = New-Object System.Windows.Forms.Padding(0, 4, 0, 10)
+  $t.Padding = New-Object System.Windows.Forms.Padding(0)
+  $kol = @($el.Kolumny)
+  $t.ColumnCount = $kol.Count
+  $zajete = 0
+  foreach ($k in $kol) { if ($k.S -gt 0) { $zajete += [int]$k.S } }
+  $szerokosci = @()
+  foreach ($k in $kol) {
+    $s = [int]$k.S
+    if ($s -le 0) { $s = [math]::Max(120, $szer - $zajete - 4) }
+    $szerokosci += $s
+    [void]$t.ColumnStyles.Add((New-Object System.Windows.Forms.ColumnStyle([System.Windows.Forms.SizeType]::Absolute, $s)))
+  }
+  $t.RowCount = $el.Wiersze.Count + 1
+  $t.Add_CellPaint({
+    param($nadawca, $e)
+    try {
+      $y = $e.CellBounds.Bottom - 1
+      $e.Graphics.DrawLine($script:PioroRamki, $e.CellBounds.Left, $y, $e.CellBounds.Right, $y)
+    } catch { if (-not $script:RamkaZawiodla) { $script:RamkaZawiodla = $true; Zanotuj-Wywrotke "rysowanie kreski w tabeli" $_ } }
+  })
+  $wiersz = 0
+  $wszystkie = @(,[string[]]@($kol | ForEach-Object { "$($_.N)" })) + @($el.Wiersze)
+  foreach ($r in $wszystkie) {
+    [void]$t.RowStyles.Add((New-Object System.Windows.Forms.RowStyle([System.Windows.Forms.SizeType]::AutoSize)))
+    for ($i = 0; $i -lt $kol.Count; $i++) {
+      $k = $kol[$i]
+      $v = ""
+      if ($i -lt @($r).Count) { $v = "$($r[$i])" }
+      if (($wiersz -gt 0) -and $k.Pasek) {
+        $p = New-Object System.Windows.Forms.Panel
+        $p.Size = New-Object System.Drawing.Size(($szerokosci[$i] - 16), 22)
+        $p.Margin = New-Object System.Windows.Forms.Padding(0, 0, 8, 0)
+        $p.BackColor = $script:TloKarty
+        $proc = 0
+        [void][int]::TryParse($v, [ref]$proc)
+        $pas = New-Object System.Windows.Forms.Panel
+        $pas.BackColor = $script:KolMr
+        $pas.Location = New-Object System.Drawing.Point(0, 7)
+        $pas.Size = New-Object System.Drawing.Size([math]::Max(2, [int](($szerokosci[$i] - 16) * [math]::Min(100, $proc) / 100.0)), 9)
+        if ($proc -le 0) { $pas.BackColor = $script:KolOsi }
+        $p.Controls.Add($pas)
+        $t.Controls.Add($p, $i, $wiersz)
+        continue
+      }
+      $cz = $script:CzZwykla; $kolor = $script:KolTekst
+      if ($wiersz -eq 0) { $cz = $script:CzMalaGruba; $kolor = $script:KolSzary }
+      $l = Etykieta-Zawijana $v $cz $kolor ($szerokosci[$i] - 12)
+      $l.UseMnemonic = $false
+      $l.Margin = New-Object System.Windows.Forms.Padding(0, 4, 12, 5)
+      if ($k.P) {
+        $l.Anchor = [System.Windows.Forms.AnchorStyles]::Right
+        $l.TextAlign = [System.Drawing.ContentAlignment]::TopRight
+      }
+      $t.Controls.Add($l, $i, $wiersz)
+    }
+    $wiersz++
+  }
+  return $t
+}
+
+function Karta-Sekcji($s) {
+  $k = Nowa-Karta $script:SzerKarty
+  $k.Padding = New-Object System.Windows.Forms.Padding(22, 16, 22, 14)
+  $k.Margin = New-Object System.Windows.Forms.Padding(0, 0, 0, 14)
+  $szer = $script:SzerKarty - 44
+  $tyt = Etykieta-Zawijana $s.Tytul $script:CzSrednia $script:KolTekst $szer
+  $tyt.UseMnemonic = $false
+  $k.Controls.Add($tyt)
+  if ($s.Opis) {
+    $o = Etykieta-Zawijana $s.Opis $script:CzZwykla $script:KolSzary $szer
+    $o.UseMnemonic = $false
+    $o.Margin = New-Object System.Windows.Forms.Padding(0, 2, 0, 12)
+    $k.Controls.Add($o)
+  }
+  foreach ($e in $s.Elementy) {
+    switch ($e.Rodzaj) {
+      "wiersz" { $k.Controls.Add((Wiersz-Dwukolumnowy $e.Etykieta $e.Wartosc (Kolor-Wagi $e.Waga) $szer $script:SzerEtykiety)) }
+      "tekst" {
+        $l = Etykieta-Zawijana $e.Tekst $script:CzZwykla (Kolor-Wagi $e.Waga) $szer
+        $l.UseMnemonic = $false
+        $l.Margin = New-Object System.Windows.Forms.Padding(0, 0, 0, 5)
+        $k.Controls.Add($l)
+      }
+      "podtytul" {
+        $l = Etykieta-Zawijana $e.Tekst $script:CzZwyklaGruba $script:KolTekst $szer
+        $l.UseMnemonic = $false
+        $l.Margin = New-Object System.Windows.Forms.Padding(0, 12, 0, 2)
+        $k.Controls.Add($l)
+      }
+      "tabela" { $k.Controls.Add((Tabela-Kontrolka $e $szer)) }
+    }
+  }
+  return $k
+}
+
+# Jedna karta z samym tekstem - "licze...", odpowiedz straznika, wywrotka.
+function Karta-Komunikatu([string]$tytul, [string[]]$linie, $kolor) {
+  $s = Nowa-Sekcja $tytul ""
+  foreach ($x in @($linie)) { [void]$s.Elementy.Add([pscustomobject]@{ Rodzaj = "tekst"; Tekst = "$x"; Waga = "" }) }
+  $k = Karta-Sekcji $s
+  if ($kolor) { foreach ($c in $k.Controls) { if ($c -is [System.Windows.Forms.Label] -and ($c.Font -eq $script:CzZwykla)) { $c.ForeColor = $kolor } } }
+  return $k
+}
+
+# --- karta "Otwarcie sesji" na Przegladzie ------------------------------------
+# Odpowiedz na pytanie uzytkownika "ile tokenow na otwarcie sesji i jaki to
+# procent tego, co dokleja MegaRuchacz". Jedna duza liczba, pasek z dwoma
+# kawalkami, dwa wiersze legendy z liczbami wyrownanymi do prawej i jedno
+# zdanie, co to znaczy dla portfela. Gdy pomiaru nie ma - "nie zmierzono, bo...",
+# bez paska i bez procentu: 0% czytaloby sie jak "MegaRuchacz nic nie kosztuje".
+function Wiersz-Legendy-Startu($panel, $kolor, [string]$napis, [string]$liczba, [string]$proc) {
+  $w = Poziomy
+  $w.Margin = New-Object System.Windows.Forms.Padding(0, 0, 0, 4)
+  $kw = New-Object System.Windows.Forms.Panel
+  $kw.Size = New-Object System.Drawing.Size(12, 12)
+  $kw.BackColor = $kolor
+  $kw.Margin = New-Object System.Windows.Forms.Padding(0, 5, 10, 0)
+  $w.Controls.Add($kw)
+  $n = Etykieta $napis $script:CzZwykla $script:KolTekst
+  $n.AutoSize = $false
+  $n.Size = New-Object System.Drawing.Size(430, 22)
+  $n.UseMnemonic = $false
+  $w.Controls.Add($n)
+  $l = Etykieta $liczba $script:CzZwyklaGruba $script:KolTekst
+  $l.AutoSize = $false
+  $l.Size = New-Object System.Drawing.Size(110, 22)
+  $l.TextAlign = [System.Drawing.ContentAlignment]::TopRight
+  $w.Controls.Add($l)
+  $p = Etykieta $proc $script:CzZwykla $script:KolSzary
+  $p.AutoSize = $false
+  $p.Size = New-Object System.Drawing.Size(110, 22)
+  $p.TextAlign = [System.Drawing.ContentAlignment]::TopRight
+  $w.Controls.Add($p)
+  $panel.Controls.Add($w)
+}
+
+function Rysuj-Pasek-Startu($g, $rozmiar) {
+  try {
+    $g.SmoothingMode = [System.Drawing.Drawing2D.SmoothingMode]::None
+    $g.Clear($script:TloKarty)
+    $w = [int]$rozmiar.Width; $h = [int]$rozmiar.Height
+    $cc = New-Object System.Drawing.SolidBrush($script:KolCc)
+    $mr = New-Object System.Drawing.SolidBrush($script:KolMr)
+    try {
+      $g.FillRectangle($cc, 0, 0, $w, $h)
+      $szerMr = [int][math]::Round($w * [double]$script:UdzialStartu)
+      if ($szerMr -lt 3) { $szerMr = 3 }   # kawalek ma byc widoczny, choc maly
+      $g.FillRectangle($mr, 0, 0, $szerMr, $h)
+    } finally { $cc.Dispose(); $mr.Dispose() }
+  } catch {
+    if (-not $script:RysowanieZawiodlo) { $script:RysowanieZawiodlo = $true; Zanotuj-Wywrotke "rysowanie paska otwarcia sesji" $_ }
+  }
+}
+
+function Odmaluj-Start {
+  if (-not $script:KartaStart -or $script:KartaStart.IsDisposed) { return }
+  Wyczysc-Panel $script:KartaStart
+  $szer = $script:SzerKarty - 44
+  $tyt = Etykieta "Otwarcie sesji" $script:CzGruba $script:KolTekst
+  $script:KartaStart.Controls.Add($tyt)
+  $pod = Etykieta-Zawijana "Ile tokenów trafia do modelu, zanim napiszesz pierwsze słowo - i ile z tego dokłada MegaRuchacz." $script:CzMala $script:KolSzary $szer
+  $pod.Margin = New-Object System.Windows.Forms.Padding(0, 0, 0, 8)
+  $script:KartaStart.Controls.Add($pod)
+
+  if ($null -eq $script:Start) {
+    $script:KartaStart.Controls.Add((Etykieta-Zawijana "Mierzę w transkryptach Claude Code - to potrwa kilka sekund..." $script:CzZwykla $script:KolSzary $szer))
+    return
+  }
+  $o = $null
+  try { $o = Opis-Startu $script:Start } catch { Zanotuj-Wywrotke "opis otwarcia sesji" $_ }
+  if (-not $o -or -not $o.Zmierzone) {
+    $pw = "nie wiadomo dlaczego - to samo w sobie jest usterką"
+    if ($o -and $o.Powod) { $pw = $o.Powod }
+    $script:KartaStart.Controls.Add((Etykieta "nie zmierzono" $script:CzDuza $script:KolUwaga))
+    $script:KartaStart.Controls.Add((Etykieta-Zawijana "Nie zmierzono, bo $pw." $script:CzZwykla $script:KolUwaga $szer))
+    if ($o -and ($null -ne $o.Mr)) {
+      $czescMr = "Sama część MegaRuchacza (z rachunku): ~$(Liczba-Ludzka $o.Mr) tokenów."
+      if ($o.Mr -le 0) { $czescMr = "Rachunek MegaRuchacza też nie znalazł nic doklejanego do sesji - powód jest w zakładce Szczegóły." }
+      $x = Etykieta-Zawijana ("$czescMr " +
+        "Bez zmierzonej całości nie da się powiedzieć, jaki to procent - dlatego procentu tu nie ma.") $script:CzZwykla $script:KolSzary $szer
+      $x.Margin = New-Object System.Windows.Forms.Padding(0, 6, 0, 0)
+      $script:KartaStart.Controls.Add($x)
+    }
+    return
+  }
+
+  $script:UdzialStartu = $o.UdzialMr
+  $wiersz = Poziomy
+  $duza = Etykieta ("~" + (Okolo $o.Razem)) $script:CzDuza $script:KolTekst
+  $duza.Margin = New-Object System.Windows.Forms.Padding(0, 0, 6, 0)
+  $wiersz.Controls.Add($duza)
+  $jed = Etykieta "tokenów na otwarcie każdej sesji" $script:CzZwykla $script:KolSzary
+  $jed.Margin = New-Object System.Windows.Forms.Padding(0, 14, 0, 0)
+  $wiersz.Controls.Add($jed)
+  $script:KartaStart.Controls.Add($wiersz)
+
+  $pasek = New-Object System.Windows.Forms.PictureBox
+  $pasek.Size = New-Object System.Drawing.Size($szer, 14)
+  $pasek.Margin = New-Object System.Windows.Forms.Padding(0, 8, 0, 10)
+  $pasek.Add_Paint({ param($nadawca, $e) Rysuj-Pasek-Startu $e.Graphics $nadawca.ClientSize })
+  $script:KartaStart.Controls.Add($pasek)
+
+  Wiersz-Legendy-Startu $script:KartaStart $script:KolMr "MegaRuchacz - zasady i wiedza o Tobie ($(Liczba-Ludzka $script:Start.MrStart)) + przypomnienie ($(Liczba-Ludzka $script:Start.MrWiadomosc))" "~$(Okolo $o.Mr)" $o.MrProc
+  Wiersz-Legendy-Startu $script:KartaStart $script:KolCc "Claude Code sam - jego instrukcje i opisy narzędzi (MCP)" "~$(Okolo $o.Cc)" $o.CcProc
+
+  $p = Etykieta-Zawijana $o.Portfel $script:CzZwykla $script:KolTekst $szer
+  $p.Margin = New-Object System.Windows.Forms.Padding(0, 8, 0, 6)
+  $script:KartaStart.Controls.Add($p)
+  $pods = (@($o.Podstawa, $o.Zakres, $o.WorkerZdanie) | Where-Object { $_ }) -join " "
+  $script:KartaStart.Controls.Add((Etykieta-Zawijana $pods $script:CzMala $script:KolSzary $szer))
 }
 
 # --- wykres ------------------------------------------------------------------
@@ -1132,7 +1648,8 @@ function Nowy-Chart($st) {
   # mial podpis zawsze. Punkty sa numerowane od 1.
   $n = @($st.Dni).Count
   for ($i = $n; $i -ge 1; $i -= 7) {
-    $ob.AxisX.CustomLabels.Add([double]($i - 0.5), [double]($i + 0.5), $st.Dni[$i - 1].Dzien.ToString('dd.MM')) | Out-Null
+    # szeroki zakres podpisu (tydzien), inaczej Chart lamie "28.08" na dwie linie
+    $ob.AxisX.CustomLabels.Add([double]($i - 3), [double]($i + 3), $st.Dni[$i - 1].Dzien.ToString('dd.MM')) | Out-Null
   }
   return $ch
 }
@@ -1276,14 +1793,14 @@ function Odmaluj-Podtytul {
 
 function Karta-Problemu($p) {
   $k = Pionowy $script:SzerKarty
-  $k.Padding = New-Object System.Windows.Forms.Padding(16, 10, 16, 12)
-  $k.Margin  = New-Object System.Windows.Forms.Padding(0, 0, 0, 10)
+  $k.Padding = New-Object System.Windows.Forms.Padding(22, 14, 22, 14)
+  $k.Margin  = New-Object System.Windows.Forms.Padding(0, 0, 0, 14)
   $kolor = $script:KolUwaga
   $k.BackColor = $script:TloUwaga
   $podpis = "Do sprawdzenia"
   if ($p.Waga -eq "pilne") { $kolor = $script:KolPilne; $k.BackColor = $script:TloPilne; $podpis = "Wymaga działania" }
   elseif ($p.Waga -eq "info") { $podpis = "Dla informacji - nic nie trzeba robić" }
-  $szer = $script:SzerKarty - 32
+  $szer = $script:SzerKarty - 44
   $k.Controls.Add((Etykieta $podpis.ToUpper() $script:CzMalaGruba $kolor))
   $k.Controls.Add((Etykieta-Zawijana $p.Tytul $script:CzGruba $kolor $szer))
   if ($p.Porada) {
@@ -1309,8 +1826,8 @@ function Odmaluj-Problemy {
 
 function Kafelek-Liczby($t) {
   $k = Nowa-Karta $script:SzerKafelka
-  $k.Margin = New-Object System.Windows.Forms.Padding(0, 0, $script:Odstep, 10)
-  $szer = $script:SzerKafelka - 32
+  $k.Margin = New-Object System.Windows.Forms.Padding(0, 0, $script:Odstep, 14)
+  $szer = $script:SzerKafelka - 44
   $k.Controls.Add((Etykieta-Zawijana $t.Naglowek $script:CzMala $script:KolSzary $szer))
   if ($null -ne $t.Liczba) {
     $w = Poziomy
@@ -1372,19 +1889,21 @@ function Odmaluj-Liczby {
     $kk.MinimumSize = New-Object System.Drawing.Size($script:SzerKafelka, $max)
     $script:PanelLiczby.Controls.Add($kk)
   }
-  $karty[$karty.Count - 1].Margin = New-Object System.Windows.Forms.Padding(0, 0, 0, 10)
+  $karty[$karty.Count - 1].Margin = New-Object System.Windows.Forms.Padding(0, 0, 0, 14)
 }
 
 function Liczba-Boczna($panel, [string]$podpis, [string]$wartosc) {
   $panel.Controls.Add((Etykieta $podpis $script:CzMala $script:KolSzary))
   $w = Etykieta $wartosc $script:CzSrednia $script:KolTekst
-  $w.Margin = New-Object System.Windows.Forms.Padding(0, 0, 0, 8)
+  $w.Margin = New-Object System.Windows.Forms.Padding(0, 0, 0, 5)
   $panel.Controls.Add($w)
 }
 
 function Znak-Legendy($panel, $kolor, [string]$napis) {
-  $kw = Etykieta "■" $script:CzZwykla $kolor
-  $kw.Margin = New-Object System.Windows.Forms.Padding(0, 0, 2, 0)
+  $kw = New-Object System.Windows.Forms.Panel
+  $kw.Size = New-Object System.Drawing.Size(10, 10)
+  $kw.BackColor = $kolor
+  $kw.Margin = New-Object System.Windows.Forms.Padding(0, 5, 6, 0)
   $panel.Controls.Add($kw)
   $t = Etykieta $napis $script:CzMala $script:KolSzary
   $t.Margin = New-Object System.Windows.Forms.Padding(0, 2, 14, 0)
@@ -1400,7 +1919,7 @@ function Odmaluj-Statystyke {
   try { $st = Statystyka-Okna $r }
   catch { Zanotuj-Wywrotke "statystyka nauki do okna" $_ }
   $script:StatWykresu = $st
-  $szer = $script:SzerKarty - 32
+  $szer = $script:SzerKarty - 44
 
   $script:KartaStat.Controls.Add((Etykieta "Koszt nauki z rozmów - ostatnie 30 dni" $script:CzGruba $script:KolTekst))
   if (-not $st) {
@@ -1411,14 +1930,14 @@ function Odmaluj-Statystyke {
   $wiersz = Poziomy
   $wiersz.Margin = New-Object System.Windows.Forms.Padding(0, 8, 0, 4)
   $gospodarz = New-Object System.Windows.Forms.Panel
-  $gospodarz.Size = New-Object System.Drawing.Size(536, 180)
+  $gospodarz.Size = New-Object System.Drawing.Size(($szer - 340), 170)
   $gospodarz.Margin = New-Object System.Windows.Forms.Padding(0)
   $gospodarz.BackColor = [System.Drawing.Color]::White
   Wstaw-Wykres $gospodarz $st
   $wiersz.Controls.Add($gospodarz)
 
-  $boczne = Pionowy ($szer - 536 - 20)
-  $boczne.Margin = New-Object System.Windows.Forms.Padding(20, 0, 0, 0)
+  $boczne = Pionowy 300
+  $boczne.Margin = New-Object System.Windows.Forms.Padding(40, 0, 0, 0)
   Liczba-Boczna $boczne "Ostatnie 7 dni" (Tokeny-Albo-Brak $st.Suma7)
   Liczba-Boczna $boczne "Ostatnie $($st.OknoDni) dni" (Tokeny-Albo-Brak $st.Suma30)
   if ($null -ne $st.Srednia) {
@@ -1460,8 +1979,8 @@ function Odmaluj-Statystyke {
 # dwie kolumny - co (szare) i jak (czarne). Linie przychodza gotowe z Linie-Stanu.
 function Wiersz-Stanu([string]$linia, $kolorWartosci) {
   $w = Poziomy
-  $w.Margin = New-Object System.Windows.Forms.Padding(0, 0, 0, 4)
-  $szer = $script:SzerKarty - 32
+  $w.Margin = New-Object System.Windows.Forms.Padding(0, 0, 0, 5)
+  $szer = $script:SzerKarty - 44
   $i = $linia.IndexOf(": ")
   if ($i -gt 0) {
     $e = Etykieta-Zawijana $linia.Substring(0, $i) $script:CzZwykla $script:KolSzary $script:SzerEtykiety
@@ -1501,7 +2020,7 @@ function Odmaluj-Stan {
 function Dodaj-Zmiany-Pamieci {
   $script:PanelZmian = $null
   $script:LinkZmian = $null
-  $szer = $script:SzerKarty - 32
+  $szer = $script:SzerKarty - 44
   $pz = $null
   if ($script:Dane) { $pz = $script:Dane.Pamiec }
   $o = $null
@@ -1577,7 +2096,7 @@ function Dopasuj-Wysokosc {
     $trzeba = $script:Naglowek.Height + $script:Root.PreferredSize.Height + $script:WidokPrzeglad.Padding.Vertical +
               $script:Pasek.Height + $ramka + 4
     $obszar = [System.Windows.Forms.Screen]::FromControl($script:Okno).WorkingArea
-    $script:Okno.Height = [math]::Max(420, [math]::Min($trzeba, $obszar.Height - 40))
+    $script:Okno.Height = [math]::Max([math]::Min(760, $obszar.Height - 40), [math]::Min($trzeba, $obszar.Height - 40))
     # Okno wysrodkowane przy starcie na innej wysokosci po zmianie wysokosci
     # wystawaloby dolem za ekran - a razem z nim przyciski.
     if ($script:Okno.Bottom -gt $obszar.Bottom) {
@@ -1592,6 +2111,7 @@ function Odmaluj-Okno {
   try {
     Odmaluj-Podtytul
     Odmaluj-Problemy
+    Odmaluj-Start
     Odmaluj-Liczby
     Odmaluj-Statystyke
     Odmaluj-Stan
@@ -1610,10 +2130,22 @@ function Odmaluj-Okno {
 
 # --- dane dla okna -----------------------------------------------------------
 
+function Pokaz-Karty-Szczegolow($karty) {
+  $p = $script:ListaSzczegolow
+  if (-not $p -or $p.IsDisposed) { return }
+  $p.SuspendLayout()
+  try {
+    Wyczysc-Panel $p
+    foreach ($k in @($karty)) { $p.Controls.Add($k) }
+  } finally { $p.ResumeLayout($true) }
+  try { $script:WidokSzczegoly.AutoScrollPosition = New-Object System.Drawing.Point(0, 0) }
+  catch { Zanotuj-Wywrotke "przewiniecie szczegolow na gore" $_ }
+}
+
 function Napelnij-Szczegoly {
-  if (-not $script:PoleSzczegoly -or $script:PoleSzczegoly.IsDisposed) { return }
+  if (-not $script:ListaSzczegolow -or $script:ListaSzczegolow.IsDisposed) { return }
   if ($null -eq $script:Rozbicie) {
-    $script:PoleSzczegoly.Text = "Liczę rozbicie rachunku..."
+    Pokaz-Karty-Szczegolow @(Karta-Komunikatu "Liczę rozbicie rachunku..." @("To potrwa kilka sekund.") $null)
     $script:Okno.Refresh()
     try { $script:Rozbicie = Rachunek-Rozbicie }
     catch {
@@ -1621,13 +2153,14 @@ function Napelnij-Szczegoly {
       $script:Rozbicie = @("  NIE UDALO SIE POLICZYC ROZBICIA: $($_.Exception.Message)")
     }
   }
-  try { $script:PoleSzczegoly.Lines = [string[]](Zbuduj-Szczegoly $script:Dane $script:Wywrotki $script:Rozbicie) }
-  catch {
+  try {
+    $karty = @()
+    foreach ($s in (Sekcje-Szczegolow $script:Dane $script:Wywrotki $script:Rozbicie $script:Start)) { $karty += (Karta-Sekcji $s) }
+    Pokaz-Karty-Szczegolow $karty
+  } catch {
     Zanotuj-Wywrotke "zlozenie szczegolow" $_
-    $script:PoleSzczegoly.Text = "NIE UDALO SIE ZLOZYC SZCZEGOLOW: $($_.Exception.Message)"
+    Pokaz-Karty-Szczegolow @(Karta-Komunikatu "Nie udało się złożyć szczegółów" @("$($_.Exception.Message)", "Pełny ślad jest w dzienniku nadzorcy.") $script:KolPilne)
   }
-  $script:PoleSzczegoly.SelectionStart = 0
-  $script:PoleSzczegoly.ScrollToCaret()
 }
 
 # --- warstwy pamieci -----------------------------------------------------------
@@ -1824,7 +2357,7 @@ function Napelnij-Warstwy {
         [void]$lv.Groups.Add($g)
         $grupy[$klucz] = $g
       }
-      $nazwa = "$($wa.Nazwa)"
+      $nazwa = Po-Polsku "$($wa.Nazwa)"
       if ($wa.Rodzic) { $nazwa = "      › " + $nazwa }
       $it = New-Object System.Windows.Forms.ListViewItem -ArgumentList @(,[string]$nazwa)
       [void]$it.SubItems.Add([string](Trwalosc-Po-Ludzku $wa.Trwalosc))
@@ -1842,7 +2375,8 @@ function Napelnij-Warstwy {
       $zd += " UWAGA: " + (@($dw.Uwagi) -join "; ")
       $script:LWarstwy.ForeColor = $script:KolUwaga
     }
-    $script:LWarstwy.Text = $zd
+    $script:LWarstwy.Text = Po-Polsku $zd
+    Pokaz-Info-Warstwy $null
     $pocz = @("Kliknij warstwę po lewej, żeby zobaczyć, co w niej jest.", "",
               "Lista zebrana: $($dw.Wygenerowano). Projekt: $($dw.Projekt).")
     if (@($dw.Uwagi).Count -gt 0) { $pocz += @("", "UWAGI:") + @($dw.Uwagi | ForEach-Object { "  - $_" }) }
@@ -1853,26 +2387,48 @@ function Napelnij-Warstwy {
   }
 }
 
-# Podglad tylko do odczytu: naglowek z tym, co o warstwie wiadomo, pod nim tresc.
-# Podwarstwa i ladunek hooka pokazuja tekst z koszt-pamieci.ps1 (kawalek pliku
-# albo to, co hook naprawde wysyla), zwykly plik czytamy tutaj, katalog to lista
-# plikow, bazy nie wczytujemy wcale.
+# Podglad tylko do odczytu. Nad trescia - dwie kolumny z tym, co o warstwie
+# wiadomo (kiedy sie wczytuje, stan, rozmiar, kto pisze, sciezka); pod nimi sama
+# tresc. Podwarstwa i ladunek hooka pokazuja tekst z koszt-pamieci.ps1 (kawalek
+# pliku albo to, co hook naprawde wysyla), zwykly plik czytamy tutaj, katalog to
+# lista plikow, bazy nie wczytujemy wcale.
+function Pokaz-Info-Warstwy($wa) {
+  $info = $script:PodgladInfo
+  if (-not $info -or $info.IsDisposed) { return }
+  $info.SuspendLayout()
+  try {
+    Wyczysc-Panel $info
+    if (-not $wa) { return }
+    $szer = [math]::Max(300, $info.Parent.ClientSize.Width - $info.Parent.Padding.Horizontal - 12)
+    $t = Etykieta-Zawijana (Po-Polsku "$($wa.Nazwa)") $script:CzSrednia $script:KolTekst $szer
+    $t.UseMnemonic = $false
+    $t.Margin = New-Object System.Windows.Forms.Padding(0, 0, 0, 8)
+    $info.Controls.Add($t)
+    $st = "$($wa.Stan)"
+    $kolSt = $script:KolDobrze
+    if (($st -eq "brak") -or ($st -eq "blad")) { $kolSt = $script:KolPilne }
+    elseif (($st -eq "nieaktywna") -or ($st -eq "pusty")) { $kolSt = $script:KolSzary }
+    $e = 130
+    $info.Controls.Add((Wiersz-Dwukolumnowy "Wczytuje się" (Kiedy-Po-Ludzku "$($wa.Kiedy)") $script:KolTekst $szer $e))
+    $info.Controls.Add((Wiersz-Dwukolumnowy "Stan" (Stan-Po-Ludzku $st) $kolSt $szer $e))
+    $info.Controls.Add((Wiersz-Dwukolumnowy "Rozmiar" (Rozmiar-Opisowy $wa) $script:KolTekst $szer $e))
+    $info.Controls.Add((Wiersz-Dwukolumnowy "Trwałość" (Trwalosc-Po-Ludzku "$($wa.Trwalosc)") $script:KolTekst $szer $e))
+    if ($wa.Zmieniony) { $info.Controls.Add((Wiersz-Dwukolumnowy "Zmieniony" "$($wa.Zmieniony)" $script:KolTekst $szer $e)) }
+    $info.Controls.Add((Wiersz-Dwukolumnowy "Kto pisze" (Po-Polsku "$($wa.KtoPisze)") $script:KolTekst $szer $e))
+    if ($wa.Opis) { $info.Controls.Add((Wiersz-Dwukolumnowy "Co to jest" (Po-Polsku "$($wa.Opis)") $script:KolTekst $szer $e)) }
+    $info.Controls.Add((Wiersz-Dwukolumnowy "Ścieżka" "$($wa.Sciezka)" $script:KolSzary $szer $e))
+    $kreska = New-Object System.Windows.Forms.Panel
+    $kreska.Size = New-Object System.Drawing.Size($szer, 1)
+    $kreska.BackColor = $script:KolRamki
+    $kreska.Margin = New-Object System.Windows.Forms.Padding(0, 8, 0, 8)
+    $info.Controls.Add($kreska)
+  } finally { $info.ResumeLayout($true) }
+}
+
 function Pokaz-Podglad($wa) {
   if (-not $script:PodgladWarstwy -or $script:PodgladWarstwy.IsDisposed -or -not $wa) { return }
+  Pokaz-Info-Warstwy $wa
   $l = New-Object System.Collections.Generic.List[string]
-  $l.Add("$($wa.Nazwa)")
-  $l.Add("")
-  $l.Add("Wczytuje się:  " + (Kiedy-Po-Ludzku "$($wa.Kiedy)"))
-  $l.Add("Trwałość:      " + (Trwalosc-Po-Ludzku "$($wa.Trwalosc)"))
-  $l.Add("Kto pisze:     " + "$($wa.KtoPisze)")
-  $l.Add("Ścieżka:       " + "$($wa.Sciezka)")
-  $l.Add("Rozmiar:       " + (Rozmiar-Opisowy $wa))
-  if ($wa.Zmieniony) { $l.Add("Zmieniony:     " + "$($wa.Zmieniony)") }
-  $l.Add("Stan:          " + (Stan-Po-Ludzku "$($wa.Stan)"))
-  if ($wa.Opis) { $l.Add("Co to jest:    " + "$($wa.Opis)") }
-  $l.Add("")
-  $l.Add(("-" * 60))
-  $l.Add("")
   $st = "$($wa.Stan)"
   if (($st -eq "brak") -or ($st -eq "blad")) {
     $l.Add("NIE MA CZEGO POKAZAĆ: $($wa.Brak)")
@@ -1949,6 +2505,8 @@ function Odswiez-Dane {
     $script:DaneBlad = $null
     $script:Rozbicie = $null
     $script:DaneWarstw = $null
+    try { $script:Start = Pomiar-Startu }
+    catch { Zanotuj-Wywrotke "pomiar otwarcia sesji" $_; $script:Start = [pscustomobject]@{ Powod = "pomiar się wywrócił: $($_.Exception.Message)"; MrSesja = $null } }
     if (($script:Widok -eq "szczegoly") -and (-not $script:SzczegolyZajete)) {
       Napelnij-Szczegoly
     }
@@ -2013,7 +2571,7 @@ function Pokaz-Okno {
   $script:Pasek.AutoSizeMode = [System.Windows.Forms.AutoSizeMode]::GrowAndShrink
   $script:Pasek.ColumnCount = 3
   $script:Pasek.RowCount = 2
-  $script:Pasek.Padding = New-Object System.Windows.Forms.Padding(24, 12, 24, 12)
+  $script:Pasek.Padding = New-Object System.Windows.Forms.Padding($script:Margines, 14, $script:Margines, 14)
   $script:Pasek.BackColor = $script:TloPaska
   $script:Pasek.ColumnStyles.Add((New-Object System.Windows.Forms.ColumnStyle([System.Windows.Forms.SizeType]::Percent, 39))) | Out-Null
   $script:Pasek.ColumnStyles.Add((New-Object System.Windows.Forms.ColumnStyle([System.Windows.Forms.SizeType]::Percent, 39))) | Out-Null
@@ -2026,8 +2584,9 @@ function Pokaz-Okno {
   $script:BAktualizuj = Nowy-Przycisk "Sprawdź i pobierz nowszą wersję MegaRuchacza"
   $script:BCykl       = Nowy-Przycisk "Przeczytaj zaległe rozmowy"
   $bZamknij           = Nowy-Przycisk "Zamknij okno"
-  $script:LAktualizuj = Etykieta-Zawijana "" $script:CzMala $script:KolSzary 290
-  $script:LCykl       = Etykieta-Zawijana "" $script:CzMala $script:KolSzary 290
+  $szerOpisu = [int]($script:SzerOkna * 0.39) - 24
+  $script:LAktualizuj = Etykieta-Zawijana "" $script:CzMala $script:KolSzary $szerOpisu
+  $script:LCykl       = Etykieta-Zawijana "" $script:CzMala $script:KolSzary $szerOpisu
   $lZamknij           = Etykieta-Zawijana "Ikona w zasobniku zostaje i pilnuje dalej." $script:CzMala $script:KolSzary 160
 
   $script:Pasek.Controls.Add($script:BAktualizuj, 0, 0)
@@ -2040,23 +2599,21 @@ function Pokaz-Okno {
   # Naglowek: tytul i podtytul po lewej, przelacznik widokow po prawej.
   $script:Naglowek = New-Object System.Windows.Forms.Panel
   $script:Naglowek.Dock = [System.Windows.Forms.DockStyle]::Top
-  $script:Naglowek.Height = 70
+  $script:Naglowek.Height = 88
   $script:Naglowek.BackColor = $script:TloOkna
   $lTytul = Etykieta "MegaRuchacz" $script:CzTytul $script:KolTekst
-  $lTytul.Location = New-Object System.Drawing.Point(22, 12)
-  $script:LPodtytul = Etykieta-Zawijana "Przeliczam, to potrwa kilka sekund..." $script:CzMala $script:KolSzary 560
-  $script:LPodtytul.Location = New-Object System.Drawing.Point(25, 44)
-  # Trzy przyciski sie nie mieszcza obok podtytulu na wysokosci 20 - przelacznik
-  # stoi wiec wyzej (8), na jednej linii z tytulem, a podtytul (od 44) moze
-  # biec pod nim na cala szerokosc, bez przestawiania szerokosci okna.
+  $lTytul.Location = New-Object System.Drawing.Point(($script:Margines - 3), 14)
+  $script:LPodtytul = Etykieta-Zawijana "Przeliczam, to potrwa kilka sekund..." $script:CzZwykla $script:KolSzary ($script:SzerOkna - 2 * $script:Margines)
+  $script:LPodtytul.Location = New-Object System.Drawing.Point($script:Margines, 54)
+  # Przelacznik trzech widokow na linii tytulu, po prawej; podtytul biegnie pod
+  # nim na cala szerokosc.
   $przel = New-Object System.Windows.Forms.Panel
-  $przel.Size = New-Object System.Drawing.Size(338, 34)
-  $przel.Location = New-Object System.Drawing.Point(($script:SzerOkna - 24 - 338), 8)
+  $przel.Size = New-Object System.Drawing.Size(426, 38)
+  $przel.Location = New-Object System.Drawing.Point(($script:SzerOkna - $script:Margines - 426), 10)
   $przel.BackColor = $script:TloPrzel
-  $script:BPrzeglad  = Przycisk-Przelacznika "Przegląd" 3
-  $script:BSzczegoly = Przycisk-Przelacznika "Szczegóły" 107
-  $script:BWarstwy   = Przycisk-Przelacznika "Warstwy pamięci" 211
-  $script:BWarstwy.Width = 124
+  $script:BPrzeglad  = Przycisk-Przelacznika "Przegląd" 3 124
+  $script:BSzczegoly = Przycisk-Przelacznika "Szczegóły" 131 124
+  $script:BWarstwy   = Przycisk-Przelacznika "Warstwy pamięci" 259 164
   $przel.Controls.Add($script:BPrzeglad)
   $przel.Controls.Add($script:BSzczegoly)
   $przel.Controls.Add($script:BWarstwy)
@@ -2070,7 +2627,7 @@ function Pokaz-Okno {
   $script:WidokPrzeglad.Dock = [System.Windows.Forms.DockStyle]::Fill
   $script:WidokPrzeglad.AutoScroll = $true
   $script:WidokPrzeglad.BackColor = $script:TloOkna
-  $script:WidokPrzeglad.Padding = New-Object System.Windows.Forms.Padding(24, 4, 24, 8)
+  $script:WidokPrzeglad.Padding = New-Object System.Windows.Forms.Padding($script:Margines, 4, $script:Margines, 8)
 
   $script:Root = Pionowy $script:SzerTresc
   $script:Root.Dock = [System.Windows.Forms.DockStyle]::Top
@@ -2078,6 +2635,8 @@ function Pokaz-Okno {
   $script:PanelProblemy = Pionowy $script:SzerTresc
   $script:PanelProblemy.Margin = New-Object System.Windows.Forms.Padding(0, 0, 0, 2)
   $script:PanelProblemy.Visible = $false
+
+  $script:KartaStart = Nowa-Karta $script:SzerKarty
 
   $script:PanelLiczby = Poziomy
   $script:PanelLiczby.Margin = New-Object System.Windows.Forms.Padding(0)
@@ -2087,35 +2646,23 @@ function Pokaz-Okno {
   $script:PanelStan.Margin = New-Object System.Windows.Forms.Padding(0)
 
   $script:Root.Controls.Add($script:PanelProblemy)
+  $script:Root.Controls.Add($script:KartaStart)
   $script:Root.Controls.Add($script:PanelLiczby)
   $script:Root.Controls.Add($script:KartaStat)
   $script:Root.Controls.Add($script:PanelStan)
   $script:WidokPrzeglad.Controls.Add($script:Root)
 
-  # Widok szczegolow: ten sam obszar, biala karta z polem tekstowym, ktore
-  # przewija sie samo - okno nie rosnie od tego ani o piksel.
+  # Widok szczegolow: ten sam obszar, karty sekcji jedna pod druga, przewijane
+  # w miejscu - okno nie rosnie od tego ani o piksel.
   $script:WidokSzczegoly = New-Object System.Windows.Forms.Panel
   $script:WidokSzczegoly.Dock = [System.Windows.Forms.DockStyle]::Fill
+  $script:WidokSzczegoly.AutoScroll = $true
   $script:WidokSzczegoly.BackColor = $script:TloOkna
-  $script:WidokSzczegoly.Padding = New-Object System.Windows.Forms.Padding(24, 4, 24, 12)
+  $script:WidokSzczegoly.Padding = New-Object System.Windows.Forms.Padding($script:Margines, 4, $script:Margines, 12)
   $script:WidokSzczegoly.Visible = $false
-  $kartaSz = New-Object System.Windows.Forms.Panel
-  $kartaSz.Dock = [System.Windows.Forms.DockStyle]::Fill
-  $kartaSz.BackColor = $script:TloKarty
-  $kartaSz.Padding = New-Object System.Windows.Forms.Padding(12, 10, 4, 4)
-  $kartaSz.Add_Paint({ param($nadawca, $e) Obrysuj $nadawca $e })
-  $script:PoleSzczegoly = New-Object System.Windows.Forms.TextBox
-  $script:PoleSzczegoly.Multiline = $true
-  $script:PoleSzczegoly.ReadOnly = $true
-  $script:PoleSzczegoly.WordWrap = $false
-  $script:PoleSzczegoly.BorderStyle = [System.Windows.Forms.BorderStyle]::None
-  $script:PoleSzczegoly.ScrollBars = [System.Windows.Forms.ScrollBars]::Both
-  $script:PoleSzczegoly.Font = $script:CzStala
-  $script:PoleSzczegoly.BackColor = $script:TloKarty
-  $script:PoleSzczegoly.ForeColor = $script:KolTekst
-  $script:PoleSzczegoly.Dock = [System.Windows.Forms.DockStyle]::Fill
-  $kartaSz.Controls.Add($script:PoleSzczegoly)
-  $script:WidokSzczegoly.Controls.Add($kartaSz)
+  $script:ListaSzczegolow = Pionowy $script:SzerTresc
+  $script:ListaSzczegolow.Dock = [System.Windows.Forms.DockStyle]::Top
+  $script:WidokSzczegoly.Controls.Add($script:ListaSzczegolow)
 
   # Widok warstw pamieci: zdanie podsumowania u gory, pod nim dwie biale karty -
   # lista warstw pogrupowana wedlug tego, kiedy sie wczytuja, i podglad tylko
@@ -2123,7 +2670,7 @@ function Pokaz-Okno {
   $script:WidokWarstwy = New-Object System.Windows.Forms.Panel
   $script:WidokWarstwy.Dock = [System.Windows.Forms.DockStyle]::Fill
   $script:WidokWarstwy.BackColor = $script:TloOkna
-  $script:WidokWarstwy.Padding = New-Object System.Windows.Forms.Padding(24, 4, 24, 12)
+  $script:WidokWarstwy.Padding = New-Object System.Windows.Forms.Padding($script:Margines, 4, $script:Margines, 14)
   $script:WidokWarstwy.Visible = $false
 
   $script:LWarstwy = New-Object System.Windows.Forms.Label
@@ -2142,7 +2689,7 @@ function Pokaz-Okno {
 
   $kartaLista = New-Object System.Windows.Forms.Panel
   $kartaLista.Dock = [System.Windows.Forms.DockStyle]::Left
-  $kartaLista.Width = 392
+  $kartaLista.Width = [int]($script:SzerTresc * 0.48)
   $kartaLista.BackColor = $script:TloKarty
   $kartaLista.Padding = New-Object System.Windows.Forms.Padding(1)
   $kartaLista.Add_Paint({ param($nadawca, $e) Obrysuj $nadawca $e })
@@ -2159,20 +2706,26 @@ function Pokaz-Okno {
   $script:ListaWarstw.BackColor = $script:TloKarty
   $script:ListaWarstw.ForeColor = $script:KolTekst
   $script:ListaWarstw.Dock = [System.Windows.Forms.DockStyle]::Fill
-  [void]$script:ListaWarstw.Columns.Add("Warstwa", 212)
-  [void]$script:ListaWarstw.Columns.Add("Trwałość", 80)
-  [void]$script:ListaWarstw.Columns.Add("Rozmiar", 76)
+  # Wyzsze wiersze: WinForms nie ma na to wlasciwosci, ale wysokosc wiersza
+  # idzie za wysokoscia obrazka z SmallImageList - pusty obrazek 1 x 26 px
+  # daje liste, ktora sie czyta, a nie mruzy oczy.
+  $wierszWys = New-Object System.Windows.Forms.ImageList
+  $wierszWys.ImageSize = New-Object System.Drawing.Size(1, 26)
+  $script:ListaWarstw.SmallImageList = $wierszWys
+  [void]$script:ListaWarstw.Columns.Add("Warstwa", ($kartaLista.Width - 100 - 116 - 26))
+  [void]$script:ListaWarstw.Columns.Add("Trwałość", 100)
+  [void]$script:ListaWarstw.Columns.Add("Rozmiar", 116)
   $kartaLista.Controls.Add($script:ListaWarstw)
 
   $odstepW = New-Object System.Windows.Forms.Panel
   $odstepW.Dock = [System.Windows.Forms.DockStyle]::Left
-  $odstepW.Width = 10
+  $odstepW.Width = 14
   $odstepW.BackColor = $script:TloOkna
 
   $kartaPodglad = New-Object System.Windows.Forms.Panel
   $kartaPodglad.Dock = [System.Windows.Forms.DockStyle]::Fill
   $kartaPodglad.BackColor = $script:TloKarty
-  $kartaPodglad.Padding = New-Object System.Windows.Forms.Padding(12, 10, 4, 4)
+  $kartaPodglad.Padding = New-Object System.Windows.Forms.Padding(18, 14, 6, 6)
   $kartaPodglad.Add_Paint({ param($nadawca, $e) Obrysuj $nadawca $e })
   $script:PodgladWarstwy = New-Object System.Windows.Forms.TextBox
   $script:PodgladWarstwy.Multiline = $true
@@ -2183,11 +2736,17 @@ function Pokaz-Okno {
   $script:PodgladWarstwy.WordWrap = $true
   $script:PodgladWarstwy.BorderStyle = [System.Windows.Forms.BorderStyle]::None
   $script:PodgladWarstwy.ScrollBars = [System.Windows.Forms.ScrollBars]::Vertical
-  $script:PodgladWarstwy.Font = $script:CzStala
+  # Consolas 9, a nie 9.5: pliki maja twarde lamanie ~80 znakow i przy 9.5 kazda
+  # dluzsza linia zostawiala sierote w nastepnym wierszu
+  $script:PodgladWarstwy.Font = $script:CzStalaMala
   $script:PodgladWarstwy.BackColor = $script:TloKarty
   $script:PodgladWarstwy.ForeColor = $script:KolTekst
   $script:PodgladWarstwy.Dock = [System.Windows.Forms.DockStyle]::Fill
   $kartaPodglad.Controls.Add($script:PodgladWarstwy)
+  $script:PodgladInfo = Pionowy 0
+  $script:PodgladInfo.Dock = [System.Windows.Forms.DockStyle]::Top
+  $script:PodgladInfo.BackColor = $script:TloKarty
+  $kartaPodglad.Controls.Add($script:PodgladInfo)
 
   # Dokowanie od ostatnio dodanej: wypelniajacy podglad pierwszy, potem odstep,
   # na koncu lista - ona dokuje sie pierwsza, czyli najbardziej z lewej.
@@ -2209,7 +2768,8 @@ function Pokaz-Okno {
     $script:WidokPrzeglad = $null; $script:WidokSzczegoly = $null
     $script:LPodtytul = $null; $script:PanelProblemy = $null; $script:PanelLiczby = $null
     $script:KartaStat = $null; $script:PanelStan = $null
-    $script:BPrzeglad = $null; $script:BSzczegoly = $null; $script:PoleSzczegoly = $null
+    $script:BPrzeglad = $null; $script:BSzczegoly = $null; $script:ListaSzczegolow = $null
+    $script:KartaStart = $null; $script:PodgladInfo = $null
     $script:Pasek = $null; $script:BAktualizuj = $null; $script:LAktualizuj = $null
     $script:BCykl = $null; $script:LCykl = $null
     $script:PanelZmian = $null; $script:LinkZmian = $null
@@ -2260,15 +2820,13 @@ function Pokaz-Okno {
     # przelaczy widok - dlatego znacznik "zajete", ustawiony PRZED przelaczeniem.
     $script:SzczegolyZajete = $true
     Pokaz-Widok "szczegoly"
-    $script:PoleSzczegoly.Text = "Pobieram nowszą wersję - strażnik sprawdza serwer i nanosi poprawki..."
+    Pokaz-Karty-Szczegolow @(Karta-Komunikatu "Pobieram nowszą wersję" @("Strażnik sprawdza serwer i nanosi poprawki - to potrwa do dwóch minut.") $null)
     $script:Okno.Refresh()
     $wynik = @()
     try { $wynik = Aktualizuj }
     catch { Zanotuj-Wywrotke "aktualizacja" $_; $wynik = @("NIE UDALO SIE: $($_.Exception.Message)") }
-    $script:PoleSzczegoly.Lines = [string[]](
-      @("CO POWIEDZIAŁ STRAŻNIK", "") + $wynik +
-      @("", "To jest odpowiedź na kliknięcie, nie zwykła zawartość szczegółów.",
-            "Kliknij [Przegląd], żeby wrócić do liczb."))
+    Pokaz-Karty-Szczegolow @(Karta-Komunikatu "Co powiedział strażnik" (@($wynik) + @("",
+      "To jest odpowiedź na kliknięcie, nie zwykła zawartość szczegółów. Kliknij [Przegląd], żeby wrócić do liczb.")) $null)
     $script:Okno.Refresh()
     $script:BAktualizuj.Enabled = $true
     $script:Rozbicie = $null
@@ -2381,6 +2939,8 @@ $menu.Items.Add((Nowa-Pozycja "Przelicz liczby teraz (nic nie kosztuje)" {
     $script:DaneCzas = [datetime]::Now
     $script:DaneBlad = $null
     $script:Rozbicie = $null
+    try { $script:Start = Pomiar-Startu }
+    catch { Zanotuj-Wywrotke "pomiar otwarcia sesji" $_; $script:Start = [pscustomobject]@{ Powod = "pomiar się wywrócił: $($_.Exception.Message)"; MrSesja = $null } }
     $script:Ikona.Text = Podpowiedz $d
     Odmaluj-Okno
     Pokaz-Dymek "MegaRuchacz: przeliczone" "Liczby sa swieze. Kliknij ikone, zeby je zobaczyc."
