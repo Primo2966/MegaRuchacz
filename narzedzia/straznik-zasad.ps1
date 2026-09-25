@@ -113,6 +113,10 @@ if ($Moduly) {
 # sesji jest wazniejszy niz to sprawdzenie.
 $plikSufitu = Join-Path $PSScriptRoot "sufit-ladunku.ps1"
 if (Test-Path $plikSufitu) { . $plikSufitu }
+# Cele bloku zasad kierownika (warianty, Codex w Orce, kopia dla opencode) - ten
+# sam kod co w instaluj-globalnie.ps1. Brak pliku melduje Pilnuj-Kierownika.
+$plikCeliKierownika = Join-Path $PSScriptRoot "kierownik-cele.ps1"
+if (Test-Path $plikCeliKierownika) { . $plikCeliKierownika }
 
 $POCZATEK = "<!-- MegaRuchacz:start -->"
 $KONIEC   = "<!-- MegaRuchacz:koniec -->"
@@ -1693,6 +1697,106 @@ function Pilnuj-Zasad {
   }
 }
 
+# ------------------------------------------------ 1b. blok zasad kierownika
+# Blok MegaRuchacz:kierownik wpisuje instalator globalny. Do 0.21.0 nikt go potem
+# nie pilnowal (P8): gdy znikal, straznik przywracal sam blok Lore i milczal.
+# Teraz: brak bloku = przywracamy go we wlasciwym wariancie dla pliku, dubel albo
+# brak szablonu = jedna linia do czlowieka. ISTNIEJACEGO bloku nie podmieniamy -
+# aktualizacja tresci to robota instalatora (tu nie wiemy, czy wariant nie byl
+# wymuszony). Tylko przy instalacji globalnej - wdrozenie per projekt tego bloku
+# w plikach globalnych nie ma i miec nie ma.
+function Powiedz-Kierownik([string]$tekst) {
+  Mow $tekst
+  # W tle nikt nie czyta ekranu - zdanie czeka na najblizszy przebieg z widownia.
+  if ($Tlo) { Odloz-Wiadomosc $tekst }
+}
+
+function Pilnuj-Kierownika {
+  if (-not (Jest-Globalna)) { return }
+  if (-not (Get-Command Z-Blokiem-Kierownika -ErrorAction SilentlyContinue)) {
+    Powiedz-Kierownik "MegaRuchacz: nie ma $plikCeliKierownika - nie pilnuje bloku zasad kierownika (uruchom narzedzia\instaluj-globalnie.ps1)."
+    return
+  }
+  $szablony = [ordered]@{
+    claude   = Join-Path $Zrodlo "szablony-global\claude\zasady-kierownika.md"
+    opencode = Join-Path $Zrodlo "szablony-opencode\zasady-kierownika.md"
+  }
+  # Wariant dla ~/.claude/CLAUDE.md: taki, jaki zapisal instalator; gdy go nie
+  # zapisal (instalacje sprzed 0.21.1) - to samo rozroznienie co instalator.
+  $wariantDomowy = (Czytaj-Klucze $PlikZnacznikaGlobalnego)["wariant"]
+  if ($wariantDomowy -notin @("claude", "opencode")) {
+    $wariantDomowy = if (Pracuje-Claude $KatalogDomowy) { "claude" } else { "opencode" }
+  }
+  $cele = @([ordered]@{ nazwa = "~/.claude/CLAUDE.md"; plik = $plikDomowy; wariant = $wariantDomowy })
+  if ($JestCodex -or (Katalog-Codex-Orki $KatalogDomowy)) {
+    $cele += [ordered]@{ nazwa = "~/.codex/AGENTS.md"; plik = $plikCodex; wariant = "opencode" }
+  }
+  $stempel = Get-Date -Format "yyyyMMdd-HHmmss"
+  foreach ($c in $cele) {
+    $tekst = ""
+    if (Test-Path $c.plik) {
+      try { $tekst = Czytaj-Utf8 $c.plik }
+      catch { Powiedz-Kierownik "MegaRuchacz: $($c.nazwa) nie czyta sie jako UTF-8 - nie sprawdzam w nim bloku zasad kierownika."; continue }
+    }
+    $ile = Ile-Blokow-Kierownika $tekst
+    if ($ile -eq 1) { continue }
+    if ($ile -gt 1) {
+      Powiedz-Kierownik "MegaRuchacz: w $($c.nazwa) jest $ile blokow zasad kierownika (dubel) - nie ruszam, usun nadmiarowe."
+      continue
+    }
+    $szablon = $szablony[$c.wariant]
+    if (-not (Test-Path $szablon)) {
+      Powiedz-Kierownik "MegaRuchacz: w $($c.nazwa) brakuje bloku zasad kierownika, a nie umiem go wpisac - brak szablonu $szablon. Uruchom narzedzia\instaluj-globalnie.ps1."
+      continue
+    }
+    try {
+      $tresc = Czytaj-Utf8 $szablon
+      $nowy = Z-Blokiem-Kierownika $tekst $tresc
+      Kopia-Zapasowa $c.plik $stempel
+      Zapisz-Tekst $c.plik $nowy
+      # Dowodem jest dysk, nie to, ze zapis nie rzucil wyjatkiem.
+      $po = Czytaj-Utf8 $c.plik
+      $naglowek = ($tresc.Trim() -split "`r?`n")[0]
+      if ((Ile-Blokow-Kierownika $po) -ne 1 -or -not $po.Contains($naglowek)) { throw "po zapisie w pliku nie ma dokladnie jednego bloku w wariancie $($c.wariant)" }
+      Powiedz-Kierownik "MegaRuchacz: w $($c.nazwa) brakowalo bloku zasad kierownika - wpisalem go (wariant $($c.wariant))."
+    } catch {
+      Powiedz-Kierownik "MegaRuchacz: w $($c.nazwa) brakuje bloku zasad kierownika, a wpisanie nie wyszlo ($($_.Exception.Message)). Uruchom narzedzia\instaluj-globalnie.ps1."
+    }
+  }
+  Pilnuj-Kopii-Opencode $szablony["opencode"]
+}
+
+# opencode czyta ~/.config/opencode/AGENTS.md zamiast ~/.claude/CLAUDE.md, gdy ten
+# pierwszy istnieje. Nasza kopia (Kopia-Dla-Opencode) ma nadazac za CLAUDE.md,
+# bo "Co wiem" zmienia sie codziennie. Zakladamy ja, gdy CLAUDE.md ma blok
+# w wariancie innym niz opencode; istniejaca nasza kopie odswiezamy zawsze.
+function Pilnuj-Kopii-Opencode($szablonOpencode) {
+  if (-not $JestOpencode) { return }
+  $plikOc = Join-Path $KatalogDomowy ".config\opencode\AGENTS.md"
+  $nasza = Jest-Kopia-Opencode $plikOc
+  if ((Test-Path $plikOc) -and -not $nasza) { Notuj "opencode: wlasny $plikOc uzytkownika - nie ruszam"; return }
+  if (-not (Test-Path $plikDomowy)) { return }
+  try { $cm = Czytaj-Utf8 $plikDomowy } catch { Powiedz-Kierownik "MegaRuchacz: ~/.claude/CLAUDE.md nie czyta sie jako UTF-8 - nie odswiezam kopii zasad dla opencode."; return }
+  if (-not (Test-Path $szablonOpencode)) {
+    if ($nasza) { Powiedz-Kierownik "MegaRuchacz: nie ma szablonu $szablonOpencode - kopia zasad dla opencode ($plikOc) nie jest odswiezana." }
+    return
+  }
+  $tresc = Czytaj-Utf8 $szablonOpencode
+  $naglowekOc = ($tresc.Trim() -split "`r?`n")[0]
+  $blok = Blok-Kierownika $cm
+  if (-not $nasza -and $blok -and $blok.Contains($naglowekOc)) { return }   # CLAUDE.md juz ma wariant opencode
+  try {
+    $nowa = Kopia-Dla-Opencode $cm $tresc
+    $stara = if ($nasza) { Czytaj-Utf8 $plikOc } else { $null }
+    if ($nowa -ceq $stara) { return }
+    Zapisz-Tekst $plikOc $nowa
+    if ($nasza) { Notuj "opencode: odswiezona kopia zasad $plikOc" }
+    else { Powiedz-Kierownik "MegaRuchacz: opencode dostal wlasna kopie zasad ($plikOc) - wariant dla opencode, z 'Co wiem' i blokiem Lore." }
+  } catch {
+    Powiedz-Kierownik "MegaRuchacz: kopia zasad dla opencode ($plikOc) nie dala sie zlozyc - $($_.Exception.Message)."
+  }
+}
+
 # Plik ponad limitem czyta sie tylko do limitu - reszta zasad przepada po cichu.
 # To nie jest nasza wina i nie mamy tego czym naprawic, ale mamy o tym powiedziec.
 function Pilnuj-Limitu($cele) {
@@ -2530,6 +2634,7 @@ try {
   if ($Tlo) {
     try { Odswiez-Zrodlo } catch { Zanotuj-Wywrotke "odswiezanie zrodla" $_ }
     try { Pilnuj-Zasad }   catch { Zanotuj-Wywrotke "pilnowanie zasad" $_ }
+    try { Pilnuj-Kierownika } catch { Zanotuj-Wywrotke "pilnowanie bloku kierownika" $_ }
     try { Pilnuj-Hookow-Globalnych } catch { Zanotuj-Wywrotke "hooki instalacji globalnej" $_ }
     try { Pilnuj-Sufitu-Zawsze } catch { Zanotuj-Wywrotke "pilnowanie sufitu ladunku" $_ }
     try { Pilnuj-Przypomnienia-Zawsze } catch { Zanotuj-Wywrotke "podmiana starego hooka przypomnienia" $_ }
@@ -2590,6 +2695,7 @@ try {
   # wiec ma sens dopiero wtedy, gdy ten katalog jest swiezy.
   try { Odswiez-Zrodlo }   catch { Zanotuj-Wywrotke "odswiezanie zrodla" $_ }
   try { Pilnuj-Zasad }     catch { Zanotuj-Wywrotke "pilnowanie zasad" $_ }
+  try { Pilnuj-Kierownika } catch { Zanotuj-Wywrotke "pilnowanie bloku kierownika" $_ }
   try { Pilnuj-Hookow-Globalnych } catch { Zanotuj-Wywrotke "hooki instalacji globalnej" $_ }
   try { Pilnuj-Sufitu-Zawsze } catch { Zanotuj-Wywrotke "pilnowanie sufitu ladunku" $_ }
   try { Pilnuj-Przypomnienia-Zawsze } catch { Zanotuj-Wywrotke "podmiana starego hooka przypomnienia" $_ }

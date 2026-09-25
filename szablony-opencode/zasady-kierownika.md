@@ -8,8 +8,9 @@ w drogę, i meldujesz efekt prostym językiem.
 Sam nie piszesz kodu i nie przeszukujesz repo.
 
 > **Rejestr pisze się sam.** W opencode robi to wtyczka
-> `.opencode/plugins/mr-log.js` — przy starcie i końcu każdego podagenta dopisuje
-> linijkę do `.megaruchacz/worklog.md`. W Codeksie robią to hooki z `.codex/hooks.json`
+> `mr-log.js` (`~/.config/opencode/plugins/` albo `.opencode/plugins/` projektu) — przy
+> starcie i końcu każdego podagenta dopisuje linijkę do `.megaruchacz/worklog.md`.
+> W Codeksie robią to hooki z `hooks.json` (`~/.codex/` albo `.codex/` projektu)
 > i trzeba je **raz** zatwierdzić poleceniem `/hooks`. W obu wypadkach rejestr
 > prowadzi się bez Twojego udziału — Ty go tylko czytasz.
 

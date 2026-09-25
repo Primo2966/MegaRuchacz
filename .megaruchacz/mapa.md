@@ -123,7 +123,24 @@ Dokumentacja zrodlowa: repo `openai/codex/docs/*.md` to same odsylacze; tresc je
 
 ### Codex na TEJ maszynie
 
-- Polecenia `codex` nie ma w PATH; katalogu `C:\Users\<uzytkownik>\.codex\` NIE MA.
+- (stan 2026-09-25, P8/P9) Codex 0.157.0 JEST: samodzielny w `C:\Users\<uzytkownik>\.codex\packages\standalone\`
+  (skrot w PATH: `%LOCALAPPDATA%\Programs\OpenAI\Codex\bin\codex.exe`) i paczka npm w
+  `C:\dev\tools\node\`. `C:\Users\<uzytkownik>\.codex\` istnieje; `AGENTS.md` tam wpisuje straznik
+  (blok Lore + blok kierownika w wariancie opencode/Codex). "Co wiem" do Codeksa NIE trafia
+  (tylko reguly Lore/Wiedza). Rol `~/.codex/agents` i hookow `~/.codex/hooks.json` na tej
+  maszynie jeszcze nie ma (wklada je tylko pelny instalator).
+- Sprawdzanie, co Codex dostaje na start, BEZ logowania: `codex debug prompt-input`
+  (z `CODEX_HOME=<katalog>` dla innego katalogu domowego).
+- `codex --worktree` ISTNIEJE (`codex --help` 0.157: "Run the session in a new managed Git worktree").
+- ORKA A AGENTS.md (kod Orki 1.4.210, `resources\app.asar.unpacked\out\main\chunks\codex-home-paths-*.js`):
+  przy KAZDYM starcie Codeksa w Orce (`prepareForCodexLaunch`) Orka przenosi z `~/.codex` do
+  swojego CODEX_HOME: `AGENTS.md`, `skills`, `hooks` (katalog), `plugins`, `plugin-state`,
+  `profile-v2`, `themes`, `prompts`. Katalogi - junction; plik - dowiazanie, a gdy Windows go
+  nie pozwoli - KOPIA z wpisem `.orca-resource-copies\AGENTS.md.json`, odswiezana przy zmianie
+  zrodla. Plik, ktorego Orka sama nie zalozyla, blokuje kopiowanie na zawsze (sprawdzone).
+  `hooks.json`, `agents\` i `config.toml` (poza `readHostConfig`) NIE sa przenoszone - hooki
+  rejestru i role z `~/.codex` pod Orka nie dzialaja. Wniosek: zasady tylko do `~/.codex/AGENTS.md`.
+  Te sama funkcje mozna wywolac recznie: `node -e "require('<chunk>').s()"` (P9).
 - Orca trzyma wlasny CODEX_HOME w `C:\Users\<uzytkownik>\AppData\Roaming\orca\codex-runtime-home\home\`:
   `hooks.json` (8 zdarzen, kazde wola ten sam skrypt), `config.toml` (`[hooks.state]` z zaufaniem),
   `.orca-hook-trust-provenance.json` (kopia zaufania po stronie Orki), `config.toml.bak`.
@@ -143,9 +160,17 @@ Dokumentacja zrodlowa: repo `openai/codex/docs/*.md` to same odsylacze; tresc je
   Wymuszenie: `instaluj-globalnie.ps1 -WariantZasad claude|opencode`.
 - `szablony-codex/zasady-kierownika.md` - wariant dla wdrozen Codeksa per projekt (AGENTS.md
   projektu); instalacja globalna go NIE uzywa.
-- opencode (1.18.32, sprawdzone w binarce) czyta globalnie PIERWSZY istniejacy z
-  `~/.config/opencode/AGENTS.md` i `~/.claude/CLAUDE.md` - na biurowej dostaje wiec wariant
-  Claude Code. Rozdzielenie wymaga wlasnego pliku razem z "Co wiem" i blokiem Lore.
+- opencode (1.18.32, sprawdzone w binarce; docs opencode.ai/docs/rules) czyta globalnie
+  PIERWSZY istniejacy z `~/.config/opencode/AGENTS.md` i `~/.claude/CLAUDE.md`; pole
+  `instructions` tylko DOKLADA pliki. Od 0.21.1: gdy `CLAUDE.md` ma wariant Claude Code,
+  `~/.config/opencode/AGENTS.md` = KOPIA `CLAUDE.md` z blokiem w wariancie opencode (znacznik
+  `<!-- MegaRuchacz:kopia-dla-opencode` w 1. linii), odswiezana przez straznika
+  (`Pilnuj-Kopii-Opencode`) przy starcie sesji Claude Code i opencode (wtyczka -> `-Tlo`).
+  Wspolny kod: `narzedzia/kierownik-cele.ps1` (instalator + straznik).
+- Straznik `Pilnuj-Kierownika` (0.21.1): przy instalacji globalnej wpisuje brakujacy blok
+  kierownika do `~/.claude/CLAUDE.md` (wariant z klucza `wariant:` w `~/.claude/.megaruchacz-global`,
+  a bez niego auto) i `~/.codex/AGENTS.md` (opencode); dubel / brak szablonu = linia do czlowieka.
+  Istniejacego bloku NIE aktualizuje - to dalej instalator.
 - `C:\dev\claude-worker\CLAUDE.md` - tylko reguly repo ("Cisza jest zakazana"); nie jest
   juz szablonem niczego.
 - Role Claude Code: jedno zrodlo `szablony-global/claude/agents/*.md` (instalator ->
@@ -240,8 +265,8 @@ komentarzami ("# 1. Workerzy", "# 4. settings.json" itd.), wiec szukaj po nich.
 
 ### Czego o Codeksie NIE USTALONO
 
-- Czy `codex exec --worktree` istnieje i czy dotyczy subagentow - NIEPOTWIERDZONE (brak w docs,
-  polecenia `codex` nie ma na tej maszynie, wiec nie da sie sprawdzic `--help`).
+- Czy `--worktree` Codeksa (istnieje, patrz "Codex na TEJ maszynie") dotyczy subagentow -
+  NIEPOTWIERDZONE.
 - Czy subagent moze dostac inny `cwd` niz rodzic - NIEPOTWIERDZONE.
 
 ## Odcisk palca zaufania hookow Codeksa (`trusted_hash`) - ROZSTRZYGNIETE 2026-09-17

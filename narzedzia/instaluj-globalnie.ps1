@@ -16,6 +16,9 @@
 #                                                   (duplikaty, stare "cat"), nie dubluje.
 #   Codex       ~/.codex/AGENTS.md                  blok zasad kierownika
 #               ~/.codex/hooks.json                 DOPISANE hooki rejestru
+#               Codex w Orce (CODEX_HOME Orki) dostaje ~/.codex/AGENTS.md od
+#               samej Orki, przy kazdym starcie - do katalogu Orki nic nie
+#               piszemy (szczegoly: narzedzia\kierownik-cele.ps1)
 #   zasady      blok miedzy znacznikami MegaRuchacz:kierownik, w wariancie
 #               wlasciwym dla narzedzia, ktore dany plik czyta:
 #               ~/.claude/CLAUDE.md  <- szablony-global\claude\zasady-kierownika.md
@@ -25,9 +28,12 @@
 #                                       czyta wtedy tylko opencode
 #               ~/.codex/AGENTS.md   <- szablony-opencode\zasady-kierownika.md
 #                                       (jak dotad, bez zmian)
-#               opencode czyta pierwszy istniejacy z ~/.config/opencode/AGENTS.md
-#               i ~/.claude/CLAUDE.md (sprawdzone w opencode 1.18.32) - na
-#               maszynie z Claude Code i opencode dostaje wiec wariant Claude Code.
+#               ~/.config/opencode/AGENTS.md <- KOPIA ~/.claude/CLAUDE.md z blokiem
+#                                       w wariancie opencode/Codex, gdy CLAUDE.md
+#                                       ma wariant Claude Code: opencode czyta
+#                                       pierwszy istniejacy z tych dwoch plikow,
+#                                       a "Co wiem" i blok Lore ma widziec dalej.
+#                                       Kopie odswieza straznik przy starcie sesji.
 #               Wymuszenie wariantu: -WariantZasad claude|opencode.
 #   znacznik    ~/.claude/.megaruchacz-global       fakt instalacji globalnej
 #
@@ -67,6 +73,8 @@ $POCZATEK = "<!-- MegaRuchacz:kierownik:start -->"
 $KONIEC   = "<!-- MegaRuchacz:kierownik:koniec -->"
 
 $Utf8Zapis  = New-Object System.Text.UTF8Encoding($false)
+# Wspolne ze straznikiem: cele bloku kierownika, katalog Codeksa Orki, kopia dla opencode.
+. (Join-Path $PSScriptRoot "kierownik-cele.ps1")
 $Utf8Odczyt = New-Object System.Text.UTF8Encoding($false, $true)
 
 function Kopia-Zapasowa($sciezka) {
@@ -154,7 +162,7 @@ function Usun-Blok($plik, $nazwa) {
 # naszych rol, nie scalanie z cudzymi.
 function Wstaw-Agentow($zrodlo, $cel, $filtr, $co) {
   if (-not (Test-Path $zrodlo)) { Write-Host "UWAGA  brak szablonow: $zrodlo" -ForegroundColor Yellow; return }
-  New-Item -ItemType Directory -Force -Path $cel | Out-Null
+  if (-not $Proba) { New-Item -ItemType Directory -Force -Path $cel | Out-Null }   # -Proba nic nie zaklada
   Get-ChildItem (Join-Path $zrodlo $filtr) -ErrorAction SilentlyContinue | ForEach-Object {
     $dokad = Join-Path $cel $_.Name
     if ((Test-Path $dokad) -and -not ((Get-Content $dokad -Raw) -match "kierownik-template")) {
@@ -231,8 +239,9 @@ $Node     = Get-Command node     -CommandType Application -ErrorAction SilentlyC
 $DomClaude   = Join-Path $KatalogDomowy ".claude"
 $DomCodex    = Join-Path $KatalogDomowy ".codex"
 $DomOpencode = Join-Path $KatalogDomowy ".config\opencode"
+$DomCodexOrki = Katalog-Codex-Orki $KatalogDomowy
 $JestClaude   = ($null -ne $Claude)   -or (Test-Path $DomClaude)
-$JestCodex    = ($null -ne $Codex)    -or (Test-Path $DomCodex)
+$JestCodex    = ($null -ne $Codex)    -or (Test-Path $DomCodex) -or ($null -ne $DomCodexOrki)
 $JestOpencode = ($null -ne $Opencode) -or (Test-Path $DomOpencode)
 
 # Zasady kierownika w dwoch wariantach - kazdy plik instrukcji dostaje ten, ktory
@@ -281,8 +290,12 @@ Write-Host "Zrodlo:         $Zrodlo"
 Write-Host ""
 Write-Host "Zainstaluje tryb kierownika dla narzedzi, ktore widze:"
 if ($JestClaude)   { Write-Host "  - Claude Code : role w ~/.claude/agents, rejestr + hooki w ~/.claude/settings.json, zasady w ~/.claude/CLAUDE.md (wariant: $Wariant)" }
-if ($JestOpencode) { Write-Host "  - opencode    : role w ~/.config/opencode/agents, wtyczka rejestru w ~/.config/opencode/plugins, zasady przez ~/.claude/CLAUDE.md (wariant: $Wariant)" }
+if ($JestOpencode) {
+  $gdzieOc = if ($Wariant -eq "claude") { "kopia ~/.claude/CLAUDE.md w ~/.config/opencode/AGENTS.md (wariant: opencode)" } else { "przez ~/.claude/CLAUDE.md (wariant: $Wariant)" }
+  Write-Host "  - opencode    : role w ~/.config/opencode/agents, wtyczka rejestru w ~/.config/opencode/plugins, zasady: $gdzieOc"
+}
 if ($JestCodex)    { Write-Host "  - Codex       : role w ~/.codex/agents, rejestr + hooki w ~/.codex/hooks.json, zasady w ~/.codex/AGENTS.md" }
+if ($DomCodexOrki) { Write-Host "  - Codex w Orce: Orka sama kopiuje ~/.codex/AGENTS.md do $DomCodexOrki przy starcie Codeksa" }
 if (-not ($JestClaude -or $JestOpencode -or $JestCodex)) { Write-Host "  (zadnego nie widze)" -ForegroundColor Yellow }
 Write-Host ""
 Write-Host "Stan pracy (rejestr, mapa) zostaje w KAZDYM projekcie w .megaruchacz\ -"
@@ -302,6 +315,11 @@ $Marker = Join-Path $DomClaude ".megaruchacz-global"
 if ($Usun) {
   Usun-Blok (Join-Path $DomClaude "CLAUDE.md") "zasady w ~/.claude/CLAUDE.md"
   Usun-Blok (Join-Path $DomCodex  "AGENTS.md") "zasady w ~/.codex/AGENTS.md"
+  $kopiaOc = Join-Path $DomOpencode "AGENTS.md"
+  if (Jest-Kopia-Opencode $kopiaOc) {
+    if ($Proba) { Write-Host "PROBA  usunalbym kopie dla opencode $kopiaOc" }
+    else { Kopia-Zapasowa $kopiaOc; Remove-Item $kopiaOc -Force; Write-Host "OK  usunieta kopia zasad dla opencode (opencode czyta znowu ~/.claude/CLAUDE.md)" }
+  }
 
   foreach ($r in @("implementer","scout","verifier","zastepca")) {
     foreach ($p in @((Join-Path $DomClaude "agents\$r.md"), (Join-Path $DomOpencode "agents\$r.md"))) {
@@ -336,13 +354,37 @@ if ($JestCodex) {
   Write-Host "    ~/.codex/AGENTS.md dostaje wariant: opencode/Codex - $PlikZasadOpencode"
   Wstaw-Blok (Join-Path $DomCodex "AGENTS.md") "zasady w ~/.codex/AGENTS.md" $TrescZasadOpencode
 }
-# opencode czyta ~/.claude/CLAUDE.md tylko wtedy, gdy nie ma ~/.config/opencode/AGENTS.md.
-# Wlasnego pliku mu nie zakladamy: przestalby wtedy widziec "Co wiem" i blok Lore.
-if ($JestOpencode -and $Wariant -eq "claude" -and -not (Test-Path (Join-Path $DomOpencode "AGENTS.md"))) {
-  Write-Host "UWAGA  opencode na tej maszynie czyta ten sam ~/.claude/CLAUDE.md, wiec dostanie zasady" -ForegroundColor Yellow
-  Write-Host "       w wariancie Claude Code. Osobny wariant dla opencode wymaga osobnego pliku" -ForegroundColor Yellow
-  Write-Host "       (~/.config/opencode/AGENTS.md) razem z 'Co wiem' i blokiem Lore - do decyzji." -ForegroundColor Yellow
-  Nie-Sprawdzono "opencode na tej maszynie dostaje zasady kierownika w wariancie Claude Code (czyta ten sam ~/.claude/CLAUDE.md)"
+# opencode czyta pierwszy istniejacy z ~/.config/opencode/AGENTS.md i ~/.claude/CLAUDE.md.
+# Gdy CLAUDE.md ma wariant Claude Code, opencode dostaje wlasny AGENTS.md - kopie
+# CLAUDE.md ("Co wiem", blok Lore) z blokiem w wariancie opencode/Codex. Istniejaca
+# nasza kopie odswiezamy zawsze. Cudzego pliku nie ruszamy - mowimy o tym.
+$PlikOpencode = Join-Path $DomOpencode "AGENTS.md"
+$KopiaOpencodePotrzebna = $JestOpencode -and (($Wariant -eq "claude") -or (Jest-Kopia-Opencode $PlikOpencode))
+if ($KopiaOpencodePotrzebna) {
+  $plikCm = Join-Path $DomClaude "CLAUDE.md"
+  if ((Test-Path $PlikOpencode) -and -not (Jest-Kopia-Opencode $PlikOpencode)) {
+    Write-Host "UWAGA  masz wlasny $PlikOpencode - opencode czyta tylko jego (nie ~/.claude/CLAUDE.md), nie ruszam go" -ForegroundColor Yellow
+    Nie-Sprawdzono "opencode czyta Twoj wlasny ~/.config/opencode/AGENTS.md - zasad kierownika i 'Co wiem' tam nie dokladam"
+    $KopiaOpencodePotrzebna = $false
+  } elseif ($Proba) {
+    Write-Host "PROBA  kopia zasad dla opencode -> $PlikOpencode"
+  } else {
+    try {
+      $zrodloCm = if (Test-Path $plikCm) { Czytaj $plikCm } else { "" }
+      $nowaKopia = Kopia-Dla-Opencode $zrodloCm $TrescZasadOpencode
+      $staraKopia = if (Test-Path $PlikOpencode) { Czytaj $PlikOpencode } else { $null }
+      if ($nowaKopia -ceq $staraKopia) { Write-Host "--  kopia zasad dla opencode - aktualna" }
+      else {
+        Kopia-Zapasowa $PlikOpencode
+        New-Item -ItemType Directory -Force -Path $DomOpencode | Out-Null
+        Zapisz $PlikOpencode $nowaKopia
+        Write-Host "OK  kopia zasad dla opencode (wariant opencode/Codex + 'Co wiem' i Lore z ~/.claude/CLAUDE.md) -> $PlikOpencode"
+      }
+    } catch {
+      Write-Host "BLAD  kopia zasad dla opencode - $($_.Exception.Message)" -ForegroundColor Red
+      $script:Bledy += "kopia zasad dla opencode"
+    }
+  }
 }
 Write-Host ""
 
@@ -414,7 +456,9 @@ if (-not $Proba) {
     }
     if ($naj) { $wersja = $naj.ToString() }
   }
-  Zapisz $Marker ("zrodlo: $Zrodlo`nwersja: $wersja`ndata: " + (Get-Date -Format 'yyyy-MM-dd HH:mm') + "`n")
+  # wariant = ktory wariant zasad dostal ~/.claude/CLAUDE.md - straznik przywraca w nim
+  # zniknely blok (moze byc wymuszony -WariantZasad, wiec sam by go nie zgadl)
+  Zapisz $Marker ("zrodlo: $Zrodlo`nwersja: $wersja`nwariant: $Wariant`ndata: " + (Get-Date -Format 'yyyy-MM-dd HH:mm') + "`n")
   Write-Host "OK  znacznik instalacji globalnej: $Marker"
 }
 
@@ -452,7 +496,25 @@ if ($JestClaude) {
 if ($JestCodex) {
   $blokCodex = ""
   if (Test-Path (Join-Path $DomCodex "AGENTS.md")) { $blokCodex = Czytaj (Join-Path $DomCodex "AGENTS.md") }
-  Sprawdz "blok zasad w ~/.codex/AGENTS.md" ($blokCodex.Contains($POCZATEK)) "brak znacznika kierownika"
+  $ileC = Ile-Blokow-Kierownika $blokCodex
+  Sprawdz "blok zasad w ~/.codex/AGENTS.md (dokladnie jeden)" ($ileC -eq 1) "jest $ileC"
+  if (-not $Proba) {
+    $pierwszaOc = ($TrescZasadOpencode -split "`r?`n")[0]
+    Sprawdz "blok w ~/.codex/AGENTS.md w wariancie opencode/Codex" ($blokCodex.Contains($pierwszaOc)) "w pliku nie ma naglowka '$pierwszaOc'"
+  }
+  if ($DomCodexOrki -and -not $Proba) {
+    $wOrce = Join-Path $DomCodexOrki "AGENTS.md"
+    $tamto = $null
+    if (Test-Path $wOrce) { try { $tamto = Czytaj $wOrce } catch { $tamto = $null } }
+    if ($tamto -cne $blokCodex) {
+      Nie-Sprawdzono "Codex w Orce: $wOrce jeszcze nie rowna sie ~/.codex/AGENTS.md - Orka skopiuje go sama przy najblizszym starcie Codeksa w Orce"
+    }
+  }
+}
+if ($KopiaOpencodePotrzebna -and -not $Proba) {
+  $kop = if (Test-Path $PlikOpencode) { Czytaj $PlikOpencode } else { "" }
+  $ileO = Ile-Blokow-Kierownika $kop
+  Sprawdz "kopia dla opencode: dokladnie jeden blok, wariant opencode/Codex" (($ileO -eq 1) -and $kop.Contains(($TrescZasadOpencode -split "`r?`n")[0])) "blokow $ileO"
 }
 if ($JestOpencode) { Sprawdz "wtyczka ~/.config/opencode/plugins/mr-log.js" (Test-Path (Join-Path $DomOpencode "plugins\mr-log.js")) "brak pliku" }
 Nie-Sprawdzono "czy narzedzia naprawde wczytaja role i hooki - to widac dopiero po zamknieciu i otwarciu okna"

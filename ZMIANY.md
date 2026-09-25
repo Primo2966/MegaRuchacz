@@ -4,6 +4,22 @@ Każda zmiana wypychana na gita dostaje tu wpis. Numer rośnie wg zasady:
 pierwsza cyfra — przebudowa łamiąca zgodność, druga — nowa funkcja,
 trzecia — poprawka.
 
+## 0.21.1 — 2026-09-25
+
+- **Codex dostaje zasady kierownika także w Orce.** Orka uruchamia Codeksa z własnym
+  katalogiem ustawień, ale przy każdym starcie sama kopiuje do niego `~/.codex/AGENTS.md`
+  — wystarczy więc, że zasady są tam. Instalator i strażnik uznają Codeksa za obecnego
+  także wtedy, gdy jest tylko katalog Orki. Do katalogu Orki nic nie piszemy (własny plik
+  zablokowałby jej kopiowanie na zawsze).
+- **opencode dostaje swój wariant zasad i dalej widzi „Co wiem”.** Na maszynie z Claude
+  Code powstaje `~/.config/opencode/AGENTS.md` — kopia `~/.claude/CLAUDE.md` z blokiem
+  kierownika w wersji dla opencode. Strażnik odświeża ją przy każdym starcie sesji, bo
+  „Co wiem” zmienia się codziennie. Twojego własnego pliku o tej nazwie nie rusza.
+- **Strażnik pilnuje bloku kierownika i nie milczy.** Gdy blok zniknie z `~/.claude/CLAUDE.md`
+  albo `~/.codex/AGENTS.md`, wpisuje go z powrotem we właściwym wariancie i mówi o tym
+  jedną linią. Gdy nie umie (brak szablonu, dubel) — też to mówi, zamiast udawać, że gra.
+  Istniejącego bloku nie podmienia; wariant dla `CLAUDE.md` zapisuje odtąd instalator.
+
 ## 0.21.0 — 2026-09-25
 
 - **Claude Code dostaje wreszcie swoje zasady kierownika.** Od 0.19.0 do każdej sesji
