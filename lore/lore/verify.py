@@ -275,10 +275,49 @@ def on_another_machine(text: str) -> bool:
     return bool(_ELSEWHERE.search(text))
 
 
+# The user works on two machines, and one fact may name the path on each: 'na biurowej w
+# `C:\\dev\\x`, na domowej w `D:\\y`'. The home one never exists on the office disk, and flagging
+# it was a false alarm (2026-09-25). Only the path the fact ties to the other machine is let go —
+# a missing path with no such tie is still flagged.
+_OTHER_MACHINE = re.compile(r"\bdomow\w*|\bw\s+domu\b|\bprzem\b", re.IGNORECASE)
+# 'katalog domowy' is a home DIRECTORY, not the home machine
+_HOME_DIRECTORY = re.compile(r"\bkatalog\w*\s+domow\w*", re.IGNORECASE)
+_CLAUSE_END = re.compile(r";|\.\s")
+
+
+def _names_other_machine(text: str) -> bool:
+    return bool(_OTHER_MACHINE.search(_HOME_DIRECTORY.sub(" ", text)))
+
+
+def _lead_ins(text: str, paths: list[str]) -> dict[str, str]:
+    """The words right before each path: from the previous path (or clause end) up to this one."""
+    spots = sorted((text.find(p), p) for p in paths)
+    out, last = {}, 0
+    for start, p in spots:
+        if start < 0:
+            out[p] = ""  # not found verbatim (a bare path with odd spacing) — no tie assumed
+            continue
+        lead = text[last:start]
+        cut = [m.end() for m in _CLAUSE_END.finditer(lead)]
+        out[p] = lead[cut[-1]:] if cut else lead
+        last = start + len(p)
+    return out
+
+
 def check_paths(text: str, exists) -> list[Check]:
     if on_another_machine(text):
         return []
-    return [Check(p, exists(p)) for p in paths_in(text)]
+    paths = paths_in(text)
+    checks = [Check(p, exists(p)) for p in paths]
+    if not _names_other_machine(text):
+        return checks
+    lead = _lead_ins(text, paths)
+    # a path introduced as the other machine's is not checkable here
+    checks = [c for c in checks if c.ok or not _names_other_machine(lead[c.claim])]
+    # the fact names two machines and the one here holds: the rest is the other machine's
+    if any(c.ok for c in checks):
+        checks = [c for c in checks if c.ok]
+    return checks
 
 
 # The one place to plug in another kind of check (a database table, an HTTP endpoint, a git remote):
