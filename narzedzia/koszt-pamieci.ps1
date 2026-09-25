@@ -32,6 +32,13 @@
 #                            z paskiem, udzialem i sciezka przy kazdej. Straznik pokazuje
 #                            to RAZ dziennie, przy pierwszej sesji
 #     -Zwykly                bez kolorow (do zapisu wydruku w pliku)
+#     -Warstwy               JSON z lista WSZYSTKICH warstw pamieci (zakladka "Warstwy
+#                            pamieci" w oknie nadzorcy): kiedy sie wczytuje, stala czy
+#                            tymczasowa, kto pisze, ile znakow, czy plik jest. Zbudowany
+#                            na tych samych pozycjach, co rachunek, plus warstwy na
+#                            zadanie i nieuzywane - lista warstw zyje TYLKO tutaj.
+#                            Wyjscie w samym ASCII (polskie znaki jako \uXXXX), bo
+#                            przekierowane wyjscie PowerShella 5.1 psuje ogonki
 #     -ZalozZadanie          codzienny raport o 08:15 do <dom>\.claude\wiedza\koszt-ostatni.txt
 #     -UsunZadanie           kasuje to zadanie
 #
@@ -56,6 +63,7 @@ param(
   [switch]$Dane,
   [switch]$Rozbicie,
   [switch]$Zwykly,
+  [switch]$Warstwy,
   [switch]$ZalozZadanie,
   [switch]$UsunZadanie
 )
@@ -306,6 +314,14 @@ function Zmierz-Warstwy($plik) {
     Stala    = $pusta
     Biezaca  = $pusta
     Wpisy    = @()
+    # Same teksty podwarstw - czyta je wylacznie tryb -Warstwy (podglad w oknie
+    # nadzorcy), zeby okno nie wycinalo sekcji drugi raz, po swojemu.
+    BlokTekst    = ""
+    StalaTekst   = ""
+    BiezacaTekst = ""
+    # WSZYSTKIE bloki <!-- MegaRuchacz...:start/koniec -->, takze te, ktorych
+    # rachunek za start sesji nie liczy (np. blok kierownika) - lista, nie liczba
+    Bloki    = @()
   }
   if (-not (Test-Path -LiteralPath $plik)) { return $wynik }
 
@@ -320,13 +336,26 @@ function Zmierz-Warstwy($plik) {
   $wynik.Jest = $true
   $tekst = $tekst -replace "`r`n", "`n"
 
+  # Lista blokow tylko do odczytu - tekst ponizej zostaje nietkniety, wiec
+  # rachunek liczy dokladnie to samo, co przed dopisaniem tej listy.
+  $bloki = @()
+  foreach ($m in [regex]::Matches($tekst, '(?s)<!-- MegaRuchacz(?<n>(:[A-Za-z0-9_-]+)?):start -->.*?<!-- MegaRuchacz\k<n>:koniec -->')) {
+    $bloki += [pscustomobject]@{
+      Nazwa = $m.Groups['n'].Value.TrimStart(':')
+      Znaki = $m.Value.Length
+      Tekst = $m.Value
+    }
+  }
+  $wynik.Bloki = $bloki
+
   # blok zasad wycinamy z tekstu od razu: ma wlasny rachunek, a gdyby zostal,
   # doliczylby sie drugi raz do sekcji, w ktorej akurat siedzi
   $i = $tekst.IndexOf($ZnacznikStart, [System.StringComparison]::Ordinal)
   $j = $tekst.IndexOf($ZnacznikKoniec, [System.StringComparison]::Ordinal)
   if ($i -ge 0 -and $j -gt $i) {
     $dlugosc = $j + $ZnacznikKoniec.Length - $i
-    $wynik.Blok = Miara @($tekst.Substring($i, $dlugosc) -split "`n")
+    $wynik.BlokTekst = $tekst.Substring($i, $dlugosc)
+    $wynik.Blok = Miara @($wynik.BlokTekst -split "`n")
     $tekst = $tekst.Remove($i, $dlugosc)
   }
 
@@ -344,6 +373,7 @@ function Zmierz-Warstwy($plik) {
   $gb = @(Granice-Sekcji $coWiem '^###\s+Bie' '^#{1,3}\s')
   if ($gb[0] -lt 0) {
     $wynik.Stala = Miara $coWiem
+    $wynik.StalaTekst = ($coWiem -join "`n")
     return $wynik
   }
 
@@ -351,6 +381,8 @@ function Zmierz-Warstwy($plik) {
   $stala = @(Linie-Zakresu $coWiem 0 $gb[0]) + @(Linie-Zakresu $coWiem $gb[1] $coWiem.Count)
   $wynik.Stala   = Miara $stala
   $wynik.Biezaca = Miara $biezace
+  $wynik.StalaTekst   = ($stala -join "`n")
+  $wynik.BiezacaTekst = ($biezace -join "`n")
   $wynik.Wpisy   = @(Czytaj-Wpisy $biezace)
   return $wynik
 }
@@ -1433,6 +1465,409 @@ if ($zasadyWdrozone -and $zasadyTresc) {
     "zasady z hooka (Cx)"
 }
 $tokSesja = Policz-Udzialy $kubSesja
+
+# --- tryb -Warstwy: inwentarz warstw pamieci dla okna nadzorcy ---------------
+# Jedna lista, z ktorej zakladka "Warstwy pamieci" w zasobnik\nadzorca.ps1
+# rysuje wszystko. Start sesji i kazda wiadomosc biora sie z tych samych pozycji,
+# co rachunek wyzej ($kubSesja, $kubWiadomosc) - okno niczego nie liczy drugi
+# raz. Warstwy na zadanie i nieuzywane, ktorych rachunek nie zna (nic nie
+# kosztuja, dopoki nikt po nie nie siegnie), sa dolozone TUTAJ, zeby lista
+# warstw zyla w jednym miejscu.
+# BRAK PLIKU NIGDY NIE USUWA WARSTWY Z LISTY: warstwa zostaje ze stanem "brak"
+# i zdaniem, czego brakuje. Pominiety wiersz czytalby sie jak "tej warstwy nie
+# ma", a to jest wprost odwrotnie - jest, tylko jej plik zniknal.
+# Stany: jest / pusty / brak / blad (plik jest, ale nie do odczytania) /
+# nieaktywna (doklejka, ktora w tej chwili nic nie dokleja - to nie usterka).
+if ($Warstwy) {
+  $script:UwagiWarstw = @()
+
+  function Stan-Pliku($sciezka, [bool]$czytaj = $true) {
+    $s = [pscustomobject]@{ Istnieje = $false; Stan = "brak"; Brak = ""; Znaki = $null; Bajty = $null; Zmieniony = $null }
+    if (-not $sciezka) { $s.Brak = "nie wiadomo, gdzie lezy ten plik"; return $s }
+    if (-not (Test-Path -LiteralPath $sciezka -PathType Leaf)) { $s.Brak = "nie ma pliku $sciezka"; return $s }
+    $s.Istnieje = $true
+    try {
+      $el = Get-Item -LiteralPath $sciezka -Force -ErrorAction Stop
+      $s.Bajty = [long]$el.Length
+      $s.Zmieniony = $el.LastWriteTime.ToString("yyyy-MM-dd HH:mm")
+    } catch {
+      $s.Stan = "blad"
+      $s.Brak = "plik $sciezka jest, ale nie da sie odczytac jego danych ($($_.Exception.Message))"
+      return $s
+    }
+    if (-not $czytaj) {
+      if ($s.Bajty -gt 0) { $s.Stan = "jest" } else { $s.Stan = "pusty"; $s.Brak = "plik jest, ale pusty" }
+      return $s
+    }
+    $tekst = $null
+    try { $tekst = Czytaj $sciezka }
+    catch {
+      # plik JEST, tylko nie da sie go przeczytac - to co innego niz jego brak
+      $s.Stan = "blad"
+      $s.Brak = "plik $sciezka jest, ale nie da sie go odczytac ($($_.Exception.Message))"
+      return $s
+    }
+    $s.Znaki = ("" + $tekst).Length
+    if ($s.Znaki -gt 0) { $s.Stan = "jest" } else { $s.Stan = "pusty"; $s.Brak = "plik jest, ale pusty" }
+    return $s
+  }
+
+  function Warstwa($id, $nazwa, $sciezka, $kiedy, $trwalosc, $ktoPisze, $opis, $rodzaj = "plik", $rodzic = "") {
+    # Kiedy: start / wiadomosc / zadanie / nieuzywane. Trwalosc: stala / tymczasowa
+    # (albo mieszana - plik, ktory dzieli sie na podwarstwy obu rodzajow).
+    # Rodzaj: plik / ladunek (JSON hooka - Tresc to to, co naprawde leci do modelu) /
+    # podwarstwa (kawalek pliku - Tresc to ten kawalek) / katalog / baza / doklejka.
+    return [pscustomobject]@{
+      Id = $id; Nazwa = $nazwa; Sciezka = "$sciezka"; Kiedy = $kiedy; Trwalosc = $trwalosc
+      KtoPisze = $ktoPisze; Opis = $opis; Rodzaj = $rodzaj; Rodzic = $rodzic
+      Istnieje = $false; Stan = "brak"; Brak = ""; Znaki = $null; Tokeny = $null
+      Bajty = $null; Zmieniony = $null; Limit = $null; Tresc = $null; Pliki = @()
+    }
+  }
+
+  function Z-Pliku($wa, [bool]$czytaj = $true) {
+    $s = Stan-Pliku $wa.Sciezka $czytaj
+    $wa.Istnieje = $s.Istnieje; $wa.Stan = $s.Stan; $wa.Brak = $s.Brak
+    $wa.Znaki = $s.Znaki; $wa.Bajty = $s.Bajty; $wa.Zmieniony = $s.Zmieniony
+    if ($null -ne $s.Znaki) { $wa.Tokeny = Tokeny $s.Znaki }
+    return $wa
+  }
+
+  # Polecenia hookow danego zdarzenia z jednego settings.json. Nieczytelny plik
+  # to nie cisza: idzie do Uwag, ktore okno pokazuje nad lista.
+  function Polecenia-Hookow($plik, $zdarzenie) {
+    $wynik = @()
+    if (-not (Test-Path -LiteralPath $plik -PathType Leaf)) { return $wynik }
+    $tekst = $null
+    try { $tekst = Czytaj $plik }
+    catch {
+      $script:UwagiWarstw += "nie da sie odczytac $plik ($($_.Exception.Message)) - nie wiem, co czytaja zapisane tam hooki"
+      return $wynik
+    }
+    $j = $null
+    try { $j = $tekst | ConvertFrom-Json }
+    catch {
+      $script:UwagiWarstw += "$plik nie jest poprawnym JSON-em ($($_.Exception.Message)) - nie wiem, co czytaja zapisane tam hooki"
+      return $wynik
+    }
+    if (-not $j -or -not $j.hooks) { return $wynik }
+    foreach ($grupa in @($j.hooks.$zdarzenie)) {
+      if (-not $grupa) { continue }
+      foreach ($h in @($grupa.hooks)) {
+        if (-not $h) { continue }
+        $wynik += ("" + $h.command + " " + $h.commandWindows)
+      }
+    }
+    return $wynik
+  }
+
+  function Klucz-Sciezki($sciezka) { return ("$sciezka" -replace '/', '\').ToLowerInvariant() }
+
+  # Czy ktorys hook naprawde wczytuje ten plik - po pelnej sciezce w poleceniu,
+  # z $CLAUDE_PROJECT_DIR podmienionym na katalog projektu.
+  function Czy-Hook-Czyta($polecenia, $sciezka, $katProj) {
+    if (-not $sciezka) { return $false }
+    $cel = Klucz-Sciezki $sciezka
+    foreach ($pol in @($polecenia)) {
+      $t = "$pol"
+      if ($katProj) { $t = $t.Replace('$CLAUDE_PROJECT_DIR', $katProj) }
+      if ((Klucz-Sciezki $t).Contains($cel)) { return $true }
+    }
+    return $false
+  }
+
+  function Opis-Limitu($n, $plik) {
+    if ($null -eq $n) { return "limitu nie znam (nie znalazlem go w $plik)" }
+    return "do $n znakow"
+  }
+
+  # Projekt, w ktorym ogladamy warstwy. Bez -Projekt to katalog narzedzia -
+  # tak samo wola ten skrypt nadzorca, ktory w zadnym projekcie nie siedzi.
+  $katProjektu = $Projekt
+  if (-not $katProjektu) { $katProjektu = $Zrodlo }
+  $katProjektu = "$katProjektu".TrimEnd('\', '/')
+  $trybGlobalny = Test-Path -LiteralPath (Join-Path $katKlaudii ".megaruchacz-global")
+
+  # Co czytaja hooki - z settings.json globalnego i projektu. Od tego zalezy,
+  # czy ladunek hooka jest warstwa, czy lezacym bez uzytku plikiem.
+  $polStart = @()
+  $polWiad  = @()
+  foreach ($pu in @((Join-Path $katKlaudii "settings.json"), (Join-Path $katKlaudii "settings.local.json"),
+                    (Join-Path $katProjektu ".claude\settings.json"), (Join-Path $katProjektu ".claude\settings.local.json"))) {
+    $polStart += @(Polecenia-Hookow $pu "SessionStart")
+    $polWiad  += @(Polecenia-Hookow $pu "UserPromptSubmit")
+  }
+
+  $lista = @()
+  $juz = @{}
+
+  # --- RAZ, przy starcie sesji -------------------------------------------------
+
+  $plikClaudeProj = Join-Path $katProjektu "CLAUDE.md"
+  $lista += Z-Pliku (Warstwa "claude-projekt" "CLAUDE.md projektu" $plikClaudeProj "start" "stala" `
+    "czlowiek recznie + git (repozytorium projektu)" `
+    "Claude Code wczytuje go sam na starcie kazdej sesji w projekcie $katProjektu")
+  $juz[(Klucz-Sciezki $plikClaudeProj)] = $true
+
+  $wGlob = Z-Pliku (Warstwa "claude-globalny" "CLAUDE.md globalny (caly plik)" $plikClaude "start" "mieszana" `
+    "czlowiek recznie + automaty (straznik-zasad.ps1, cykl wiedzy)" `
+    "Claude Code wczytuje go sam na starcie KAZDEJ sesji, w kazdym projekcie na tej maszynie. Dzieli sie na podwarstwy ponizej - kazda da sie obejrzec osobno.")
+  $lista += $wGlob
+  $juz[(Klucz-Sciezki $plikClaude)] = $true
+
+  # Podwarstwy globalnego CLAUDE.md - liczby z pozycji rachunku ($kubSesja),
+  # teksty z Zmierz-Warstwy. Brak sekcji to wiersz ze stanem "brak", nie dziura.
+  $uwagaBiez = "tymczasowa"
+  $pozBiez = @($kubSesja | Where-Object { $_.Krotka -eq "warstwa biezaca" }) | Select-Object -First 1
+  if ($pozBiez -and $pozBiez.Uwaga) { $uwagaBiez = $pozBiez.Uwaga.Trim() }
+  $podwarstwy = @(
+    @{ Krotka = "zasady globalne"; Id = "claude-globalny-blok"; Nazwa = "blok zasad MegaRuchacza"; Trwalosc = "stala"
+       Kto = "automat Pilnuj-Zasad w narzedzia\straznik-zasad.ps1 (kopia zasad narzedzia)"; Tekst = $w.BlokTekst
+       Opis = "stala kopia zasad narzedzia (Lore, wiedza) - skraca sie ja w zrodle i wgrywa przez wdroz.ps1, nie recznie"
+       BrakSekcji = "w $plikClaude nie ma bloku $ZnacznikStart ... $ZnacznikKoniec" },
+    @{ Krotka = "warstwa stala"; Id = "claude-globalny-stala"; Nazwa = "Co wiem - czesc stala"; Trwalosc = "stala"
+       Kto = "czlowiek recznie + narzedzia\aktualizuj-wiedze.ps1 (awans z Biezace)"; Tekst = $w.StalaTekst
+       Opis = "nie wygasa; prog ostrzegawczy $ProgStalej znakow"
+       BrakSekcji = "w $plikClaude nie ma sekcji '## Co wiem'" },
+    @{ Krotka = "warstwa biezaca"; Id = "claude-globalny-biezace"; Nazwa = "Co wiem - Biezace"; Trwalosc = "tymczasowa"
+       Kto = "narzedzia\wyciagnij-fakty.ps1 + aktualizuj-wiedze.ps1 (cykl dzienny)"; Tekst = $w.BiezacaTekst
+       Opis = "$uwagaBiez; wpis starszy niz $DniWaznosci dni jest podejrzany"
+       BrakSekcji = "w sekcji '## Co wiem' nie ma podsekcji '### Biezace'" })
+  foreach ($pw in $podwarstwy) {
+    $poz = @($kubSesja | Where-Object { ($_.Krotka -eq $pw.Krotka) -and ($_.Skad -eq $plikClaude) }) | Select-Object -First 1
+    $sub = Warstwa $pw.Id $pw.Nazwa $plikClaude "start" $pw.Trwalosc $pw.Kto $pw.Opis "podwarstwa" "claude-globalny"
+    $sub.Istnieje = $wGlob.Istnieje; $sub.Bajty = $wGlob.Bajty; $sub.Zmieniony = $wGlob.Zmieniony
+    if ($poz) {
+      $sub.Stan = "jest"; $sub.Znaki = $poz.Znaki; $sub.Tokeny = $poz.Tokeny; $sub.Tresc = $pw.Tekst
+    } elseif (-not $w.Jest) {
+      $sub.Stan = $wGlob.Stan; $sub.Brak = $powodBrakuClaude
+    } else {
+      $sub.Stan = "brak"; $sub.Brak = $pw.BrakSekcji
+    }
+    $lista += $sub
+  }
+  # Pozostale bloki MegaRuchacza (np. zasady kierownika). Rachunek za start
+  # sesji liczy wylacznie blok glowny - te wchodza do modelu razem z calym
+  # plikiem, ale w rachunku ich nie ma. Mowimy to wprost przy wierszu.
+  foreach ($b in @($w.Bloki)) {
+    if (-not $b.Nazwa) { continue }
+    $sub = Warstwa ("claude-globalny-blok-" + $b.Nazwa) "blok zasad MegaRuchacza: $($b.Nazwa)" $plikClaude "start" "stala" `
+      "automat Pilnuj-Zasad w narzedzia\straznik-zasad.ps1 (kopia zasad narzedzia)" `
+      "wchodzi na start sesji razem z calym plikiem, ale rachunek za start sesji w koszt-pamieci.ps1 go NIE dolicza (liczy tylko blok glowny)" `
+      "podwarstwa" "claude-globalny"
+    $sub.Istnieje = $true; $sub.Stan = "jest"; $sub.Znaki = $b.Znaki; $sub.Tokeny = Tokeny $b.Znaki
+    $sub.Bajty = $wGlob.Bajty; $sub.Zmieniony = $wGlob.Zmieniony; $sub.Tresc = $b.Tekst
+    $lista += $sub
+  }
+
+  # Natywna pamiec Claude Code dla projektu. Katalog nazywa sie od sciezki
+  # projektu: kazdy znak inny niz litera i cyfra zamieniony na "-"
+  # (C:\dev\claude-worker -> C--dev-claude-worker).
+  $katPamieci = Join-Path $katKlaudii ("projects\" + ($katProjektu -replace '[^A-Za-z0-9]', '-') + "\memory")
+  $wp = Z-Pliku (Warstwa "pamiec-natywna" "natywna pamiec Claude Code (MEMORY.md)" (Join-Path $katPamieci "MEMORY.md") "start" "stala" `
+    "Claude Code sam (automatyczna pamiec projektu)" `
+    "Claude Code wczytuje ja sam na starcie sesji w tym projekcie - o ile plik istnieje")
+  if ((-not $wp.Istnieje) -and (Test-Path -LiteralPath $katPamieci -PathType Container)) {
+    $wp.Stan = "pusty"
+    $wp.Brak = "katalog $katPamieci jest, ale pusty - Claude Code nic tu jeszcze nie zapisal, wiec nic sie nie wczytuje"
+  }
+  $lista += $wp
+
+  # Reszta rachunku za start sesji (Codex, ladunki hookow przy -Projekt).
+  $nr = 0
+  foreach ($poz in @($kubSesja)) {
+    if ($poz.Skad -eq $plikClaude) { continue }
+    $nr++
+    $jsonowy = ("$($poz.Skad)" -like "*.json")
+    $rodzaj = "plik"
+    if ($jsonowy) { $rodzaj = "ladunek" }
+    $kiedy = "start"
+    $opis = "wchodzi na start sesji (pozycja rachunku: $($poz.Krotka))"
+    if (($poz.Krotka -eq "zasady z hooka (CC)") -and -not (Czy-Hook-Czyta $polStart $poz.Skad $katProjektu)) {
+      $kiedy = "nieuzywane"
+      $opis = "zaden hook SessionStart w settings.json go nie wczytuje - plik lezy, ale nie trafia do modelu"
+    }
+    $wa = Z-Pliku (Warstwa "sesja-$nr" $poz.Nazwa $poz.Skad $kiedy "stala" "instalator MegaRuchacza (wdroz.ps1)" $opis $rodzaj)
+    $wa.Znaki = $poz.Znaki; $wa.Tokeny = $poz.Tokeny
+    if ($jsonowy) { $wa.Tresc = Ladunek-Hooka $poz.Skad }
+    $lista += $wa
+    $juz[(Klucz-Sciezki $poz.Skad)] = $true
+  }
+
+  # --- przy KAZDEJ wiadomosci ---------------------------------------------------
+
+  # Ktory ladunek przypomnienia NAPRAWDE leci: ten, ktory hook UserPromptSubmit
+  # podaje narzedzia\przypomnienie.js. Rachunek bez -Projekt liczy kopie
+  # z katalogu narzedzia - w trybie globalnym to nie jest plik, ktory czyta hook.
+  $przypUzywany = $null
+  foreach ($pol in $polWiad) {
+    $m = [regex]::Match("$pol", 'przypomnienie\.js"?\s+(?:"(?<a>[^"]+)"|(?<a>\S+))')
+    if ($m.Success) {
+      $przypUzywany = ($m.Groups['a'].Value.Replace('$CLAUDE_PROJECT_DIR', $katProjektu) -replace '/', '\')
+      break
+    }
+  }
+  $pozCC = @($kubWiadomosc | Where-Object { $_.Krotka -eq "przypomnienie Claude" }) | Select-Object -First 1
+  $sciezkaPrzyp = $przypUzywany
+  $opisPrzyp = "hook UserPromptSubmit (narzedzia\przypomnienie.js) dokleja ten ladunek do KAZDEJ wiadomosci"
+  if ($pozCC -and $przypUzywany -and ((Klucz-Sciezki $pozCC.Skad) -ne (Klucz-Sciezki $przypUzywany))) {
+    $opisPrzyp += ". Uwaga: rachunek w koszt-pamieci.ps1 liczy inna kopie ($($pozCC.Skad)) - ta nizej jest w grupie nieuzywanych"
+  }
+  if ((-not $sciezkaPrzyp) -and $pozCC) {
+    $sciezkaPrzyp = $pozCC.Skad
+    $opisPrzyp = "zaden hook UserPromptSubmit w settings.json nie wskazuje ladunku przypomnienia - pokazany plik, ktory liczy rachunek"
+  }
+  $wa = Z-Pliku (Warstwa "przypomnienie" "przypomnienie zasad (Claude Code)" $sciezkaPrzyp "wiadomosc" "stala" `
+    "instalator MegaRuchacza (instaluj-globalnie.ps1 / wdroz.ps1)" $opisPrzyp "ladunek")
+  if (-not $sciezkaPrzyp) {
+    $wa.Brak = "nie znalazlem ladunku przypomnienia: zaden hook UserPromptSubmit w settings.json go nie wskazuje, a w $Zrodlo nie ma .claude\orchestrator-reminder.json"
+  } elseif ($wa.Istnieje -and ($wa.Stan -eq "jest")) {
+    $wa.Tresc = Ladunek-Hooka $sciezkaPrzyp
+    if ($wa.Tresc) {
+      $wa.Znaki = $wa.Tresc.Length; $wa.Tokeny = Tokeny $wa.Znaki
+    } else {
+      $wa.Stan = "blad"
+      $wa.Brak = "plik jest, ale nie ma w nim pola hookSpecificOutput.additionalContext - hook nic z niego nie dokleja"
+    }
+  }
+  $lista += $wa
+  if ($sciezkaPrzyp) { $juz[(Klucz-Sciezki $sciezkaPrzyp)] = $true }
+
+  foreach ($poz in @($kubWiadomosc)) {
+    if ($poz.Krotka -eq "przypomnienie Claude") { continue }
+    $wa = Z-Pliku (Warstwa "przypomnienie-codex" $poz.Nazwa $poz.Skad "wiadomosc" "stala" "instalator MegaRuchacza (wdroz.ps1)" `
+      "hook UserPromptSubmit Codeksa dokleja ten ladunek do kazdej wiadomosci" "ladunek")
+    $wa.Znaki = $poz.Znaki; $wa.Tokeny = $poz.Tokeny; $wa.Tresc = Ladunek-Hooka $poz.Skad
+    $lista += $wa
+    $juz[(Klucz-Sciezki $poz.Skad)] = $true
+  }
+
+  # Doklejki: tresc powstaje przy kazdej wiadomosci od nowa i nigdzie sie nie
+  # zapisuje, wiec podglad pokazuje plik stanu. Limity czytamy ze zrodla,
+  # ktore je ustala - wpisane tu na sztywno zaczelyby klamac.
+  $plikPrzypJs = Join-Path $Zrodlo "narzedzia\przypomnienie.js"
+  $maxArch = Limit-Z-Pliku $plikPrzypJs '(?m)^const\s+MAX_ARCHIWUM\s*=\s*(\d+)'
+  $maxStan = Limit-Z-Pliku $plikPrzypJs '(?m)^const\s+MAX_STAN\s*=\s*(\d+)'
+
+  $plikArchStan = Join-Path $katWiedzy ".archiwum-stan.json"
+  $wa = Z-Pliku (Warstwa "doklejka-archiwum" "fragmenty 'Z ARCHIWUM' z Lore" $plikArchStan "wiadomosc" "tymczasowa" `
+    "narzedzia\przypomnienie.js + lore\lore\recall.py, przy kazdej wiadomosci od nowa" `
+    ("1-2 fragmenty dawnych rozmow dobrane do tresci wiadomosci, $(Opis-Limitu $maxArch $plikPrzypJs); doklejane tylko do tej jednej wiadomosci. " +
+     "Samej doklejki nikt nie zapisuje - podglad pokazuje plik stanu (co juz pokazano w ktorej sesji).") "doklejka")
+  $wa.Limit = $maxArch; $wa.Znaki = $null; $wa.Tokeny = $null
+  if (-not (Test-Path -LiteralPath $bazaLore -PathType Leaf)) {
+    $wa.Stan = "brak"; $wa.Brak = "nie ma bazy Lore $bazaLore - fragmentow z archiwum nie bedzie"
+  } elseif (-not $wa.Istnieje) {
+    $wa.Stan = "nieaktywna"; $wa.Brak = "archiwum nic jeszcze nie pokazalo (nie ma pliku stanu $plikArchStan)"
+  }
+  $lista += $wa
+
+  $plikCyklPostep = Join-Path $katWiedzy ".cykl-postep"
+  $wa = Z-Pliku (Warstwa "doklejka-cykl" "linia o stanie cyklu wiedzy" $plikCyklPostep "wiadomosc" "tymczasowa" `
+    "narzedzia\cykl-dzienny.ps1 zapisuje stan, narzedzia\przypomnienie.js dokleja" `
+    "jedna linia, $(Opis-Limitu $maxStan $plikPrzypJs), tylko gdy cykl wiedzy akurat pracuje albo wlasnie skonczyl; znika po pierwszym pokazaniu" "doklejka")
+  $wa.Limit = $maxStan; $wa.Znaki = $null; $wa.Tokeny = $null
+  if (-not $wa.Istnieje) {
+    $wa.Stan = "nieaktywna"; $wa.Brak = "nie ma pliku $plikCyklPostep - teraz nic sie nie dokleja (plik pojawia sie tylko, gdy cykl pracuje)"
+  }
+  $lista += $wa
+
+  # --- tylko na zadanie ---------------------------------------------------------
+
+  $lista += Z-Pliku (Warstwa "mapa" "mapa projektu" (Join-Path $katProjektu ".claude\mapa.md") "zadanie" "stala" `
+    "scout (dopisuje) + kierownik" "zaden hook jej nie wczytuje - model czyta ja sam, gdy siegnie po nia narzedziem")
+  $lista += Z-Pliku (Warstwa "worklog" "rejestr zadan (worklog)" (Join-Path $katProjektu ".claude\worklog.md") "zadanie" "tymczasowa" `
+    "automat megaruchacz-mr-log.js (start i koniec workera) + kierownik" "biezacy stan zadan; zaden hook go nie wczytuje - model czyta go sam")
+
+  $wk = Warstwa "wiedza" "wiedza referencyjna (katalog)" $katWiedzy "zadanie" "stala" "cykl wiedzy + czlowiek recznie" `
+    "pliki czytane tylko wtedy, gdy rozmowa ich dotyczy (odsylacze w globalnym CLAUDE.md)" "katalog"
+  $plikiWiedzy = @()
+  if (Test-Path -LiteralPath $katWiedzy -PathType Container) {
+    $wk.Istnieje = $true
+    try {
+      $plikiWiedzy = @(Get-ChildItem -LiteralPath $katWiedzy -File -Force -ErrorAction Stop | Sort-Object Name)
+      $opisy = @()
+      foreach ($pl in $plikiWiedzy) {
+        $opisy += [pscustomobject]@{ Nazwa = $pl.Name; Bajty = [long]$pl.Length; Zmieniony = $pl.LastWriteTime.ToString("yyyy-MM-dd HH:mm") }
+      }
+      $wk.Pliki = @($opisy)
+      if ($opisy.Count -gt 0) { $wk.Stan = "jest" } else { $wk.Stan = "pusty"; $wk.Brak = "katalog jest, ale pusty" }
+    } catch {
+      $wk.Stan = "blad"; $wk.Brak = "katalog $katWiedzy jest, ale nie da sie go wylistowac ($($_.Exception.Message))"
+    }
+  } else {
+    $wk.Brak = "nie ma katalogu $katWiedzy"
+  }
+  $lista += $wk
+  foreach ($pl in @($plikiWiedzy | Where-Object { $_.Extension -eq ".md" })) {
+    $tr = "stala"
+    $op = "czytany tylko wtedy, gdy rozmowa go dotyczy"
+    if ($pl.Name -eq "kandydaci.md") {
+      $tr = "tymczasowa"
+      $op = "poczekalnia propozycji faktow wylowionych z rozmow - nic stad nie trafia do CLAUDE.md samo"
+    }
+    $lista += Z-Pliku (Warstwa ("wiedza-" + $pl.BaseName) $pl.Name $pl.FullName "zadanie" $tr "cykl wiedzy + czlowiek recznie" $op "plik" "wiedza")
+  }
+
+  $lista += Z-Pliku (Warstwa "lore" "baza Lore (pamiec wszystkich rozmow)" $bazaLore "zadanie" "stala" `
+    "indeksowanie Lore (lore\lore\index.py)" `
+    "model siega do niej narzedziami lore_search / lore_context; do podgladu sie jej nie wczytuje - tylko rozmiar i data" "baza") $false
+
+  # --- nieuzywane ----------------------------------------------------------------
+  # Ladunki hookow, ktore leza na dysku, a nie ma ich wyzej. Zanim trafia tutaj,
+  # sprawdzamy settings.json - jesli jednak jakis hook je czyta, ida tam, gdzie
+  # naprawde wchodza. Kandydata, ktorego pliku nie ma, pomijamy: to nie warstwa,
+  # tylko miejsce, w ktorym starsze wersje kladly ladunek.
+  $kandydaci = @(
+    @{ Sciezka = (Join-Path $katKlaudii "mr\megaruchacz-sesja.json"); Nazwa = "zasady kierownika dla hooka startowego (kopia globalna)"
+       Zdarzenie = "start"; Kto = "narzedzia\straznik-zasad.ps1 (Zbuduj-Sesje)" },
+    @{ Sciezka = (Join-Path $katProjektu ".claude\megaruchacz-sesja.json"); Nazwa = "zasady kierownika dla hooka startowego (kopia projektu)"
+       Zdarzenie = "start"; Kto = "narzedzia\straznik-zasad.ps1 (Zbuduj-Sesje)" },
+    @{ Sciezka = (Join-Path $katKlaudii "mr\orchestrator-reminder.json"); Nazwa = "przypomnienie zasad (kopia globalna)"
+       Zdarzenie = "wiadomosc"; Kto = "instalator MegaRuchacza (instaluj-globalnie.ps1)" },
+    @{ Sciezka = (Join-Path $katProjektu ".claude\orchestrator-reminder.json"); Nazwa = "przypomnienie zasad (kopia projektu)"
+       Zdarzenie = "wiadomosc"; Kto = "instalator MegaRuchacza (wdroz.ps1)" })
+  $nr = 0
+  foreach ($k in $kandydaci) {
+    if ($juz.ContainsKey((Klucz-Sciezki $k.Sciezka))) { continue }
+    if (-not (Test-Path -LiteralPath $k.Sciezka -PathType Leaf)) { continue }
+    $nr++
+    $pol = $polWiad
+    if ($k.Zdarzenie -eq "start") { $pol = $polStart }
+    if (Czy-Hook-Czyta $pol $k.Sciezka $katProjektu) {
+      $kiedy = $k.Zdarzenie
+      $opis = "hook w settings.json wczytuje ten plik"
+    } else {
+      $kiedy = "nieuzywane"
+      $opis = "nikt go nie czyta: zaden hook w settings.json (globalnym ani projektu) nie wczytuje tego pliku - lezy, ale nie trafia do modelu"
+      if ($trybGlobalny) {
+        $opis = "nikt go nie czyta w trybie globalnym: zaden hook w settings.json (globalnym ani projektu) nie wczytuje tego pliku - lezy, ale nie trafia do modelu"
+      }
+    }
+    $wa = Z-Pliku (Warstwa "ladunek-$nr" $k.Nazwa $k.Sciezka $kiedy "stala" $k.Kto $opis "ladunek")
+    $t = Ladunek-Hooka $k.Sciezka
+    if ($t) { $wa.Tresc = $t; $wa.Znaki = $t.Length; $wa.Tokeny = Tokeny $t.Length }
+    $lista += $wa
+    $juz[(Klucz-Sciezki $k.Sciezka)] = $true
+  }
+
+  $wynikW = [pscustomobject]@{
+    Wersja        = 1
+    Wygenerowano  = (Get-Date).ToString("yyyy-MM-dd HH:mm:ss")
+    KatalogDomowy = $KatalogDomowy
+    Projekt       = $katProjektu
+    TrybGlobalny  = [bool]$trybGlobalny
+    ZnakiNaToken  = $ZnakiNaToken
+    Uwagi         = @($script:UwagiWarstw)
+    Warstwy       = @($lista)
+  }
+  $json = $wynikW | ConvertTo-Json -Depth 6 -Compress
+  # Samo ASCII na wyjsciu: wolajacy czyta przekierowane wyjscie, a PowerShell 5.1
+  # pisze je w stronie kodowej konsoli - ogonki wyszlyby krzakami.
+  $json = [regex]::Replace($json, '[^\x00-\x7F]', { param($m) '\u{0:x4}' -f [int][char]$m.Value })
+  Write-Output $json
+  exit 0
+}
 
 # Trzeci rachunek: cykl wiedzy raz na dobe. NIE doliczamy go do zadnego z dwoch
 # powyzej - to inne pieniadze. Tamte to tekst doklejany do rozmowy, ten to

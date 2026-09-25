@@ -616,6 +616,47 @@ function Linia-Rachunku {
   return $w
 }
 
+# Warstwy pamieci dla zakladki "Warstwy pamieci": narzedzia\koszt-pamieci.ps1
+# -Warstwy oddaje JSON z lista warstw (kiedy sie wczytuje, stala czy tymczasowa,
+# kto pisze, ile znakow, czy plik jest). Lista warstw zyje TYLKO tam - tutaj
+# jest wywolanie i odczyt, bez drugiej kopii sciezek. Nieudane wywolanie albo
+# smiec zamiast JSON-u to Powod, ktory okno pokazuje zamiast pustej listy.
+function Warstwy-Pamieci {
+  $w = [pscustomobject]@{ Warstwy = @(); Uwagi = @(); Powod = ""; Wygenerowano = ""; TrybGlobalny = $null; Projekt = "" }
+  $skrypt = Join-Path $script:NadzZrodlo "narzedzia\koszt-pamieci.ps1"
+  $r = Wolaj-Skrypt $skrypt @("-KatalogDomowy", ('"' + $script:NadzDom + '"'), "-Zrodlo", ('"' + $script:NadzZrodlo + '"'), "-Warstwy") 120
+  if (-not $r.ok) {
+    $w.Powod = $r.powod
+    return $w
+  }
+  $tekst = "$($r.tekst)".Trim()
+  if (-not $tekst) {
+    $w.Powod = "koszt-pamieci.ps1 -Warstwy nic nie wypisal (kod $($r.kod))"
+    if ($r.powod) { $w.Powod = $w.Powod + " - " + $r.powod }
+    return $w
+  }
+  $j = $null
+  try { $j = $tekst | ConvertFrom-Json }
+  catch {
+    Zanotuj-Wywrotke "odczyt listy warstw pamieci" $_
+    $w.Powod = "koszt-pamieci.ps1 -Warstwy oddal cos, co nie jest JSON-em: $($_.Exception.Message)"
+    return $w
+  }
+  if (-not $j -or ($null -eq $j.Warstwy)) {
+    $w.Powod = "w odpowiedzi koszt-pamieci.ps1 -Warstwy nie ma listy warstw (kod $($r.kod))"
+    return $w
+  }
+  $w.Warstwy = @($j.Warstwy)
+  $w.Uwagi = @($j.Uwagi | Where-Object { $_ })
+  $w.Wygenerowano = "$($j.Wygenerowano)"
+  $w.TrybGlobalny = $j.TrybGlobalny
+  $w.Projekt = "$($j.Projekt)"
+  if ($r.kod -ne 0) {
+    $w.Uwagi += "koszt-pamieci.ps1 -Warstwy skonczyl z kodem $($r.kod)$(if ($r.powod) { ': ' + $r.powod })"
+  }
+  return $w
+}
+
 # Odczyt pojedynczych kluczy z odpowiedzi -Dane. Brak klucza i smiec to $null /
 # pusty tekst - "nie wiem", nigdy zero.
 function Liczba-Z-Klucza($k, [string]$klucz) {

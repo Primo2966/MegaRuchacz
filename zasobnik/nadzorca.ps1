@@ -798,6 +798,14 @@ $script:PanelLiczby    = $null
 $script:KartaStat      = $null
 $script:PanelStan      = $null
 $script:PoleSzczegoly  = $null
+$script:BWarstwy       = $null   # trzeci przycisk przelacznika
+$script:WidokWarstwy   = $null   # warstwy pamieci: lista po lewej, podglad po prawej
+$script:LWarstwy       = $null   # jedno zdanie podsumowania nad lista
+$script:ListaWarstw    = $null
+$script:PodgladWarstwy = $null
+# Odpowiedz Warstwy-Pamieci - liczona dopiero przy wejsciu w zakladke, bo wola
+# osobny proces, a przeglad ma sie otwierac bez czekania.
+$script:DaneWarstw     = $null
 $script:Pasek          = $null
 $script:BAktualizuj    = $null
 $script:LAktualizuj    = $null
@@ -1622,17 +1630,274 @@ function Napelnij-Szczegoly {
   $script:PoleSzczegoly.ScrollToCaret()
 }
 
+# --- warstwy pamieci -----------------------------------------------------------
+# Wszystko o warstwach pochodzi z Warstwy-Pamieci (narzedzia\koszt-pamieci.ps1
+# -Warstwy) - okno nie zna zadnej sciezki samo z siebie. Samo tylko CZYTA plik
+# wybranej warstwy do podgladu i niczego nie zapisuje.
+
+$KOLEJNOSC_KIEDY = @("start", "wiadomosc", "zadanie", "nieuzywane")
+
+function Kiedy-Po-Ludzku([string]$k) {
+  switch ($k) {
+    "start"      { return "Raz, przy starcie sesji" }
+    "wiadomosc"  { return "Przy każdej wiadomości" }
+    "zadanie"    { return "Tylko na żądanie" }
+    "nieuzywane" { return "Nieużywane - nikt ich nie wczytuje" }
+  }
+  return "Inne ($k)"
+}
+
+function Trwalosc-Po-Ludzku([string]$t) {
+  switch ($t) {
+    "stala"      { return "stała" }
+    "tymczasowa" { return "tymczasowa" }
+    "mieszana"   { return "stała + tymcz." }
+  }
+  return "$t"
+}
+
+function Stan-Po-Ludzku([string]$s) {
+  switch ($s) {
+    "jest"       { return "jest" }
+    "pusty"      { return "pusta" }
+    "brak"       { return "BRAK" }
+    "blad"       { return "BŁĄD ODCZYTU" }
+    "nieaktywna" { return "teraz nieaktywna" }
+  }
+  return "$s"
+}
+
+function Rozmiar-Ludzki($bajty) {
+  if ($null -eq $bajty) { return "rozmiar nieznany" }
+  if ($bajty -lt 1024)    { return "$bajty B" }
+  if ($bajty -lt 1048576) { return "$([math]::Round($bajty / 1024, 1)) KB" }
+  return "$([math]::Round($bajty / 1048576, 1)) MB"
+}
+
+# Kolumna "Rozmiar": liczba znakow, a gdy jej nie ma - krotko, dlaczego nie ma.
+# Brak pliku ma byc widoczny w samej liscie, nie dopiero po kliknieciu.
+function Rozmiar-Warstwy($wa) {
+  switch ("$($wa.Stan)") {
+    "brak" {
+      if ($wa.Rodzaj -eq "katalog") { return "BRAK KATALOGU" }
+      if (($wa.Rodzaj -eq "podwarstwa") -and $wa.Istnieje) { return "BRAK SEKCJI" }
+      return "BRAK PLIKU"
+    }
+    "blad"       { return "BŁĄD ODCZYTU" }
+    "pusty"      { return "pusta" }
+    "nieaktywna" { return "teraz nic" }
+  }
+  if ($wa.Rodzaj -eq "katalog") { return "$(@($wa.Pliki).Count) plików" }
+  if ($wa.Rodzaj -eq "baza")    { return (Rozmiar-Ludzki $wa.Bajty) }
+  if ($null -ne $wa.Znaki)      { return "$(Liczba-Ludzka $wa.Znaki) zn." }
+  if ($null -ne $wa.Limit)      { return "do $(Liczba-Ludzka $wa.Limit) zn." }
+  return "nieznany"
+}
+
+# Ten sam rozmiar pelnym zdaniem, z jednostka - do podgladu.
+function Rozmiar-Opisowy($wa) {
+  if ($wa.Rodzaj -eq "baza") { return (Rozmiar-Ludzki $wa.Bajty) + " (bazy nie liczy się w znakach)" }
+  if ($wa.Rodzaj -eq "katalog") { return "$(@($wa.Pliki).Count) plików" }
+  if ($null -ne $wa.Znaki) {
+    $t = "$(Liczba-Ludzka $wa.Znaki) znaków"
+    if ($null -ne $wa.Tokeny) { $t += " (~$(Liczba-Ludzka $wa.Tokeny) tokenów)" }
+    return $t
+  }
+  if ($null -ne $wa.Limit) { return "do $(Liczba-Ludzka $wa.Limit) znaków, za każdym razem inna treść" }
+  return "nieznany"
+}
+
+# Jedno zdanie po ludzku nad lista. Liczy warstwy glowne wedlug tego, kiedy sie
+# wczytuja, a stale i tymczasowe - na najdrobniejszym poziomie (podwarstwy
+# CLAUDE.md i pliki wiedzy osobno), bo dopiero tam to rozroznienie ma sens.
+function Zdanie-Warstw($dw) {
+  $wszystkie = @($dw.Warstwy)
+  $glowne = @($wszystkie | Where-Object { -not $_.Rodzic })
+  $czesci = @()
+  foreach ($k in $KOLEJNOSC_KIEDY) {
+    $n = @($glowne | Where-Object { $_.Kiedy -eq $k }).Count
+    switch ($k) {
+      "start"      { $czesci += "$n przy starcie sesji" }
+      "wiadomosc"  { $czesci += "$n przy każdej wiadomości" }
+      "zadanie"    { $czesci += "$n tylko na żądanie" }
+      "nieuzywane" { if ($n -gt 0) { $czesci += "$n $(Odmiana $n 'nieużywana' 'nieużywane' 'nieużywanych')" } }
+    }
+  }
+  $z = "$($glowne.Count) $(Odmiana $glowne.Count 'warstwa' 'warstwy' 'warstw') pamięci: " + ($czesci -join ", ") + "."
+  $rodzice = @{}
+  foreach ($x in $wszystkie) { if ($x.Rodzic) { $rodzice["$($x.Rodzic)"] = $true } }
+  $liscie = @($wszystkie | Where-Object { (-not $rodzice.ContainsKey("$($_.Id)")) -and ($_.Kiedy -ne "nieuzywane") })
+  $st = @($liscie | Where-Object { $_.Trwalosc -eq "stala" }).Count
+  $tm = @($liscie | Where-Object { $_.Trwalosc -eq "tymczasowa" }).Count
+  $z += " Stałych $st, tymczasowych $tm (podwarstwy CLAUDE.md i pliki wiedzy liczone osobno)."
+  $zle = @($wszystkie | Where-Object { ($_.Stan -eq "brak") -or ($_.Stan -eq "blad") }).Count
+  if ($zle -gt 0) { $z += " Brak pliku albo błąd odczytu: $zle - zaznaczone na czerwono." }
+  return $z
+}
+
+# Etykieta podsumowania rosnie razem z tekstem - uciety koniec zdania bylby
+# ucieciem po cichu, a tego w tym projekcie nie wolno.
+function Dopasuj-Etykiete($l) {
+  if (-not $l -or $l.IsDisposed) { return }
+  try {
+    $szer = [math]::Max(200, $l.ClientSize.Width)
+    $roz = [System.Windows.Forms.TextRenderer]::MeasureText($l.Text, $l.Font,
+             (New-Object System.Drawing.Size($szer, 0)), [System.Windows.Forms.TextFormatFlags]::WordBreak)
+    $l.Height = $roz.Height + 10
+  } catch { Zanotuj-Wywrotke "dopasowanie wysokosci podsumowania warstw" $_ }
+}
+
+function Napelnij-Warstwy {
+  if (-not $script:ListaWarstw -or $script:ListaWarstw.IsDisposed) { return }
+  if ($null -eq $script:DaneWarstw) {
+    $script:LWarstwy.ForeColor = $script:KolSzary
+    $script:LWarstwy.Text = "Zbieram listę warstw pamięci..."
+    $script:Okno.Refresh()
+    try { $script:DaneWarstw = Warstwy-Pamieci }
+    catch {
+      Zanotuj-Wywrotke "lista warstw pamieci" $_
+      $script:DaneWarstw = [pscustomobject]@{ Warstwy = @(); Uwagi = @(); Powod = $_.Exception.Message; Wygenerowano = ""; TrybGlobalny = $null; Projekt = "" }
+    }
+  }
+  $dw = $script:DaneWarstw
+  $lv = $script:ListaWarstw
+  $lv.BeginUpdate()
+  try {
+    $lv.Items.Clear()
+    $lv.Groups.Clear()
+    if ($dw.Powod) {
+      $script:LWarstwy.ForeColor = $script:KolPilne
+      $script:LWarstwy.Text = "NIE UDAŁO SIĘ ZEBRAĆ LISTY WARSTW: $($dw.Powod)"
+      $script:PodgladWarstwy.Text = ("Lista warstw jest pusta, bo jej zebranie się nie udało - to nie znaczy, że warstw nie ma." + "`r`n`r`n" +
+        "Powód: $($dw.Powod)" + "`r`n`r`n" + "Spróbuj ręcznie:" + "`r`n" +
+        "powershell -ExecutionPolicy Bypass -File $(Join-Path $script:NadzZrodlo 'narzedzia\koszt-pamieci.ps1') -Warstwy")
+      return
+    }
+    $grupy = @{}
+    foreach ($k in $KOLEJNOSC_KIEDY) {
+      $g = New-Object System.Windows.Forms.ListViewGroup -ArgumentList @((Kiedy-Po-Ludzku $k), [System.Windows.Forms.HorizontalAlignment]::Left)
+      [void]$lv.Groups.Add($g)
+      $grupy[$k] = $g
+    }
+    foreach ($wa in @($dw.Warstwy)) {
+      $klucz = "$($wa.Kiedy)"
+      if (-not $grupy.ContainsKey($klucz)) {
+        # nieznany rodzaj "kiedy" nie znika - dostaje wlasna grupe
+        $g = New-Object System.Windows.Forms.ListViewGroup -ArgumentList @((Kiedy-Po-Ludzku $klucz), [System.Windows.Forms.HorizontalAlignment]::Left)
+        [void]$lv.Groups.Add($g)
+        $grupy[$klucz] = $g
+      }
+      $nazwa = "$($wa.Nazwa)"
+      if ($wa.Rodzic) { $nazwa = "      › " + $nazwa }
+      $it = New-Object System.Windows.Forms.ListViewItem -ArgumentList @(,[string]$nazwa)
+      [void]$it.SubItems.Add([string](Trwalosc-Po-Ludzku $wa.Trwalosc))
+      [void]$it.SubItems.Add([string](Rozmiar-Warstwy $wa))
+      $it.Group = $grupy[$klucz]
+      $it.Tag = $wa
+      $it.ToolTipText = "$($wa.Nazwa) - $($wa.Sciezka)"
+      if (($wa.Stan -eq "brak") -or ($wa.Stan -eq "blad")) { $it.ForeColor = $script:KolPilne }
+      elseif (($wa.Kiedy -eq "nieuzywane") -or ($wa.Stan -eq "nieaktywna") -or ($wa.Stan -eq "pusty")) { $it.ForeColor = $script:KolSzary }
+      [void]$lv.Items.Add($it)
+    }
+    $zd = Zdanie-Warstw $dw
+    $script:LWarstwy.ForeColor = $script:KolTekst
+    if (@($dw.Uwagi).Count -gt 0) {
+      $zd += " UWAGA: " + (@($dw.Uwagi) -join "; ")
+      $script:LWarstwy.ForeColor = $script:KolUwaga
+    }
+    $script:LWarstwy.Text = $zd
+    $pocz = @("Kliknij warstwę po lewej, żeby zobaczyć, co w niej jest.", "",
+              "Lista zebrana: $($dw.Wygenerowano). Projekt: $($dw.Projekt).")
+    if (@($dw.Uwagi).Count -gt 0) { $pocz += @("", "UWAGI:") + @($dw.Uwagi | ForEach-Object { "  - $_" }) }
+    $script:PodgladWarstwy.Lines = [string[]]$pocz
+  } finally {
+    $lv.EndUpdate()
+    Dopasuj-Etykiete $script:LWarstwy
+  }
+}
+
+# Podglad tylko do odczytu: naglowek z tym, co o warstwie wiadomo, pod nim tresc.
+# Podwarstwa i ladunek hooka pokazuja tekst z koszt-pamieci.ps1 (kawalek pliku
+# albo to, co hook naprawde wysyla), zwykly plik czytamy tutaj, katalog to lista
+# plikow, bazy nie wczytujemy wcale.
+function Pokaz-Podglad($wa) {
+  if (-not $script:PodgladWarstwy -or $script:PodgladWarstwy.IsDisposed -or -not $wa) { return }
+  $l = New-Object System.Collections.Generic.List[string]
+  $l.Add("$($wa.Nazwa)")
+  $l.Add("")
+  $l.Add("Wczytuje się:  " + (Kiedy-Po-Ludzku "$($wa.Kiedy)"))
+  $l.Add("Trwałość:      " + (Trwalosc-Po-Ludzku "$($wa.Trwalosc)"))
+  $l.Add("Kto pisze:     " + "$($wa.KtoPisze)")
+  $l.Add("Ścieżka:       " + "$($wa.Sciezka)")
+  $l.Add("Rozmiar:       " + (Rozmiar-Opisowy $wa))
+  if ($wa.Zmieniony) { $l.Add("Zmieniony:     " + "$($wa.Zmieniony)") }
+  $l.Add("Stan:          " + (Stan-Po-Ludzku "$($wa.Stan)"))
+  if ($wa.Opis) { $l.Add("Co to jest:    " + "$($wa.Opis)") }
+  $l.Add("")
+  $l.Add(("-" * 60))
+  $l.Add("")
+  $st = "$($wa.Stan)"
+  if (($st -eq "brak") -or ($st -eq "blad")) {
+    $l.Add("NIE MA CZEGO POKAZAĆ: $($wa.Brak)")
+  } elseif ($st -eq "nieaktywna") {
+    $l.Add("Teraz nic się nie dokleja: $($wa.Brak)")
+  } elseif ($st -eq "pusty") {
+    $l.Add("Warstwa jest pusta: $($wa.Brak)")
+  } elseif ($wa.Rodzaj -eq "baza") {
+    $l.Add("Bazy nie wczytuję do podglądu - to $(Rozmiar-Ludzki $wa.Bajty) danych. Model sięga do niej narzędziami lore_search i lore_context.")
+  } elseif ($wa.Rodzaj -eq "katalog") {
+    $l.Add("Pliki w katalogu ($(@($wa.Pliki).Count)):")
+    $l.Add("")
+    foreach ($pl in @($wa.Pliki)) { $l.Add(("{0,-30} {1,10}  {2}" -f "$($pl.Nazwa)", (Rozmiar-Ludzki $pl.Bajty), "$($pl.Zmieniony)")) }
+    $l.Add("")
+    $l.Add("Pliki .md z tego katalogu są na liście po lewej - kliknij, żeby zobaczyć treść.")
+  } elseif ("$($wa.Tresc)" -ne "") {
+    if ($wa.Rodzaj -eq "ladunek") {
+      $l.Add("Poniżej tekst, który hook naprawdę wysyła do modelu (pole additionalContext), a nie surowy JSON:")
+      $l.Add("")
+    }
+    $l.Add(("$($wa.Tresc)" -replace '\r?\n', "`r`n"))
+  } else {
+    if ($wa.Rodzaj -eq "doklejka") {
+      $l.Add("Samej doklejki nikt nie zapisuje - poniżej plik stanu, z którego korzysta:")
+      $l.Add("")
+    } elseif ($wa.Rodzaj -eq "ladunek") {
+      $l.Add("Nie udało się wyciągnąć tekstu, który hook wysyła - poniżej surowy plik:")
+      $l.Add("")
+    }
+    try {
+      $l.Add(([System.IO.File]::ReadAllText("$($wa.Sciezka)", [System.Text.Encoding]::UTF8) -replace '\r?\n', "`r`n"))
+    } catch {
+      Zanotuj-Wywrotke "podglad warstwy $($wa.Sciezka)" $_
+      $l.Add("NIE UDAŁO SIĘ ODCZYTAĆ PLIKU: $($_.Exception.Message)")
+    }
+  }
+  $script:PodgladWarstwy.Text = ($l -join "`r`n")
+  $script:PodgladWarstwy.SelectionStart = 0
+  $script:PodgladWarstwy.ScrollToCaret()
+}
+
 # Przelaczenie widoku. Szczegoly napelniaja sie przy wejsciu - chyba ze stoi
 # w nich odpowiedz na klikniecie (SzczegolyZajete), ktorej nie wolno podmienic.
+# Warstwy licza sie przy pierwszym wejsciu; nieudana proba liczy sie od nowa
+# przy nastepnym, zamiast zostawiac na ekranie stary blad.
 function Pokaz-Widok([string]$nazwa) {
   if (-not $script:Okno -or $script:Okno.IsDisposed) { return }
   $script:Widok = $nazwa
   $szcz = ($nazwa -eq "szczegoly")
+  $warst = ($nazwa -eq "warstwy")
+  $przeg = (-not ($szcz -or $warst))
   $script:WidokSzczegoly.Visible = $szcz
-  $script:WidokPrzeglad.Visible = (-not $szcz)
-  Styl-Przelacznika $script:BPrzeglad (-not $szcz)
+  $script:WidokWarstwy.Visible = $warst
+  $script:WidokPrzeglad.Visible = $przeg
+  Styl-Przelacznika $script:BPrzeglad $przeg
   Styl-Przelacznika $script:BSzczegoly $szcz
+  Styl-Przelacznika $script:BWarstwy $warst
   if ($szcz -and (-not $script:SzczegolyZajete)) { Napelnij-Szczegoly }
+  if ($warst) {
+    if ($script:DaneWarstw -and $script:DaneWarstw.Powod) { $script:DaneWarstw = $null }
+    if (($null -eq $script:DaneWarstw) -or ($script:ListaWarstw.Items.Count -eq 0)) { Napelnij-Warstwy }
+  }
 }
 
 # Przeliczenie BEZ zagladania do sieci - po nowsza wersje chodzi dozor, ktory
@@ -1646,9 +1911,11 @@ function Odswiez-Dane {
     $script:DaneCzas = [datetime]::Now
     $script:DaneBlad = $null
     $script:Rozbicie = $null
+    $script:DaneWarstw = $null
     if (($script:Widok -eq "szczegoly") -and (-not $script:SzczegolyZajete)) {
       Napelnij-Szczegoly
     }
+    if ($script:Widok -eq "warstwy") { Napelnij-Warstwy }
   } catch {
     # Cisza jest zakazana: nieudane przeliczenie MA byc widoczne w oknie jako
     # zolta karta, a nie schowane za starymi liczbami udajacymi biezace.
@@ -1742,14 +2009,20 @@ function Pokaz-Okno {
   $lTytul.Location = New-Object System.Drawing.Point(22, 12)
   $script:LPodtytul = Etykieta-Zawijana "Przeliczam, to potrwa kilka sekund..." $script:CzMala $script:KolSzary 560
   $script:LPodtytul.Location = New-Object System.Drawing.Point(25, 44)
+  # Trzy przyciski sie nie mieszcza obok podtytulu na wysokosci 20 - przelacznik
+  # stoi wiec wyzej (8), na jednej linii z tytulem, a podtytul (od 44) moze
+  # biec pod nim na cala szerokosc, bez przestawiania szerokosci okna.
   $przel = New-Object System.Windows.Forms.Panel
-  $przel.Size = New-Object System.Drawing.Size(214, 34)
-  $przel.Location = New-Object System.Drawing.Point(($script:SzerOkna - 24 - 214), 20)
+  $przel.Size = New-Object System.Drawing.Size(338, 34)
+  $przel.Location = New-Object System.Drawing.Point(($script:SzerOkna - 24 - 338), 8)
   $przel.BackColor = $script:TloPrzel
   $script:BPrzeglad  = Przycisk-Przelacznika "Przegląd" 3
   $script:BSzczegoly = Przycisk-Przelacznika "Szczegóły" 107
+  $script:BWarstwy   = Przycisk-Przelacznika "Warstwy pamięci" 211
+  $script:BWarstwy.Width = 124
   $przel.Controls.Add($script:BPrzeglad)
   $przel.Controls.Add($script:BSzczegoly)
+  $przel.Controls.Add($script:BWarstwy)
   $script:Naglowek.Controls.Add($lTytul)
   $script:Naglowek.Controls.Add($script:LPodtytul)
   $script:Naglowek.Controls.Add($przel)
@@ -1807,8 +2080,89 @@ function Pokaz-Okno {
   $kartaSz.Controls.Add($script:PoleSzczegoly)
   $script:WidokSzczegoly.Controls.Add($kartaSz)
 
+  # Widok warstw pamieci: zdanie podsumowania u gory, pod nim dwie biale karty -
+  # lista warstw pogrupowana wedlug tego, kiedy sie wczytuja, i podglad tylko
+  # do odczytu. Ten sam obszar co pozostale widoki, okno nie rosnie.
+  $script:WidokWarstwy = New-Object System.Windows.Forms.Panel
+  $script:WidokWarstwy.Dock = [System.Windows.Forms.DockStyle]::Fill
+  $script:WidokWarstwy.BackColor = $script:TloOkna
+  $script:WidokWarstwy.Padding = New-Object System.Windows.Forms.Padding(24, 4, 24, 12)
+  $script:WidokWarstwy.Visible = $false
+
+  $script:LWarstwy = New-Object System.Windows.Forms.Label
+  $script:LWarstwy.AutoSize = $false
+  $script:LWarstwy.UseMnemonic = $false
+  $script:LWarstwy.Dock = [System.Windows.Forms.DockStyle]::Top
+  $script:LWarstwy.Height = 44
+  $script:LWarstwy.Font = $script:CzZwyklaGruba
+  $script:LWarstwy.ForeColor = $script:KolTekst
+  $script:LWarstwy.BackColor = [System.Drawing.Color]::Transparent
+  $script:LWarstwy.Text = "Zbieram listę warstw pamięci..."
+
+  $cialoW = New-Object System.Windows.Forms.Panel
+  $cialoW.Dock = [System.Windows.Forms.DockStyle]::Fill
+  $cialoW.BackColor = $script:TloOkna
+
+  $kartaLista = New-Object System.Windows.Forms.Panel
+  $kartaLista.Dock = [System.Windows.Forms.DockStyle]::Left
+  $kartaLista.Width = 392
+  $kartaLista.BackColor = $script:TloKarty
+  $kartaLista.Padding = New-Object System.Windows.Forms.Padding(1)
+  $kartaLista.Add_Paint({ param($nadawca, $e) Obrysuj $nadawca $e })
+  $script:ListaWarstw = New-Object System.Windows.Forms.ListView
+  $script:ListaWarstw.View = [System.Windows.Forms.View]::Details
+  $script:ListaWarstw.FullRowSelect = $true
+  $script:ListaWarstw.HideSelection = $false
+  $script:ListaWarstw.MultiSelect = $false
+  $script:ListaWarstw.ShowGroups = $true
+  $script:ListaWarstw.ShowItemToolTips = $true
+  $script:ListaWarstw.HeaderStyle = [System.Windows.Forms.ColumnHeaderStyle]::Nonclickable
+  $script:ListaWarstw.BorderStyle = [System.Windows.Forms.BorderStyle]::None
+  $script:ListaWarstw.Font = $script:CzZwykla
+  $script:ListaWarstw.BackColor = $script:TloKarty
+  $script:ListaWarstw.ForeColor = $script:KolTekst
+  $script:ListaWarstw.Dock = [System.Windows.Forms.DockStyle]::Fill
+  [void]$script:ListaWarstw.Columns.Add("Warstwa", 212)
+  [void]$script:ListaWarstw.Columns.Add("Trwałość", 80)
+  [void]$script:ListaWarstw.Columns.Add("Rozmiar", 76)
+  $kartaLista.Controls.Add($script:ListaWarstw)
+
+  $odstepW = New-Object System.Windows.Forms.Panel
+  $odstepW.Dock = [System.Windows.Forms.DockStyle]::Left
+  $odstepW.Width = 10
+  $odstepW.BackColor = $script:TloOkna
+
+  $kartaPodglad = New-Object System.Windows.Forms.Panel
+  $kartaPodglad.Dock = [System.Windows.Forms.DockStyle]::Fill
+  $kartaPodglad.BackColor = $script:TloKarty
+  $kartaPodglad.Padding = New-Object System.Windows.Forms.Padding(12, 10, 4, 4)
+  $kartaPodglad.Add_Paint({ param($nadawca, $e) Obrysuj $nadawca $e })
+  $script:PodgladWarstwy = New-Object System.Windows.Forms.TextBox
+  $script:PodgladWarstwy.Multiline = $true
+  $script:PodgladWarstwy.ReadOnly = $true
+  # CLAUDE.md i mapa potrafia miec po kilkadziesiat tysiecy znakow - domyslny
+  # sufit pola (32 767) nie ma prawa uciac konca pliku po cichu
+  $script:PodgladWarstwy.MaxLength = [int]::MaxValue
+  $script:PodgladWarstwy.WordWrap = $true
+  $script:PodgladWarstwy.BorderStyle = [System.Windows.Forms.BorderStyle]::None
+  $script:PodgladWarstwy.ScrollBars = [System.Windows.Forms.ScrollBars]::Vertical
+  $script:PodgladWarstwy.Font = $script:CzStala
+  $script:PodgladWarstwy.BackColor = $script:TloKarty
+  $script:PodgladWarstwy.ForeColor = $script:KolTekst
+  $script:PodgladWarstwy.Dock = [System.Windows.Forms.DockStyle]::Fill
+  $kartaPodglad.Controls.Add($script:PodgladWarstwy)
+
+  # Dokowanie od ostatnio dodanej: wypelniajacy podglad pierwszy, potem odstep,
+  # na koncu lista - ona dokuje sie pierwsza, czyli najbardziej z lewej.
+  $cialoW.Controls.Add($kartaPodglad)
+  $cialoW.Controls.Add($odstepW)
+  $cialoW.Controls.Add($kartaLista)
+  $script:WidokWarstwy.Controls.Add($cialoW)
+  $script:WidokWarstwy.Controls.Add($script:LWarstwy)
+
   # Kolejnosc dodawania ma znaczenie: WinForms dokuje od ostatnio dodanej
   # kontrolki, wiec wypelniajace widoki ida PIERWSZE, a naglowek i pasek po nich.
+  $f.Controls.Add($script:WidokWarstwy)
   $f.Controls.Add($script:WidokSzczegoly)
   $f.Controls.Add($script:WidokPrzeglad)
   $f.Controls.Add($script:Naglowek)
@@ -1822,6 +2176,8 @@ function Pokaz-Okno {
     $script:Pasek = $null; $script:BAktualizuj = $null; $script:LAktualizuj = $null
     $script:BCykl = $null; $script:LCykl = $null
     $script:PanelZmian = $null; $script:LinkZmian = $null
+    $script:BWarstwy = $null; $script:WidokWarstwy = $null; $script:LWarstwy = $null
+    $script:ListaWarstw = $null; $script:PodgladWarstwy = $null; $script:DaneWarstw = $null
     $script:Widok = "przeglad"
     $script:SzczegolyZajete = $false
   })
@@ -1836,6 +2192,23 @@ function Pokaz-Okno {
     if ($script:Widok -eq "szczegoly") { return }
     $script:SzczegolyZajete = $false
     Pokaz-Widok "szczegoly"
+  })
+  $script:BWarstwy.Add_Click({
+    if ($script:Widok -eq "warstwy") { return }
+    $script:SzczegolyZajete = $false
+    Pokaz-Widok "warstwy"
+  })
+  # Klikniecie warstwy pokazuje jej tresc po prawej. Wywrotka podgladu idzie
+  # do dziennika i na ekran - nie zostawia starego podgladu udajacego nowy.
+  $script:ListaWarstw.Add_SelectedIndexChanged({
+    try {
+      if ($script:ListaWarstw.SelectedItems.Count -gt 0) { Pokaz-Podglad $script:ListaWarstw.SelectedItems[0].Tag }
+    } catch {
+      Zanotuj-Wywrotke "podglad warstwy pamieci" $_
+      if ($script:PodgladWarstwy -and -not $script:PodgladWarstwy.IsDisposed) {
+        $script:PodgladWarstwy.Text = "NIE UDAŁO SIĘ POKAZAĆ TEJ WARSTWY: $($_.Exception.Message)"
+      }
+    }
   })
 
   # Przycisk bezpieczny - NIE pyta o zgode, bo nie wydaje ani jednego tokena.
