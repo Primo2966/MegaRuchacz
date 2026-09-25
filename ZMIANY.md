@@ -4,6 +4,12 @@ Każda zmiana wypychana na gita dostaje tu wpis. Numer rośnie wg zasady:
 pierwsza cyfra — przebudowa łamiąca zgodność, druga — nowa funkcja,
 trzecia — poprawka.
 
+## 0.20.1 — 2026-09-25
+
+- **Automat nie flaguje już ścieżek z drugiego komputera.** Ścieżka opisana jako
+  „na domowej”, „w domu” albo „przem” nie dostaje znacznika „niepotwierdzone” tylko
+  dlatego, że nie ma jej na tym komputerze.
+
 ## 0.20.0 — 2026-09-24
 
 - **Nauka czyta tylko najsilniejszy sygnał.** Z Twoich wiadomości bierze wyłącznie
