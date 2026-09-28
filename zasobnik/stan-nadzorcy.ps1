@@ -1065,10 +1065,11 @@ function Dzien-Ludzko($data) {
 # z bufora, za ulamek zwyklej ceny. To samo z przypomnieniem - zostaje w historii.
 # Podpisy mowia to slowami, BEZ przeliczania: liczby sa te same, co w rachunku.
 #
-# Zdania "pamiec to ok. 1% tego, co model czyta w sesji" tu NIE MA z rozmyslem.
-# Dalo by sie je policzyc z pola usage w transkryptach, ale nie tanio przy
-# otwarciu okna (pojedynczy transkrypt ma do 138 MB), a liczba wpisana na sztywno
-# zaczelaby klamac przy pierwszej zmianie. Gdy powstanie pomiar - tu jest miejsce.
+# PROCENT CALOSCI obok liczby tokenow (od 28.09.2026, na zyczenie uzytkownika:
+# "nie wiem, czy to duzo"). Calosc otwarcia sesji mierzy koszt-pamieci.ps1
+# w transkryptach Claude Code i oddaje w -Dane (udzial.calosc, udzial.start,
+# udzial.wiadomosc). Tu tylko dzielimy. Bez zmierzonej calosci procentu nie ma
+# - Ogon mowi wtedy szaro, dlaczego (udzial.powod), bez alarmu.
 function Trzy-Liczby($rachunek, $cykl) {
   $naWiadomosc = [pscustomobject]@{
     Naglowek = "MegaRuchacz dokleja do każdej wiadomości"
@@ -1117,6 +1118,22 @@ function Trzy-Liczby($rachunek, $cykl) {
       $naSesje.Powod = "rachunek nie umie zmierzyć tego, co wchodzi na starcie sesji"
     } else {
       $naSesje.Powod = "w odpowiedzi rachunku nie ma tej liczby: $l"
+    }
+
+    # Procent calego otwarcia sesji obok kazdej z dwoch liczb.
+    $calosc = Liczba-Z-Klucza $rachunek.Klucze "udzial.calosc"
+    if (($null -ne $calosc) -and ($calosc -gt 0)) {
+      if ($null -ne $naWiadomosc.Liczba) {
+        $naWiadomosc.Ogon = "= $(Procent-Ludzko $naWiadomosc.Liczba $calosc) otwarcia sesji; zostają w rozmowie do końca"
+      }
+      if ($null -ne $naSesje.Liczba) {
+        $naSesje.Ogon = "= $(Procent-Ludzko $naSesje.Liczba $calosc) otwarcia sesji, reszta to sam Claude Code; zostają w rozmowie do końca"
+      }
+    } else {
+      # Powod (udzial.powod) stoi na karcie "Otwarcie sesji" - tu wystarczy zdanie.
+      $bez = "procentu nie ma - nie zmierzono całości otwarcia sesji, dlatego nie porównuję"
+      $naWiadomosc.Ogon = $bez
+      $naSesje.Ogon = $bez
     }
   }
 
@@ -1214,6 +1231,13 @@ function Alarm-Z-Rachunku($a, $o) {
       $porada = ("To stan plików na teraz, nie koszt jednego dnia: tyle tekstu wchodzi przy każdym otwarciu sesji " +
                  "(próg $(Liczba-Ludzka $a.Prog)). Najczęściej pomaga skrócenie sekcji 'Co wiem' w pliku z wiedzą. Co urosło - w zakładce Szczegóły.")
     }
+    "otwarcie" {
+      # Od 28.09.2026 prog jest procentem calego otwarcia sesji, a nie liczba
+      # tokenow - "7 500 tokenow" nic uzytkownikowi nie mowilo.
+      $tytul = "MegaRuchacz to już $($a.Liczba)% otwarcia sesji (próg $($a.Prog)%)"
+      $porada = ("Tyle z tego, co model dostaje na start każdej sesji, dokłada MegaRuchacz - resztę sam Claude Code. " +
+                 "To stan plików na teraz, nie koszt jednego dnia. Najczęściej pomaga skrócenie sekcji 'Co wiem'. Co urosło - w zakładce Szczegóły.")
+    }
     "udzial" {
       $tytul = "MegaRuchacz: jedna pozycja to $($a.Liczba)% rachunku"
       $porada = "Stan plików na teraz. Skracanie czegokolwiek innego nic nie da. Która to pozycja - w zakładce Szczegóły."
@@ -1224,6 +1248,11 @@ function Alarm-Z-Rachunku($a, $o) {
       if ($m.Success) { $od = $m.Groups[1].Value }
       $tytul = "MegaRuchacz: start sesji urósł o $($a.Liczba)% od $od"
       $porada = "Tyle więcej tekstu wchodzi teraz przy każdym otwarciu sesji niż przy pomiarze z $od. Co doszło - w zakładce Szczegóły."
+      # Skok przy udziale ponizej progu przychodzi jako informacja (waga "info"):
+      # widac go, ale udzial w calym otwarciu sesji wciaz jest maly.
+      if ($a.Waga -eq "info") {
+        $porada = "Udział MegaRuchacza w całym otwarciu sesji nadal jest poniżej progu, więc to tylko informacja. Co doszło - w zakładce Szczegóły."
+      }
     }
     "cykl-zwykly" {
       $tytul = "MegaRuchacz: nauka $kiedy ~$(Okolo $a.Liczba) tokenów za zwykły dzień"
