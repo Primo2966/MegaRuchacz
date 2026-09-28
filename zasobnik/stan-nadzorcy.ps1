@@ -695,7 +695,7 @@ function Pomiar-Startu {
   $j = $null
   try { $j = $tekst | ConvertFrom-Json }
   catch {
-    Zanotuj-Wywrotke "odczyt pomiaru otwarcia sesji" $_
+    Zanotuj-Wywrotke "odczyt pomiaru otwarcia okna rozmowy" $_
     $w.Powod = "koszt-pamieci.ps1 -Start oddał coś, co nie jest JSON-em: $($_.Exception.Message)"
     return $w
   }
@@ -711,7 +711,7 @@ function Pomiar-Startu {
   $w.MrWiadomosc = $j.MegaRuchaczWiadomosc
   $w.MrWorker = $j.MegaRuchaczWorker
   if ((-not $w.Powod) -and ((-not $w.Sesje) -or ($null -eq $w.Sesje.Mediana))) {
-    $w.Powod = "pomiar nie oddał mediany sesji (kod $($r.kod))"
+    $w.Powod = "pomiar nie oddał mediany z rozmów (kod $($r.kod))"
   }
   return $w
 }
@@ -800,7 +800,15 @@ function Proc-Sesji($tokeny, $o) {
 function Jak-Sesji($tokeny, $o) {
   $p = Proc-Sesji $tokeny $o
   if (-not $p) { return "" }
-  return "jak $p jednej sesji"
+  return "jak $p otwarcia okna rozmowy"
+}
+
+# P16 (28.09.2026): "+115 przy kazdej wiadomosci" po ludzku - to stala doplata,
+# nie zalezy od dlugosci wiadomosci (przypomnienie zasad ma zawsze te sama tresc).
+# Bez pomiaru przypomnienia zdania nie ma - zadnego "0" zamiast "nie wiem".
+function Zdanie-Wiadomosci($start) {
+  if (-not $start -or ($null -eq $start.MrWiadomosc)) { return "" }
+  return "Te +$(Liczba-Ludzka ([long]$start.MrWiadomosc)) to stała dopłata MegaRuchacza do każdej Twojej wiadomości - tyle samo, czy piszesz dwa słowa, czy długi tekst."
 }
 
 # WERDYKT NA SAMEJ GORZE PRZEGLADU (P15). Uzytkownik: "ma byc jasno jak dla
@@ -826,13 +834,13 @@ function Werdykt-Kosztu($start, $rachunek, $cykl) {
   $o = Opis-Startu $start
   if ($cykl -and ($null -ne $cykl.Koszt)) {
     $js = Jak-Sesji $cykl.Koszt $o
-    if ($js) { $w.Nauka = "Osobno, raz dziennie, czyta Twoje rozmowy, żeby się z nich uczyć - ostatnio za tyle, co $(Proc-Sesji $cykl.Koszt $o) jednego otwarcia sesji (karty niżej)." }
+    if ($js) { $w.Nauka = "Osobno, raz dziennie, czyta Twoje rozmowy, żeby się z nich uczyć - ostatnio za tyle, co $(Proc-Sesji $cykl.Koszt $o) jednego otwarcia okna rozmowy (karty niżej)." }
   }
   if (-not $o.Zmierzone) {
     $w.Stan = "nie wiadomo"
     $w.Zdanie = "Nie wiadomo, czy MegaRuchacz kosztuje dużo, czy mało."
-    $w.Wyjasnienie = "Nie zmierzono, ile kosztuje cała rozmowa z Claude, bo $($o.Powod) - więc nie ma do czego porównać."
-    if (($null -ne $o.Mr) -and ($o.Mr -gt 0)) { $w.Wyjasnienie += " Sam MegaRuchacz dokłada ok. $(Okolo $o.Mr) tokenów na start każdej rozmowy." }
+    $w.Wyjasnienie = "Nie zmierzono, ile Claude wczytuje przy otwarciu nowego okna rozmowy, bo $($o.Powod) - więc nie ma do czego porównać."
+    if (($null -ne $o.Mr) -and ($o.Mr -gt 0)) { $w.Wyjasnienie += " Sam MegaRuchacz dokłada ok. $(Okolo $o.Mr) tokenów przy każdym otwarciu okna rozmowy." }
     return $w
   }
   $w.Proc = $o.MrProc
@@ -843,16 +851,16 @@ function Werdykt-Kosztu($start, $rachunek, $cykl) {
     elseif (-not $rachunek) { $pw = "rachunek MegaRuchacza się nie policzył" }
     $w.Stan = "nie wiadomo"
     $w.Zdanie = "Nie wiadomo, czy MegaRuchacz kosztuje dużo, czy mało."
-    $w.Wyjasnienie = "Jego część to $($o.MrProc) otwarcia sesji, ale nie znam progu, od którego jest drogo ($pw)."
+    $w.Wyjasnienie = "Jego część to $($o.MrProc) otwarcia okna rozmowy, ale nie znam progu, od którego jest drogo ($pw)."
     return $w
   }
   if ((100.0 * [double]$o.UdzialMr) -gt [double]$w.Prog) {
     $w.Stan = "duzo"
-    $w.Zdanie = "MegaRuchacz kosztuje dużo: $($o.MrProc) tego, co i tak płacisz za każdą rozmowę z Claude."
+    $w.Zdanie = "MegaRuchacz kosztuje dużo: dokłada $($o.MrProc) do tego, co Claude wczytuje przy każdym otwarciu nowego okna rozmowy."
     $w.Wyjasnienie = "Drogo robi się już od $($w.Prog)% - warto odchudzić jego zasady albo wiedzę (co ile waży, pokazuje zakładka Szczegóły)."
   } else {
     $w.Stan = "malo"
-    $w.Zdanie = "MegaRuchacz kosztuje mało: $($o.MrProc) tego, co i tak płacisz za każdą rozmowę z Claude."
+    $w.Zdanie = "MegaRuchacz kosztuje mało: dokłada $($o.MrProc) do tego, co Claude wczytuje przy każdym otwarciu nowego okna rozmowy."
     $w.Wyjasnienie = "Drogo byłoby dopiero od $($w.Prog)%."
   }
   return $w
@@ -1260,15 +1268,15 @@ function Alarm-Z-Rachunku($a, $o) {
                  "(próg $(Liczba-Ludzka $a.Prog)). Która pozycja urosła - w zakładce Szczegóły.")
     }
     "sesja" {
-      $tytul = "MegaRuchacz: każda sesja startuje z ~$(Liczba-Ludzka $a.Liczba) tokenami"
-      $porada = ("To stan plików na teraz, nie koszt jednego dnia: tyle tekstu wchodzi przy każdym otwarciu sesji " +
+      $tytul = "MegaRuchacz: każde otwarcie okna rozmowy to ~$(Liczba-Ludzka $a.Liczba) jego tokenów"
+      $porada = ("To stan plików na teraz, nie koszt jednego dnia: tyle tekstu wchodzi przy każdym otwarciu okna rozmowy " +
                  "(próg $(Liczba-Ludzka $a.Prog)). Najczęściej pomaga skrócenie sekcji 'Co wiem' w pliku z wiedzą. Co urosło - w zakładce Szczegóły.")
     }
     "otwarcie" {
       # Od 28.09.2026 prog jest procentem calego otwarcia sesji, a nie liczba
       # tokenow - "7 500 tokenow" nic uzytkownikowi nie mowilo.
-      $tytul = "MegaRuchacz to już $($a.Liczba)% otwarcia sesji (próg $($a.Prog)%)"
-      $porada = ("Tyle z tego, co model dostaje na start każdej sesji, dokłada MegaRuchacz - resztę sam Claude Code. " +
+      $tytul = "MegaRuchacz to już $($a.Liczba)% otwarcia okna rozmowy (próg $($a.Prog)%)"
+      $porada = ("Tyle z tego, co Claude wczytuje przy każdym otwarciu okna rozmowy, dokłada MegaRuchacz - resztę sam Claude Code. " +
                  "To stan plików na teraz, nie koszt jednego dnia. Najczęściej pomaga skrócenie sekcji 'Co wiem'. Co urosło - w zakładce Szczegóły.")
     }
     "udzial" {
@@ -1279,12 +1287,12 @@ function Alarm-Z-Rachunku($a, $o) {
       $m = [regex]::Match($a.Okres, '(\d\d\.\d\d)')
       $od = "poprzedniego pomiaru"
       if ($m.Success) { $od = $m.Groups[1].Value }
-      $tytul = "MegaRuchacz: start sesji urósł o $($a.Liczba)% od $od"
-      $porada = "Tyle więcej tekstu wchodzi teraz przy każdym otwarciu sesji niż przy pomiarze z $od. Co doszło - w zakładce Szczegóły."
+      $tytul = "MegaRuchacz: jego część otwarcia okna rozmowy urosła o $($a.Liczba)% od $od"
+      $porada = "Tyle więcej tekstu wchodzi teraz przy każdym otwarciu okna rozmowy niż przy pomiarze z $od. Co doszło - w zakładce Szczegóły."
       # Skok przy udziale ponizej progu przychodzi jako informacja (waga "info"):
       # widac go, ale udzial w calym otwarciu sesji wciaz jest maly.
       if ($a.Waga -eq "info") {
-        $porada = "Udział MegaRuchacza w całym otwarciu sesji nadal jest poniżej progu, więc to tylko informacja. Co doszło - w zakładce Szczegóły."
+        $porada = "Udział MegaRuchacza w całym otwarciu okna rozmowy nadal jest poniżej progu, więc to tylko informacja. Co doszło - w zakładce Szczegóły."
       }
     }
     "cykl-zwykly" {

@@ -367,7 +367,7 @@ function Napisy-Przyciskow($d, $start = $null) {
   } elseif ($null -ne $s.Tokeny) {
     $o = $null
     if ($start) {
-      try { $o = Opis-Startu $start } catch { Zanotuj-Wywrotke "opis otwarcia sesji do napisu przycisku" $_ }
+      try { $o = Opis-Startu $start } catch { Zanotuj-Wywrotke "opis otwarcia okna rozmowy do napisu przycisku" $_ }
     }
     $js = Jak-Sesji $s.Tokeny $o
     if ($js) {
@@ -375,7 +375,7 @@ function Napisy-Przyciskow($d, $start = $null) {
       $n.CyklOpis = "Nie musisz - robi to sam raz dziennie. To ok. $(Liczba-Ludzka $s.Tokeny) tokenów; zapyta o zgodę i pokaże, skąd ta liczba."
     } else {
       $n.Cykl = "Przeczytaj teraz nowe rozmowy (~$(Liczba-Ludzka $s.Tokeny) tokenów)"
-      $n.CyklOpis = "Nie musisz - robi to sam raz dziennie. Procentu nie ma, bo nie zmierzono otwarcia sesji. Zapyta o zgodę."
+      $n.CyklOpis = "Nie musisz - robi to sam raz dziennie. Procentu nie ma, bo nie zmierzono otwarcia okna rozmowy. Zapyta o zgodę."
     }
   } else {
     $n.Cykl = "Przeczytaj teraz nowe rozmowy (koszt: nie wiem)"
@@ -396,14 +396,16 @@ function Skladniki-Mr($start, $o) {
   $lista = @()
   if (-not $start -or -not $o -or -not $o.Zmierzone) { return ,$lista }
   foreach ($x in @(
-      @("raz na start rozmowy: zasady i wiedza o Tobie i firmie", $start.MrStart, ""),
-      @("przy każdej Twojej wiadomości: przypomnienie zasad", $start.MrWiadomosc, "+"))) {
+      @("raz na start rozmowy: zasady i wiedza o Tobie i firmie", $start.MrStart, "", ""),
+      @("przy każdej Twojej wiadomości: przypomnienie zasad", $start.MrWiadomosc, "+", "stała dopłata - tyle samo, czy piszesz dwa słowa, czy długi tekst"))) {
     $liczba = "nie wiem"; $proc = ""
     if ($null -ne $x[1]) {
       $liczba = "$($x[2])$(Liczba-Ludzka ([long]$x[1]))"
       $proc = Procent-Drobny ([double]$x[1]) ([double]$o.Razem)
     }
-    $lista += [pscustomobject]@{ Napis = $x[0]; Liczba = $liczba; Proc = $proc }
+    $uw = ""
+    if ($null -ne $x[1]) { $uw = $x[3] }
+    $lista += [pscustomobject]@{ Napis = $x[0]; Liczba = $liczba; Proc = $proc; Uwaga = $uw }
   }
   return ,$lista
 }
@@ -457,23 +459,25 @@ function Zbuduj-Przod($d, $problemy, $czas, $start) {
     $l += ""
   }
 
-  $l += "OTWARCIE SESJI   (w oknie: karta z dużą liczbą i paskiem - MegaRuchacz kontra sam Claude Code)"
+  $l += "OTWARCIE OKNA ROZMOWY   (w oknie: karta z dużą liczbą i paskiem - MegaRuchacz kontra sam Claude Code)"
   $os = $null
-  try { $os = Opis-Startu $start } catch { Zanotuj-Wywrotke "otwarcie sesji do wydruku" $_ }
+  try { $os = Opis-Startu $start } catch { Zanotuj-Wywrotke "otwarcie okna rozmowy do wydruku" $_ }
   if (-not $os) {
     $l += "  NIE UDALO SIE ZLOZYC - szczegoly w dzienniku nadzorcy"
   } elseif (-not $os.Zmierzone) {
     $l += "  nie zmierzono, bo $($os.Powod)."
     if ($null -ne $os.Mr) { $l += "  sama część MegaRuchacza (z rachunku): ~$(Liczba-Ludzka $os.Mr) tokenów - procentu nie ma, bo nie ma całości" }
   } else {
-    $l += "  Otwarcie sesji: ~$(Okolo $os.Razem) tokenów. Z tego MegaRuchacz: $(Okolo $os.Mr) ($($os.MrProc)) · Claude Code sam: $(Okolo $os.Cc) ($($os.CcProc))"
+    $l += "  Otwarcie okna rozmowy: ~$(Okolo $os.Razem) tokenów. Z tego MegaRuchacz: $(Okolo $os.Mr) ($($os.MrProc)) · Claude Code sam: $(Okolo $os.Cc) ($($os.CcProc))"
     foreach ($sk in (Skladniki-Mr $start $os)) { $l += "      $($sk.Napis): $($sk.Liczba)   ($($sk.Proc))" }
+    $zw = Zdanie-Wiadomosci $start
+    if ($zw) { $l += "      $zw" }
     $l += "  $($os.Portfel)"
     $l += "  $($os.Podstawa) $($os.Zakres)   (drobnym drukiem)"
   }
   $l += ""
 
-  $l += "NAUKA Z ROZMÓW   (w oknie: karta na całą szerokość pod otwarciem sesji)"
+  $l += "NAUKA Z ROZMÓW   (w oknie: karta na całą szerokość pod otwarciem okna rozmowy)"
   $r = $null; $c = $null
   if ($d) { $r = $d.Rachunek; $c = $d.Cykl }
   $trzy = @()
@@ -485,7 +489,7 @@ function Zbuduj-Przod($d, $problemy, $czas, $start) {
       $ogon = ""
       if ($t.Ogon) { $ogon = "   ($($t.Ogon))" }
       if ($os -and $os.Zmierzone -and ($os.Razem -gt 0)) {
-        $l += "  |   ~$(Procent-Drobny ([double]$t.Liczba) ([double]$os.Razem)) jednego otwarcia sesji  (duża liczba w oknie)"
+        $l += "  |   ~$(Procent-Drobny ([double]$t.Liczba) ([double]$os.Razem)) otwarcia okna rozmowy  (duża liczba w oknie)"
       }
       $l += "  |   ~$(Liczba-Ludzka $t.Liczba) tokenów$ogon"
       if ($t.Znacznik) {
@@ -504,7 +508,7 @@ function Zbuduj-Przod($d, $problemy, $czas, $start) {
   $st = $null
   try { $st = Statystyka-Okna $r }
   catch { Zanotuj-Wywrotke "statystyka nauki do wydruku" $_ }
-  $l += "KOSZT CZYTANIA ROZMÓW - OSTATNIE 30 DNI   (w oknie: dalszy ciąg karty nauki, wykres słupkowy w procentach jednej sesji - $(Opis-Rysownika))"
+  $l += "KOSZT CZYTANIA ROZMÓW - OSTATNIE 30 DNI   (w oknie: dalszy ciąg karty nauki, wykres słupkowy w procentach otwarcia okna rozmowy - $(Opis-Rysownika))"
   if (-not $st) {
     $l += "  NIE UDALO SIE ZLOZYC STATYSTYKI - szczegoly w dzienniku nadzorcy"
   } else {
@@ -571,7 +575,7 @@ function Linie-Statystyki($st, $rachunek, $o = $null) {
   } else {
     $l += "  (wykres bez słupków - w oknie w jego miejscu stoi zdanie niżej)"
   }
-  if (-not (Proc-Sesji 1 $o)) { $l += "  (procentów nie ma, bo nie zmierzono otwarcia sesji - w oknie oś w tysiącach tokenów)" }
+  if (-not (Proc-Sesji 1 $o)) { $l += "  (procentów nie ma, bo nie zmierzono otwarcia okna rozmowy - w oknie oś w tysiącach tokenów)" }
   $l += ("  Ostatnie 7 dni: {0}   |   ostatnie {1} dni: {2}" -f (Koszt-Po-Ludzku $st.Suma7 $o), $st.OknoDni, (Koszt-Po-Ludzku $st.Suma30 $o))
   if ($null -ne $st.Srednia) {
     $l += ("  Średnio na dzień nauki: {0} (z {1} {2})" -f (Koszt-Po-Ludzku $st.Srednia $o), $st.SredniaDni, (Odmiana $st.SredniaDni 'dnia' 'dni' 'dni'))
@@ -610,8 +614,8 @@ function Koszt-Po-Ludzku($n, $o) {
 function Zdanie-Progu($st, $o) {
   if (-not $st -or ($null -eq $st.Prog)) { return "" }
   $p = Proc-Sesji $st.Prog $o
-  if ($p) { return "Drogo robi się, gdy zwykły dzień kosztuje ponad $p jednej sesji ($(Liczba-Ludzka $st.Prog) tokenów)." }
-  return "Drogo robi się, gdy zwykły dzień kosztuje ponad $(Liczba-Ludzka $st.Prog) tokenów."
+  if ($p) { return "Drogo, gdy zwykły dzień przekracza $p otwarcia okna rozmowy ($(Liczba-Ludzka $st.Prog) tokenów)." }
+  return "Drogo, gdy zwykły dzień przekracza $(Liczba-Ludzka $st.Prog) tokenów."
 }
 
 # SZCZEGOLY JAKO SEKCJE, NIE SCIANA TEKSTU (przebudowane 25.09.2026). Uzytkownik:
@@ -661,6 +665,11 @@ function Dodaj-Tabele($s, $kolumny, $wiersze) {
 # a "KAZDEJ" i "kazdej" to dwa rozne slowa w wydruku. Porownanie jest dokladne.
 $SLOWA_Z_OGONKAMI = @(
   @("uczenie sie na wczesniejszych rozmowach", "nauka z wcześniejszych rozmów"),
+  # P16: "sesja" nic uzytkownikowi nie mowi - jednostka jest otwarcie okna rozmowy.
+  # Frazy przed pojedynczymi slowami; koszt-pamieci.ps1 zostaje, jak byl.
+  @("przy starcie sesji", "przy otwarciu okna rozmowy"), @("na start sesji", "przy otwarciu okna rozmowy"),
+  @("start sesji", "otwarcie okna rozmowy"), @("otwarcia sesji", "otwarcia okna rozmowy"),
+  @("otwarciu sesji", "otwarciu okna rozmowy"), @("ostatnich sesji", "ostatnich rozmów"),
   @("KAZDEJ", "każdej"), @("kazdej", "każdej"), @("wiadomosci", "wiadomości"), @("wiadomosc", "wiadomość"),
   @("tokenow", "tokenów"), @("RAZ NA DOBE", "raz na dobę"), @("RAZ", "raz"), @("uczenie sie", "nauka"),
   @("wczesniejszych", "wcześniejszych"), @("stala", "stała"), @("biezaca", "bieżąca"), @("dzis", "dziś"),
@@ -691,7 +700,7 @@ function Po-Polsku([string]$t) {
 # otwarcia sesji nikt nie mierzy, a procent od sesji Claude Code bylby falszywy.
 function Dodaj-Rozbicie($s, $rozbicie, $o = $null) {
   $kol = @(@{ N = "Pozycja"; S = 250 }, @{ N = "Udział"; S = 170; Pasek = $true }, @{ N = "Tokeny"; S = 100; P = $true },
-           @{ N = ""; S = 60; P = $true }, @{ N = "% otwarcia sesji"; S = 130; P = $true }, @{ N = "Uwaga"; S = 0 })
+           @{ N = ""; S = 60; P = $true }, @{ N = "% otwarcia okna rozmowy"; S = 180; P = $true }, @{ N = "Uwaga"; S = 0 })
   $wiersze = @()
   $zrzuc = {
     if ($wiersze.Count -gt 0) { Dodaj-Tabele $s $kol $wiersze; Set-Variable -Name wiersze -Value @() -Scope 1 }
@@ -746,19 +755,19 @@ function Sekcje-Szczegolow($d, $wywrotkiNadzorcy, $rozbicie, $start) {
       if ($waga -eq "pilne") { $etyk = "Wymaga działania"; $kol = "pilne" }
       elseif ($waga -eq "info") { $etyk = "Dla informacji"; $kol = "uwaga" }
       Dodaj-Wiersz $s $etyk (Bez-Przedrostka $a.Tytul) $kol
-      Dodaj-Wiersz $s "" "$($a.Tresc)" "szary"
+      Dodaj-Wiersz $s "" (Po-Polsku "$($a.Tresc)") "szary"
     }
   }
   if ($d -and $d.Rachunek -and $d.Rachunek.Linia) {
-    Dodaj-Wiersz $s "Linia rachunku" "$($d.Rachunek.Linia)" "szary"
-    Dodaj-Wiersz $s "" "ta sama, którą strażnik pokazuje przy starcie sesji" "szary"
+    Dodaj-Wiersz $s "Linia rachunku" (Po-Polsku "$($d.Rachunek.Linia)") "szary"
+    Dodaj-Wiersz $s "" "te same liczby, które strażnik pokazuje przy otwarciu okna rozmowy" "szary"
   }
   $lista += $s
 
-  # 2. Otwarcie sesji - skad liczby z karty na Przegladzie.
-  $s = Nowa-Sekcja "Otwarcie sesji - skąd ta liczba" "Ile tokenów wchodzi do modelu przy pierwszej wiadomości w sesji i jaka część z tego to MegaRuchacz."
+  # 2. Otwarcie okna rozmowy - skad liczby z karty na Przegladzie.
+  $s = Nowa-Sekcja "Otwarcie okna rozmowy - skąd ta liczba" "Ile tokenów Claude wczytuje, gdy otwierasz nowe okno rozmowy (liczone przy pierwszej wiadomości), i jaka część z tego to MegaRuchacz."
   $o = $null
-  try { $o = Opis-Startu $start } catch { Zanotuj-Wywrotke "opis otwarcia sesji do szczegolow" $_ }
+  try { $o = Opis-Startu $start } catch { Zanotuj-Wywrotke "opis otwarcia okna rozmowy do szczegolow" $_ }
   if (-not $start) {
     Dodaj-Tekst $s "Jeszcze nie zmierzone - pomiar rusza przy otwarciu okna." "szary"
   } elseif (-not $o -or -not $o.Zmierzone) {
@@ -767,17 +776,17 @@ function Sekcje-Szczegolow($d, $wywrotkiNadzorcy, $rozbicie, $start) {
     Dodaj-Wiersz $s "Całość" "nie zmierzono, bo $pw" "uwaga"
     if ($o -and ($null -ne $o.Mr)) { Dodaj-Wiersz $s "MegaRuchacz (rachunek)" "~$(Liczba-Ludzka $o.Mr) tokenów - bez całości nie ma z czego policzyć procentu" }
   } else {
-    Dodaj-Wiersz $s "Razem na otwarcie" "~$(Liczba-Ludzka $o.Razem) tokenów (mediana z $($o.Sesji) sesji)"
+    Dodaj-Wiersz $s "Razem na otwarcie" "~$(Liczba-Ludzka $o.Razem) tokenów (mediana z $($o.Sesji) $(Odmiana $o.Sesji 'rozmowy' 'rozmów' 'rozmów'))"
     # Bez rozbicia na start + przypomnienie (P14): te dwie liczby stoja jako
     # naglowki w sekcji "Rachunek za pamiec" tuz nizej - drugi raz tu tylko mylil.
-    Dodaj-Wiersz $s "MegaRuchacz" "~$(Liczba-Ludzka $o.Mr) tokenów ($($o.MrProc)) - start sesji i przypomnienie doklejone do pierwszej wiadomości; każdą pozycję pokazuje sekcja niżej"
+    Dodaj-Wiersz $s "MegaRuchacz" "~$(Liczba-Ludzka $o.Mr) tokenów ($($o.MrProc)) - to, co dokłada przy otwarciu okna rozmowy, i przypomnienie doklejone do pierwszej wiadomości; każdą pozycję pokazuje sekcja niżej"
     Dodaj-Wiersz $s "Claude Code sam" "~$(Liczba-Ludzka $o.Cc) tokenów ($($o.CcProc)) - jego instrukcje, opisy narzędzi (także z serwerów MCP), lista skilli"
     # "(22%)" to udzial w starcie WORKERA, nie w otwarciu sesji - dopisujemy to wprost (P15)
     if ($o.Worker) { Dodaj-Wiersz $s "Start workera" (($o.WorkerZdanie -replace '^Start jednego workera: ', '') -replace '\((\d+%)\)', '($1 startu workera)') }
     else { Dodaj-Wiersz $s "Start workera" ($o.WorkerZdanie -replace '^Start jednego workera: ', '') "uwaga" }
     Dodaj-Wiersz $s "Jak to zmierzone" ("W każdym transkrypcie Claude Code pierwsza odpowiedź modelu ma pole usage: suma input_tokens, " +
       "cache_creation_input_tokens i cache_read_input_tokens to cały kontekst w tej chwili. Od tego odejmuję Twoją pierwszą wiadomość " +
-      "(jej znaki / 3) i biorę medianę z ostatnich sesji.") "szary"
+      "(jej znaki / 3) i biorę medianę z ostatnich rozmów.") "szary"
     Dodaj-Wiersz $s "" "Część MegaRuchacza to rachunek narzędzia (znaki / 3 - szacunek), całość to prawdziwe liczby z transkryptów." "szary"
     Dodaj-Wiersz $s "Transkrypty" "$($start.Katalog)" "szary"
     $ws = @()
@@ -791,7 +800,7 @@ function Sekcje-Szczegolow($d, $wywrotkiNadzorcy, $rozbicie, $start) {
       $ws += ,@($kiedy, $proj, (Liczba-Ludzka $x.Kontekst), (Liczba-Ludzka $x.BezWiadomosci))
     }
     if ($ws.Count -gt 0) {
-      Dodaj-Podtytul $s "Sesje, z których jest mediana"
+      Dodaj-Podtytul $s "Rozmowy, z których jest mediana"
       Dodaj-Tabele $s @(@{ N = "Kiedy"; S = 110 }, @{ N = "Projekt"; S = 0 }, @{ N = "Kontekst"; S = 110; P = $true }, @{ N = "Bez Twojej wiadomości"; S = 170; P = $true }) $ws
     }
     $ww = @()
@@ -848,7 +857,7 @@ function Sekcje-Szczegolow($d, $wywrotkiNadzorcy, $rozbicie, $start) {
       $dni += ,@($x.Dzien.ToString('yyyy-MM-dd'), (Liczba-Ludzka $x.Razem), (Proc-Sesji $x.Razem $o), (Liczba-Ludzka $x.Zwykle), (Liczba-Ludzka $x.Nadrabianie), (Liczba-Ludzka $x.Nieznane))
     }
     if ($dni.Count -gt 0) {
-      Dodaj-Tabele $s @(@{ N = "Dzień"; S = 120 }, @{ N = "Razem"; S = 110; P = $true }, @{ N = "% otwarcia sesji"; S = 140; P = $true }, @{ N = "Zwykły dzień"; S = 120; P = $true },
+      Dodaj-Tabele $s @(@{ N = "Dzień"; S = 120 }, @{ N = "Razem"; S = 110; P = $true }, @{ N = "% otwarcia okna rozmowy"; S = 190; P = $true }, @{ N = "Zwykły dzień"; S = 120; P = $true },
                         @{ N = "Nadrabianie"; S = 120; P = $true }, @{ N = "Okres nieznany"; S = 130; P = $true }) $dni
     } else {
       Dodaj-Tekst $s "Jeszcze nie ma ani jednego dnia z kosztem." "szary"
@@ -1048,7 +1057,7 @@ if ($Raz -or $Raport) {
     $d = Zbierz-Wszystko $true $true
     $probl = Zbierz-Problemy $d $stare "" ([datetime]::Now)
     $start = $null
-    try { $start = Pomiar-Startu } catch { Zanotuj-Wywrotke "pomiar otwarcia sesji" $_ }
+    try { $start = Pomiar-Startu } catch { Zanotuj-Wywrotke "pomiar otwarcia okna rozmowy" $_ }
     $roz = @()
     try { $roz = Rachunek-Rozbicie }
     catch { Zanotuj-Wywrotke "rachunek za pamiec (rozbicie)" $_; $roz = @("  NIE UDALO SIE POLICZYC - szczegoly w dzienniku nadzorcy") }
@@ -1097,7 +1106,7 @@ if ($Raz -or $Raport) {
   Write-Output ""
   $probl = Zbierz-Problemy $d $stare "" ([datetime]::Now)
   $start = $null
-  try { $start = Pomiar-Startu } catch { Zanotuj-Wywrotke "pomiar otwarcia sesji" $_ }
+  try { $start = Pomiar-Startu } catch { Zanotuj-Wywrotke "pomiar otwarcia okna rozmowy" $_ }
   $roz = @()
   try { $roz = Rachunek-Rozbicie }
   catch { Zanotuj-Wywrotke "rachunek za pamiec (rozbicie)" $_; $roz = @("  NIE UDALO SIE POLICZYC - szczegoly w dzienniku nadzorcy") }
@@ -1640,6 +1649,12 @@ function Wiersz-Skladnika-Startu($panel, $sk) {
   $p.Size = New-Object System.Drawing.Size(110, 20)
   $p.TextAlign = [System.Drawing.ContentAlignment]::TopRight
   $w.Controls.Add($p)
+  # P16: "+115 przy kazdej wiadomosci" po ludzku, w tym samym wierszu - bez nowej linii
+  if ($sk.Uwaga) {
+    $u = Etykieta "- $($sk.Uwaga)" $script:CzMala $script:KolSzary
+    $u.Margin = New-Object System.Windows.Forms.Padding(16, 0, 0, 0)
+    $w.Controls.Add($u)
+  }
   $panel.Controls.Add($w)
 }
 
@@ -1657,7 +1672,7 @@ function Rysuj-Pasek-Startu($g, $rozmiar) {
       $g.FillRectangle($mr, 0, 0, $szerMr, $h)
     } finally { $cc.Dispose(); $mr.Dispose() }
   } catch {
-    if (-not $script:RysowanieZawiodlo) { $script:RysowanieZawiodlo = $true; Zanotuj-Wywrotke "rysowanie paska otwarcia sesji" $_ }
+    if (-not $script:RysowanieZawiodlo) { $script:RysowanieZawiodlo = $true; Zanotuj-Wywrotke "rysowanie paska otwarcia okna rozmowy" $_ }
   }
 }
 
@@ -1665,9 +1680,18 @@ function Odmaluj-Start {
   if (-not $script:KartaStart -or $script:KartaStart.IsDisposed) { return }
   Wyczysc-Panel $script:KartaStart
   $szer = $script:SzerKarty - 44
-  $tyt = Etykieta "Otwarcie sesji" $script:CzGruba $script:KolTekst
+  $tyt = Etykieta "Otwarcie okna rozmowy - nasza miara 100%" $script:CzGruba $script:KolTekst
   $script:KartaStart.Controls.Add($tyt)
-  $pod = Etykieta-Zawijana "Co Claude wczytuje na starcie każdej nowej rozmowy, zanim napiszesz pierwsze słowo - i ile z tego dokłada MegaRuchacz." $script:CzMala $script:KolSzary $szer
+  # P16 (28.09.2026): uzytkownik nie wie, co to "sesja" - dla niego to okno, w ktorym
+  # pisze, a pisac mozna dwa slowa albo miliony tokenow. Jednostka jest wiec to, co
+  # Claude wczytuje przy OTWARCIU nowego okna rozmowy, i tu, raz, stoi to wprost.
+  $ileTxt = "swoje instrukcje"
+  $o = $null
+  if ($null -ne $script:Start) {
+    try { $o = Opis-Startu $script:Start } catch { Zanotuj-Wywrotke "opis otwarcia okna rozmowy" $_ }
+  }
+  if ($o -and $o.Zmierzone) { $ileTxt = "~$(Okolo $o.Razem) tokenów swoich instrukcji" }
+  $pod = Etykieta-Zawijana "Za każdym razem, gdy otwierasz nowe okno rozmowy z Claude, zanim napiszesz słowo, Claude wczytuje $ileTxt. To nasza miara 100%." $script:CzMala $script:KolSzary $szer
   $pod.Margin = New-Object System.Windows.Forms.Padding(0, 0, 0, 8)
   $script:KartaStart.Controls.Add($pod)
 
@@ -1675,8 +1699,6 @@ function Odmaluj-Start {
     $script:KartaStart.Controls.Add((Etykieta-Zawijana "Liczę, ile Claude wczytuje na starcie rozmowy - to potrwa kilka sekund..." $script:CzZwykla $script:KolSzary $szer))
     return
   }
-  $o = $null
-  try { $o = Opis-Startu $script:Start } catch { Zanotuj-Wywrotke "opis otwarcia sesji" $_ }
   if (-not $o -or -not $o.Zmierzone) {
     $pw = "nie wiadomo dlaczego - to samo w sobie jest usterką"
     if ($o -and $o.Powod) { $pw = $o.Powod }
@@ -1684,7 +1706,7 @@ function Odmaluj-Start {
     $script:KartaStart.Controls.Add((Etykieta-Zawijana "Nie zmierzono, bo $pw." $script:CzZwykla $script:KolUwaga $szer))
     if ($o -and ($null -ne $o.Mr)) {
       $czescMr = "Sama część MegaRuchacza (z rachunku): ~$(Liczba-Ludzka $o.Mr) tokenów."
-      if ($o.Mr -le 0) { $czescMr = "Rachunek MegaRuchacza też nie znalazł nic doklejanego do sesji - powód jest w zakładce Szczegóły." }
+      if ($o.Mr -le 0) { $czescMr = "Rachunek MegaRuchacza też nie znalazł nic doklejanego przy otwarciu okna rozmowy - powód jest w zakładce Szczegóły." }
       $x = Etykieta-Zawijana ("$czescMr " +
         "Bez zmierzonej całości nie da się powiedzieć, jaki to procent - dlatego procentu tu nie ma.") $script:CzZwykla $script:KolSzary $szer
       $x.Margin = New-Object System.Windows.Forms.Padding(0, 6, 0, 0)
@@ -1698,7 +1720,7 @@ function Odmaluj-Start {
   $duza = Etykieta ("~" + (Okolo $o.Razem)) $script:CzDuza $script:KolTekst
   $duza.Margin = New-Object System.Windows.Forms.Padding(0, 0, 6, 0)
   $wiersz.Controls.Add($duza)
-  $jed = Etykieta "tokenów na start każdej rozmowy - to jest 100%" $script:CzZwykla $script:KolSzary
+  $jed = Etykieta "tokenów przy każdym otwarciu okna rozmowy - to jest 100%" $script:CzZwykla $script:KolSzary
   $jed.Margin = New-Object System.Windows.Forms.Padding(0, 14, 0, 0)
   $wiersz.Controls.Add($jed)
   $script:KartaStart.Controls.Add($wiersz)
@@ -1779,7 +1801,7 @@ function Opis-Dnia-Wykresu($d) {
   if ($d.Nadrabianie -gt 0) { $cz += "rozmowy z kilku dni naraz" }
   if ($d.Nieznane -gt 0)    { $cz += "nie wiadomo, z których dni" }
   $proc = ""
-  if ($script:WykresProc) { $proc = "jak $(Procent-Drobny ([double]$d.Razem) ($script:WykresDz * 100.0)) jednej sesji, " }
+  if ($script:WykresProc) { $proc = "jak $(Procent-Drobny ([double]$d.Razem) ($script:WykresDz * 100.0)) otwarcia okna rozmowy, " }
   return "$($d.Dzien.ToString('dd.MM')): $proc$(Liczba-Ludzka $d.Razem) tokenów ($($cz -join ' + '))"
 }
 
@@ -1808,7 +1830,7 @@ function Nowy-Chart($st) {
   $ob.AxisY.Interval = $skala / 2.0
   if ($script:WykresProc) {
     $ob.AxisY.LabelStyle.Format = "0.#'%'"
-    $ob.AxisY.Title = "% jednej sesji"
+    $ob.AxisY.Title = "% otwarcia`nokna rozmowy"
   } else {
     $ob.AxisY.LabelStyle.Format = "0"
     $ob.AxisY.Title = "tys. tokenów"
@@ -2048,7 +2070,7 @@ function Kafelek-Liczby($t, $o) {
       $duza = Etykieta ("~" + (Procent-Drobny ([double]$t.Liczba) ([double]$o.Razem))) $script:CzDuza $script:KolTekst
       $ogonTxt = ""
       if ($t.Ogon) { $ogonTxt = ", $($t.Ogon)" }
-      $jedTxt = "jednego otwarcia sesji - tyle kosztuje jedno takie czytanie ($(Liczba-Ludzka $t.Liczba) tokenów$ogonTxt)"
+      $jedTxt = "otwarcia okna rozmowy - tyle kosztuje jedno takie czytanie ($(Liczba-Ludzka $t.Liczba) tokenów$ogonTxt)"
     } else {
       $duza = Etykieta ("~" + (Liczba-Ludzka $t.Liczba)) $script:CzDuza $script:KolTekst
       $jedTxt = "tokenów"
@@ -2061,7 +2083,7 @@ function Kafelek-Liczby($t, $o) {
     $k.Controls.Add($w)
     $pod = @()
     if (-not $zProcentem) {
-      $pod += "procentu nie ma, bo nie zmierzono otwarcia sesji (karta wyżej)"
+      $pod += "procentu nie ma, bo nie zmierzono otwarcia okna rozmowy (karta wyżej)"
       if ($t.Ogon) { $pod += $t.Ogon }
       $k.Controls.Add((Etykieta-Zawijana ($pod -join ", ") $script:CzMala $script:KolSzary $szer))
     }
@@ -2107,7 +2129,7 @@ function Odmaluj-Liczby {
   }
   $o = $null
   if ($script:Start) {
-    try { $o = Opis-Startu $script:Start } catch { Zanotuj-Wywrotke "opis otwarcia sesji do karty nauki" $_ }
+    try { $o = Opis-Startu $script:Start } catch { Zanotuj-Wywrotke "opis otwarcia okna rozmowy do karty nauki" $_ }
   }
   $script:PanelLiczby.Controls.Add((Kafelek-Liczby $t $o))
 }
@@ -2142,7 +2164,7 @@ function Odmaluj-Statystyke {
   $szer = $script:SzerKarty - 44
   $o = $null
   if ($script:Start) {
-    try { $o = Opis-Startu $script:Start } catch { Zanotuj-Wywrotke "opis otwarcia sesji do wykresu" $_ }
+    try { $o = Opis-Startu $script:Start } catch { Zanotuj-Wywrotke "opis otwarcia okna rozmowy do wykresu" $_ }
   }
   Ustaw-Miare-Wykresu $o
 
@@ -2212,7 +2234,7 @@ function Odmaluj-Statystyke {
   }
   if ($st.DniZDanymi -gt 0) { $script:KartaStat.Controls.Add($leg) }
   if (-not $script:WykresProc) {
-    $u = Etykieta-Zawijana "Oś w tysiącach tokenów, bo nie zmierzono otwarcia sesji (karta wyżej) - bez niego nie ma procentów." $script:CzMala $script:KolUwaga $szer
+    $u = Etykieta-Zawijana "Oś w tysiącach tokenów, bo nie zmierzono otwarcia okna rozmowy (karta wyżej) - bez niego nie ma procentów." $script:CzMala $script:KolUwaga $szer
     $u.Margin = New-Object System.Windows.Forms.Padding(0, 4, 0, 0)
     $script:KartaStat.Controls.Add($u)
   }
@@ -2423,7 +2445,7 @@ $KOLEJNOSC_KIEDY = @("start", "wiadomosc", "zadanie", "nieuzywane")
 
 function Kiedy-Po-Ludzku([string]$k) {
   switch ($k) {
-    "start"      { return "Raz, przy starcie sesji" }
+    "start"      { return "Raz, przy otwarciu okna rozmowy" }
     "wiadomosc"  { return "Przy każdej wiadomości" }
     "zadanie"    { return "Tylko na żądanie" }
     "nieuzywane" { return "Nieużywane - nikt ich nie wczytuje" }
@@ -2490,7 +2512,7 @@ function Rozmiar-Opisowy($wa) {
       $js = ""
       if ("$($wa.Nazwa)" -notmatch 'tylko Codex') {
         $o = $null
-        try { if ($script:Start) { $o = Opis-Startu $script:Start } } catch { Zanotuj-Wywrotke "opis otwarcia sesji do warstwy" $_ }
+        try { if ($script:Start) { $o = Opis-Startu $script:Start } } catch { Zanotuj-Wywrotke "opis otwarcia okna rozmowy do warstwy" $_ }
         $js = Jak-Sesji $wa.Tokeny $o
       }
       if ($js) { $t += " (~$(Liczba-Ludzka $wa.Tokeny) tokenów, $js)" }
@@ -2517,7 +2539,7 @@ function Zdanie-Warstw($dw) {
   foreach ($k in $KOLEJNOSC_KIEDY) {
     $n = @($glowne | Where-Object { $_.Kiedy -eq $k }).Count
     switch ($k) {
-      "start"      { $czesci += "$n przy starcie sesji" }
+      "start"      { $czesci += "$n przy otwarciu okna rozmowy" }
       "wiadomosc"  { $czesci += "$n przy każdej wiadomości" }
       "zadanie"    { $czesci += "$n tylko na żądanie" }
       "nieuzywane" { if ($n -gt 0) { $czesci += "$n $(Odmiana $n 'nieużywana' 'nieużywane' 'nieużywanych')" } }
@@ -2768,7 +2790,7 @@ function Odswiez-Dane {
     $script:Rozbicie = $null
     $script:DaneWarstw = $null
     try { $script:Start = Pomiar-Startu }
-    catch { Zanotuj-Wywrotke "pomiar otwarcia sesji" $_; $script:Start = [pscustomobject]@{ Powod = "pomiar się wywrócił: $($_.Exception.Message)"; MrSesja = $null } }
+    catch { Zanotuj-Wywrotke "pomiar otwarcia okna rozmowy" $_; $script:Start = [pscustomobject]@{ Powod = "pomiar się wywrócił: $($_.Exception.Message)"; MrSesja = $null } }
     if (($script:Widok -eq "szczegoly") -and (-not $script:SzczegolyZajete)) {
       Napelnij-Szczegoly
     }
@@ -3116,7 +3138,7 @@ function Pokaz-Okno {
     $t = @()
     if ($s -and ($null -ne $s.Tokeny)) {
       $js = ""
-      try { $js = Jak-Sesji $s.Tokeny (Opis-Startu $script:Start) } catch { Zanotuj-Wywrotke "procent sesji w pytaniu o zgode" $_ }
+      try { $js = Jak-Sesji $s.Tokeny (Opis-Startu $script:Start) } catch { Zanotuj-Wywrotke "procent otwarcia okna rozmowy w pytaniu o zgode" $_ }
       if ($js) { $js = " - $js" }
       $t += "Przeczytanie nowych rozmów będzie kosztować około $(Liczba-Ludzka $s.Tokeny) tokenów$js."
       $t += "Nie musisz tego robić - MegaRuchacz czyta rozmowy sam raz dziennie. Ten przycisk robi to tylko wcześniej."
@@ -3125,7 +3147,7 @@ function Pokaz-Okno {
       if ($s -and $s.Powod) { $t += "Powód: $($s.Powod)." }
       if ($script:Dane -and $script:Dane.Cykl -and ($null -ne $script:Dane.Cykl.Koszt)) {
         $jp = ""
-        try { $jp = Jak-Sesji $script:Dane.Cykl.Koszt (Opis-Startu $script:Start) } catch { Zanotuj-Wywrotke "procent sesji w pytaniu o zgode" $_ }
+        try { $jp = Jak-Sesji $script:Dane.Cykl.Koszt (Opis-Startu $script:Start) } catch { Zanotuj-Wywrotke "procent otwarcia okna rozmowy w pytaniu o zgode" $_ }
         if ($jp) { $jp = " ($jp)" }
         $t += "Poprzednie czytanie kosztowało ~$(Liczba-Ludzka $script:Dane.Cykl.Koszt) tokenów$jp - takiego rzędu liczby się spodziewaj."
       }
@@ -3228,7 +3250,7 @@ $menu.Items.Add((Nowa-Pozycja "Przelicz liczby teraz (nic nie kosztuje)" {
     $script:DaneBlad = $null
     $script:Rozbicie = $null
     try { $script:Start = Pomiar-Startu }
-    catch { Zanotuj-Wywrotke "pomiar otwarcia sesji" $_; $script:Start = [pscustomobject]@{ Powod = "pomiar się wywrócił: $($_.Exception.Message)"; MrSesja = $null } }
+    catch { Zanotuj-Wywrotke "pomiar otwarcia okna rozmowy" $_; $script:Start = [pscustomobject]@{ Powod = "pomiar się wywrócił: $($_.Exception.Message)"; MrSesja = $null } }
     $script:Ikona.Text = Podpowiedz $d
     Odmaluj-Okno
     Pokaz-Dymek "MegaRuchacz: przeliczone" "Liczby sa swieze. Kliknij ikone, zeby je zobaczyc."
