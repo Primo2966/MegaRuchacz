@@ -151,6 +151,14 @@ $LINII_DZIENNIKA = 200
 # data policzenia i znacznik dnia, w ktorym poszedl pelniejszy meldunek. Osobny
 # plik, bo plik stanu zasad jest przepisywany w calosci przy kazdej zmianie skrotow.
 $plikKosztu = Join-Path $KatalogDomowy ".claude\.megaruchacz-koszt.txt"
+# To samo dla Codeksa - OSOBNY plik, bo od 0.21.3 kazde narzedzie ma wlasny
+# rachunek (koszt-pamieci.ps1 -Narzedzie). Do 0.21.2 Codex dostawal linie
+# Claude Code, czyli liczbe, ktorej jego model w ogole nie placi.
+$plikKosztuCodex = Join-Path $KatalogDomowy ".claude\.megaruchacz-koszt-codex.txt"
+# Liczenie obu rachunkow trwa kilka sekund (zmierzone 28.09: ~1 s na narzedzie).
+# Proba sprzed wiecej niz tylu minut, po ktorej w pliku nie ma swiezej linii,
+# to przeliczenie, ktore sie wywrocilo - wtedy "przeliczam" byloby klamstwem.
+$MINUT_NA_PRZELICZENIE = 5
 # Rozbicie rachunku na pozycje - kilkanascie linii, wiec osobny plik, a nie klucz
 # w pliku podrecznym (tamten trzyma "klucz: wartosc", po jednej linii na wartosc).
 # Liczy je koszt-pamieci.ps1 -Rozbicie w tle, pokazujemy raz dziennie.
@@ -1910,16 +1918,21 @@ function Pilnuj-Wersji {
 # jest ucinane, 1 gdy cokolwiek jest. Starsza wersja skryptu potrafi zwrocic co
 # innego - bierzemy wtedy pierwsza niepusta linie i kod, jaki dostaniemy. Nic
 # z tego nie ma prawa wywrocic otwarcia sesji.
-function Policz-Koszt {
+#
+# $narzedzie: "Claude" albo "Codex" - kazde narzedzie ma wlasny rachunek i wlasny
+# plik podreczny. Starsza wersja skryptu bez -Narzedzie wywroci sie na nieznanym
+# parametrze - to trafia do wywrotek, a nie w cisze.
+function Policz-Koszt([string]$narzedzie = "Claude") {
   $skrypt = Join-Path $Zrodlo "narzedzia\koszt-pamieci.ps1"
   if (-not (Test-Path $skrypt)) { return $null }
+  $odcisk = Odcisk-Rachunku
   $kod = 0
   $wy = @()
   try {
     $global:LASTEXITCODE = 0
-    $wy = @(& $skrypt -KatalogDomowy $KatalogDomowy -Zwiezle 2>$null)
+    $wy = @(& $skrypt -KatalogDomowy $KatalogDomowy -Zwiezle -Narzedzie $narzedzie 2>$null)
     $kod = $LASTEXITCODE
-  } catch { Zanotuj-Wywrotke "liczenie rachunku za pamiec" $_; return $null }
+  } catch { Zanotuj-Wywrotke "liczenie rachunku za pamiec ($narzedzie)" $_; return $null }
   $linia = ""
   foreach ($l in $wy) {
     $t = "$l".Trim()
@@ -1927,7 +1940,64 @@ function Policz-Koszt {
   }
   if (-not $linia) { return $null }
   if ($null -eq $kod) { $kod = 0 }
-  return [ordered]@{ linia = $linia; kod = [int]$kod }
+  return [ordered]@{ linia = $linia; kod = [int]$kod; skrypt = $odcisk }
+}
+
+# Odcisk skryptu liczacego. Linia w pliku podrecznym jest wazna TYLKO z tym samym
+# odciskiem: 28.09.2026 po zmianie rachunku (911d5a0) okno pokazywalo przez dwie
+# godziny linie policzona stara wersja ("ALARM: ... prog 300"), bo data miescila
+# sie w $GODZIN_MIEDZY_KOSZTAMI. Stara liczba z innego rachunku to nie liczba
+# "troche nieswieza", tylko inna liczba - nie pokazujemy jej wcale.
+# "" = nie da sie policzyc odcisku (wtedy zadna linia nie jest wazna).
+function Odcisk-Rachunku {
+  $skrypt = Join-Path $Zrodlo "narzedzia\koszt-pamieci.ps1"
+  if (-not (Test-Path $skrypt)) { return "" }
+  try { return (Get-FileHash -Algorithm SHA256 -LiteralPath $skrypt -ErrorAction Stop).Hash.Substring(0, 16) }
+  catch { Zanotuj-Wywrotke "odcisk skryptu rachunku" $_; return "" }
+}
+
+# Odczyt linii z pliku podrecznego razem z ocena, czy wolno ja pokazac.
+# Zwraca linie = $null i powod, gdy jej nie ma, gdy policzyl ja inny rachunek
+# (inny odcisk skryptu) albo gdy jest starsza niz $GODZIN_KOSZT_STARY - liczba
+# sprzed ponad doby opisuje juz inna konfiguracje. Miedzy $GODZIN_MIEDZY_KOSZTAMI
+# a $GODZIN_KOSZT_STARY linia idzie dalej, ale z godzina (Ogon-Wieku).
+function Czytaj-Rachunek($plik) {
+  $stan = Czytaj-Klucze $plik
+  $w = [ordered]@{ linia = $null; kod = 0; kiedy = [datetime]::MinValue; swieza = $false; powod = "" }
+  if ($stan["kod"] -match '^\d+$') { $w.kod = [int]$stan["kod"] }
+  $kiedy = [datetime]::MinValue
+  $jestData = [datetime]::TryParse($stan["data"], [ref]$kiedy)
+  $w.kiedy = $kiedy
+  $odcisk = Odcisk-Rachunku
+  if (-not $stan["linia"]) {
+    $w.powod = "nie ma jeszcze policzonej liczby"
+  } elseif ((-not $odcisk) -or ($stan["skrypt"] -ne $odcisk)) {
+    $w.powod = "zapisana liczba jest z poprzedniej wersji rachunku, wiec jej nie pokazuje"
+  } elseif (-not $jestData) {
+    $w.powod = "zapisana liczba nie ma daty, wiec jej nie pokazuje"
+  } elseif (([datetime]::Now - $kiedy).TotalHours -gt $GODZIN_KOSZT_STARY) {
+    $w.powod = "zapisana liczba jest z $($kiedy.ToString('yyyy-MM-dd HH:mm')), sprzed ponad doby, wiec jej nie pokazuje"
+  } else {
+    $w.linia = $stan["linia"]
+    $w.swieza = (([datetime]::Now - $kiedy).TotalHours -le $GODZIN_MIEDZY_KOSZTAMI)
+  }
+  return $w
+}
+
+# Zdanie zamiast linii, gdy linii nie wolno pokazac. Gdy ostatnie zamowione
+# przeliczenie (znacznik "proba") jest starsze niz $MINUT_NA_PRZELICZENIE i nie
+# zostawilo waznej linii, mowimy wprost, ze sie nie udalo - "przeliczam" przy
+# liczeniu, ktore sie wywraca, byloby ta sama cisza, tylko ladniej ubrana.
+function Zdanie-Przeliczania($rach, [string]$kiedyBedzie) {
+  $tekst = "MegaRuchacz: rachunek za pamiec agenta sie przelicza ($($rach.powod)) - liczba bedzie $kiedyBedzie."
+  $stan = Czytaj-Klucze $plikKosztu
+  $probowano = [datetime]::MinValue
+  if ([datetime]::TryParse($stan["proba"], [ref]$probowano) -and
+      $probowano -gt $rach.kiedy -and ([datetime]::Now - $probowano).TotalMinutes -gt $MINUT_NA_PRZELICZENIE) {
+    $tekst += (" UWAGA: przeliczenie zamowione $($probowano.ToString('yyyy-MM-dd HH:mm')) nie zapisalo nowej liczby - " +
+               "pelny rachunek recznie: powershell -File $Zrodlo\narzedzia\koszt-pamieci.ps1")
+  }
+  return $tekst
 }
 
 # Rozbicie na pozycje - to samo liczenie, tylko dluzsze wyjscie. Idzie z -Projekt,
@@ -1952,12 +2022,13 @@ function Zapisz-Rozbicie($blok) {
 
 # Zapis do pliku podrecznego. Znacznik dziennego meldunku przezywa przeliczenie -
 # inaczej pelniejszy raport wracalby po kazdym odswiezeniu liczby.
-function Zapisz-Koszt($wynik) {
-  $stare = Czytaj-Klucze $plikKosztu
+function Zapisz-Koszt($wynik, $plik = $plikKosztu) {
+  $stare = Czytaj-Klucze $plik
   $stan = [ordered]@{
-    data  = (Get-Date -Format 'yyyy-MM-dd HH:mm:ss')
-    kod   = $wynik.kod
-    linia = $wynik.linia
+    data   = (Get-Date -Format 'yyyy-MM-dd HH:mm:ss')
+    kod    = $wynik.kod
+    linia  = $wynik.linia
+    skrypt = $wynik.skrypt
   }
   # "pelny" i "pelny.codex" - znaczniki dziennego meldunku, osobne dla kazdego
   # narzedzia, bo uzytkownik Codeksa ma zobaczyc rozbicie takze wtedy, gdy tego
@@ -1966,7 +2037,19 @@ function Zapisz-Koszt($wynik) {
     if ($k -like "pelny*") { $stan[$k] = $stare[$k] }
   }
   if ($stare["proba"]) { $stan["proba"] = $stare["proba"] }
-  try { Zapisz-Klucze $plikKosztu $stan } catch { Zanotuj-Wywrotke "zapis podrecznego rachunku" $_ }
+  try { Zapisz-Klucze $plik $stan } catch { Zanotuj-Wywrotke "zapis podrecznego rachunku" $_ }
+}
+
+# Oba rachunki naraz - Claude Code i Codex, kazdy do swojego pliku. Liczymy oba
+# niezaleznie od tego, ktore okno zamowilo przeliczenie: to sekundy w procesie,
+# na ktory nikt nie czeka, a drugie narzedzie dostaje swieza liczbe za darmo.
+function Policz-I-Zapisz-Koszty {
+  $claude = Policz-Koszt "Claude"
+  if ($claude) { Zapisz-Koszt $claude $plikKosztu }
+  $codex = Policz-Koszt "Codex"
+  if ($codex) { Zapisz-Koszt $codex $plikKosztuCodex }
+  # do dziennika trybu -Tlo: trend rachunku Codeksa ma tam tak samo lezec
+  if ($codex) { Notuj "koszt pamieci Codeksa: $($codex.linia)" }
 }
 
 # Odpala liczenie osobnym procesem i NIE czeka na wynik - to jest cala sztuczka,
@@ -2066,38 +2149,32 @@ function Zglos-Koszt {
   if ($Tlo) {
     # W tle nikt nie czeka na otwarcie okna, wiec liczymy na miejscu - i przy
     # okazji odswiezamy liczbe oraz rozbicie, z ktorych skorzystaja nastepne okna.
-    $swieze = Policz-Koszt
-    if ($swieze) { Zapisz-Koszt $swieze }
+    Policz-I-Zapisz-Koszty
     Zapisz-Rozbicie (Policz-Rozbicie)
   }
 
-  $stan = Czytaj-Klucze $plikKosztu
-  $linia = $stan["linia"]
-  $kod = 0
-  if ($stan["kod"] -match '^\d+$') { $kod = [int]$stan["kod"] }
+  # Rachunek Claude Code - to okno jest oknem Claude Code (hook SessionStart
+  # z ~\.claude\settings.json), a w -Tlo linia idzie do dziennika jako trend.
+  $rach = Czytaj-Rachunek $plikKosztu
+  $linia = $rach.linia
+  $kod = $rach.kod
+  $kiedy = $rach.kiedy
 
-  $kiedy = [datetime]::MinValue
-  $godzin = [double]::MaxValue
-  if ([datetime]::TryParse($stan["data"], [ref]$kiedy)) {
-    $godzin = ([datetime]::Now - $kiedy).TotalHours
-  }
+  # Zdanie o przeliczaniu skladamy PRZED zamowieniem: zamowienie przestawia
+  # znacznik proby, a zdanie ma powiedziec, czy POPRZEDNIA proba sie udala.
+  $zdanie = $null
+  if (-not $linia) { $zdanie = Zdanie-Przeliczania $rach "przy nastepnym otwarciu okna" }
 
-  # Kiedy ostatnio w ogole PROBOWALISMY policzyc - stad wiadomo, czy wypada
-  # startowac kolejny proces, czy poprzedni dopiero co poszedl.
-  $probowano = [datetime]::MinValue
-  $odProby = [double]::MaxValue
-  if ([datetime]::TryParse($stan["proba"], [ref]$probowano)) {
-    $odProby = ([datetime]::Now - $probowano).TotalMinutes
-  }
-
-  $trzeba = ($godzin -gt $GODZIN_MIEDZY_KOSZTAMI)
-  if (-not $Tlo -and $trzeba -and $odProby -gt $MINUT_MIEDZY_PROBAMI) { Odswiez-Koszt-W-Tle }
+  # Linia niewazna albo nieswieza - przeliczenie w tle. Dlawik na probe siedzi
+  # w Zamow-Przeliczenie (w -Tlo nic nie startuje, bo liczy na miejscu).
+  if ((-not $linia) -or (-not $rach.swieza)) { Zamow-Przeliczenie }
 
   if (-not $linia) {
-    # Pierwsze uruchomienie: nie ma jeszcze czego pokazac, ale cisza wygladalaby
-    # jak "nic sie nie dzieje", wiec mowimy wprost, ze liczba dopiero powstaje.
-    if ($Tlo) { Notuj "koszt pamieci: nie ma jeszcze policzonej liczby" }
-    else       { Write-Host "MegaRuchacz: rachunek za pamiec agenta licze wlasnie w tle - liczba bedzie przy nastepnym otwarciu okna." }
+    # Nie ma czego pokazac (pierwsze uruchomienie, liczba z innej wersji rachunku
+    # albo sprzed doby) - cisza wygladalaby jak "nic sie nie dzieje", a stara
+    # liczba jak stan na teraz, wiec mowimy wprost, ze rachunek sie przelicza.
+    if ($Tlo) { Notuj "koszt pamieci: $($rach.powod)" }
+    else       { Mow $zdanie }
     return
   }
 
@@ -2178,18 +2255,18 @@ function Dolacz-Rozbicie-Codex([string]$tresc) {
 #
 # Ucinanie (kod inny niz 0) idzie na POCZATEK linii, slowem UWAGA - alarm
 # schowany w srodku zdania jest alarmem, ktorego nikt nie zauwaza.
+#
+# Od 0.21.3 czytamy WLASNY rachunek Codeksa ($plikKosztuCodex, koszt-pamieci.ps1
+# -Narzedzie Codex) - do 0.21.2 szla tu linia Claude Code.
 function Wypisz-Koszt-Codex {
-  $stan = Czytaj-Klucze $plikKosztu
-  $linia = $stan["linia"]
-  $kod = 0
-  if ($stan["kod"] -match '^\d+$') { $kod = [int]$stan["kod"] }
+  $rach = Czytaj-Rachunek $plikKosztuCodex
+  $linia = $rach.linia
+  $kod = $rach.kod
 
   if (-not $linia) {
-    $tresc = "MegaRuchacz: rachunek za pamiec agenta nie jest jeszcze policzony - liczba bedzie przy nastepnym otwarciu sesji."
+    $tresc = Zdanie-Przeliczania $rach "przy nastepnym otwarciu sesji"
   } else {
-    $kiedy = [datetime]::MinValue
-    if (-not [datetime]::TryParse($stan["data"], [ref]$kiedy)) { $kiedy = [datetime]::MinValue }
-    $ogon = Ogon-Wieku $kiedy
+    $ogon = Ogon-Wieku $rach.kiedy
     # tak samo jak w Zglos-Koszt: kod 1 bez slowa UCINANE to przekroczony prog,
     # a nie uciete zasady - nazywanie tego ucinaniem byloby klamstwem
     if ($kod -ne 0 -and $linia -like "*UCINANE:*") { $tresc = "UWAGA: czesc zasad NIE DOCIERA do agenta - ${linia}${ogon}" }
@@ -2243,12 +2320,7 @@ function Wypisz-Koszt-Codex {
   # Zamawiamy takze wtedy, gdy rozbicie dzis juz poszlo - inaczej pod Codeksem
   # odswiezal rachunek wylacznie hook -Tlo i kazde okno czytalo stan sprzed sesji.
   try {
-    $wiekLiczby = [datetime]::MinValue
-    $swiezaLiczba = $false
-    if ([datetime]::TryParse($stan["data"], [ref]$wiekLiczby)) {
-      $swiezaLiczba = (([datetime]::Now - $wiekLiczby).TotalHours -le $GODZIN_MIEDZY_KOSZTAMI)
-    }
-    if ((-not $swiezaLiczba) -or (-not (Rozbicie-Swieze))) { Zamow-Przeliczenie }
+    if ((-not $rach.swieza) -or (-not (Rozbicie-Swieze))) { Zamow-Przeliczenie }
   } catch { Zanotuj-Wywrotke "start przeliczenia rachunku (Codex)" $_ }
 
   # Ostatnia bramka: nawet sam rachunek z alarmami moze nie zmiescic sie w suficie
@@ -2595,8 +2667,7 @@ try {
   # podrecznego. Startuje go straznik sam, osobnym procesem, wiec nikt tu nie
   # czeka i nikt nie czyta: zadnego wypisywania, zadnych innych sprawdzen.
   if ($PoliczKoszt) {
-    $w = Policz-Koszt
-    if ($w) { Zapisz-Koszt $w }
+    Policz-I-Zapisz-Koszty
     # Rozbicie na pozycje liczy sie przy tej samej okazji: to ten sam skrypt,
     # a blok ma byc gotowy do wypisania, gdy nastanie nowy dzien.
     Zapisz-Rozbicie (Policz-Rozbicie)

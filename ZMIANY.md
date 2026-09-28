@@ -4,6 +4,18 @@ Każda zmiana wypychana na gita dostaje tu wpis. Numer rośnie wg zasady:
 pierwsza cyfra — przebudowa łamiąca zgodność, druga — nowa funkcja,
 trzecia — poprawka.
 
+## 0.21.3 — 2026-09-28
+
+- **Na starcie sesji nie pokazuje się już rachunek policzony starą wersją.** Po zmianie
+  rachunku na procent otwarcia sesji okno Claude Code jeszcze przez dwie godziny
+  pokazywało zapamiętaną linię ze starym alarmem („każda wiadomość dokleja ~313 tokenów
+  (próg 300)”), bo była „świeża” wiekiem. Zapamiętana linia niesie teraz odcisk skryptu,
+  który ją policzył; linia z innej wersji rachunku albo sprzed ponad doby się nie pokazuje —
+  zamiast niej stoi „rachunek się przelicza”, a gdy przeliczenie się nie udało, mówi to wprost.
+- **Codex dostaje własny rachunek.** Hook `-KosztCodex` pokazywał Codeksowi liczby Claude
+  Code. Teraz czyta osobny zapis (`~/.claude/.megaruchacz-koszt-codex.txt`, liczony przez
+  `koszt-pamieci.ps1 -Narzedzie Codex`); przeliczenie w tle liczy od razu oba rachunki.
+
 ## 0.21.2 — 2026-09-28
 
 - **Przypomnienie i rejestr pracy w Codeksie na Windows znowu działają.** Codex 0.157
