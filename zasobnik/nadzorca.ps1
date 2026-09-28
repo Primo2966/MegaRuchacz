@@ -58,6 +58,11 @@
 #    Te liczby stoja teraz tylko tam, rozpisane pod paskiem. Kafelek nauki
 #    z rozmow na cala szerokosc, z duza liczba jako procent jednego otwarcia
 #    sesji: na Przegladzie kazda liczba MegaRuchacza jest w tej samej mierze.
+# 9. 28.09.2026 (P17): koszt nauki z powrotem w TOKENACH - karta, wykres (os
+#    w tys. tokenow), przycisk, pytanie o zgode i werdykt. Uzytkownik: "te 20%,
+#    to nie wiem czego". Jedyne porownanie: udzial w calym dziennym zuzyciu
+#    tokenow w rozmowach z Claude (Zuzycie-Dzienne w stan-nadzorcy.ps1).
+#    Procent otwarcia okna rozmowy zostal tylko w karcie "Otwarcie okna rozmowy".
 #
 # PRZYCISKU [ODSWIEZ] NIE MA I NIE MA GO BYC. Istnial tylko dlatego, ze okno
 # nie odswiezalo sie samo - byl obejsciem braku, nie funkcja. Dzis okno przelicza
@@ -329,11 +334,12 @@ function Ile-Wymaga-Uwagi($problemy) {
 # Etykieta przycisku, ktory wydaje tokeny, NIESIE SZACUNEK KOSZTU. Uzytkownik ma
 # zobaczyc liczbe zanim kliknie, a nie dowiedziec sie o niej z rachunku nazajutrz.
 #
-# P15 (28.09.2026): koszt na przycisku w tej samej mierze, co reszta Przegladu -
-# procent jednego otwarcia sesji ($start = Pomiar-Startu). Bez pomiaru zostaja
-# tokeny; zgadnietego procentu nie ma. Bez slowa "zalegle": czytanie i tak idzie
-# samo raz dziennie, przycisk robi to tylko wczesniej - i opis mowi to wprost.
-function Napisy-Przyciskow($d, $start = $null) {
+# P17 (28.09.2026): koszt na przycisku w TOKENACH. Procent otwarcia okna
+# rozmowy (P15) nic uzytkownikowi nie mowil przy koszcie dziennym; porownanie
+# z calym dziennym zuzyciem ($zuzycie = Zuzycie-Dzienne) stoi w pytaniu o zgode.
+# Bez slowa "zalegle": czytanie i tak idzie samo raz dziennie, przycisk robi to
+# tylko wczesniej - i opis mowi to wprost.
+function Napisy-Przyciskow($d, $zuzycie = $null) {
   $n = [pscustomobject]@{
     Aktualizuj     = "Sprawdź i pobierz nowszą wersję MegaRuchacza"
     AktualizujOpis = "Nie kosztuje nic. Zagląda na serwer po poprawki i nanosi je."
@@ -365,18 +371,8 @@ function Napisy-Przyciskow($d, $start = $null) {
     $n.CyklWlaczony = $false
     $n.CyklOpis = "Wyłączone: nic nie czeka, wszystkie rozmowy są już przeczytane."
   } elseif ($null -ne $s.Tokeny) {
-    $o = $null
-    if ($start) {
-      try { $o = Opis-Startu $start } catch { Zanotuj-Wywrotke "opis otwarcia okna rozmowy do napisu przycisku" $_ }
-    }
-    $js = Jak-Sesji $s.Tokeny $o
-    if ($js) {
-      $n.Cykl = "Przeczytaj teraz nowe rozmowy (koszt $js)"
-      $n.CyklOpis = "Nie musisz - robi to sam raz dziennie. To ok. $(Liczba-Ludzka $s.Tokeny) tokenów; zapyta o zgodę i pokaże, skąd ta liczba."
-    } else {
-      $n.Cykl = "Przeczytaj teraz nowe rozmowy (~$(Liczba-Ludzka $s.Tokeny) tokenów)"
-      $n.CyklOpis = "Nie musisz - robi to sam raz dziennie. Procentu nie ma, bo nie zmierzono otwarcia okna rozmowy. Zapyta o zgodę."
-    }
+    $n.Cykl = "Przeczytaj teraz nowe rozmowy ($(Tokeny-Okolo $s.Tokeny) tokenów)"
+    $n.CyklOpis = "Nie musisz - robi to sam raz dziennie. Zapyta o zgodę i pokaże, skąd ta liczba."
   } else {
     $n.Cykl = "Przeczytaj teraz nowe rozmowy (koszt: nie wiem)"
     $n.CyklOpis = "Nie umiem oszacować kosztu: $($s.Powod). Przed startem zapyta o zgodę."
@@ -412,7 +408,7 @@ function Skladniki-Mr($start, $o) {
 
 # Przod okna jako tekst: dokladnie te sekcje i w tej samej kolejnosci, co
 # w oknie. Ten wydruk jest jedynym sposobem sprawdzenia ukladu bez pulpitu.
-function Zbuduj-Przod($d, $problemy, $czas, $start) {
+function Zbuduj-Przod($d, $problemy, $czas, $start, $zuzycie = $null) {
   $l = @()
   $l += "MegaRuchacz - nadzorca                      [ Przegląd | Szczegóły | Warstwy pamięci ]   <- przełącznik widoków u góry okna"
   $stempel = "przed chwilą"
@@ -422,7 +418,7 @@ function Zbuduj-Przod($d, $problemy, $czas, $start) {
 
   $l += "WERDYKT   (w oknie: pierwsza karta, duże zdanie - zielone: mało, czerwone: dużo, żółte: nie wiadomo)"
   $wd = $null
-  try { $wd = Werdykt-Kosztu $start $(if ($d) { $d.Rachunek } else { $null }) $(if ($d) { $d.Cykl } else { $null }) }
+  try { $wd = Werdykt-Kosztu $start $(if ($d) { $d.Rachunek } else { $null }) $(if ($d) { $d.Cykl } else { $null }) $zuzycie }
   catch { Zanotuj-Wywrotke "werdykt do wydruku" $_ }
   if (-not $wd) {
     $l += "  NIE UDALO SIE ZLOZYC - szczegoly w dzienniku nadzorcy"
@@ -486,18 +482,16 @@ function Zbuduj-Przod($d, $problemy, $czas, $start) {
   foreach ($t in $trzy) {
     $l += "  | $($t.Naglowek)"
     if ($null -ne $t.Liczba) {
-      $ogon = ""
-      if ($t.Ogon) { $ogon = "   ($($t.Ogon))" }
-      if ($os -and $os.Zmierzone -and ($os.Razem -gt 0)) {
-        $l += "  |   ~$(Procent-Drobny ([double]$t.Liczba) ([double]$os.Razem)) otwarcia okna rozmowy  (duża liczba w oknie)"
-      }
-      $l += "  |   ~$(Liczba-Ludzka $t.Liczba) tokenów$ogon"
+      $tn = Teksty-Nauki $t $zuzycie
+      $l += "  |   $($tn.Duza)  (duża liczba w oknie)  $($tn.Jednostka)"
       if ($t.Znacznik) {
         $zn = "[$($t.Znacznik)]"
         if ($t.ZnacznikWaga -eq "pilne") { $zn = "$zn  (czerwony napis)" }
         elseif ($t.ZnacznikWaga) { $zn = "$zn  (żółty napis)" }
         $l += "  |   $zn"
       }
+      $l += "  |   $($tn.Porownanie)$(if (-not $tn.PorownanieJest) { '  (żółty napis)' })"
+      if ($tn.Drobny) { $l += "  |   $($tn.Drobny)   (drobnym drukiem)" }
     } else {
       $l += "  |   nie wiem - $($t.Powod)"
     }
@@ -508,11 +502,11 @@ function Zbuduj-Przod($d, $problemy, $czas, $start) {
   $st = $null
   try { $st = Statystyka-Okna $r }
   catch { Zanotuj-Wywrotke "statystyka nauki do wydruku" $_ }
-  $l += "KOSZT CZYTANIA ROZMÓW - OSTATNIE 30 DNI   (w oknie: dalszy ciąg karty nauki, wykres słupkowy w procentach otwarcia okna rozmowy - $(Opis-Rysownika))"
+  $l += "KOSZT CZYTANIA ROZMÓW - OSTATNIE 30 DNI   (w oknie: dalszy ciąg karty nauki, wykres słupkowy w tysiącach tokenów - $(Opis-Rysownika))"
   if (-not $st) {
     $l += "  NIE UDALO SIE ZLOZYC STATYSTYKI - szczegoly w dzienniku nadzorcy"
   } else {
-    $l += Linie-Statystyki $st $r $os
+    $l += Linie-Statystyki $st $r $zuzycie
   }
   $l += ""
 
@@ -538,7 +532,7 @@ function Zbuduj-Przod($d, $problemy, $czas, $start) {
   $l += ""
 
   $l += "PRZYCISKI W OKNIE - co się stanie po kliknięciu"
-  $n = Napisy-Przyciskow $d $start
+  $n = Napisy-Przyciskow $d $zuzycie
   $l += "  [$($n.Aktualizuj)]"
   $l += "      $($n.AktualizujOpis)"
   $wl = ""
@@ -555,7 +549,7 @@ function Zbuduj-Przod($d, $problemy, $czas, $start) {
 
 # Statystyka jako tekst: to samo, co wykres w oknie, tylko paskami ze znakow.
 # Sluzy wydrukowi -Raport, czyli sprawdzeniu bez pulpitu.
-function Linie-Statystyki($st, $rachunek, $o = $null) {
+function Linie-Statystyki($st, $rachunek, $zuzycie = $null) {
   $l = @()
   $zDanymi = @(@($st.Dni) | Where-Object { $_.Jest })
   if ($zDanymi.Count -gt 0) {
@@ -569,26 +563,24 @@ function Linie-Statystyki($st, $rachunek, $o = $null) {
       if ($x.Zwykle -gt 0)      { $rodzaj += "zwykły dzień" }
       if ($x.Nadrabianie -gt 0) { $rodzaj += "rozmowy z kilku dni" }
       if ($x.Nieznane -gt 0)    { $rodzaj += "nie wiadomo, z których dni" }
-      $proc = Proc-Sesji $x.Razem $o
-      $l += ("  {0}  {1,-30}  {2,9}  {3,8}  {4}" -f $x.Dzien.ToString('dd.MM'), $pasek, (Liczba-Ludzka $x.Razem), $proc, ($rodzaj -join " + "))
+      $l += ("  {0}  {1,-30}  {2,9}  {3}" -f $x.Dzien.ToString('dd.MM'), $pasek, (Liczba-Ludzka $x.Razem), ($rodzaj -join " + "))
     }
   } else {
     $l += "  (wykres bez słupków - w oknie w jego miejscu stoi zdanie niżej)"
   }
-  if (-not (Proc-Sesji 1 $o)) { $l += "  (procentów nie ma, bo nie zmierzono otwarcia okna rozmowy - w oknie oś w tysiącach tokenów)" }
-  $l += ("  Ostatnie 7 dni: {0}   |   ostatnie {1} dni: {2}" -f (Koszt-Po-Ludzku $st.Suma7 $o), $st.OknoDni, (Koszt-Po-Ludzku $st.Suma30 $o))
+  $l += ("  Ostatnie 7 dni: {0}   |   ostatnie {1} dni: {2}" -f (Koszt-Po-Ludzku $st.Suma7), $st.OknoDni, (Koszt-Po-Ludzku $st.Suma30))
   if ($null -ne $st.Srednia) {
-    $l += ("  Średnio na dzień nauki: {0} (z {1} {2})" -f (Koszt-Po-Ludzku $st.Srednia $o), $st.SredniaDni, (Odmiana $st.SredniaDni 'dnia' 'dni' 'dni'))
+    $l += ("  Średnio na dzień nauki: {0} (z {1} {2})" -f (Koszt-Po-Ludzku $st.Srednia), $st.SredniaDni, (Odmiana $st.SredniaDni 'dnia' 'dni' 'dni'))
   } else {
     $l += "  Średnio na dzień nauki: jeszcze nie wiem"
   }
   if (($null -ne $st.Typowy) -and ($st.TypowychDni -gt 0)) {
-    $l += ("  Zwykły dzień (rozmowy z poprzedniego dnia): {0} - typowa wartość z {1} {2}" -f (Koszt-Po-Ludzku $st.Typowy $o), $st.TypowychDni, (Odmiana $st.TypowychDni 'dnia' 'dni' 'dni'))
+    $l += ("  Zwykły dzień (rozmowy z poprzedniego dnia): {0} - typowa wartość z {1} {2}" -f (Koszt-Po-Ludzku $st.Typowy), $st.TypowychDni, (Odmiana $st.TypowychDni 'dnia' 'dni' 'dni'))
   } else {
     $l += "  Zwykły dzień (rozmowy z poprzedniego dnia): jeszcze nie wiem - w historii nie ma ani jednego takiego dnia"
   }
   if ($null -ne $st.Prog) {
-    $l += "  $(Zdanie-Progu $st $o)  (w oknie przerywana czerwona linia, gdy mieści się w skali)"
+    $l += "  $(Zdanie-Progu $st $zuzycie)  (w oknie przerywana czerwona linia, gdy mieści się w skali)"
   }
   if ($st.Uwaga) { $l += "  $($st.Uwaga)" }
   return ,$l
@@ -599,23 +591,21 @@ function Tokeny-Albo-Brak($n) {
   return "~$(Liczba-Ludzka $n) tokenów"
 }
 
-# "jak 21% jednej sesji (40 477 tokenów)" - albo same tokeny, gdy otwarcia
-# sesji nie zmierzono. Jedna miara Przegladu (P15), tokeny tylko pomocniczo.
-function Koszt-Po-Ludzku($n, $o) {
+# "~40 000 tokenów (40 477)" - od P17 koszt nauki wszedzie w tokenach; procent
+# otwarcia okna rozmowy przy koszcie dziennym nic nie mowil.
+function Koszt-Po-Ludzku($n) {
   if ($null -eq $n) { return "brak danych" }
-  $js = Jak-Sesji $n $o
-  if ($js) { return "$js ($(Liczba-Ludzka $n) tokenów)" }
-  return "~$(Liczba-Ludzka $n) tokenów"
+  return "$(Tokeny-Okolo $n) tokenów ($(Liczba-Ludzka $n))"
 }
 
 # Prog zwyklego dnia (z koszt-pamieci.ps1, cykl.prog) po ludzku: "tu zaczyna
-# sie drogo" w procencie jednego otwarcia sesji. Liczba progu idzie z rachunku,
-# tu tylko ja ubieramy w slowa.
-function Zdanie-Progu($st, $o) {
+# sie drogo" w tokenach i - gdy jest z czym porownac - jako udzial w calym
+# dziennym zuzyciu. Liczba progu idzie z rachunku, tu tylko ja ubieramy w slowa.
+function Zdanie-Progu($st, $zuzycie = $null) {
   if (-not $st -or ($null -eq $st.Prog)) { return "" }
-  $p = Proc-Sesji $st.Prog $o
-  if ($p) { return "Drogo, gdy zwykły dzień przekracza $p otwarcia okna rozmowy ($(Liczba-Ludzka $st.Prog) tokenów)." }
-  return "Drogo, gdy zwykły dzień przekracza $(Liczba-Ludzka $st.Prog) tokenów."
+  $t = "Drogo dopiero od $(Tokeny-Okolo $st.Prog) tokenów za zwykły dzień"
+  if ($zuzycie -and ($zuzycie.Stan -eq "jest")) { $t += " ($(Procent-Udzialu ([double]$st.Prog) ([double]$zuzycie.Srednia)) dziennego zużycia)" }
+  return "$t."
 }
 
 # SZCZEGOLY JAKO SEKCJE, NIE SCIANA TEKSTU (przebudowane 25.09.2026). Uzytkownik:
@@ -1058,10 +1048,12 @@ if ($Raz -or $Raport) {
     $probl = Zbierz-Problemy $d $stare "" ([datetime]::Now)
     $start = $null
     try { $start = Pomiar-Startu } catch { Zanotuj-Wywrotke "pomiar otwarcia okna rozmowy" $_ }
+    $zu = $null
+    try { $zu = Zuzycie-Dzienne $true } catch { Zanotuj-Wywrotke "dzienne zuzycie tokenow" $_ }
     $roz = @()
     try { $roz = Rachunek-Rozbicie }
     catch { Zanotuj-Wywrotke "rachunek za pamiec (rozbicie)" $_; $roz = @("  NIE UDALO SIE POLICZYC - szczegoly w dzienniku nadzorcy") }
-    Zbuduj-Przod $d $probl ([datetime]::Now) $start | ForEach-Object { Write-Output $_ }
+    Zbuduj-Przod $d $probl ([datetime]::Now) $start $zu | ForEach-Object { Write-Output $_ }
     Write-Output ""
     Zbuduj-Szczegoly $d $stare $roz $start | ForEach-Object { Write-Output $_ }
     Zapisz-Obecnosc "raport"
@@ -1107,10 +1099,12 @@ if ($Raz -or $Raport) {
   $probl = Zbierz-Problemy $d $stare "" ([datetime]::Now)
   $start = $null
   try { $start = Pomiar-Startu } catch { Zanotuj-Wywrotke "pomiar otwarcia okna rozmowy" $_ }
+  $zu = $null
+  try { $zu = Zuzycie-Dzienne $true } catch { Zanotuj-Wywrotke "dzienne zuzycie tokenow" $_ }
   $roz = @()
   try { $roz = Rachunek-Rozbicie }
   catch { Zanotuj-Wywrotke "rachunek za pamiec (rozbicie)" $_; $roz = @("  NIE UDALO SIE POLICZYC - szczegoly w dzienniku nadzorcy") }
-  Zbuduj-Przod $d $probl ([datetime]::Now) $start | ForEach-Object { Write-Output $_ }
+  Zbuduj-Przod $d $probl ([datetime]::Now) $start $zu | ForEach-Object { Write-Output $_ }
   Write-Output ""
   Zbuduj-Szczegoly $d $stare $roz $start | ForEach-Object { Write-Output $_ }
   if (@($d.Alarmy).Count -gt 0) { exit 1 }
@@ -1158,6 +1152,11 @@ $script:KartaWerdykt   = $null   # jedno zdanie na samej gorze: MegaRuchacz kosz
 # i przy recznym przeliczeniu - nie w dozorze co kwadrans, bo nikt go wtedy nie oglada.
 $script:Start          = $null
 $script:UdzialStartu   = 0.0
+# Dzienne zuzycie tokenow w rozmowach z Claude (Zuzycie-Dzienne, P17) - jedyne
+# sensowne porownanie dla kosztu nauki. Liczone w osobnym procesie; gdy trwa,
+# zegar co 3 s zaglada do pliku podrecznego i odmalowuje okno po wyniku.
+$script:Zuzycie        = $null
+$script:ZegarZuzycia   = $null
 $script:PodgladInfo    = $null   # dwie kolumny nad trescia podgladu warstwy
 $script:BWarstwy       = $null   # trzeci przycisk przelacznika
 $script:WidokWarstwy   = $null   # warstwy pamieci: lista po lewej, podglad po prawej
@@ -1182,8 +1181,7 @@ $script:Widok          = "przeglad"
 # Dane, z ktorych rysuje sie wykres w zdarzeniu Paint - procedura obslugi siega
 # wylacznie po $script:, wiec odkladamy je tutaj przy kazdym odmalowaniu.
 $script:StatWykresu    = $null
-# Jednostka osi wykresu (Ustaw-Miare-Wykresu): procent jednego otwarcia sesji,
-# a bez pomiaru - tysiace tokenow.
+# Jednostka osi wykresu (Ustaw-Miare-Wykresu): od P17 zawsze tysiace tokenow.
 $script:WykresDz       = 1000.0
 $script:WykresProc     = $false
 # Wykres bez karty nauki nad soba (nie dalo sie jej zlozyc) rysuje pelna ramke.
@@ -1570,7 +1568,7 @@ function Odmaluj-Werdykt {
   $r = $null; $c = $null
   if ($script:Dane) { $r = $script:Dane.Rachunek; $c = $script:Dane.Cykl }
   $w = $null
-  try { $w = Werdykt-Kosztu $script:Start $r $c } catch { Zanotuj-Wywrotke "werdykt kosztu" $_ }
+  try { $w = Werdykt-Kosztu $script:Start $r $c $script:Zuzycie } catch { Zanotuj-Wywrotke "werdykt kosztu" $_ }
   $script:KartaWerdykt.BackColor = $script:TloKarty
   if (-not $w) {
     $script:KartaWerdykt.BackColor = $script:TloUwaga
@@ -1752,19 +1750,15 @@ function Odmaluj-Start {
 # Prog zwyklego dnia wchodzi do skali tylko wtedy, gdy jest najwyzej dwa razy
 # wyzej niz najwyzszy slupek - inaczej zgniotlby wszystkie slupki do kresek,
 # a legenda mowi wtedy wprost, ze prog jest daleko ponad nimi.
-# MIARA OSI (P15, 28.09.2026): procent jednego otwarcia sesji, jak cala reszta
-# Przegladu. $script:WykresDz to dzielnik "tokeny -> jednostka osi": przy
-# zmierzonym otwarciu sesji 1% = Razem/100 tokenow, bez pomiaru - tysiac tokenow
-# (os "tys. tokenow" i zdanie pod wykresem, czemu nie ma procentow). Ustawia go
+# MIARA OSI. $script:WykresDz to dzielnik "tokeny -> jednostka osi". Ustawia go
 # Odmaluj-Statystyke przed rysowaniem; skala zwracana jest juz w tej jednostce.
-function Ustaw-Miare-Wykresu($o) {
-  if ($o -and $o.Zmierzone -and ($o.Razem -gt 0)) {
-    $script:WykresDz = [double]$o.Razem / 100.0
-    $script:WykresProc = $true
-  } else {
-    $script:WykresDz = 1000.0
-    $script:WykresProc = $false
-  }
+# P15 dal tu procent jednego otwarcia sesji.
+# P17 (28.09.2026): os ZAWSZE w tysiacach tokenow. Procent otwarcia okna
+# rozmowy przy koszcie dziennym nic uzytkownikowi nie mowil. Przelacznik
+# $script:WykresProc zostaje (rysowanie go obsluguje), ale nie jest wlaczany.
+function Ustaw-Miare-Wykresu {
+  $script:WykresDz = 1000.0
+  $script:WykresProc = $false
 }
 
 function Etykieta-Osi([double]$v) {
@@ -1800,9 +1794,7 @@ function Opis-Dnia-Wykresu($d) {
   if ($d.Zwykle -gt 0)      { $cz += "zwykły dzień" }
   if ($d.Nadrabianie -gt 0) { $cz += "rozmowy z kilku dni naraz" }
   if ($d.Nieznane -gt 0)    { $cz += "nie wiadomo, z których dni" }
-  $proc = ""
-  if ($script:WykresProc) { $proc = "jak $(Procent-Drobny ([double]$d.Razem) ($script:WykresDz * 100.0)) otwarcia okna rozmowy, " }
-  return "$($d.Dzien.ToString('dd.MM')): $proc$(Liczba-Ludzka $d.Razem) tokenów ($($cz -join ' + '))"
+  return "$($d.Dzien.ToString('dd.MM')): $(Liczba-Ludzka $d.Razem) tokenów ($($cz -join ' + '))"
 }
 
 # Droga pierwsza: wbudowana kontrolka Chart. Wyjatek z tej funkcji przelacza
@@ -2052,41 +2044,29 @@ function Odmaluj-Problemy {
 
 # Karta nauki z rozmow - na cala szerokosc, pod "Otwarcie sesji". Do 28.09.2026
 # (P14) byla trzecim z trzech kafelkow; dwa pierwsze dublowaly karte otwarcia
-# sesji i zniknely. Uzytkownik rozumie jedna miare - procent jednego otwarcia
-# sesji - wiec duza liczba to ten procent, a tokeny stoja pod nia drobniej.
-# Bez zmierzonego otwarcia procentu nie ma (nie zgadujemy): wtedy duza liczba
-# to tokeny, a szare zdanie mowi, czemu procentu brak.
-function Kafelek-Liczby($t, $o) {
+# sesji i zniknely.
+# P17 (28.09.2026): duza liczba to TOKENY dziennie. Uzytkownik: "te 20%, to nie
+# wiem czego" - procent otwarcia okna rozmowy nie ma sensu przy koszcie
+# dziennym. Pod liczba jedno zdanie porownania z calym dziennym zuzyciem
+# tokenow w rozmowach z Claude ($zu = Zuzycie-Dzienne) albo, gdy go nie ma,
+# "nie mam z czym porownac, bo ..." na zolto - nigdy zero.
+function Kafelek-Liczby($t, $zu) {
   $k = Nowa-Karta $script:SzerKarty
   # bez odstepu pod spodem - wykres kosztu nauki jest dalszym ciagiem tej karty (P15)
   $k.Margin = New-Object System.Windows.Forms.Padding(0)
   $szer = $script:SzerKarty - 44
   $k.Controls.Add((Etykieta-Zawijana $t.Naglowek $script:CzGruba $script:KolTekst $szer))
   if ($null -ne $t.Liczba) {
-    $zProcentem = ($o -and $o.Zmierzone -and ($o.Razem -gt 0))
+    $tn = Teksty-Nauki $t $zu
     $w = Poziomy
     $w.Margin = New-Object System.Windows.Forms.Padding(0, 6, 0, 0)
-    if ($zProcentem) {
-      $duza = Etykieta ("~" + (Procent-Drobny ([double]$t.Liczba) ([double]$o.Razem))) $script:CzDuza $script:KolTekst
-      $ogonTxt = ""
-      if ($t.Ogon) { $ogonTxt = ", $($t.Ogon)" }
-      $jedTxt = "otwarcia okna rozmowy - tyle kosztuje jedno takie czytanie ($(Liczba-Ludzka $t.Liczba) tokenów$ogonTxt)"
-    } else {
-      $duza = Etykieta ("~" + (Liczba-Ludzka $t.Liczba)) $script:CzDuza $script:KolTekst
-      $jedTxt = "tokenów"
-    }
+    $duza = Etykieta $tn.Duza $script:CzDuza $script:KolTekst
     $duza.Margin = New-Object System.Windows.Forms.Padding(0, 0, 6, 0)
     $w.Controls.Add($duza)
-    $jed = Etykieta $jedTxt $script:CzZwykla $script:KolSzary
+    $jed = Etykieta $tn.Jednostka $script:CzZwykla $script:KolSzary
     $jed.Margin = New-Object System.Windows.Forms.Padding(0, 14, 0, 0)
     $w.Controls.Add($jed)
     $k.Controls.Add($w)
-    $pod = @()
-    if (-not $zProcentem) {
-      $pod += "procentu nie ma, bo nie zmierzono otwarcia okna rozmowy (karta wyżej)"
-      if ($t.Ogon) { $pod += $t.Ogon }
-      $k.Controls.Add((Etykieta-Zawijana ($pod -join ", ") $script:CzMala $script:KolSzary $szer))
-    }
     # Dopisek "z jakich dni i czy zalegle" - kolor tylko wtedy, gdy niesie
     # znaczenie (czerwony: zwykly dzien nad progiem; zolty: zalegle rozmowy
     # albo dni nieznane); zwykly dzien dostaje neutralna szara plakietke.
@@ -2099,7 +2079,29 @@ function Kafelek-Liczby($t, $o) {
       $z.BackColor = $tlo
       $z.Padding = New-Object System.Windows.Forms.Padding(6, 2, 6, 3)
       $z.Margin = New-Object System.Windows.Forms.Padding(0, 6, 0, 2)
-      $k.Controls.Add($z)
+      # P17: w wierszu duzej liczby, gdy sie miesci - karta dostala zdanie
+      # porownania i drobny druk, a okno ma sie miescic bez przewijania.
+      # Gdy sie nie miesci, osobna linia jak dotad (wiersz sie nie zawija).
+      if (($w.PreferredSize.Width + 14 + $z.PreferredSize.Width) -le $szer) {
+        $z.Margin = New-Object System.Windows.Forms.Padding(14, 12, 0, 0)
+        $w.Controls.Add($z)
+      } else {
+        $k.Controls.Add($z)
+      }
+    }
+    # Porownanie z calym dniem - zwykla czcionka, bo to odpowiedz na "duzo czy
+    # malo?"; zolte, gdy porownania nie ma.
+    $kolP = $script:KolTekst
+    if (-not $tn.PorownanieJest) { $kolP = $script:KolUwaga }
+    $por = Etykieta-Zawijana $tn.Porownanie $script:CzZwykla $kolP $szer
+    $por.UseMnemonic = $false
+    $por.Margin = New-Object System.Windows.Forms.Padding(0, 3, 0, 0)
+    $k.Controls.Add($por)
+    if ($tn.Drobny) {
+      $dd = Etykieta-Zawijana $tn.Drobny $script:CzMala $script:KolSzary $szer
+      $dd.UseMnemonic = $false
+      $dd.Margin = New-Object System.Windows.Forms.Padding(0, 2, 0, 0)
+      $k.Controls.Add($dd)
     }
   } else {
     # Zero znaczyloby "nic nie kosztuje" - a my po prostu nie wiemy. Mowimy to
@@ -2108,7 +2110,7 @@ function Kafelek-Liczby($t, $o) {
     $k.Controls.Add((Etykieta-Zawijana $t.Powod $script:CzMala $script:KolUwaga $szer))
   }
   $opis = Etykieta-Zawijana $t.Opis $script:CzMala $script:KolSzary $szer
-  $opis.Margin = New-Object System.Windows.Forms.Padding(0, 6, 0, 0)
+  $opis.Margin = New-Object System.Windows.Forms.Padding(0, 3, 0, 0)
   $k.Controls.Add($opis)
   return $k
 }
@@ -2127,17 +2129,13 @@ function Odmaluj-Liczby {
       "Kosztu nauki jeszcze nie ma - nie udało się go złożyć. Powód jest w zakładce Szczegóły.") $script:CzZwykla $script:KolUwaga $script:SzerTresc))
     return
   }
-  $o = $null
-  if ($script:Start) {
-    try { $o = Opis-Startu $script:Start } catch { Zanotuj-Wywrotke "opis otwarcia okna rozmowy do karty nauki" $_ }
-  }
-  $script:PanelLiczby.Controls.Add((Kafelek-Liczby $t $o))
+  $script:PanelLiczby.Controls.Add((Kafelek-Liczby $t $script:Zuzycie))
 }
 
 function Liczba-Boczna($panel, [string]$podpis, [string]$wartosc) {
   $panel.Controls.Add((Etykieta $podpis $script:CzMala $script:KolSzary))
   $w = Etykieta $wartosc $script:CzSrednia $script:KolTekst
-  $w.Margin = New-Object System.Windows.Forms.Padding(0, 0, 0, 5)
+  $w.Margin = New-Object System.Windows.Forms.Padding(0, 0, 0, 2)
   $panel.Controls.Add($w)
 }
 
@@ -2162,11 +2160,7 @@ function Odmaluj-Statystyke {
   catch { Zanotuj-Wywrotke "statystyka nauki do okna" $_ }
   $script:StatWykresu = $st
   $szer = $script:SzerKarty - 44
-  $o = $null
-  if ($script:Start) {
-    try { $o = Opis-Startu $script:Start } catch { Zanotuj-Wywrotke "opis otwarcia okna rozmowy do wykresu" $_ }
-  }
-  Ustaw-Miare-Wykresu $o
+  Ustaw-Miare-Wykresu
 
   $script:KartaStat.Controls.Add((Etykieta "Koszt czytania rozmów - ostatnie 30 dni" $script:CzZwyklaGruba $script:KolTekst))
   if (-not $st) {
@@ -2177,22 +2171,22 @@ function Odmaluj-Statystyke {
   $wiersz = Poziomy
   $wiersz.Margin = New-Object System.Windows.Forms.Padding(0, 8, 0, 4)
   $gospodarz = New-Object System.Windows.Forms.Panel
-  $gospodarz.Size = New-Object System.Drawing.Size(($szer - 340), 160)
+  # 130 px, nie 160 (P17): karta nauki dostala zdanie porownania i drobny druk,
+  # a okno ma sie dalej miescic na ekranie bez przewijania.
+  $gospodarz.Size = New-Object System.Drawing.Size(($szer - 340), 130)
   $gospodarz.Margin = New-Object System.Windows.Forms.Padding(0)
   $gospodarz.BackColor = [System.Drawing.Color]::White
   Wstaw-Wykres $gospodarz $st
   $wiersz.Controls.Add($gospodarz)
 
-  # Liczby po prawej w tej samej mierze, co os: "jak 21% jednej sesji" duzo,
-  # tokeny drobno w podpisie (P15). Bez pomiaru otwarcia - same tokeny.
+  # Liczby po prawej w tej samej mierze, co os: tokeny (P17). Dokladna liczba
+  # drobno w podpisie, zaokraglona duzo.
   $boczne = Pionowy 300
   $boczne.Margin = New-Object System.Windows.Forms.Padding(40, 0, 0, 0)
   $boczna = {
     param([string]$podpis, $n, [string]$brak)
     if ($null -eq $n) { Liczba-Boczna $boczne $podpis $brak; return }
-    $js = Jak-Sesji $n $o
-    if ($js) { Liczba-Boczna $boczne "$podpis · $(Liczba-Ludzka $n) tokenów" $js }
-    else { Liczba-Boczna $boczne $podpis "~$(Liczba-Ludzka $n) tokenów" }
+    Liczba-Boczna $boczne "$podpis · dokładnie $(Liczba-Ludzka $n)" "$(Tokeny-Okolo $n) tokenów"
   }
   # Trzy liczby, nie cztery (P15): srednia na dzien nauki powtarzala sume
   # podzielona przez dni i nie mowila laikowi nic nowego - stoi w wydruku -Raport.
@@ -2218,7 +2212,7 @@ function Odmaluj-Statystyke {
   # czerwona linia stoi na wykresie; gdy prog jest daleko ponad slupkami,
   # zdanie jest szare - to informacja, nie alarm.
   if ($null -ne $st.Prog) {
-    $zp = Zdanie-Progu $st $o
+    $zp = Zdanie-Progu $st $script:Zuzycie
     $kolP = $script:KolSzary
     if ((Prog-Widoczny $st) -and ($st.DniZDanymi -gt 0)) { $zp = "- - czerwona linia: tu zaczyna się drogo. $zp"; $kolP = $script:KolPilne }
     elseif ($st.DniZDanymi -gt 0) { $zp = "$zp Słupki są daleko poniżej." }
@@ -2233,11 +2227,6 @@ function Odmaluj-Statystyke {
     }
   }
   if ($st.DniZDanymi -gt 0) { $script:KartaStat.Controls.Add($leg) }
-  if (-not $script:WykresProc) {
-    $u = Etykieta-Zawijana "Oś w tysiącach tokenów, bo nie zmierzono otwarcia okna rozmowy (karta wyżej) - bez niego nie ma procentów." $script:CzMala $script:KolUwaga $szer
-    $u.Margin = New-Object System.Windows.Forms.Padding(0, 4, 0, 0)
-    $script:KartaStat.Controls.Add($u)
-  }
   # Uwaga o zbierajacej sie statystyce stoi pod wykresem ZAWSZE, gdy danych jest
   # malo - takze wtedy, gdy w samym wykresie jest juz jej tresc (bez danych).
   if ($st.Uwaga -and ($st.DniZDanymi -gt 0)) {
@@ -2348,7 +2337,7 @@ function Ustaw-Rozwiniecie-Zmian {
 
 function Odmaluj-Przyciski {
   if (-not $script:BCykl -or $script:BCykl.IsDisposed) { return }
-  $n = Napisy-Przyciskow $script:Dane $script:Start
+  $n = Napisy-Przyciskow $script:Dane $script:Zuzycie
   $script:BAktualizuj.Text = $n.Aktualizuj
   $script:LAktualizuj.Text = $n.AktualizujOpis
   $script:BCykl.Text       = $n.Cykl
@@ -2777,6 +2766,38 @@ function Pokaz-Widok([string]$nazwa) {
   }
 }
 
+# Dzienne zuzycie tokenow (P17): odczyt pliku podrecznego, a gdy wyniku z dzis
+# nie ma - liczenie w osobnym procesie. Okno nie czeka: zegar co 3 s sprawdza,
+# czy wynik juz jest, i wtedy odmalowuje okno. Zegar staje sam, gdy stan
+# przestaje byc "licze" (wynik albo powod, czemu go nie ma - nigdy wieczne "licze":
+# Zuzycie-Dzienne po $MINUT_LICZENIA_ZUZYCIA zamienia je na powod).
+function Odswiez-Zuzycie {
+  try { $script:Zuzycie = Zuzycie-Dzienne $false }
+  catch {
+    Zanotuj-Wywrotke "dzienne zuzycie tokenow" $_
+    $script:Zuzycie = [pscustomobject]@{ Stan = "brak"; Powod = "odczyt się wywrócił: $($_.Exception.Message)" }
+  }
+  if (-not $script:Zuzycie -or ($script:Zuzycie.Stan -ne "licze")) {
+    if ($script:ZegarZuzycia) { $script:ZegarZuzycia.Stop() }
+    return
+  }
+  if (-not $script:ZegarZuzycia) {
+    $script:ZegarZuzycia = New-Object System.Windows.Forms.Timer
+    $script:ZegarZuzycia.Interval = 3000
+    $script:ZegarZuzycia.Add_Tick({
+      try {
+        $przed = $script:Zuzycie.Stan
+        Odswiez-Zuzycie
+        if ($script:Zuzycie.Stan -ne $przed) { Odmaluj-Okno }
+      } catch {
+        $script:ZegarZuzycia.Stop()
+        Zanotuj-Wywrotke "zegar dziennego zuzycia tokenow" $_
+      }
+    })
+  }
+  $script:ZegarZuzycia.Start()
+}
+
 # Przeliczenie BEZ zagladania do sieci - po nowsza wersje chodzi dozor, ktory
 # nikogo nie trzyma. Dzieki temu otwarcie okna nie czeka na gita.
 function Odswiez-Dane {
@@ -2791,6 +2812,7 @@ function Odswiez-Dane {
     $script:DaneWarstw = $null
     try { $script:Start = Pomiar-Startu }
     catch { Zanotuj-Wywrotke "pomiar otwarcia okna rozmowy" $_; $script:Start = [pscustomobject]@{ Powod = "pomiar się wywrócił: $($_.Exception.Message)"; MrSesja = $null } }
+    Odswiez-Zuzycie
     if (($script:Widok -eq "szczegoly") -and (-not $script:SzczegolyZajete)) {
       Napelnij-Szczegoly
     }
@@ -3133,23 +3155,29 @@ function Pokaz-Okno {
   # kliknieciem 312 609 tokenow, nie mowiac o tym ani slowa wczesniej.
   # Domyslnie podswietlone jest "Nie": przypadkowy Enter ma nic nie kosztowac.
   $script:BCykl.Add_Click({
-    $n = Napisy-Przyciskow $script:Dane $script:Start
+    $n = Napisy-Przyciskow $script:Dane $script:Zuzycie
     $s = $n.Szacunek
     $t = @()
+    # P17: tokeny i udzial w calym dziennym zuzyciu - bez procentu otwarcia okna rozmowy.
+    $porownaj = {
+      param($tokeny)
+      $ud = ""
+      try { $ud = Udzial-W-Dniu $tokeny $script:Zuzycie } catch { Zanotuj-Wywrotke "udzial w dziennym zuzyciu w pytaniu o zgode" $_ }
+      if ($ud) { return "To $ud." }
+      $bp = "Nie mam z czym porównać."
+      try { $bp = (Z-Wielkiej (Bez-Porownania $script:Zuzycie)) + "." } catch { Zanotuj-Wywrotke "brak porownania w pytaniu o zgode" $_ }
+      return $bp
+    }
     if ($s -and ($null -ne $s.Tokeny)) {
-      $js = ""
-      try { $js = Jak-Sesji $s.Tokeny (Opis-Startu $script:Start) } catch { Zanotuj-Wywrotke "procent otwarcia okna rozmowy w pytaniu o zgode" $_ }
-      if ($js) { $js = " - $js" }
-      $t += "Przeczytanie nowych rozmów będzie kosztować około $(Liczba-Ludzka $s.Tokeny) tokenów$js."
+      $t += "Przeczytanie nowych rozmów będzie kosztować około $(Liczba-Ludzka $s.Tokeny) tokenów."
+      $t += (& $porownaj $s.Tokeny)
       $t += "Nie musisz tego robić - MegaRuchacz czyta rozmowy sam raz dziennie. Ten przycisk robi to tylko wcześniej."
     } else {
       $t += "NIE WIEM, ile to będzie kosztować."
       if ($s -and $s.Powod) { $t += "Powód: $($s.Powod)." }
       if ($script:Dane -and $script:Dane.Cykl -and ($null -ne $script:Dane.Cykl.Koszt)) {
-        $jp = ""
-        try { $jp = Jak-Sesji $script:Dane.Cykl.Koszt (Opis-Startu $script:Start) } catch { Zanotuj-Wywrotke "procent otwarcia okna rozmowy w pytaniu o zgode" $_ }
-        if ($jp) { $jp = " ($jp)" }
-        $t += "Poprzednie czytanie kosztowało ~$(Liczba-Ludzka $script:Dane.Cykl.Koszt) tokenów$jp - takiego rzędu liczby się spodziewaj."
+        $t += "Poprzednie czytanie kosztowało ~$(Liczba-Ludzka $script:Dane.Cykl.Koszt) tokenów - takiego rzędu liczby się spodziewaj."
+        $t += (& $porownaj $script:Dane.Cykl.Koszt)
       }
     }
     $t += ""
@@ -3251,6 +3279,7 @@ $menu.Items.Add((Nowa-Pozycja "Przelicz liczby teraz (nic nie kosztuje)" {
     $script:Rozbicie = $null
     try { $script:Start = Pomiar-Startu }
     catch { Zanotuj-Wywrotke "pomiar otwarcia okna rozmowy" $_; $script:Start = [pscustomobject]@{ Powod = "pomiar się wywrócił: $($_.Exception.Message)"; MrSesja = $null } }
+    Odswiez-Zuzycie
     $script:Ikona.Text = Podpowiedz $d
     Odmaluj-Okno
     Pokaz-Dymek "MegaRuchacz: przeliczone" "Liczby sa swieze. Kliknij ikone, zeby je zobaczyc."
