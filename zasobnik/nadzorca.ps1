@@ -2902,7 +2902,16 @@ $script:Ikona.Icon = Ikona-Nadzorcy
 $script:Ikona.Text = "MegaRuchacz - zbieram dane"
 $script:Ikona.Visible = $true
 
+# Dymki (powiadomienia Windows) wylaczone 28.09.2026 na prosbe uzytkownika - wyskakiwaly
+# przy kazdym alarmie. Alarm nie znika w cisze: zostaje w podpowiedzi ikony (najechanie
+# myszka), w czerwonej karcie na gorze okna i w dzienniku. $true przywraca dymki.
+$script:PokazujDymki = $false
+
 function Pokaz-Dymek([string]$tytul, [string]$tresc) {
+  if (-not $script:PokazujDymki) {
+    try { Notuj "dymek pominiety (dymki wylaczone): $tytul" } catch { Zanotuj-Wywrotke "wpis o pominietym dymku" $_ }
+    return
+  }
   try {
     $script:Ikona.BalloonTipIcon  = [System.Windows.Forms.ToolTipIcon]::Warning
     $script:Ikona.BalloonTipTitle = Skroc-Na-Dymek $tytul $MAX_TYTUL "[skrocone] "
