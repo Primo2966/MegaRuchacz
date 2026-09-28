@@ -53,6 +53,11 @@
 #    na Przegladzie (zmierzona calosc z transkryptow i udzial MegaRuchacza),
 #    Szczegoly jako karty sekcji zamiast jednego pola tekstu, podglad warstwy
 #    z dwiema kolumnami nad trescia.
+# 8. 28.09.2026 (P14): dwa kafelki "dokleja do kazdej wiadomosci" i "doklada
+#    na otwarcie sesji" usuniete - dublowaly liczby z karty "Otwarcie sesji".
+#    Te liczby stoja teraz tylko tam, rozpisane pod paskiem. Kafelek nauki
+#    z rozmow na cala szerokosc, z duza liczba jako procent jednego otwarcia
+#    sesji: na Przegladzie kazda liczba MegaRuchacza jest w tej samej mierze.
 #
 # PRZYCISKU [ODSWIEZ] NIE MA I NIE MA GO BYC. Istnial tylko dlatego, ze okno
 # nie odswiezalo sie samo - byl obejsciem braku, nie funkcja. Dzis okno przelicza
@@ -366,6 +371,28 @@ function Napisy-Przyciskow($d) {
 
 # ----------------------------------------------------------- wydruk tego, co widac
 
+# Czesc MegaRuchacza rozpisana na dwa kawalki, ktore laik rozroznia (P14,
+# 28.09.2026). Do tej pory te same liczby staly drugi raz w dwoch kafelkach pod
+# karta ("dokleja do kazdej wiadomosci", "doklada na otwarcie sesji") i
+# uzytkownik pytal, czym to sie rozni. Teraz stoja TYLKO tu, w tej samej mierze
+# co reszta Przegladu: procent jednego otwarcia sesji. Liczby z pomiaru -Start,
+# niczego nie przeliczamy; brak liczby to "nie wiem", nigdy zero.
+function Skladniki-Mr($start, $o) {
+  $lista = @()
+  if (-not $start -or -not $o -or -not $o.Zmierzone) { return ,$lista }
+  foreach ($x in @(
+      @("raz na start sesji: zasady i wiedza o Tobie i firmie", $start.MrStart, ""),
+      @("przy każdej Twojej wiadomości: przypomnienie zasad", $start.MrWiadomosc, "+"))) {
+    $liczba = "nie wiem"; $proc = ""
+    if ($null -ne $x[1]) {
+      $liczba = "$($x[2])$(Liczba-Ludzka ([long]$x[1]))"
+      $proc = Procent-Drobny ([double]$x[1]) ([double]$o.Razem)
+    }
+    $lista += [pscustomobject]@{ Napis = $x[0]; Liczba = $liczba; Proc = $proc }
+  }
+  return ,$lista
+}
+
 # Przod okna jako tekst: dokladnie te sekcje i w tej samej kolejnosci, co
 # w oknie. Ten wydruk jest jedynym sposobem sprawdzenia ukladu bez pulpitu.
 function Zbuduj-Przod($d, $problemy, $czas, $start) {
@@ -412,26 +439,27 @@ function Zbuduj-Przod($d, $problemy, $czas, $start) {
     if ($null -ne $os.Mr) { $l += "  sama część MegaRuchacza (z rachunku): ~$(Liczba-Ludzka $os.Mr) tokenów - procentu nie ma, bo nie ma całości" }
   } else {
     $l += "  Otwarcie sesji: ~$(Okolo $os.Razem) tokenów. Z tego MegaRuchacz: $(Okolo $os.Mr) ($($os.MrProc)) · Claude Code sam: $(Okolo $os.Cc) ($($os.CcProc))"
+    foreach ($sk in (Skladniki-Mr $start $os)) { $l += "      $($sk.Napis): $($sk.Liczba)   ($($sk.Proc))" }
     $l += "  $($os.Portfel)"
     $l += "  $($os.Podstawa) $($os.Zakres)"
     $l += "  $($os.WorkerZdanie)"
   }
   $l += ""
 
-  $l += "ILE TO KOSZTUJE   (w oknie: trzy karty obok siebie)"
+  $l += "NAUKA Z ROZMÓW   (w oknie: karta na całą szerokość pod otwarciem sesji)"
   $r = $null; $c = $null
   if ($d) { $r = $d.Rachunek; $c = $d.Cykl }
-  # Bez @() wokol wywolania - te funkcje koncza sie na "return ,$lista", wiec
-  # owiniecie ich w @() daje tablice z jedna tablica w srodku (pulapka opisana
-  # w naglowku stan-nadzorcy.ps1). Owijac wolno zmienne, nie wywolania.
   $trzy = @()
-  try { $trzy = Trzy-Liczby $r $c }
-  catch { Zanotuj-Wywrotke "trzy liczby do wydruku" $_; $l += "  NIE UDALO SIE ZLOZYC - szczegoly w dzienniku nadzorcy" }
+  try { $trzy = @(Liczba-Nauki $r $c) }
+  catch { Zanotuj-Wywrotke "koszt nauki do wydruku" $_; $l += "  NIE UDALO SIE ZLOZYC - szczegoly w dzienniku nadzorcy" }
   foreach ($t in $trzy) {
     $l += "  | $($t.Naglowek)"
     if ($null -ne $t.Liczba) {
       $ogon = ""
       if ($t.Ogon) { $ogon = "   ($($t.Ogon))" }
+      if ($os -and $os.Zmierzone -and ($os.Razem -gt 0)) {
+        $l += "  |   ~$(Procent-Drobny ([double]$t.Liczba) ([double]$os.Razem)) jednego otwarcia sesji  (duża liczba w oknie)"
+      }
       $l += "  |   ~$(Liczba-Ludzka $t.Liczba) tokenów$ogon"
       if ($t.Znacznik) {
         $zn = "[$($t.Znacznik)]"
@@ -679,7 +707,9 @@ function Sekcje-Szczegolow($d, $wywrotkiNadzorcy, $rozbicie, $start) {
     if ($o -and ($null -ne $o.Mr)) { Dodaj-Wiersz $s "MegaRuchacz (rachunek)" "~$(Liczba-Ludzka $o.Mr) tokenów - bez całości nie ma z czego policzyć procentu" }
   } else {
     Dodaj-Wiersz $s "Razem na otwarcie" "~$(Liczba-Ludzka $o.Razem) tokenów (mediana z $($o.Sesji) sesji)"
-    Dodaj-Wiersz $s "MegaRuchacz" "~$(Liczba-Ludzka $o.Mr) tokenów ($($o.MrProc)) - $(Liczba-Ludzka $start.MrStart) na start + $(Liczba-Ludzka $start.MrWiadomosc) przypomnienia doklejonego do pierwszej wiadomości"
+    # Bez rozbicia na start + przypomnienie (P14): te dwie liczby stoja jako
+    # naglowki w sekcji "Rachunek za pamiec" tuz nizej - drugi raz tu tylko mylil.
+    Dodaj-Wiersz $s "MegaRuchacz" "~$(Liczba-Ludzka $o.Mr) tokenów ($($o.MrProc)) - start sesji i przypomnienie doklejone do pierwszej wiadomości; każdą pozycję pokazuje sekcja niżej"
     Dodaj-Wiersz $s "Claude Code sam" "~$(Liczba-Ludzka $o.Cc) tokenów ($($o.CcProc)) - jego instrukcje, opisy narzędzi (także z serwerów MCP), lista skilli"
     if ($o.Worker) { Dodaj-Wiersz $s "Start workera" ($o.WorkerZdanie -replace '^Start jednego workera: ', '') }
     else { Dodaj-Wiersz $s "Start workera" ($o.WorkerZdanie -replace '^Start jednego workera: ', '') "uwaga" }
@@ -1148,14 +1178,13 @@ $script:CzStalaMala   = New-Object System.Drawing.Font("Consolas", 9)
 # szerzej niz obszar roboczy minus 80 px i nigdy wezej niz 900). Tresc to okno
 # minus marginesy po 28 px i 20 px na pionowy suwak, gdy ekran jest za niski -
 # suwak poziomy nie ma prawa sie pojawic, a tekst wyjezdzajacy poza krawedz
-# bylby ucieciem po cichu. Trzy karty kosztow dziela tresc po rowno.
+# bylby ucieciem po cichu.
 $script:ObszarEkranu = [System.Windows.Forms.Screen]::PrimaryScreen.WorkingArea
 $script:SzerOkna    = [int][math]::Max(900, [math]::Min(1240, $script:ObszarEkranu.Width - 80))
 $script:Margines    = 28
 $script:SzerTresc   = $script:SzerOkna - 2 * $script:Margines - 20
 $script:SzerKarty   = $script:SzerTresc
 $script:Odstep      = 16
-$script:SzerKafelka = [int][math]::Floor(($script:SzerTresc - 2 * $script:Odstep) / 3)
 $script:SzerEtykiety = 220   # lewa kolumna w karcie stanu i w szczegolach
 
 # ZLAPANE 24.09.2026 NA PROBIE Z PRAWDZIWYM OKNEM, i to jest dokladnie ten rodzaj
@@ -1465,6 +1494,29 @@ function Wiersz-Legendy-Startu($panel, $kolor, [string]$napis, [string]$liczba, 
   $panel.Controls.Add($w)
 }
 
+# Wiersz skladnika pod wierszem MegaRuchacza: wciety pod kwadracik legendy,
+# szary, te same kolumny liczby i procentu co wiersz nad nim.
+function Wiersz-Skladnika-Startu($panel, $sk) {
+  $w = Poziomy
+  $w.Margin = New-Object System.Windows.Forms.Padding(22, 0, 0, 2)
+  $n = Etykieta "$($sk.Napis)" $script:CzMala $script:KolSzary
+  $n.AutoSize = $false
+  $n.Size = New-Object System.Drawing.Size(430, 20)
+  $n.UseMnemonic = $false
+  $w.Controls.Add($n)
+  $l = Etykieta "$($sk.Liczba)" $script:CzMala $script:KolSzary
+  $l.AutoSize = $false
+  $l.Size = New-Object System.Drawing.Size(110, 20)
+  $l.TextAlign = [System.Drawing.ContentAlignment]::TopRight
+  $w.Controls.Add($l)
+  $p = Etykieta "$($sk.Proc)" $script:CzMala $script:KolSzary
+  $p.AutoSize = $false
+  $p.Size = New-Object System.Drawing.Size(110, 20)
+  $p.TextAlign = [System.Drawing.ContentAlignment]::TopRight
+  $w.Controls.Add($p)
+  $panel.Controls.Add($w)
+}
+
 function Rysuj-Pasek-Startu($g, $rozmiar) {
   try {
     $g.SmoothingMode = [System.Drawing.Drawing2D.SmoothingMode]::None
@@ -1531,7 +1583,8 @@ function Odmaluj-Start {
   $pasek.Add_Paint({ param($nadawca, $e) Rysuj-Pasek-Startu $e.Graphics $nadawca.ClientSize })
   $script:KartaStart.Controls.Add($pasek)
 
-  Wiersz-Legendy-Startu $script:KartaStart $script:KolMr "MegaRuchacz - zasady i wiedza o Tobie ($(Liczba-Ludzka $script:Start.MrStart)) + przypomnienie ($(Liczba-Ludzka $script:Start.MrWiadomosc))" "~$(Okolo $o.Mr)" $o.MrProc
+  Wiersz-Legendy-Startu $script:KartaStart $script:KolMr "MegaRuchacz - razem, z tego:" "~$(Okolo $o.Mr)" $o.MrProc
+  foreach ($sk in (Skladniki-Mr $script:Start $o)) { Wiersz-Skladnika-Startu $script:KartaStart $sk }
   Wiersz-Legendy-Startu $script:KartaStart $script:KolCc "Claude Code sam - jego instrukcje i opisy narzędzi (MCP)" "~$(Okolo $o.Cc)" $o.CcProc
 
   $p = Etykieta-Zawijana $o.Portfel $script:CzZwykla $script:KolTekst $szer
@@ -1824,32 +1877,50 @@ function Odmaluj-Problemy {
   $script:PanelProblemy.Visible = $true
 }
 
-function Kafelek-Liczby($t) {
-  $k = Nowa-Karta $script:SzerKafelka
-  $k.Margin = New-Object System.Windows.Forms.Padding(0, 0, $script:Odstep, 14)
-  $szer = $script:SzerKafelka - 44
-  $k.Controls.Add((Etykieta-Zawijana $t.Naglowek $script:CzMala $script:KolSzary $szer))
+# Karta nauki z rozmow - na cala szerokosc, pod "Otwarcie sesji". Do 28.09.2026
+# (P14) byla trzecim z trzech kafelkow; dwa pierwsze dublowaly karte otwarcia
+# sesji i zniknely. Uzytkownik rozumie jedna miare - procent jednego otwarcia
+# sesji - wiec duza liczba to ten procent, a tokeny stoja pod nia drobniej.
+# Bez zmierzonego otwarcia procentu nie ma (nie zgadujemy): wtedy duza liczba
+# to tokeny, a szare zdanie mowi, czemu procentu brak.
+function Kafelek-Liczby($t, $o) {
+  $k = Nowa-Karta $script:SzerKarty
+  $szer = $script:SzerKarty - 44
+  $k.Controls.Add((Etykieta-Zawijana $t.Naglowek $script:CzGruba $script:KolTekst $szer))
   if ($null -ne $t.Liczba) {
+    $zProcentem = ($o -and $o.Zmierzone -and ($o.Razem -gt 0))
     $w = Poziomy
-    $duza = Etykieta ("~" + (Liczba-Ludzka $t.Liczba)) $script:CzDuza $script:KolTekst
-    $duza.Margin = New-Object System.Windows.Forms.Padding(0, 2, 5, 0)
+    $w.Margin = New-Object System.Windows.Forms.Padding(0, 6, 0, 0)
+    if ($zProcentem) {
+      $duza = Etykieta ("~" + (Procent-Drobny ([double]$t.Liczba) ([double]$o.Razem))) $script:CzDuza $script:KolTekst
+      $jedTxt = "jednego otwarcia sesji - tyle kosztuje jedno takie czytanie"
+    } else {
+      $duza = Etykieta ("~" + (Liczba-Ludzka $t.Liczba)) $script:CzDuza $script:KolTekst
+      $jedTxt = "tokenów"
+    }
+    $duza.Margin = New-Object System.Windows.Forms.Padding(0, 0, 6, 0)
     $w.Controls.Add($duza)
-    $jed = Etykieta "tokenów" $script:CzZwykla $script:KolSzary
-    $jed.Margin = New-Object System.Windows.Forms.Padding(0, 16, 0, 0)
+    $jed = Etykieta $jedTxt $script:CzZwykla $script:KolSzary
+    $jed.Margin = New-Object System.Windows.Forms.Padding(0, 14, 0, 0)
     $w.Controls.Add($jed)
     $k.Controls.Add($w)
-    if ($t.Ogon) { $k.Controls.Add((Etykieta-Zawijana $t.Ogon $script:CzMala $script:KolSzary $szer)) }
-    # Dopisek "za jaki okres i czy to nadrabianie" - kolor tylko wtedy, gdy
-    # niesie znaczenie (czerwony: zwykly dzien nad progiem; zolty: nadrabianie
-    # albo okres nieznany); zwykly dzien dostaje neutralna szara plakietke.
+    $pod = @()
+    if ($zProcentem) { $pod += "$(Liczba-Ludzka $t.Liczba) tokenów" }
+    else { $pod += "procentu nie ma, bo nie zmierzono otwarcia sesji (karta wyżej)" }
+    if ($t.Ogon) { $pod += $t.Ogon }
+    $k.Controls.Add((Etykieta-Zawijana ($pod -join ", ") $script:CzMala $script:KolSzary $szer))
+    # Dopisek "z jakich dni i czy zalegle" - kolor tylko wtedy, gdy niesie
+    # znaczenie (czerwony: zwykly dzien nad progiem; zolty: zalegle rozmowy
+    # albo dni nieznane); zwykly dzien dostaje neutralna szara plakietke.
     if ($t.Znacznik) {
       $kol = $script:KolSzary; $tlo = $script:TloZnacz
       if ($t.ZnacznikWaga -eq "pilne") { $kol = $script:KolPilne; $tlo = $script:TloPilne }
       elseif ($t.ZnacznikWaga) { $kol = $script:KolUwaga; $tlo = $script:TloUwaga }
-      $z = Etykieta-Zawijana $t.Znacznik $script:CzMalaGruba $kol $szer
+      $z = Etykieta $t.Znacznik $script:CzMalaGruba $kol
+      $z.UseMnemonic = $false
       $z.BackColor = $tlo
       $z.Padding = New-Object System.Windows.Forms.Padding(6, 2, 6, 3)
-      $z.Margin = New-Object System.Windows.Forms.Padding(0, 4, 0, 4)
+      $z.Margin = New-Object System.Windows.Forms.Padding(0, 6, 0, 2)
       $k.Controls.Add($z)
     }
   } else {
@@ -1859,7 +1930,7 @@ function Kafelek-Liczby($t) {
     $k.Controls.Add((Etykieta-Zawijana $t.Powod $script:CzMala $script:KolUwaga $szer))
   }
   $opis = Etykieta-Zawijana $t.Opis $script:CzMala $script:KolSzary $szer
-  $opis.Margin = New-Object System.Windows.Forms.Padding(0, 4, 0, 0)
+  $opis.Margin = New-Object System.Windows.Forms.Padding(0, 6, 0, 0)
   $k.Controls.Add($opis)
   return $k
 }
@@ -1869,27 +1940,19 @@ function Odmaluj-Liczby {
   Wyczysc-Panel $script:PanelLiczby
   $r = $null; $c = $null
   if ($script:Dane) { $r = $script:Dane.Rachunek; $c = $script:Dane.Cykl }
-  $trzy = @()
-  try { $trzy = Trzy-Liczby $r $c }
-  catch { Zanotuj-Wywrotke "zlozenie trzech liczb" $_ }
-  if (@($trzy).Count -eq 0) {
+  $t = $null
+  try { $t = Liczba-Nauki $r $c }
+  catch { Zanotuj-Wywrotke "zlozenie kosztu nauki" $_ }
+  if (-not $t) {
     $script:PanelLiczby.Controls.Add((Etykieta-Zawijana (
-      "Liczb jeszcze nie ma - nie udało się ich złożyć. Powód jest w zakładce Szczegóły.") $script:CzZwykla $script:KolUwaga $script:SzerTresc))
+      "Kosztu nauki jeszcze nie ma - nie udało się go złożyć. Powód jest w zakładce Szczegóły.") $script:CzZwykla $script:KolUwaga $script:SzerTresc))
     return
   }
-  $karty = @()
-  foreach ($t in $trzy) { $karty += (Kafelek-Liczby $t) }
-  # Trzy karty rowne wysokoscia - nierowne wygladaja jak zrobione byle jak.
-  $max = 0
-  foreach ($kk in $karty) {
-    $h = $kk.GetPreferredSize((New-Object System.Drawing.Size($script:SzerKafelka, 0))).Height
-    if ($h -gt $max) { $max = $h }
+  $o = $null
+  if ($script:Start) {
+    try { $o = Opis-Startu $script:Start } catch { Zanotuj-Wywrotke "opis otwarcia sesji do karty nauki" $_ }
   }
-  foreach ($kk in $karty) {
-    $kk.MinimumSize = New-Object System.Drawing.Size($script:SzerKafelka, $max)
-    $script:PanelLiczby.Controls.Add($kk)
-  }
-  $karty[$karty.Count - 1].Margin = New-Object System.Windows.Forms.Padding(0, 0, 0, 14)
+  $script:PanelLiczby.Controls.Add((Kafelek-Liczby $t $o))
 }
 
 function Liczba-Boczna($panel, [string]$podpis, [string]$wartosc) {

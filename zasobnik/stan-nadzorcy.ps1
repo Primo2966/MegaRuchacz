@@ -721,6 +721,22 @@ function Procent-Ludzko([double]$czesc, [double]$calosc) {
   return "$([int][math]::Round($p))%"
 }
 
+# To samo, ale drobne kawalki pokazuje dokladniej (28.09.2026, P14): na
+# Przegladzie kazda liczba MegaRuchacza stoi w JEDNEJ mierze - procent jednego
+# otwarcia sesji - wiec "przy kazdej wiadomosci +115" nie moze byc wrzucone do
+# worka "mniej niz 1%" razem z czyms dziesiec razy wiekszym. Od 10% w gore -
+# calosci, ponizej - jedno miejsce po przecinku (skladnik 3,6% pod wierszem
+# "razem 4%" nie wyglada wtedy jak ta sama liczba drugi raz), ponizej 0,1% -
+# "mniej niz 0,1%". Zero procent nie powstaje nigdy dla niezerowej czesci.
+function Procent-Drobny([double]$czesc, [double]$calosc) {
+  if ($calosc -le 0) { return "?" }
+  $p = 100.0 * $czesc / $calosc
+  if ($p -ge 10) { return "$([int][math]::Round($p))%" }
+  if ($p -le 0) { return "0%" }
+  if ($p -lt 0.1) { return "mniej niż 0,1%" }
+  return ([math]::Round($p, 1).ToString("0.0", [System.Globalization.CultureInfo]::GetCultureInfo("pl-PL")) + "%")
+}
+
 # Pomiar ubrany w zdania: jedna struktura dla karty w oknie i dla wydruku -Raport.
 # Zmierzone = $false znaczy, ze calosci nie ma - wtedy Powod mowi dlaczego,
 # a liczby calosci i procentu w ogole nie powstaja.
@@ -745,9 +761,16 @@ function Opis-Startu($p) {
   if (($null -ne $p.Sesje.Min) -and ($null -ne $p.Sesje.Max)) {
     $o.Zakres = "Najmniejsza $(Okolo $p.Sesje.Min), największa $(Okolo $p.Sesje.Max) tokenów."
   }
-  $o.Portfel = ("Ta paczka idzie do modelu przy każdej Twojej wiadomości (od drugiej zwykle z bufora, za ułamek ceny). " +
-                "Nawet bez MegaRuchacza sesja startowałaby z ~$(Okolo $o.Cc) tokenami, więc skracanie jego zasad " +
-                "oszczędzi najwyżej $($o.MrProc) - resztę waży sam Claude Code z opisami narzędzi.")
+  # Zdanie o portfelu przepisane 28.09.2026 (P14). Stare "ta paczka idzie przy
+  # kazdej wiadomosci" stalo obok wiersza "przy kazdej wiadomosci: ~115"
+  # i czytalo sie jak sprzecznosc. Teraz rozdziela dwie rzeczy: nowy tekst
+  # doklejany do wiadomosci i cala rozmowe czytana od nowa (z bufora). Liczb tu
+  # nie ma - stoja w wierszach karty, a ta sama liczba w dwoch miejscach myli.
+  $o.Portfel = ("Model nie pamięta rozmowy - przy każdej Twojej wiadomości dostaje ją całą od nowa, razem z tą paczką. " +
+                "Pełną cenę płacisz za nią raz, na starcie; przy kolejnych wiadomościach idzie z bufora, za ok. 1/10 ceny, " +
+                "a nowego tekstu MegaRuchacz dokłada tylko przypomnienie z wiersza wyżej. " +
+                "Bez MegaRuchacza sesja i tak startowałaby z tym, co waży sam Claude Code (szara część paska), " +
+                "więc skracanie zasad MegaRuchacza oszczędzi najwyżej jego niebieską część.")
   $wk = $p.Workerzy
   if ($wk -and ($null -ne $wk.Mediana) -and ($wk.Liczba -gt 0)) {
     $mrW = $null
@@ -1044,97 +1067,33 @@ function Dzien-Ludzko($data) {
   return $data.ToString('dd.MM')
 }
 
-# TRZY LICZBY NA WIERZCHU OKNA.
+# KOSZT NAUKI Z ROZMOW NA WIERZCHU OKNA.
 #
-# Pierwsze dwie wyjmujemy z JEDNEJ linii, ktora wypisuje
-# narzedzia\koszt-pamieci.ps1 -Zwiezle (mamy ja juz w $rachunek.Linia, zebrana
-# przy odswiezaniu). Trzecia to koszt ostatniego przebiegu nauki, czyli to, co
-# samo wylawianie zapisalo w .koszt-cyklu.txt. Nic tu nie jest liczone na nowo -
-# to sa TE SAME liczby, ktore stoja w rozbiciu pod [Szczegoly], tylko wyjete
-# na wierzch i opisane zdaniem.
+# Do 28.09.2026 (P14) byly tu TRZY liczby: na wiadomosc, na otwarcie sesji
+# i nauka. Dwie pierwsze powtarzaly to, co stoi w karcie "Otwarcie sesji" -
+# uzytkownik: "u gory jest otwarcie sesji, srodkowy kafelek tez ma napisane,
+# ile doklada do kazdej sesji. Czym to sie rozni?". Zostaly wiec tylko w tej
+# karcie (rozpisane na "raz na start sesji" i "przy kazdej wiadomosci"), a tu
+# sama nauka - to inny koszt: jedyne prawdziwe wywolanie modelu. Liczba to
+# koszt ostatniego przebiegu, czyli to, co samo wylawianie zapisalo
+# w .koszt-cyklu.txt. Nic tu nie jest liczone na nowo.
 #
-# Gdy ktorejs nie da sie ustalic, pole Liczba zostaje puste, a w Powod stoi
+# Gdy liczby nie da sie ustalic, pole Liczba zostaje puste, a w Powod stoi
 # DLACZEGO. Okno pokazuje wtedy "nie wiem" i powod, nigdy zera: zero znaczy
 # "nic nie kosztuje" i byloby najdrozszym rodzajem ciszy w calym narzedziu.
-#
-# PODPISY MOWIA, JAK TO SIE NAPRAWDE PLACI (poprawione 24.09.2026 po pomiarze na
-# prawdziwych transkryptach, opis w .megaruchacz\mapa.md, sekcja "Koszt tekstu
-# w kontekscie a pamiec podreczna modelu"). Stary podpis "Otwarcie nowej sesji
-# ... raz" wprowadzal w blad: tekst WCHODZI do rozmowy raz, ale model czyta cala
-# rozmowe przy kazdym swoim kroku (~10 krokow na jedna wiadomosc), tyle ze
-# z bufora, za ulamek zwyklej ceny. To samo z przypomnieniem - zostaje w historii.
-# Podpisy mowia to slowami, BEZ przeliczania: liczby sa te same, co w rachunku.
-#
-# PROCENT CALOSCI obok liczby tokenow (od 28.09.2026, na zyczenie uzytkownika:
-# "nie wiem, czy to duzo"). Calosc otwarcia sesji mierzy koszt-pamieci.ps1
-# w transkryptach Claude Code i oddaje w -Dane (udzial.calosc, udzial.start,
-# udzial.wiadomosc). Tu tylko dzielimy. Bez zmierzonej calosci procentu nie ma
-# - Ogon mowi wtedy szaro, dlaczego (udzial.powod), bez alarmu.
-function Trzy-Liczby($rachunek, $cykl) {
-  $naWiadomosc = [pscustomobject]@{
-    Naglowek = "MegaRuchacz dokleja do każdej wiadomości"
-    Liczba   = $null
-    Opis     = "Przypomnienie zasad. Model czyta je potem przy każdym swoim kroku, ale z bufora, za ułamek ceny."
-    Ogon     = "i zostają w rozmowie do końca"
-    Powod    = ""
-  }
-  $naSesje = [pscustomobject]@{
-    Naglowek = "MegaRuchacz dokłada na otwarcie sesji"
-    Liczba   = $null
-    Opis     = "Wiedza o Tobie i o firmie. Wchodzi raz, ale model czyta ją przy każdym kroku - z bufora, za ułamek ceny."
-    Ogon     = "i zostają w rozmowie do końca"
-    Powod    = ""
-  }
+function Liczba-Nauki($rachunek, $cykl) {
+  # Slowa bez zargonu (P14, uzytkownik: "trzecia belka jest niezrozumiala"):
+  # zadnego "wywolania modelu", "doklejonego tekstu" ani "nadrabiania".
   $naDobe = [pscustomobject]@{
-    Naglowek = "Raz dziennie, nauka z rozmów"
+    Naglowek = "Raz dziennie: MegaRuchacz czyta Twoje rozmowy i wyciąga z nich fakty"
     Liczba   = $null
-    Opis     = "Jedyne miejsce, w którym naprawdę płacisz za wywołanie modelu - reszta to doklejony tekst."
+    Opis     = "Tylko tu MegaRuchacz sam zleca pracę Claude'owi i za nią płacisz. Wszystko inne to tekst dopisany do Twoich rozmów - karta wyżej."
     Ogon     = ""
     Powod    = ""
     # Za jaki okres i czy to nadrabianie - bez tego drogi dzien nadrabiania
     # wygladal na karcie jak nowa norma. Waga koloruje tylko ten jeden napis.
     Znacznik     = ""
     ZnacznikWaga = ""
-  }
-
-  if (-not $rachunek -or -not $rachunek.Linia) {
-    $powod = "nie udało się policzyć rachunku"
-    if ($rachunek -and $rachunek.Powod) { $powod = $rachunek.Powod }
-    $naWiadomosc.Powod = $powod
-    $naSesje.Powod     = $powod
-  } else {
-    $l = $rachunek.Linia
-    $m = [regex]::Match($l, 'wiadomosc\s*\+(\d+)\s*tokenow')
-    if ($m.Success) { $naWiadomosc.Liczba = [long]$m.Groups[1].Value }
-    elseif ($l -match 'przypomnienia nie umiem zmierzyc') {
-      $naWiadomosc.Powod = "rachunek nie znalazł gotowego przypomnienia, więc nie ma czego zmierzyć"
-    } else {
-      $naWiadomosc.Powod = "w odpowiedzi rachunku nie ma tej liczby: $l"
-    }
-
-    $m = [regex]::Match($l, 'start sesji\s*\+(\d+)\s*tokenow')
-    if ($m.Success) { $naSesje.Liczba = [long]$m.Groups[1].Value }
-    elseif ($l -match 'startu sesji nie umiem zmierzyc') {
-      $naSesje.Powod = "rachunek nie umie zmierzyć tego, co wchodzi na starcie sesji"
-    } else {
-      $naSesje.Powod = "w odpowiedzi rachunku nie ma tej liczby: $l"
-    }
-
-    # Procent calego otwarcia sesji obok kazdej z dwoch liczb.
-    $calosc = Liczba-Z-Klucza $rachunek.Klucze "udzial.calosc"
-    if (($null -ne $calosc) -and ($calosc -gt 0)) {
-      if ($null -ne $naWiadomosc.Liczba) {
-        $naWiadomosc.Ogon = "= $(Procent-Ludzko $naWiadomosc.Liczba $calosc) otwarcia sesji; zostają w rozmowie do końca"
-      }
-      if ($null -ne $naSesje.Liczba) {
-        $naSesje.Ogon = "= $(Procent-Ludzko $naSesje.Liczba $calosc) otwarcia sesji, reszta to sam Claude Code; zostają w rozmowie do końca"
-      }
-    } else {
-      # Powod (udzial.powod) stoi na karcie "Otwarcie sesji" - tu wystarczy zdanie.
-      $bez = "procentu nie ma - nie zmierzono całości otwarcia sesji, dlatego nie porównuję"
-      $naWiadomosc.Ogon = $bez
-      $naSesje.Ogon = $bez
-    }
   }
 
   if ($cykl -and ($null -ne $cykl.Koszt)) {
@@ -1144,12 +1103,13 @@ function Trzy-Liczby($rachunek, $cykl) {
     $o = Ocena-Nauki $rachunek
     $okres = Okres-Ludzko $o.ZakresOd $o.ZakresDo
     switch ($o.Rodzaj) {
-      "nadrabianie" { $naDobe.Znacznik = "nadrabianie zaległości"; $naDobe.ZnacznikWaga = "info" }
-      "mieszany"    { $naDobe.Znacznik = "częściowo nadrabianie";  $naDobe.ZnacznikWaga = "info" }
-      "zwykly"      { $naDobe.Znacznik = "zwykły dzień";           $naDobe.ZnacznikWaga = "" }
-      "nieznany"    { $naDobe.Znacznik = "okres nieznany";         $naDobe.ZnacznikWaga = "uwaga" }
+      "nadrabianie" { $naDobe.Znacznik = "tym razem czytał zaległe rozmowy";      $naDobe.ZnacznikWaga = "info" }
+      "mieszany"    { $naDobe.Znacznik = "tym razem czytał częściowo zaległe rozmowy"; $naDobe.ZnacznikWaga = "info" }
+      "zwykly"      { $naDobe.Znacznik = "zwykły dzień - czytał rozmowy";         $naDobe.ZnacznikWaga = "" }
+      "nieznany"    { $naDobe.Znacznik = "nie wiem, z których dni czytał rozmowy"; $naDobe.ZnacznikWaga = "uwaga" }
     }
-    if ($okres -and $naDobe.Znacznik) { $naDobe.Znacznik = "$($naDobe.Znacznik), rozmowy z $okres" }
+    if ($okres -and $naDobe.Znacznik -and ($o.Rodzaj -ne "nieznany")) { $naDobe.Znacznik = "$($naDobe.Znacznik) z $okres" }
+    elseif ($okres -and $naDobe.Znacznik) { $naDobe.Znacznik = "$($naDobe.Znacznik) (zakres: $okres)" }
     foreach ($a in (Alarmy-Rachunku $rachunek)) {
       if (($a.Temat -eq "cykl-zwykly") -or ($a.Temat -eq "cykl-rosnie")) { $naDobe.ZnacznikWaga = "pilne" }
     }
@@ -1160,7 +1120,7 @@ function Trzy-Liczby($rachunek, $cykl) {
     }
   }
 
-  return ,@($naWiadomosc, $naSesje, $naDobe)
+  return $naDobe
 }
 
 # ---------------------------------------------------- koszt nauki po ludzku
