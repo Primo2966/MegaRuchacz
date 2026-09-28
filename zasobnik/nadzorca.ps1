@@ -328,12 +328,17 @@ function Ile-Wymaga-Uwagi($problemy) {
 #
 # Etykieta przycisku, ktory wydaje tokeny, NIESIE SZACUNEK KOSZTU. Uzytkownik ma
 # zobaczyc liczbe zanim kliknie, a nie dowiedziec sie o niej z rachunku nazajutrz.
-function Napisy-Przyciskow($d) {
+#
+# P15 (28.09.2026): koszt na przycisku w tej samej mierze, co reszta Przegladu -
+# procent jednego otwarcia sesji ($start = Pomiar-Startu). Bez pomiaru zostaja
+# tokeny; zgadnietego procentu nie ma. Bez slowa "zalegle": czytanie i tak idzie
+# samo raz dziennie, przycisk robi to tylko wczesniej - i opis mowi to wprost.
+function Napisy-Przyciskow($d, $start = $null) {
   $n = [pscustomobject]@{
     Aktualizuj     = "Sprawdź i pobierz nowszą wersję MegaRuchacza"
     AktualizujOpis = "Nie kosztuje nic. Zagląda na serwer po poprawki i nanosi je."
-    Cykl           = "Przeczytaj zaległe rozmowy"
-    CyklOpis       = "Wysyła zaległe rozmowy do modelu, żeby się z nich uczył. Zapyta o zgodę."
+    Cykl           = "Przeczytaj teraz nowe rozmowy"
+    CyklOpis       = "Nie musisz - MegaRuchacz robi to sam raz dziennie. Zapyta o zgodę."
     CyklWlaczony   = $true
     Szacunek       = $null
   }
@@ -354,16 +359,26 @@ function Napisy-Przyciskow($d) {
     $n.CyklWlaczony = $false
     $n.CyklOpis = "Wyłączone: czytanie rozmów właśnie trwa. Liczby odświeżą się same, gdy skończy."
   } elseif (-not $s) {
-    $n.Cykl = "Przeczytaj zaległe rozmowy (koszt: nie wiem)"
-    $n.CyklOpis = "Nie mam danych, żeby oszacować koszt. Przed startem i tak zapyta o zgodę."
+    $n.Cykl = "Przeczytaj teraz nowe rozmowy (koszt: nie wiem)"
+    $n.CyklOpis = "Nie musisz - robi to sam raz dziennie. Nie mam danych, żeby oszacować koszt; przed startem zapyta o zgodę."
   } elseif (($null -ne $s.Porcje) -and ($s.Porcje -le 0)) {
     $n.CyklWlaczony = $false
     $n.CyklOpis = "Wyłączone: nic nie czeka, wszystkie rozmowy są już przeczytane."
   } elseif ($null -ne $s.Tokeny) {
-    $n.Cykl = "Przeczytaj zaległe rozmowy (~$(Liczba-Ludzka $s.Tokeny) tokenów)"
-    $n.CyklOpis = "Tyle mniej więcej wyda to jedno kliknięcie. Zapyta o zgodę i pokaże, skąd ta liczba."
+    $o = $null
+    if ($start) {
+      try { $o = Opis-Startu $start } catch { Zanotuj-Wywrotke "opis otwarcia sesji do napisu przycisku" $_ }
+    }
+    $js = Jak-Sesji $s.Tokeny $o
+    if ($js) {
+      $n.Cykl = "Przeczytaj teraz nowe rozmowy (koszt $js)"
+      $n.CyklOpis = "Nie musisz - robi to sam raz dziennie. To ok. $(Liczba-Ludzka $s.Tokeny) tokenów; zapyta o zgodę i pokaże, skąd ta liczba."
+    } else {
+      $n.Cykl = "Przeczytaj teraz nowe rozmowy (~$(Liczba-Ludzka $s.Tokeny) tokenów)"
+      $n.CyklOpis = "Nie musisz - robi to sam raz dziennie. Procentu nie ma, bo nie zmierzono otwarcia sesji. Zapyta o zgodę."
+    }
   } else {
-    $n.Cykl = "Przeczytaj zaległe rozmowy (koszt: nie wiem)"
+    $n.Cykl = "Przeczytaj teraz nowe rozmowy (koszt: nie wiem)"
     $n.CyklOpis = "Nie umiem oszacować kosztu: $($s.Powod). Przed startem zapyta o zgodę."
   }
   return $n
@@ -381,7 +396,7 @@ function Skladniki-Mr($start, $o) {
   $lista = @()
   if (-not $start -or -not $o -or -not $o.Zmierzone) { return ,$lista }
   foreach ($x in @(
-      @("raz na start sesji: zasady i wiedza o Tobie i firmie", $start.MrStart, ""),
+      @("raz na start rozmowy: zasady i wiedza o Tobie i firmie", $start.MrStart, ""),
       @("przy każdej Twojej wiadomości: przypomnienie zasad", $start.MrWiadomosc, "+"))) {
     $liczba = "nie wiem"; $proc = ""
     if ($null -ne $x[1]) {
@@ -403,7 +418,20 @@ function Zbuduj-Przod($d, $problemy, $czas, $start) {
   $l += "liczby sprawdzone: $stempel  (okno przelicza je samo przy każdym otwarciu i co $Minut min)"
   $l += ""
 
-  $wazne = @(@($problemy) | Where-Object { $_.Waga -ne "info" })
+  $l += "WERDYKT   (w oknie: pierwsza karta, duże zdanie - zielone: mało, czerwone: dużo, żółte: nie wiadomo)"
+  $wd = $null
+  try { $wd = Werdykt-Kosztu $start $(if ($d) { $d.Rachunek } else { $null }) $(if ($d) { $d.Cykl } else { $null }) }
+  catch { Zanotuj-Wywrotke "werdykt do wydruku" $_ }
+  if (-not $wd) {
+    $l += "  NIE UDALO SIE ZLOZYC - szczegoly w dzienniku nadzorcy"
+  } else {
+    $l += "  [$($wd.Stan)] $($wd.Zdanie)"
+    if ($wd.Wyjasnienie) { $l += "  $($wd.Wyjasnienie)" }
+    if ($wd.Nauka) { $l += "  $($wd.Nauka)" }
+  }
+  $l += ""
+
+  $wazne =@(@($problemy) | Where-Object { $_.Waga -ne "info" })
   $info  = @(@($problemy) | Where-Object { $_.Waga -eq "info" })
   if (($wazne.Count -eq 0) -and ($info.Count -eq 0)) {
     $l += "CO WYMAGA UWAGI"
@@ -441,8 +469,7 @@ function Zbuduj-Przod($d, $problemy, $czas, $start) {
     $l += "  Otwarcie sesji: ~$(Okolo $os.Razem) tokenów. Z tego MegaRuchacz: $(Okolo $os.Mr) ($($os.MrProc)) · Claude Code sam: $(Okolo $os.Cc) ($($os.CcProc))"
     foreach ($sk in (Skladniki-Mr $start $os)) { $l += "      $($sk.Napis): $($sk.Liczba)   ($($sk.Proc))" }
     $l += "  $($os.Portfel)"
-    $l += "  $($os.Podstawa) $($os.Zakres)"
-    $l += "  $($os.WorkerZdanie)"
+    $l += "  $($os.Podstawa) $($os.Zakres)   (drobnym drukiem)"
   }
   $l += ""
 
@@ -477,11 +504,11 @@ function Zbuduj-Przod($d, $problemy, $czas, $start) {
   $st = $null
   try { $st = Statystyka-Okna $r }
   catch { Zanotuj-Wywrotke "statystyka nauki do wydruku" $_ }
-  $l += "KOSZT NAUKI Z ROZMÓW - OSTATNIE 30 DNI   (w oknie: wykres słupkowy - $(Opis-Rysownika))"
+  $l += "KOSZT CZYTANIA ROZMÓW - OSTATNIE 30 DNI   (w oknie: dalszy ciąg karty nauki, wykres słupkowy w procentach jednej sesji - $(Opis-Rysownika))"
   if (-not $st) {
     $l += "  NIE UDALO SIE ZLOZYC STATYSTYKI - szczegoly w dzienniku nadzorcy"
   } else {
-    $l += Linie-Statystyki $st $r
+    $l += Linie-Statystyki $st $r $os
   }
   $l += ""
 
@@ -507,7 +534,7 @@ function Zbuduj-Przod($d, $problemy, $czas, $start) {
   $l += ""
 
   $l += "PRZYCISKI W OKNIE - co się stanie po kliknięciu"
-  $n = Napisy-Przyciskow $d
+  $n = Napisy-Przyciskow $d $start
   $l += "  [$($n.Aktualizuj)]"
   $l += "      $($n.AktualizujOpis)"
   $wl = ""
@@ -524,7 +551,7 @@ function Zbuduj-Przod($d, $problemy, $czas, $start) {
 
 # Statystyka jako tekst: to samo, co wykres w oknie, tylko paskami ze znakow.
 # Sluzy wydrukowi -Raport, czyli sprawdzeniu bez pulpitu.
-function Linie-Statystyki($st, $rachunek) {
+function Linie-Statystyki($st, $rachunek, $o = $null) {
   $l = @()
   $zDanymi = @(@($st.Dni) | Where-Object { $_.Jest })
   if ($zDanymi.Count -gt 0) {
@@ -536,26 +563,28 @@ function Linie-Statystyki($st, $rachunek) {
       if (($x.Razem -gt 0) -and ($dl -lt 1)) { $pasek = "|" }
       $rodzaj = @()
       if ($x.Zwykle -gt 0)      { $rodzaj += "zwykły dzień" }
-      if ($x.Nadrabianie -gt 0) { $rodzaj += "nadrabianie" }
-      if ($x.Nieznane -gt 0)    { $rodzaj += "okres nieznany" }
-      $l += ("  {0}  {1,-30}  {2,9}  {3}" -f $x.Dzien.ToString('dd.MM'), $pasek, (Liczba-Ludzka $x.Razem), ($rodzaj -join " + "))
+      if ($x.Nadrabianie -gt 0) { $rodzaj += "rozmowy z kilku dni" }
+      if ($x.Nieznane -gt 0)    { $rodzaj += "nie wiadomo, z których dni" }
+      $proc = Proc-Sesji $x.Razem $o
+      $l += ("  {0}  {1,-30}  {2,9}  {3,8}  {4}" -f $x.Dzien.ToString('dd.MM'), $pasek, (Liczba-Ludzka $x.Razem), $proc, ($rodzaj -join " + "))
     }
   } else {
     $l += "  (wykres bez słupków - w oknie w jego miejscu stoi zdanie niżej)"
   }
-  $l += ("  Ostatnie 7 dni: {0}   |   ostatnie {1} dni: {2}" -f (Tokeny-Albo-Brak $st.Suma7), $st.OknoDni, (Tokeny-Albo-Brak $st.Suma30))
+  if (-not (Proc-Sesji 1 $o)) { $l += "  (procentów nie ma, bo nie zmierzono otwarcia sesji - w oknie oś w tysiącach tokenów)" }
+  $l += ("  Ostatnie 7 dni: {0}   |   ostatnie {1} dni: {2}" -f (Koszt-Po-Ludzku $st.Suma7 $o), $st.OknoDni, (Koszt-Po-Ludzku $st.Suma30 $o))
   if ($null -ne $st.Srednia) {
-    $l += ("  Średnio na dzień nauki: ~{0} tokenów (z {1} {2})" -f (Liczba-Ludzka $st.Srednia), $st.SredniaDni, (Odmiana $st.SredniaDni 'dnia' 'dni' 'dni'))
+    $l += ("  Średnio na dzień nauki: {0} (z {1} {2})" -f (Koszt-Po-Ludzku $st.Srednia $o), $st.SredniaDni, (Odmiana $st.SredniaDni 'dnia' 'dni' 'dni'))
   } else {
     $l += "  Średnio na dzień nauki: jeszcze nie wiem"
   }
   if (($null -ne $st.Typowy) -and ($st.TypowychDni -gt 0)) {
-    $l += ("  Zwykły dzień (bez nadrabiania): ok. {0} tokenów - typowa wartość z {1} {2}" -f (Okolo $st.Typowy), $st.TypowychDni, (Odmiana $st.TypowychDni 'dnia' 'dni' 'dni'))
+    $l += ("  Zwykły dzień (rozmowy z poprzedniego dnia): {0} - typowa wartość z {1} {2}" -f (Koszt-Po-Ludzku $st.Typowy $o), $st.TypowychDni, (Odmiana $st.TypowychDni 'dnia' 'dni' 'dni'))
   } else {
-    $l += "  Zwykły dzień (bez nadrabiania): jeszcze nie wiem - w historii nie ma ani jednego dnia bez nadrabiania"
+    $l += "  Zwykły dzień (rozmowy z poprzedniego dnia): jeszcze nie wiem - w historii nie ma ani jednego takiego dnia"
   }
   if ($null -ne $st.Prog) {
-    $l += "  Próg zwykłego dnia: $(Liczba-Ludzka $st.Prog) tokenów (w oknie przerywana czerwona linia, gdy mieści się w skali)"
+    $l += "  $(Zdanie-Progu $st $o)  (w oknie przerywana czerwona linia, gdy mieści się w skali)"
   }
   if ($st.Uwaga) { $l += "  $($st.Uwaga)" }
   return ,$l
@@ -564,6 +593,25 @@ function Linie-Statystyki($st, $rachunek) {
 function Tokeny-Albo-Brak($n) {
   if ($null -eq $n) { return "brak danych" }
   return "~$(Liczba-Ludzka $n) tokenów"
+}
+
+# "jak 21% jednej sesji (40 477 tokenów)" - albo same tokeny, gdy otwarcia
+# sesji nie zmierzono. Jedna miara Przegladu (P15), tokeny tylko pomocniczo.
+function Koszt-Po-Ludzku($n, $o) {
+  if ($null -eq $n) { return "brak danych" }
+  $js = Jak-Sesji $n $o
+  if ($js) { return "$js ($(Liczba-Ludzka $n) tokenów)" }
+  return "~$(Liczba-Ludzka $n) tokenów"
+}
+
+# Prog zwyklego dnia (z koszt-pamieci.ps1, cykl.prog) po ludzku: "tu zaczyna
+# sie drogo" w procencie jednego otwarcia sesji. Liczba progu idzie z rachunku,
+# tu tylko ja ubieramy w slowa.
+function Zdanie-Progu($st, $o) {
+  if (-not $st -or ($null -eq $st.Prog)) { return "" }
+  $p = Proc-Sesji $st.Prog $o
+  if ($p) { return "Drogo robi się, gdy zwykły dzień kosztuje ponad $p jednej sesji ($(Liczba-Ludzka $st.Prog) tokenów)." }
+  return "Drogo robi się, gdy zwykły dzień kosztuje ponad $(Liczba-Ludzka $st.Prog) tokenów."
 }
 
 # SZCZEGOLY JAKO SEKCJE, NIE SCIANA TEKSTU (przebudowane 25.09.2026). Uzytkownik:
@@ -621,7 +669,10 @@ $SLOWA_Z_OGONKAMI = @(
   @("dopoki", "dopóki"), @("wpisow", "wpisów"), @("pamiec", "pamięć"), @("sciezka", "ścieżka"),
   @("caly", "cały"), @("czesc", "część"), @("Biezace", "Bieżące"), @("rozmow", "rozmów"), @("zadan", "zadań"),
   @("czlowiek", "człowiek"), @("recznie", "ręcznie"), @("sie", "się"), @("kazdej", "każdej"),
-  @("zaden", "żaden"), @("siega", "sięga"), @("narzedziami", "narzędziami")
+  @("zaden", "żaden"), @("siega", "sięga"), @("narzedziami", "narzędziami"),
+  @("niz", "niż"), @("prog", "próg"), @("calosc", "całość"), @("porownuje", "porównuje"), @("mierze", "mierzę"),
+  @("Udzialu", "Udziału"), @("calym", "całym"), @("calosci", "całości"), @("transkryptow", "transkryptów"),
+  @("zaleglosci", "zaległości")
 )
 function Po-Polsku([string]$t) {
   if (-not $t) { return "" }
@@ -634,14 +685,19 @@ function Po-Polsku([string]$t) {
 # Rozbicie z koszt-pamieci.ps1 -Rozbicie jako tabele: wiersz pozycji ma postac
 # "  nazwa  ####  1 234  54%  uwaga". Linia, ktora nie pasuje do wzorca, NIE
 # ginie - idzie jako zwykly tekst pod tabela, w tej samej kolejnosci.
-function Dodaj-Rozbicie($s, $rozbicie) {
+#
+# P15: kolumna "% otwarcia sesji" - kazda liczba tokenow MegaRuchacza takze
+# w mierze Przegladu ($o = Opis-Startu). Pozycje Codeksa jej nie dostaja: jego
+# otwarcia sesji nikt nie mierzy, a procent od sesji Claude Code bylby falszywy.
+function Dodaj-Rozbicie($s, $rozbicie, $o = $null) {
   $kol = @(@{ N = "Pozycja"; S = 250 }, @{ N = "Udział"; S = 170; Pasek = $true }, @{ N = "Tokeny"; S = 100; P = $true },
-           @{ N = ""; S = 60; P = $true }, @{ N = "Uwaga"; S = 0 })
+           @{ N = ""; S = 60; P = $true }, @{ N = "% otwarcia sesji"; S = 130; P = $true }, @{ N = "Uwaga"; S = 0 })
   $wiersze = @()
   $zrzuc = {
     if ($wiersze.Count -gt 0) { Dodaj-Tabele $s $kol $wiersze; Set-Variable -Name wiersze -Value @() -Scope 1 }
   }
   $pierwsza = $true
+  $codex = $false
   foreach ($linia in @($rozbicie)) {
     $l = "$linia"
     if (-not $l.Trim()) { continue }
@@ -655,10 +711,15 @@ function Dodaj-Rozbicie($s, $rozbicie) {
       if (-not $pasek) { $pasek = "100"; if ($m.Groups[2].Value -eq "|") { $pasek = "0" } }
       $procTxt = ""
       if ($proc) { $procTxt = "$proc%" }
-      $wiersze += ,@((Po-Polsku $m.Groups[1].Value.Trim()), $pasek, $m.Groups[3].Value, $procTxt, (Po-Polsku $m.Groups[5].Value.Trim()))
+      $sesja = ""
+      $tok = [long]($m.Groups[3].Value -replace ' ', '')
+      if ((-not $codex) -and ($tok -gt 0)) { $sesja = Proc-Sesji $tok $o }
+      elseif ($codex) { $sesja = "nie mierzę" }
+      $wiersze += ,@((Po-Polsku $m.Groups[1].Value.Trim()), $pasek, $m.Groups[3].Value, $procTxt, $sesja, (Po-Polsku $m.Groups[5].Value.Trim()))
       continue
     }
     & $zrzuc
+    if ($l -match '^\S') { $codex = ($l -match '^Codex') }
     if ($l -match '^\S') {
       Dodaj-Podtytul $s (Z-Wielkiej (Po-Polsku $l.Trim()))
     } else {
@@ -711,7 +772,8 @@ function Sekcje-Szczegolow($d, $wywrotkiNadzorcy, $rozbicie, $start) {
     # naglowki w sekcji "Rachunek za pamiec" tuz nizej - drugi raz tu tylko mylil.
     Dodaj-Wiersz $s "MegaRuchacz" "~$(Liczba-Ludzka $o.Mr) tokenów ($($o.MrProc)) - start sesji i przypomnienie doklejone do pierwszej wiadomości; każdą pozycję pokazuje sekcja niżej"
     Dodaj-Wiersz $s "Claude Code sam" "~$(Liczba-Ludzka $o.Cc) tokenów ($($o.CcProc)) - jego instrukcje, opisy narzędzi (także z serwerów MCP), lista skilli"
-    if ($o.Worker) { Dodaj-Wiersz $s "Start workera" ($o.WorkerZdanie -replace '^Start jednego workera: ', '') }
+    # "(22%)" to udzial w starcie WORKERA, nie w otwarciu sesji - dopisujemy to wprost (P15)
+    if ($o.Worker) { Dodaj-Wiersz $s "Start workera" (($o.WorkerZdanie -replace '^Start jednego workera: ', '') -replace '\((\d+%)\)', '($1 startu workera)') }
     else { Dodaj-Wiersz $s "Start workera" ($o.WorkerZdanie -replace '^Start jednego workera: ', '') "uwaga" }
     Dodaj-Wiersz $s "Jak to zmierzone" ("W każdym transkrypcie Claude Code pierwsza odpowiedź modelu ma pole usage: suma input_tokens, " +
       "cache_creation_input_tokens i cache_read_input_tokens to cały kontekst w tej chwili. Od tego odejmuję Twoją pierwszą wiadomość " +
@@ -748,13 +810,13 @@ function Sekcje-Szczegolow($d, $wywrotkiNadzorcy, $rozbicie, $start) {
 
   # 3. Rachunek pozycja po pozycji.
   $s = Nowa-Sekcja "Rachunek za pamięć, pozycja po pozycji" "Co MegaRuchacz dokleja do rozmowy i ile to waży. Liczy narzędzie koszt-pamieci (znaki podzielone przez 3 - szacunek)."
-  if ($null -ne $rozbicie) { Dodaj-Rozbicie $s $rozbicie }
+  if ($null -ne $rozbicie) { Dodaj-Rozbicie $s $rozbicie $o }
   else { Dodaj-Tekst $s "Jeszcze nie policzone." "szary" }
   $lista += $s
 
   # 4. Nauka z rozmow.
   $s = Nowa-Sekcja "Nauka z rozmów" "Raz dziennie MegaRuchacz czyta Twoje rozmowy i wyciąga z nich fakty do pamięci. To jedyne miejsce, gdzie naprawdę woła model."
-  if ($d -and $d.Cykl) { Dodaj-Wiersze $s (Opis-Cyklu $d.Cykl) }
+  if ($d -and $d.Cykl) { Dodaj-Wiersze $s (Opis-Cyklu $d.Cykl $o) }
   else { Dodaj-Tekst $s "Nie udało się odczytać - szczegóły w dzienniku nadzorcy." "uwaga" }
   $lista += $s
 
@@ -778,13 +840,15 @@ function Sekcje-Szczegolow($d, $wywrotkiNadzorcy, $rozbicie, $start) {
     elseif ($st.SumyZ -eq "dni") { $sumy = "zsumowane z dni poniżej (podsumowania nie ma)" }
     Dodaj-Wiersz $s "Sumy 7 i 30 dni" $sumy
     Dodaj-Wiersz $s "Wykres" (Opis-Rysownika)
-    Dodaj-Wiersz $s "Próg zwykłego dnia" "$(Tokeny-Albo-Brak $st.Prog) - uzasadnienie na górze narzedzia\koszt-pamieci.ps1"
+    $pj = Jak-Sesji $st.Prog $o
+    if ($pj) { $pj = " ($pj)" }
+    Dodaj-Wiersz $s "Próg zwykłego dnia" "$(Tokeny-Albo-Brak $st.Prog)$pj - uzasadnienie na górze narzedzia\koszt-pamieci.ps1"
     $dni = @()
     foreach ($x in @(@($st.Dni) | Where-Object { $_.Jest })) {
-      $dni += ,@($x.Dzien.ToString('yyyy-MM-dd'), (Liczba-Ludzka $x.Razem), (Liczba-Ludzka $x.Zwykle), (Liczba-Ludzka $x.Nadrabianie), (Liczba-Ludzka $x.Nieznane))
+      $dni += ,@($x.Dzien.ToString('yyyy-MM-dd'), (Liczba-Ludzka $x.Razem), (Proc-Sesji $x.Razem $o), (Liczba-Ludzka $x.Zwykle), (Liczba-Ludzka $x.Nadrabianie), (Liczba-Ludzka $x.Nieznane))
     }
     if ($dni.Count -gt 0) {
-      Dodaj-Tabele $s @(@{ N = "Dzień"; S = 120 }, @{ N = "Razem"; S = 110; P = $true }, @{ N = "Zwykły dzień"; S = 120; P = $true },
+      Dodaj-Tabele $s @(@{ N = "Dzień"; S = 120 }, @{ N = "Razem"; S = 110; P = $true }, @{ N = "% otwarcia sesji"; S = 140; P = $true }, @{ N = "Zwykły dzień"; S = 120; P = $true },
                         @{ N = "Nadrabianie"; S = 120; P = $true }, @{ N = "Okres nieznany"; S = 130; P = $true }) $dni
     } else {
       Dodaj-Tekst $s "Jeszcze nie ma ani jednego dnia z kosztem." "szary"
@@ -1080,6 +1144,7 @@ $script:KartaStat      = $null
 $script:PanelStan      = $null
 $script:ListaSzczegolow = $null  # karty sekcji w zakladce Szczegoly (od 25.09.2026 zamiast jednego pola tekstu)
 $script:KartaStart     = $null   # karta "Otwarcie sesji" na Przegladzie
+$script:KartaWerdykt   = $null   # jedno zdanie na samej gorze: MegaRuchacz kosztuje malo / duzo / nie wiadomo (P15)
 # Pomiar otwarcia sesji z transkryptow (Pomiar-Startu). Liczony przy otwarciu okna
 # i przy recznym przeliczeniu - nie w dozorze co kwadrans, bo nikt go wtedy nie oglada.
 $script:Start          = $null
@@ -1108,6 +1173,12 @@ $script:Widok          = "przeglad"
 # Dane, z ktorych rysuje sie wykres w zdarzeniu Paint - procedura obslugi siega
 # wylacznie po $script:, wiec odkladamy je tutaj przy kazdym odmalowaniu.
 $script:StatWykresu    = $null
+# Jednostka osi wykresu (Ustaw-Miare-Wykresu): procent jednego otwarcia sesji,
+# a bez pomiaru - tysiace tokenow.
+$script:WykresDz       = 1000.0
+$script:WykresProc     = $false
+# Wykres bez karty nauki nad soba (nie dalo sie jej zlozyc) rysuje pelna ramke.
+$script:StatSama       = $false
 # Wywrotka rysowania meldowana RAZ, a nie przy kazdym odmalowaniu - Paint
 # przychodzi dziesiatki razy na minute i zasypalby dziennik.
 $script:RysowanieZawiodlo = $false
@@ -1268,6 +1339,21 @@ function Obrysuj($kontrolka, $e) {
     $e.Graphics.DrawRectangle($script:PioroRamki, 0, 0, $kontrolka.Width - 1, $kontrolka.Height - 1)
   } catch {
     if (-not $script:RamkaZawiodla) { $script:RamkaZawiodla = $true; Zanotuj-Wywrotke "rysowanie ramki karty" $_ }
+  }
+}
+
+# Ramka karty, ktora jest dalszym ciagiem karty nad nia (wykres pod karta
+# nauki): lewa, prawa i dolna kreska. Gorna tylko wtedy, gdy karty nad nia
+# nie ma ($script:StatSama) - inaczej wisialaby bez ramki od gory.
+function Obrysuj-Ciag-Dalszy($kontrolka, $e) {
+  try {
+    $w = $kontrolka.Width - 1; $h = $kontrolka.Height - 1
+    $e.Graphics.DrawLine($script:PioroRamki, 0, 0, 0, $h)
+    $e.Graphics.DrawLine($script:PioroRamki, $w, 0, $w, $h)
+    $e.Graphics.DrawLine($script:PioroRamki, 0, $h, $w, $h)
+    if ($script:StatSama) { $e.Graphics.DrawLine($script:PioroRamki, 0, 0, $w, 0) }
+  } catch {
+    if (-not $script:RamkaZawiodla) { $script:RamkaZawiodla = $true; Zanotuj-Wywrotke "rysowanie ramki wykresu" $_ }
   }
 }
 
@@ -1462,6 +1548,46 @@ function Karta-Komunikatu([string]$tytul, [string[]]$linie, $kolor) {
   return $k
 }
 
+# --- werdykt na samej gorze Przegladu (P15, 28.09.2026) ------------------------
+# Jedno zdanie duza czcionka, ktore czlowiek nieznajacy MegaRuchacza zrozumie
+# w piec sekund: ile MegaRuchacz kosztuje w stosunku do calosci i czy to malo.
+# Stan i slowa sklada Werdykt-Kosztu (stan-nadzorcy.ps1) - tu tylko kolor:
+# zielony = malo, czerwony = duzo, zolty = nie wiadomo (i wtedy tlo karty tez
+# zolte, zeby "nie wiem" nie wygladalo jak "wszystko gra").
+function Odmaluj-Werdykt {
+  if (-not $script:KartaWerdykt -or $script:KartaWerdykt.IsDisposed) { return }
+  Wyczysc-Panel $script:KartaWerdykt
+  $szer = $script:SzerKarty - 44
+  $r = $null; $c = $null
+  if ($script:Dane) { $r = $script:Dane.Rachunek; $c = $script:Dane.Cykl }
+  $w = $null
+  try { $w = Werdykt-Kosztu $script:Start $r $c } catch { Zanotuj-Wywrotke "werdykt kosztu" $_ }
+  $script:KartaWerdykt.BackColor = $script:TloKarty
+  if (-not $w) {
+    $script:KartaWerdykt.BackColor = $script:TloUwaga
+    $script:KartaWerdykt.Controls.Add((Etykieta-Zawijana "Nie udało się ocenić, ile kosztuje MegaRuchacz - powód jest w dzienniku nadzorcy." $script:CzGruba $script:KolUwaga $szer))
+    return
+  }
+  $kol = $script:KolSzary
+  switch ($w.Stan) {
+    "malo"        { $kol = $script:KolDobrze }
+    "duzo"        { $kol = $script:KolPilne; $script:KartaWerdykt.BackColor = $script:TloPilne }
+    "nie wiadomo" { $kol = $script:KolUwaga; $script:KartaWerdykt.BackColor = $script:TloUwaga }
+  }
+  $z = Etykieta-Zawijana $w.Zdanie $script:CzTytul $kol $szer
+  $z.UseMnemonic = $false
+  $script:KartaWerdykt.Controls.Add($z)
+  # Prog i nauka jednym akapitem pod zdaniem - okno ma sie miescic na ekranie
+  # bez przewijania, a karta otwarcia sesji tuz nizej i tak mowi, co jest 100%.
+  $reszta = (@($w.Wyjasnienie, $w.Nauka) | Where-Object { $_ }) -join " "
+  if ($reszta) {
+    $x = Etykieta-Zawijana $reszta $script:CzZwykla $script:KolTekst $szer
+    $x.UseMnemonic = $false
+    $x.Margin = New-Object System.Windows.Forms.Padding(0, 6, 0, 0)
+    $script:KartaWerdykt.Controls.Add($x)
+  }
+}
+
 # --- karta "Otwarcie sesji" na Przegladzie ------------------------------------
 # Odpowiedz na pytanie uzytkownika "ile tokenow na otwarcie sesji i jaki to
 # procent tego, co dokleja MegaRuchacz". Jedna duza liczba, pasek z dwoma
@@ -1541,12 +1667,12 @@ function Odmaluj-Start {
   $szer = $script:SzerKarty - 44
   $tyt = Etykieta "Otwarcie sesji" $script:CzGruba $script:KolTekst
   $script:KartaStart.Controls.Add($tyt)
-  $pod = Etykieta-Zawijana "Ile tokenów trafia do modelu, zanim napiszesz pierwsze słowo - i ile z tego dokłada MegaRuchacz." $script:CzMala $script:KolSzary $szer
+  $pod = Etykieta-Zawijana "Co Claude wczytuje na starcie każdej nowej rozmowy, zanim napiszesz pierwsze słowo - i ile z tego dokłada MegaRuchacz." $script:CzMala $script:KolSzary $szer
   $pod.Margin = New-Object System.Windows.Forms.Padding(0, 0, 0, 8)
   $script:KartaStart.Controls.Add($pod)
 
   if ($null -eq $script:Start) {
-    $script:KartaStart.Controls.Add((Etykieta-Zawijana "Mierzę w transkryptach Claude Code - to potrwa kilka sekund..." $script:CzZwykla $script:KolSzary $szer))
+    $script:KartaStart.Controls.Add((Etykieta-Zawijana "Liczę, ile Claude wczytuje na starcie rozmowy - to potrwa kilka sekund..." $script:CzZwykla $script:KolSzary $szer))
     return
   }
   $o = $null
@@ -1572,7 +1698,7 @@ function Odmaluj-Start {
   $duza = Etykieta ("~" + (Okolo $o.Razem)) $script:CzDuza $script:KolTekst
   $duza.Margin = New-Object System.Windows.Forms.Padding(0, 0, 6, 0)
   $wiersz.Controls.Add($duza)
-  $jed = Etykieta "tokenów na otwarcie każdej sesji" $script:CzZwykla $script:KolSzary
+  $jed = Etykieta "tokenów na start każdej rozmowy - to jest 100%" $script:CzZwykla $script:KolSzary
   $jed.Margin = New-Object System.Windows.Forms.Padding(0, 14, 0, 0)
   $wiersz.Controls.Add($jed)
   $script:KartaStart.Controls.Add($wiersz)
@@ -1585,12 +1711,13 @@ function Odmaluj-Start {
 
   Wiersz-Legendy-Startu $script:KartaStart $script:KolMr "MegaRuchacz - razem, z tego:" "~$(Okolo $o.Mr)" $o.MrProc
   foreach ($sk in (Skladniki-Mr $script:Start $o)) { Wiersz-Skladnika-Startu $script:KartaStart $sk }
-  Wiersz-Legendy-Startu $script:KartaStart $script:KolCc "Claude Code sam - jego instrukcje i opisy narzędzi (MCP)" "~$(Okolo $o.Cc)" $o.CcProc
+  Wiersz-Legendy-Startu $script:KartaStart $script:KolCc "Claude Code sam - jego własne instrukcje i podłączone dodatki" "~$(Okolo $o.Cc)" $o.CcProc
 
   $p = Etykieta-Zawijana $o.Portfel $script:CzZwykla $script:KolTekst $szer
   $p.Margin = New-Object System.Windows.Forms.Padding(0, 8, 0, 6)
   $script:KartaStart.Controls.Add($p)
-  $pods = (@($o.Podstawa, $o.Zakres, $o.WorkerZdanie) | Where-Object { $_ }) -join " "
+  # Start workera stoi w Szczegolach - na Przegladzie tylko to, co laik rozumie (P15).
+  $pods = (@($o.Podstawa, $o.Zakres) | Where-Object { $_ }) -join " "
   $script:KartaStart.Controls.Add((Etykieta-Zawijana $pods $script:CzMala $script:KolSzary $szer))
 }
 
@@ -1603,13 +1730,35 @@ function Odmaluj-Start {
 # Prog zwyklego dnia wchodzi do skali tylko wtedy, gdy jest najwyzej dwa razy
 # wyzej niz najwyzszy slupek - inaczej zgniotlby wszystkie slupki do kresek,
 # a legenda mowi wtedy wprost, ze prog jest daleko ponad nimi.
+# MIARA OSI (P15, 28.09.2026): procent jednego otwarcia sesji, jak cala reszta
+# Przegladu. $script:WykresDz to dzielnik "tokeny -> jednostka osi": przy
+# zmierzonym otwarciu sesji 1% = Razem/100 tokenow, bez pomiaru - tysiac tokenow
+# (os "tys. tokenow" i zdanie pod wykresem, czemu nie ma procentow). Ustawia go
+# Odmaluj-Statystyke przed rysowaniem; skala zwracana jest juz w tej jednostce.
+function Ustaw-Miare-Wykresu($o) {
+  if ($o -and $o.Zmierzone -and ($o.Razem -gt 0)) {
+    $script:WykresDz = [double]$o.Razem / 100.0
+    $script:WykresProc = $true
+  } else {
+    $script:WykresDz = 1000.0
+    $script:WykresProc = $false
+  }
+}
+
+function Etykieta-Osi([double]$v) {
+  if ($v -le 0) { return "0" }
+  $pl = [System.Globalization.CultureInfo]::GetCultureInfo("pl-PL")
+  if ($script:WykresProc) { return ($v.ToString("0.#", $pl) + "%") }
+  return ($v.ToString("0.#", $pl) + " tys.")
+}
+
 function Skala-Wykresu($st) {
   $max = [double]0
   foreach ($d in @($st.Dni)) { if ($d.Razem -gt $max) { $max = [double]$d.Razem } }
   if ($max -le 0) { $max = 1000 }
   $gora = $max
   if (Prog-Widoczny $st) { $gora = [math]::Max($gora, [double]$st.Prog) }
-  $gora = $gora * 1.1
+  $gora = $gora * 1.1 / $script:WykresDz
   $potega = [math]::Pow(10, [math]::Floor([math]::Log10($gora)))
   foreach ($m in @(1, 2, 2.5, 4, 5, 10)) {
     if (($m * $potega) -ge $gora) { return [double]($m * $potega) }
@@ -1624,17 +1773,14 @@ function Prog-Widoczny($st) {
   return ([double]$st.Prog -le (2 * $max))
 }
 
-function Tysiace($n) {
-  if ($n -le 0) { return "0" }
-  return "$(Liczba-Ludzka ([math]::Round([double]$n / 1000))) tys."
-}
-
 function Opis-Dnia-Wykresu($d) {
   $cz = @()
   if ($d.Zwykle -gt 0)      { $cz += "zwykły dzień" }
-  if ($d.Nadrabianie -gt 0) { $cz += "nadrabianie zaległości" }
-  if ($d.Nieznane -gt 0)    { $cz += "okres nieznany" }
-  return "$($d.Dzien.ToString('dd.MM')): $(Liczba-Ludzka $d.Razem) tokenów ($($cz -join ' + '))"
+  if ($d.Nadrabianie -gt 0) { $cz += "rozmowy z kilku dni naraz" }
+  if ($d.Nieznane -gt 0)    { $cz += "nie wiadomo, z których dni" }
+  $proc = ""
+  if ($script:WykresProc) { $proc = "jak $(Procent-Drobny ([double]$d.Razem) ($script:WykresDz * 100.0)) jednej sesji, " }
+  return "$($d.Dzien.ToString('dd.MM')): $proc$(Liczba-Ludzka $d.Razem) tokenów ($($cz -join ' + '))"
 }
 
 # Droga pierwsza: wbudowana kontrolka Chart. Wyjatek z tej funkcji przelacza
@@ -1656,22 +1802,27 @@ function Nowy-Chart($st) {
   $ob.AxisX.MajorGrid.Enabled = $false
   $ob.AxisX.IsLabelAutoFit = $false
   $ob.AxisY.MajorGrid.LineColor = $script:KolSiatki
-  $skala = (Skala-Wykresu $st) / 1000.0
+  $skala = Skala-Wykresu $st
   $ob.AxisY.Minimum = 0
   $ob.AxisY.Maximum = $skala
   $ob.AxisY.Interval = $skala / 2.0
-  $ob.AxisY.LabelStyle.Format = "0"
-  $ob.AxisY.Title = "tys. tokenów"
+  if ($script:WykresProc) {
+    $ob.AxisY.LabelStyle.Format = "0.#'%'"
+    $ob.AxisY.Title = "% jednej sesji"
+  } else {
+    $ob.AxisY.LabelStyle.Format = "0"
+    $ob.AxisY.Title = "tys. tokenów"
+  }
   $ob.AxisY.TitleFont = $script:CzMala
   $ob.AxisY.TitleForeColor = $script:KolSzary
   if (Prog-Widoczny $st) {
     $linia = New-Object System.Windows.Forms.DataVisualization.Charting.StripLine
-    $linia.IntervalOffset = [double]$st.Prog / 1000.0
+    $linia.IntervalOffset = [double]$st.Prog / $script:WykresDz
     $linia.StripWidth = 0
     $linia.BorderColor = $script:KolPilne
     $linia.BorderDashStyle = [System.Windows.Forms.DataVisualization.Charting.ChartDashStyle]::Dash
     $linia.BorderWidth = 1
-    $linia.Text = "próg zwykłego dnia"
+    $linia.Text = "tu zaczyna się drogo"
     $linia.TextAlignment = [System.Drawing.StringAlignment]::Far
     $linia.TextLineAlignment = [System.Drawing.StringAlignment]::Far
     $linia.ForeColor = $script:KolPilne
@@ -1692,7 +1843,7 @@ function Nowy-Chart($st) {
     $s.Color = $opis.Kolor
     $s["PointWidth"] = "0.62"
     foreach ($d in @($st.Dni)) {
-      $i = $s.Points.AddY([double]$d.($opis.Pole) / 1000.0)
+      $i = $s.Points.AddY([double]$d.($opis.Pole) / $script:WykresDz)
       if ($d.Jest) { $s.Points[$i].ToolTip = (Opis-Dnia-Wykresu $d) }
     }
     $ch.Series.Add($s) | Out-Null
@@ -1743,7 +1894,7 @@ function Rysuj-Slupki($g, $rozmiar, $st) {
     foreach ($f in @(0.5, 1.0)) {
       $y = $gora + $h - [float]($h * $f)
       $g.DrawLine($siatka, [float]$lewy, [float]$y, [float]($lewy + $w), [float]$y)
-      $g.DrawString((Tysiace ($skala * $f)), $script:CzMala, $szary, (New-Object System.Drawing.RectangleF(0, ($y - 9), ($lewy - 6), 18)), $doPrawej)
+      $g.DrawString((Etykieta-Osi ($skala * $f)), $script:CzMala, $szary, (New-Object System.Drawing.RectangleF(0, ($y - 9), ($lewy - 6), 18)), $doPrawej)
     }
     $g.DrawString("0", $script:CzMala, $szary, (New-Object System.Drawing.RectangleF(0, ($gora + $h - 9), ($lewy - 6), 18)), $doPrawej)
 
@@ -1761,7 +1912,7 @@ function Rysuj-Slupki($g, $rozmiar, $st) {
       $x = [float]($lewy + $i * $slot + ($slot - $bw) / 2)
       $podstawa = $gora + $h
       foreach ($pole in @("Zwykle", "Nieznane", "Nadrabianie")) {
-        $ile = [double]$d.$pole
+        $ile = [double]$d.$pole / $script:WykresDz
         if ($ile -le 0) { continue }
         $hh = [float]($h * $ile / $skala)
         if ($hh -lt 1) { $hh = [float]1 }   # dzien z kosztem ma byc widoczny, choc maly
@@ -1776,14 +1927,14 @@ function Rysuj-Slupki($g, $rozmiar, $st) {
     $g.DrawLine($os, [float]$lewy, [float]($gora + $h), [float]($lewy + $w), [float]($gora + $h))
 
     if (Prog-Widoczny $st) {
-      $y = $gora + $h - [float]($h * [double]$st.Prog / $skala)
+      $y = $gora + $h - [float]($h * [double]$st.Prog / $script:WykresDz / $skala)
       $prog = New-Object System.Drawing.Pen($script:KolPilne); $piora += $prog
       $prog.DashStyle = [System.Drawing.Drawing2D.DashStyle]::Dash
       $g.DrawLine($prog, [float]$lewy, [float]$y, [float]($lewy + $w), [float]$y)
       $czerwony = New-Object System.Drawing.SolidBrush($script:KolPilne); $pedzle += $czerwony
       $nad = New-Object System.Drawing.StringFormat
       $nad.Alignment = [System.Drawing.StringAlignment]::Far
-      $g.DrawString("próg zwykłego dnia", $script:CzMala, $czerwony, (New-Object System.Drawing.RectangleF($lewy, ($y - 16), $w, 16)), $nad)
+      $g.DrawString("tu zaczyna się drogo", $script:CzMala, $czerwony, (New-Object System.Drawing.RectangleF($lewy, ($y - 16), $w, 16)), $nad)
     }
   } catch {
     if (-not $script:RysowanieZawiodlo) { $script:RysowanieZawiodlo = $true; Zanotuj-Wywrotke "rysowanie wykresu" $_ }
@@ -1885,6 +2036,8 @@ function Odmaluj-Problemy {
 # to tokeny, a szare zdanie mowi, czemu procentu brak.
 function Kafelek-Liczby($t, $o) {
   $k = Nowa-Karta $script:SzerKarty
+  # bez odstepu pod spodem - wykres kosztu nauki jest dalszym ciagiem tej karty (P15)
+  $k.Margin = New-Object System.Windows.Forms.Padding(0)
   $szer = $script:SzerKarty - 44
   $k.Controls.Add((Etykieta-Zawijana $t.Naglowek $script:CzGruba $script:KolTekst $szer))
   if ($null -ne $t.Liczba) {
@@ -1893,7 +2046,9 @@ function Kafelek-Liczby($t, $o) {
     $w.Margin = New-Object System.Windows.Forms.Padding(0, 6, 0, 0)
     if ($zProcentem) {
       $duza = Etykieta ("~" + (Procent-Drobny ([double]$t.Liczba) ([double]$o.Razem))) $script:CzDuza $script:KolTekst
-      $jedTxt = "jednego otwarcia sesji - tyle kosztuje jedno takie czytanie"
+      $ogonTxt = ""
+      if ($t.Ogon) { $ogonTxt = ", $($t.Ogon)" }
+      $jedTxt = "jednego otwarcia sesji - tyle kosztuje jedno takie czytanie ($(Liczba-Ludzka $t.Liczba) tokenów$ogonTxt)"
     } else {
       $duza = Etykieta ("~" + (Liczba-Ludzka $t.Liczba)) $script:CzDuza $script:KolTekst
       $jedTxt = "tokenów"
@@ -1905,10 +2060,11 @@ function Kafelek-Liczby($t, $o) {
     $w.Controls.Add($jed)
     $k.Controls.Add($w)
     $pod = @()
-    if ($zProcentem) { $pod += "$(Liczba-Ludzka $t.Liczba) tokenów" }
-    else { $pod += "procentu nie ma, bo nie zmierzono otwarcia sesji (karta wyżej)" }
-    if ($t.Ogon) { $pod += $t.Ogon }
-    $k.Controls.Add((Etykieta-Zawijana ($pod -join ", ") $script:CzMala $script:KolSzary $szer))
+    if (-not $zProcentem) {
+      $pod += "procentu nie ma, bo nie zmierzono otwarcia sesji (karta wyżej)"
+      if ($t.Ogon) { $pod += $t.Ogon }
+      $k.Controls.Add((Etykieta-Zawijana ($pod -join ", ") $script:CzMala $script:KolSzary $szer))
+    }
     # Dopisek "z jakich dni i czy zalegle" - kolor tylko wtedy, gdy niesie
     # znaczenie (czerwony: zwykly dzien nad progiem; zolty: zalegle rozmowy
     # albo dni nieznane); zwykly dzien dostaje neutralna szara plakietke.
@@ -1943,6 +2099,7 @@ function Odmaluj-Liczby {
   $t = $null
   try { $t = Liczba-Nauki $r $c }
   catch { Zanotuj-Wywrotke "zlozenie kosztu nauki" $_ }
+  $script:StatSama = (-not $t)
   if (-not $t) {
     $script:PanelLiczby.Controls.Add((Etykieta-Zawijana (
       "Kosztu nauki jeszcze nie ma - nie udało się go złożyć. Powód jest w zakładce Szczegóły.") $script:CzZwykla $script:KolUwaga $script:SzerTresc))
@@ -1983,8 +2140,13 @@ function Odmaluj-Statystyke {
   catch { Zanotuj-Wywrotke "statystyka nauki do okna" $_ }
   $script:StatWykresu = $st
   $szer = $script:SzerKarty - 44
+  $o = $null
+  if ($script:Start) {
+    try { $o = Opis-Startu $script:Start } catch { Zanotuj-Wywrotke "opis otwarcia sesji do wykresu" $_ }
+  }
+  Ustaw-Miare-Wykresu $o
 
-  $script:KartaStat.Controls.Add((Etykieta "Koszt nauki z rozmów - ostatnie 30 dni" $script:CzGruba $script:KolTekst))
+  $script:KartaStat.Controls.Add((Etykieta "Koszt czytania rozmów - ostatnie 30 dni" $script:CzZwyklaGruba $script:KolTekst))
   if (-not $st) {
     $script:KartaStat.Controls.Add((Etykieta-Zawijana "Statystyki nie udało się złożyć - powód jest w dzienniku nadzorcy." $script:CzZwykla $script:KolUwaga $szer))
     return
@@ -1993,25 +2155,31 @@ function Odmaluj-Statystyke {
   $wiersz = Poziomy
   $wiersz.Margin = New-Object System.Windows.Forms.Padding(0, 8, 0, 4)
   $gospodarz = New-Object System.Windows.Forms.Panel
-  $gospodarz.Size = New-Object System.Drawing.Size(($szer - 340), 170)
+  $gospodarz.Size = New-Object System.Drawing.Size(($szer - 340), 160)
   $gospodarz.Margin = New-Object System.Windows.Forms.Padding(0)
   $gospodarz.BackColor = [System.Drawing.Color]::White
   Wstaw-Wykres $gospodarz $st
   $wiersz.Controls.Add($gospodarz)
 
+  # Liczby po prawej w tej samej mierze, co os: "jak 21% jednej sesji" duzo,
+  # tokeny drobno w podpisie (P15). Bez pomiaru otwarcia - same tokeny.
   $boczne = Pionowy 300
   $boczne.Margin = New-Object System.Windows.Forms.Padding(40, 0, 0, 0)
-  Liczba-Boczna $boczne "Ostatnie 7 dni" (Tokeny-Albo-Brak $st.Suma7)
-  Liczba-Boczna $boczne "Ostatnie $($st.OknoDni) dni" (Tokeny-Albo-Brak $st.Suma30)
-  if ($null -ne $st.Srednia) {
-    Liczba-Boczna $boczne "Średnio na dzień nauki (z $($st.SredniaDni) $(Odmiana $st.SredniaDni 'dnia' 'dni' 'dni'))" "~$(Liczba-Ludzka $st.Srednia) tokenów"
-  } else {
-    Liczba-Boczna $boczne "Średnio na dzień nauki" "jeszcze nie wiem"
+  $boczna = {
+    param([string]$podpis, $n, [string]$brak)
+    if ($null -eq $n) { Liczba-Boczna $boczne $podpis $brak; return }
+    $js = Jak-Sesji $n $o
+    if ($js) { Liczba-Boczna $boczne "$podpis · $(Liczba-Ludzka $n) tokenów" $js }
+    else { Liczba-Boczna $boczne $podpis "~$(Liczba-Ludzka $n) tokenów" }
   }
+  # Trzy liczby, nie cztery (P15): srednia na dzien nauki powtarzala sume
+  # podzielona przez dni i nie mowila laikowi nic nowego - stoi w wydruku -Raport.
+  & $boczna "Ostatnie 7 dni" $st.Suma7 "brak danych"
+  & $boczna "Ostatnie $($st.OknoDni) dni" $st.Suma30 "brak danych"
   if (($null -ne $st.Typowy) -and ($st.TypowychDni -gt 0)) {
-    Liczba-Boczna $boczne "Zwykły dzień, bez nadrabiania (z $($st.TypowychDni) $(Odmiana $st.TypowychDni 'dnia' 'dni' 'dni'))" "ok. $(Okolo $st.Typowy) tokenów"
+    & $boczna "Zwykły dzień (z $($st.TypowychDni) $(Odmiana $st.TypowychDni 'dnia' 'dni' 'dni'))" $st.Typowy ""
   } else {
-    Liczba-Boczna $boczne "Zwykły dzień, bez nadrabiania" "jeszcze nie wiem"
+    Liczba-Boczna $boczne "Zwykły dzień" "jeszcze nie wiem"
   }
   $wiersz.Controls.Add($boczne)
   $script:KartaStat.Controls.Add($wiersz)
@@ -2019,15 +2187,34 @@ function Odmaluj-Statystyke {
   if ($st.DniZDanymi -gt 0) {
     $leg = Poziomy
     $leg.Margin = New-Object System.Windows.Forms.Padding(54, 0, 0, 2)
-    Znak-Legendy $leg $script:KolSlupek "zwykły dzień"
-    Znak-Legendy $leg $script:KolNadrab "nadrabianie zaległości"
-    if (@(@($st.Dni) | Where-Object { $_.Nieznane -gt 0 }).Count -gt 0) { Znak-Legendy $leg $script:KolNiezn "okres nieznany" }
-    if ($null -ne $st.Prog) {
-      $napis = "- - próg zwykłego dnia: $(Liczba-Ludzka $st.Prog)"
-      if (-not (Prog-Widoczny $st)) { $napis = "próg zwykłego dnia ($(Liczba-Ludzka $st.Prog)) - daleko ponad słupkami" }
-      $leg.Controls.Add((Etykieta $napis $script:CzMala $script:KolPilne))
+    Znak-Legendy $leg $script:KolSlupek "zwykły dzień: rozmowy z poprzedniego dnia"
+    Znak-Legendy $leg $script:KolNadrab "rozmowy z kilku dni naraz"
+    if (@(@($st.Dni) | Where-Object { $_.Nieznane -gt 0 }).Count -gt 0) { Znak-Legendy $leg $script:KolNiezn "nie wiadomo, z których dni" }
+  }
+  # Prog "tu zaczyna sie drogo" pelnym zdaniem - w wierszu legendy, gdy sa
+  # slupki (jedna linia mniej), inaczej osobno. Czerwony tylko wtedy, gdy
+  # czerwona linia stoi na wykresie; gdy prog jest daleko ponad slupkami,
+  # zdanie jest szare - to informacja, nie alarm.
+  if ($null -ne $st.Prog) {
+    $zp = Zdanie-Progu $st $o
+    $kolP = $script:KolSzary
+    if ((Prog-Widoczny $st) -and ($st.DniZDanymi -gt 0)) { $zp = "- - czerwona linia: tu zaczyna się drogo. $zp"; $kolP = $script:KolPilne }
+    elseif ($st.DniZDanymi -gt 0) { $zp = "$zp Słupki są daleko poniżej." }
+    if ($st.DniZDanymi -gt 0) {
+      $u = Etykieta-Zawijana $zp $script:CzMala $kolP ($szer - 54 - $leg.PreferredSize.Width - 10)
+      $u.Margin = New-Object System.Windows.Forms.Padding(10, 2, 0, 0)
+      $leg.Controls.Add($u)
+    } else {
+      $u = Etykieta-Zawijana $zp $script:CzMala $kolP $szer
+      $u.Margin = New-Object System.Windows.Forms.Padding(0, 4, 0, 0)
+      $script:KartaStat.Controls.Add($u)
     }
-    $script:KartaStat.Controls.Add($leg)
+  }
+  if ($st.DniZDanymi -gt 0) { $script:KartaStat.Controls.Add($leg) }
+  if (-not $script:WykresProc) {
+    $u = Etykieta-Zawijana "Oś w tysiącach tokenów, bo nie zmierzono otwarcia sesji (karta wyżej) - bez niego nie ma procentów." $script:CzMala $script:KolUwaga $szer
+    $u.Margin = New-Object System.Windows.Forms.Padding(0, 4, 0, 0)
+    $script:KartaStat.Controls.Add($u)
   }
   # Uwaga o zbierajacej sie statystyce stoi pod wykresem ZAWSZE, gdy danych jest
   # malo - takze wtedy, gdy w samym wykresie jest juz jej tresc (bez danych).
@@ -2139,7 +2326,7 @@ function Ustaw-Rozwiniecie-Zmian {
 
 function Odmaluj-Przyciski {
   if (-not $script:BCykl -or $script:BCykl.IsDisposed) { return }
-  $n = Napisy-Przyciskow $script:Dane
+  $n = Napisy-Przyciskow $script:Dane $script:Start
   $script:BAktualizuj.Text = $n.Aktualizuj
   $script:LAktualizuj.Text = $n.AktualizujOpis
   $script:BCykl.Text       = $n.Cykl
@@ -2173,6 +2360,7 @@ function Odmaluj-Okno {
   $script:Okno.SuspendLayout()
   try {
     Odmaluj-Podtytul
+    Odmaluj-Werdykt
     Odmaluj-Problemy
     Odmaluj-Start
     Odmaluj-Liczby
@@ -2296,7 +2484,18 @@ function Rozmiar-Opisowy($wa) {
   if ($wa.Rodzaj -eq "katalog") { return "$(@($wa.Pliki).Count) plików" }
   if ($null -ne $wa.Znaki) {
     $t = "$(Liczba-Ludzka $wa.Znaki) znaków"
-    if ($null -ne $wa.Tokeny) { $t += " (~$(Liczba-Ludzka $wa.Tokeny) tokenów)" }
+    if ($null -ne $wa.Tokeny) {
+      # P15: tokeny takze jako procent jednego otwarcia sesji Claude Code.
+      # Warstwy Codeksa bez procentu - jego otwarcia sesji nikt nie mierzy.
+      $js = ""
+      if ("$($wa.Nazwa)" -notmatch 'tylko Codex') {
+        $o = $null
+        try { if ($script:Start) { $o = Opis-Startu $script:Start } } catch { Zanotuj-Wywrotke "opis otwarcia sesji do warstwy" $_ }
+        $js = Jak-Sesji $wa.Tokeny $o
+      }
+      if ($js) { $t += " (~$(Liczba-Ludzka $wa.Tokeny) tokenów, $js)" }
+      else { $t += " (~$(Liczba-Ludzka $wa.Tokeny) tokenów)" }
+    }
     return $t
   }
   if ($null -ne $wa.Limit) { return "do $(Liczba-Ludzka $wa.Limit) znaków, za każdym razem inna treść" }
@@ -2645,7 +2844,7 @@ function Pokaz-Okno {
   $script:Pasek.Add_Paint({ param($nadawca, $e) try { $e.Graphics.DrawLine($script:PioroRamki, 0, 0, $nadawca.Width, 0) } catch { if (-not $script:RamkaZawiodla) { $script:RamkaZawiodla = $true; Zanotuj-Wywrotke "rysowanie kreski nad przyciskami" $_ } } })
 
   $script:BAktualizuj = Nowy-Przycisk "Sprawdź i pobierz nowszą wersję MegaRuchacza"
-  $script:BCykl       = Nowy-Przycisk "Przeczytaj zaległe rozmowy"
+  $script:BCykl       = Nowy-Przycisk "Przeczytaj teraz nowe rozmowy"
   $bZamknij           = Nowy-Przycisk "Zamknij okno"
   $szerOpisu = [int]($script:SzerOkna * 0.39) - 24
   $script:LAktualizuj = Etykieta-Zawijana "" $script:CzMala $script:KolSzary $szerOpisu
@@ -2699,15 +2898,25 @@ function Pokaz-Okno {
   $script:PanelProblemy.Margin = New-Object System.Windows.Forms.Padding(0, 0, 0, 2)
   $script:PanelProblemy.Visible = $false
 
+  $script:KartaWerdykt = Nowa-Karta $script:SzerKarty
   $script:KartaStart = Nowa-Karta $script:SzerKarty
 
   $script:PanelLiczby = Poziomy
   $script:PanelLiczby.Margin = New-Object System.Windows.Forms.Padding(0)
 
-  $script:KartaStat = Nowa-Karta $script:SzerKarty
+  # Wykres to dalszy ciag karty nauki (P15): bez gornej kreski i bez odstepu,
+  # dolna kreska karty nauki robi za przedzialke. Okno ma sie zmiescic na
+  # ekranie bez przewijania - osobna karta kosztowala ~40 px. Gdy karty nauki
+  # nie ma (nie dalo sie jej zlozyc), wykres rysuje pelna ramke sam.
+  $script:KartaStat = Pionowy $script:SzerKarty
+  $script:KartaStat.BackColor = $script:TloKarty
+  $script:KartaStat.Padding = New-Object System.Windows.Forms.Padding(22, 10, 22, 16)
+  $script:KartaStat.Margin = New-Object System.Windows.Forms.Padding(0, 0, 0, 14)
+  $script:KartaStat.Add_Paint({ param($nadawca, $e) Obrysuj-Ciag-Dalszy $nadawca $e })
   $script:PanelStan = Nowa-Karta $script:SzerKarty
   $script:PanelStan.Margin = New-Object System.Windows.Forms.Padding(0)
 
+  $script:Root.Controls.Add($script:KartaWerdykt)
   $script:Root.Controls.Add($script:PanelProblemy)
   $script:Root.Controls.Add($script:KartaStart)
   $script:Root.Controls.Add($script:PanelLiczby)
@@ -2832,7 +3041,7 @@ function Pokaz-Okno {
     $script:LPodtytul = $null; $script:PanelProblemy = $null; $script:PanelLiczby = $null
     $script:KartaStat = $null; $script:PanelStan = $null
     $script:BPrzeglad = $null; $script:BSzczegoly = $null; $script:ListaSzczegolow = $null
-    $script:KartaStart = $null; $script:PodgladInfo = $null
+    $script:KartaStart = $null; $script:KartaWerdykt = $null; $script:PodgladInfo = $null
     $script:Pasek = $null; $script:BAktualizuj = $null; $script:LAktualizuj = $null
     $script:BCykl = $null; $script:LCykl = $null
     $script:PanelZmian = $null; $script:LinkZmian = $null
@@ -2902,16 +3111,23 @@ function Pokaz-Okno {
   # kliknieciem 312 609 tokenow, nie mowiac o tym ani slowa wczesniej.
   # Domyslnie podswietlone jest "Nie": przypadkowy Enter ma nic nie kosztowac.
   $script:BCykl.Add_Click({
-    $n = Napisy-Przyciskow $script:Dane
+    $n = Napisy-Przyciskow $script:Dane $script:Start
     $s = $n.Szacunek
     $t = @()
     if ($s -and ($null -ne $s.Tokeny)) {
-      $t += "Przeczytanie zaległych rozmów będzie kosztować około $(Liczba-Ludzka $s.Tokeny) tokenów."
+      $js = ""
+      try { $js = Jak-Sesji $s.Tokeny (Opis-Startu $script:Start) } catch { Zanotuj-Wywrotke "procent sesji w pytaniu o zgode" $_ }
+      if ($js) { $js = " - $js" }
+      $t += "Przeczytanie nowych rozmów będzie kosztować około $(Liczba-Ludzka $s.Tokeny) tokenów$js."
+      $t += "Nie musisz tego robić - MegaRuchacz czyta rozmowy sam raz dziennie. Ten przycisk robi to tylko wcześniej."
     } else {
       $t += "NIE WIEM, ile to będzie kosztować."
       if ($s -and $s.Powod) { $t += "Powód: $($s.Powod)." }
       if ($script:Dane -and $script:Dane.Cykl -and ($null -ne $script:Dane.Cykl.Koszt)) {
-        $t += "Poprzednie czytanie kosztowało ~$(Liczba-Ludzka $script:Dane.Cykl.Koszt) tokenów - takiego rzędu liczby się spodziewaj."
+        $jp = ""
+        try { $jp = Jak-Sesji $script:Dane.Cykl.Koszt (Opis-Startu $script:Start) } catch { Zanotuj-Wywrotke "procent sesji w pytaniu o zgode" $_ }
+        if ($jp) { $jp = " ($jp)" }
+        $t += "Poprzednie czytanie kosztowało ~$(Liczba-Ludzka $script:Dane.Cykl.Koszt) tokenów$jp - takiego rzędu liczby się spodziewaj."
       }
     }
     $t += ""
@@ -2920,7 +3136,7 @@ function Pokaz-Okno {
     $t += "To jedyny przycisk w tym oknie, który naprawdę wydaje tokeny."
     $t += "Kliknij Tak, żeby uruchomić. Po kliknięciu Nie nie stanie się nic."
     $odp = [System.Windows.Forms.MessageBox]::Show(
-      $script:Okno, ($t -join "`r`n"), "Przeczytać zaległe rozmowy?",
+      $script:Okno, ($t -join "`r`n"), "Przeczytać teraz nowe rozmowy?",
       [System.Windows.Forms.MessageBoxButtons]::YesNo,
       [System.Windows.Forms.MessageBoxIcon]::Warning,
       [System.Windows.Forms.MessageBoxDefaultButton]::Button2)

@@ -487,7 +487,7 @@ function Godzin-Od-Cyklu($c) {
   return [int]([datetime]::Now - $c.Data).TotalHours
 }
 
-function Opis-Cyklu($c) {
+function Opis-Cyklu($c, $o = $null) {
   $linie = @()
   if ($c.Data) {
     $godzin = Godzin-Od-Cyklu $c
@@ -521,7 +521,10 @@ function Opis-Cyklu($c) {
     if ($c.KosztData) { $kiedy = $c.KosztData.ToString('yyyy-MM-dd') }
     $ogon = ""
     if ($c.KosztOpis) { $ogon = " - $($c.KosztOpis)" }
-    $linie += Wiersz "Ostatni koszt nauki" "~$(Liczba-Ludzka $c.Koszt) tokenów, ${kiedy}${ogon}"
+    # $o = Opis-Startu: procent jednego otwarcia sesji obok tokenow (P15)
+    $js = Jak-Sesji $c.Koszt $o
+    if ($js) { $js = " ($js)" }
+    $linie += Wiersz "Ostatni koszt nauki" "~$(Liczba-Ludzka $c.Koszt) tokenów${js}, ${kiedy}${ogon}"
     $linie += Wiersz "" "to PRAWDZIWE wywołanie modelu, osobno od rachunku za pamięć" "szary"
   } else {
     $linie += Wiersz "Ostatni koszt nauki" "jeszcze ani razu nie policzony" "uwaga"
@@ -757,20 +760,17 @@ function Opis-Startu($p) {
   $o.UdzialMr = [double]$o.Mr / [double][math]::Max(1, $o.Razem)
   $o.MrProc = Procent-Ludzko $o.Mr $o.Razem
   $o.CcProc = Procent-Ludzko $o.Cc $o.Razem
-  $o.Podstawa = "Zmierzone w transkryptach Claude Code: mediana z $($o.Sesji) $(Odmiana $o.Sesji 'ostatniej sesji' 'ostatnich sesji' 'ostatnich sesji') (z $($p.DniWstecz) dni)."
+  # Podstawa i zakres po ludzku (P15, 28.09.2026): czytelnik nie wie, co to
+  # transkrypt ani mediana - wie, ile rozmow mial. Metoda stoi w Szczegolach.
+  $o.Podstawa = "Policzone z Twoich ostatnich $($o.Sesji) $(Odmiana $o.Sesji 'rozmowy' 'rozmów' 'rozmów') z Claude (z $($p.DniWstecz) dni)."
   if (($null -ne $p.Sesje.Min) -and ($null -ne $p.Sesje.Max)) {
-    $o.Zakres = "Najmniejsza $(Okolo $p.Sesje.Min), największa $(Okolo $p.Sesje.Max) tokenów."
+    $o.Zakres = "Najmniejsza zaczynała się od ~$(Okolo $p.Sesje.Min), największa od ~$(Okolo $p.Sesje.Max) tokenów."
   }
-  # Zdanie o portfelu przepisane 28.09.2026 (P14). Stare "ta paczka idzie przy
-  # kazdej wiadomosci" stalo obok wiersza "przy kazdej wiadomosci: ~115"
-  # i czytalo sie jak sprzecznosc. Teraz rozdziela dwie rzeczy: nowy tekst
-  # doklejany do wiadomosci i cala rozmowe czytana od nowa (z bufora). Liczb tu
-  # nie ma - stoja w wierszach karty, a ta sama liczba w dwoch miejscach myli.
-  $o.Portfel = ("Model nie pamięta rozmowy - przy każdej Twojej wiadomości dostaje ją całą od nowa, razem z tą paczką. " +
-                "Pełną cenę płacisz za nią raz, na starcie; przy kolejnych wiadomościach idzie z bufora, za ok. 1/10 ceny, " +
-                "a nowego tekstu MegaRuchacz dokłada tylko przypomnienie z wiersza wyżej. " +
-                "Bez MegaRuchacza sesja i tak startowałaby z tym, co waży sam Claude Code (szara część paska), " +
-                "więc skracanie zasad MegaRuchacza oszczędzi najwyżej jego niebieską część.")
+  # Zdanie o portfelu skrocone 28.09.2026 (P15). Uzytkownik: "ma byc jasno jak
+  # dla laika". Wczesniejsze wyjasnienie pamieci modelu i bufora wymagalo
+  # wiedzy, ktorej laik nie ma; zostaje jedna rzecz, ktora laik ma zrozumiec:
+  # wylaczenie MegaRuchacza oszczedza tylko niebieski kawalek paska.
+  $o.Portfel = "Gdyby wyłączyć MegaRuchacza, każda rozmowa i tak zaczynałaby się od szarej części paska - oszczędzisz najwyżej niebieski kawałek."
   $wk = $p.Workerzy
   if ($wk -and ($null -ne $wk.Mediana) -and ($wk.Liczba -gt 0)) {
     $mrW = $null
@@ -785,6 +785,77 @@ function Opis-Startu($p) {
     $o.WorkerZdanie = "Start jednego workera: nie zmierzono, bo $pw."
   }
   return $o
+}
+
+# JEDNA MIARA WSZEDZIE (P15, 28.09.2026): kazda liczba tokenow MegaRuchacza
+# stoi obok jako procent jednego otwarcia sesji, bo "40 477 tokenow" laikowi
+# nic nie mowi, a "jak 21% jednej sesji" mowi wszystko. Bez zmierzonego
+# otwarcia procentu nie ma - oddajemy pusty tekst i wolajacy pokazuje wtedy
+# same tokeny z powodem, nigdy zgadniety procent.
+function Proc-Sesji($tokeny, $o) {
+  if (($null -eq $tokeny) -or (-not $o) -or (-not $o.Zmierzone) -or ($o.Razem -le 0)) { return "" }
+  return (Procent-Drobny ([double]$tokeny) ([double]$o.Razem))
+}
+
+function Jak-Sesji($tokeny, $o) {
+  $p = Proc-Sesji $tokeny $o
+  if (-not $p) { return "" }
+  return "jak $p jednej sesji"
+}
+
+# WERDYKT NA SAMEJ GORZE PRZEGLADU (P15). Uzytkownik: "ma byc jasno jak dla
+# laika, ktory nie wie do konca, co to MegaRuchacz, ale wie, ze tokeny kosztuja".
+# Trzy stany i zaden czwarty:
+#   malo        - czesc MegaRuchacza w otwarciu sesji NIE przekracza progu,
+#   duzo        - przekracza (to samo porownanie, co alarm w koszt-pamieci.ps1:
+#                 udzial > $AlarmUdzialuOtwarcia),
+#   nie wiadomo - nie ma zmierzonej calosci albo progu; mowimy wtedy wprost,
+#                 czego brakuje. "Malo" bez pomiaru byloby klamstwem.
+# Prog NIE jest tu wpisany - przychodzi z koszt-pamieci.ps1 -Dane (udzial.prog),
+# gdzie stoi razem z uzasadnieniem. Stan "licze" to tylko chwila przed pierwszym
+# pomiarem po otwarciu okna, nie werdykt.
+function Werdykt-Kosztu($start, $rachunek, $cykl) {
+  $w = [pscustomobject]@{ Stan = "licze"; Zdanie = ""; Wyjasnienie = ""; Nauka = ""; Prog = $null; Proc = "" }
+  if ($null -eq $start) {
+    $w.Zdanie = "Liczę, ile kosztuje MegaRuchacz - to potrwa kilka sekund..."
+    return $w
+  }
+  $k = $null
+  if ($rachunek) { $k = $rachunek.Klucze }
+  $w.Prog = Liczba-Z-Klucza $k "udzial.prog"
+  $o = Opis-Startu $start
+  if ($cykl -and ($null -ne $cykl.Koszt)) {
+    $js = Jak-Sesji $cykl.Koszt $o
+    if ($js) { $w.Nauka = "Osobno, raz dziennie, czyta Twoje rozmowy, żeby się z nich uczyć - ostatnio za tyle, co $(Proc-Sesji $cykl.Koszt $o) jednego otwarcia sesji (karty niżej)." }
+  }
+  if (-not $o.Zmierzone) {
+    $w.Stan = "nie wiadomo"
+    $w.Zdanie = "Nie wiadomo, czy MegaRuchacz kosztuje dużo, czy mało."
+    $w.Wyjasnienie = "Nie zmierzono, ile kosztuje cała rozmowa z Claude, bo $($o.Powod) - więc nie ma do czego porównać."
+    if (($null -ne $o.Mr) -and ($o.Mr -gt 0)) { $w.Wyjasnienie += " Sam MegaRuchacz dokłada ok. $(Okolo $o.Mr) tokenów na start każdej rozmowy." }
+    return $w
+  }
+  $w.Proc = $o.MrProc
+  # Co to jest "otwarcie sesji" (~194 400 tokenow = 100%) mowi duza liczba na karcie tuz pod spodem - tu tylko prog.
+  if ($null -eq $w.Prog) {
+    $pw = "rachunek MegaRuchacza go nie podał"
+    if ($rachunek -and $rachunek.Powod) { $pw = "rachunek MegaRuchacza się nie policzył: $($rachunek.Powod)" }
+    elseif (-not $rachunek) { $pw = "rachunek MegaRuchacza się nie policzył" }
+    $w.Stan = "nie wiadomo"
+    $w.Zdanie = "Nie wiadomo, czy MegaRuchacz kosztuje dużo, czy mało."
+    $w.Wyjasnienie = "Jego część to $($o.MrProc) otwarcia sesji, ale nie znam progu, od którego jest drogo ($pw)."
+    return $w
+  }
+  if ((100.0 * [double]$o.UdzialMr) -gt [double]$w.Prog) {
+    $w.Stan = "duzo"
+    $w.Zdanie = "MegaRuchacz kosztuje dużo: $($o.MrProc) tego, co i tak płacisz za każdą rozmowę z Claude."
+    $w.Wyjasnienie = "Drogo robi się już od $($w.Prog)% - warto odchudzić jego zasady albo wiedzę (co ile waży, pokazuje zakładka Szczegóły)."
+  } else {
+    $w.Stan = "malo"
+    $w.Zdanie = "MegaRuchacz kosztuje mało: $($o.MrProc) tego, co i tak płacisz za każdą rozmowę z Claude."
+    $w.Wyjasnienie = "Drogo byłoby dopiero od $($w.Prog)%."
+  }
+  return $w
 }
 
 # Odczyt pojedynczych kluczy z odpowiedzi -Dane. Brak klucza i smiec to $null /
@@ -952,7 +1023,7 @@ function Zbierz-Alarmy($cykl, $rachunek) {
   if ($null -eq $godzin) {
     $alarmy += Alarm "cykl" "MegaRuchacz: nauka z rozmów nie przeszła ani razu" (
       "Nie ma zapisu ani jednego zakończonego przebiegu, więc MegaRuchacz niczego się jeszcze nie nauczył z Twoich rozmów. " +
-      "Kliknij ikonę MegaRuchacza i użyj przycisku [Przeczytaj zaległe rozmowy] - pokaże koszt i zapyta o zgodę. " +
+      "Kliknij ikonę MegaRuchacza i użyj przycisku [Przeczytaj teraz nowe rozmowy] - pokaże koszt i zapyta o zgodę. " +
       "Jesli to nie pomoze, sprawdz recznie: powershell -ExecutionPolicy Bypass -File " +
       "$($script:NadzZrodlo)\narzedzia\cykl-dzienny.ps1 -Proba")
   } elseif ($godzin -gt $GODZIN_CYKL_STOI) {
@@ -963,7 +1034,7 @@ function Zbierz-Alarmy($cykl, $rachunek) {
     elseif ($null -ne $cykl.Zaleglosc) { $czeka = " Zaległość: $($cykl.Zaleglosc) $(Odmiana ([int]$cykl.Zaleglosc) 'porcja' 'porcje' 'porcji')." }
     $alarmy += Alarm "cykl" "MegaRuchacz: nauka z rozmów stoi od ${ile}" (
       "Ostatnio przeszła $(Kiedy-Ludzko $cykl.Data).${czeka} " +
-      "Kliknij ikonę MegaRuchacza i użyj przycisku [Przeczytaj zaległe rozmowy] - pokaże koszt i zapyta o zgodę. " +
+      "Kliknij ikonę MegaRuchacza i użyj przycisku [Przeczytaj teraz nowe rozmowy] - pokaże koszt i zapyta o zgodę. " +
       "Jesli to nie rusza, sprawdz co blokuje: powershell -ExecutionPolicy Bypass -File " +
       "$($script:NadzZrodlo)\narzedzia\cykl-dzienny.ps1 -Proba")
   }
@@ -1102,13 +1173,15 @@ function Liczba-Nauki($rachunek, $cykl) {
     if ($kiedy) { $naDobe.Ogon = "ostatnio $kiedy" } else { $naDobe.Ogon = "przy ostatnim przebiegu" }
     $o = Ocena-Nauki $rachunek
     $okres = Okres-Ludzko $o.ZakresOd $o.ZakresDo
+    # P15: bez slowa "zalegle" - laik nie wie, co zalega. Mowimy, co sie stalo:
+    # przeczytal rozmowy, ktore czekaly dluzej niz jeden dzien.
     switch ($o.Rodzaj) {
-      "nadrabianie" { $naDobe.Znacznik = "tym razem czytał zaległe rozmowy";      $naDobe.ZnacznikWaga = "info" }
-      "mieszany"    { $naDobe.Znacznik = "tym razem czytał częściowo zaległe rozmowy"; $naDobe.ZnacznikWaga = "info" }
-      "zwykly"      { $naDobe.Znacznik = "zwykły dzień - czytał rozmowy";         $naDobe.ZnacznikWaga = "" }
-      "nieznany"    { $naDobe.Znacznik = "nie wiem, z których dni czytał rozmowy"; $naDobe.ZnacznikWaga = "uwaga" }
+      "nadrabianie" { $naDobe.Znacznik = "tym razem czytał rozmowy, które czekały dłużej niż dzień";            $naDobe.ZnacznikWaga = "info" }
+      "mieszany"    { $naDobe.Znacznik = "tym razem czytał nowe rozmowy i część tych, które czekały dłużej"; $naDobe.ZnacznikWaga = "info" }
+      "zwykly"      { $naDobe.Znacznik = "zwykły dzień - czytał rozmowy z poprzedniego dnia";                 $naDobe.ZnacznikWaga = "" }
+      "nieznany"    { $naDobe.Znacznik = "nie wiem, z których dni były czytane rozmowy";                      $naDobe.ZnacznikWaga = "uwaga" }
     }
-    if ($okres -and $naDobe.Znacznik -and ($o.Rodzaj -ne "nieznany")) { $naDobe.Znacznik = "$($naDobe.Znacznik) z $okres" }
+    if ($okres -and $naDobe.Znacznik -and ($o.Rodzaj -ne "nieznany")) { $naDobe.Znacznik = "$($naDobe.Znacznik) (z $okres)" }
     elseif ($okres -and $naDobe.Znacznik) { $naDobe.Znacznik = "$($naDobe.Znacznik) (zakres: $okres)" }
     foreach ($a in (Alarmy-Rachunku $rachunek)) {
       if (($a.Temat -eq "cykl-zwykly") -or ($a.Temat -eq "cykl-rosnie")) { $naDobe.ZnacznikWaga = "pilne" }
@@ -1452,7 +1525,7 @@ function Zmiana-Ludzko([string]$tresc) {
 function Opis-Zmian-Pamieci($z) {
   $o = [pscustomobject]@{ Linia = ""; Zmiany = @(); Porada = ""; Uwaga = $false }
   if (-not $z) {
-    $o.Linia = "Pamięć: nie wiem, co się w niej zmieniło - nie udało się tego odczytać."
+    $o.Linia = "Pamięć o Tobie i firmie: nie wiem, co się w niej zmieniło - nie udało się tego odczytać."
     $o.Uwaga = $true
     return $o
   }
@@ -1461,15 +1534,15 @@ function Opis-Zmian-Pamieci($z) {
     $kiedy = "przy ostatniej nauce ($(Dzien-Ludzko $z.Dzien))"
   }
   if (-not $z.Wiadomo) {
-    $o.Linia = "Pamięć ${kiedy}: nie wiem, co się zmieniło - $($z.Powod)."
+    $o.Linia = "Pamięć o Tobie i firmie ${kiedy}: nie wiem, co się zmieniło - $($z.Powod)."
     $o.Uwaga = $true
     return $o
   }
   if ($z.Ile -le 0) {
-    $o.Linia = "Pamięć ${kiedy}: bez zmian."
+    $o.Linia = "Pamięć o Tobie i firmie ${kiedy}: bez zmian."
     return $o
   }
-  $o.Linia = "Pamięć ${kiedy}: $($z.Ile) $(Odmiana ([int]$z.Ile) 'zmiana' 'zmiany' 'zmian')."
+  $o.Linia = "Pamięć o Tobie i firmie ${kiedy}: $($z.Ile) $(Odmiana ([int]$z.Ile) 'zmiana' 'zmiany' 'zmian')."
   foreach ($x in $z.Zmiany) { $o.Zmiany += (Zmiana-Ludzko $x.Tresc) }
   if ($z.Zmiany.Count -lt $z.Ile) {
     $o.Zmiany += "... i jeszcze $($z.Ile - $z.Zmiany.Count) - pełna lista jest w historii zmian pamięci."
@@ -1550,26 +1623,26 @@ function Linie-Stanu($wersja, $cykl, $przeliczanie) {
 
   if ($cykl) {
     if ($cykl.Pracuje) {
-      $linie += "Nauka z rozmów: właśnie trwa."
+      $linie += "Czytanie rozmów: właśnie trwa."
     } elseif ($cykl.Data) {
-      $linie += "Nauka z rozmów: ostatnio $(Kiedy-Ludzko $cykl.Data)."
+      $linie += "Ostatnie czytanie rozmów: $(Kiedy-Ludzko $cykl.Data)."
     } else {
-      $linie += "Nauka z rozmów: jeszcze ani razu na tym komputerze."
+      $linie += "Czytanie rozmów: jeszcze ani razu na tym komputerze."
     }
 
     if ($null -ne $cykl.Kawalki) {
       if ($cykl.Kawalki -le 0) {
-        $linie += "Do przeczytania: nic nie czeka, wszystkie rozmowy są przerobione."
+        $linie += "Czeka na przeczytanie: nic - wszystkie rozmowy są już przeczytane."
       } else {
-        $linie += "Do przeczytania: $(Liczba-Ludzka $cykl.Kawalki) $(Odmiana ([int]$cykl.Kawalki) 'fragment rozmów' 'fragmenty rozmów' 'fragmentów rozmów')."
+        $linie += "Czeka na przeczytanie: $(Liczba-Ludzka $cykl.Kawalki) $(Odmiana ([int]$cykl.Kawalki) 'kawałek' 'kawałki' 'kawałków') Twoich nowszych rozmów. Przeczyta je sam przy kolejnym codziennym czytaniu - nic nie musisz robić."
       }
     } elseif ($null -ne $cykl.Zaleglosc) {
-      $linie += "Do przeczytania: na żywo nie policzone; przy ostatnim podsumowaniu zostawało $(Liczba-Ludzka $cykl.Zaleglosc) $(Odmiana ([int]$cykl.Zaleglosc) 'porcja' 'porcje' 'porcji')."
+      $linie += "Czeka na przeczytanie: teraz nie sprawdziłem; ostatnio zostawało $(Liczba-Ludzka $cykl.Zaleglosc) $(Odmiana ([int]$cykl.Zaleglosc) 'porcja' 'porcje' 'porcji') rozmów."
     } else {
-      $linie += "Do przeczytania: nie wiem, nie dało się sprawdzić kolejki."
+      $linie += "Czeka na przeczytanie: nie wiem, nie dało się sprawdzić."
     }
   } else {
-    $linie += "Nauka z rozmów: nie wiem, nie udało się odczytać jej stanu."
+    $linie += "Czytanie rozmów: nie wiem, nie udało się odczytać jego stanu."
   }
 
   if ($wersja) {
@@ -1578,14 +1651,14 @@ function Linie-Stanu($wersja, $cykl, $przeliczanie) {
     if ($null -eq $wersja.Nowsza) {
       $powod = $wersja.Powod
       if (-not $powod) { $powod = "nie ustaliłem powodu - to samo w sobie jest usterką" }
-      $linie += "Wersja narzędzia: $w. Czy jest coś nowszego - nie wiem ($powod)."
+      $linie += "Wersja MegaRuchacza: $w. Czy jest coś nowszego - nie wiem ($powod)."
     } elseif ($wersja.Nowsza -le 0) {
-      $linie += "Wersja narzędzia: $w, nic nowszego nie czeka."
+      $linie += "Wersja MegaRuchacza: $w, nic nowszego nie czeka."
     } else {
-      $linie += "Wersja narzędzia: $w. Czeka $($wersja.Nowsza) $(Odmiana ([int]$wersja.Nowsza) 'nowsza zmiana' 'nowsze zmiany' 'nowszych zmian') - pobierze je przycisk na dole."
+      $linie += "Wersja MegaRuchacza: $w. Czeka $($wersja.Nowsza) $(Odmiana ([int]$wersja.Nowsza) 'nowsza zmiana' 'nowsze zmiany' 'nowszych zmian') - pobierze je przycisk na dole."
     }
   } else {
-    $linie += "Wersja narzędzia: nie wiem, nie udało się jej odczytać."
+    $linie += "Wersja MegaRuchacza: nie wiem, nie udało się jej odczytać."
   }
 
   return ,$linie
