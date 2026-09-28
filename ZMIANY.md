@@ -4,6 +4,23 @@ Każda zmiana wypychana na gita dostaje tu wpis. Numer rośnie wg zasady:
 pierwsza cyfra — przebudowa łamiąca zgodność, druga — nowa funkcja,
 trzecia — poprawka.
 
+## 0.21.2 — 2026-09-28
+
+- **Przypomnienie i rejestr pracy w Codeksie na Windows znowu działają.** Codex 0.157
+  uruchamia każdy hook przez `powershell -Command "..."`, a nie przez `cmd` — i ten
+  PowerShell zjadał zmienne (`$p`, `$o`, `$we`) z naszych poleceń. Skutek: przypomnienie
+  przy każdej wiadomości w ogóle nie docierało do modelu, a start i koniec workera nie
+  trafiały do `.megaruchacz\worklog.md`. Trzy hooki (UserPromptSubmit, SubagentStart,
+  SubagentStop) wołają teraz `node` wprost — sprawdzone w prawdziwej sesji Codeksa.
+  Strażnik i instalator podmieniają stare polecenia same; po podmianie Codex prosi
+  o jednorazowe zatwierdzenie hooków poleceniem `/hooks`.
+- **Czarnych okien nie da się schować po stronie MegaRuchacza — i teraz wiadomo dlaczego.**
+  Okno pojawia się tylko wtedy, gdy sam Codex działa bez konsoli; wtedy okno otwiera
+  jego własny PowerShell-opakowanie, zanim nasze polecenie w ogóle ruszy, a do tego
+  kilkanaście okien daje sam Codex (np. przy wywołaniach gita). Proponowane
+  `conhost --headless` niczego tu nie ukrywa, a do tego ucina tekst hooka — nie weszło.
+  Szczegóły i pomiary: `.megaruchacz\raporty\P11.md`.
+
 ## 0.21.1 — 2026-09-25
 
 - **Codex dostaje zasady kierownika także w Orce.** Orka uruchamia Codeksa z własnym

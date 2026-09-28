@@ -44,7 +44,7 @@
           {
             "type": "command",
             "command": "node \"{{ZRODLO}}/narzedzia/przypomnienie.js\" \"{{PROJEKT}}/.megaruchacz/przypomnienie.json\" || cat \"{{PROJEKT}}/.megaruchacz/przypomnienie.json\"",
-            "commandWindows": "powershell -NoProfile -NonInteractive -Command \"[Console]::OutputEncoding=(New-Object System.Text.UTF8Encoding($false)); $p='{{PROJEKT}}/.megaruchacz/przypomnienie.json'; $o=$null; try { $o=(node '{{ZRODLO}}/narzedzia/przypomnienie.js' $p) } catch { }; if ((-not $o) -and (Test-Path -LiteralPath $p)) { $o=[IO.File]::ReadAllText($p) }; if ($o) { $o }\"",
+            "commandWindows": "node \"{{ZRODLO}}/narzedzia/przypomnienie.js\" \"{{PROJEKT}}/.megaruchacz/przypomnienie.json\"",
             "timeout": 5,
             "statusMessage": "MegaRuchacz: przypomnienie",
             "additionalContextLimit": 1500
@@ -58,7 +58,7 @@
           {
             "type": "command",
             "command": "node \"{{ZRODLO}}/narzedzia/mr-log-codex.js\" start \"{{PROJEKT}}\" || true",
-            "commandWindows": "powershell -NoProfile -NonInteractive -Command \"[Console]::OutputEncoding=(New-Object System.Text.UTF8Encoding($false)); $we=[Console]::In.ReadToEnd(); try { $we | node '{{ZRODLO}}/narzedzia/mr-log-codex.js' start '{{PROJEKT}}' } catch { }\"",
+            "commandWindows": "node \"{{ZRODLO}}/narzedzia/mr-log-codex.js\" start \"{{PROJEKT}}\"",
             "timeout": 5,
             "statusMessage": "MegaRuchacz: wpis do rejestru pracy"
           }
@@ -71,7 +71,7 @@
           {
             "type": "command",
             "command": "node \"{{ZRODLO}}/narzedzia/mr-log-codex.js\" stop \"{{PROJEKT}}\" || echo '{\"continue\":true}'",
-            "commandWindows": "powershell -NoProfile -NonInteractive -Command \"[Console]::OutputEncoding=(New-Object System.Text.UTF8Encoding($false)); $we=[Console]::In.ReadToEnd(); $o=$null; try { $o=($we | node '{{ZRODLO}}/narzedzia/mr-log-codex.js' stop '{{PROJEKT}}') } catch { }; if ($o) { $o } else { @{ continue = $true } | ConvertTo-Json -Compress }\"",
+            "commandWindows": "node \"{{ZRODLO}}/narzedzia/mr-log-codex.js\" stop \"{{PROJEKT}}\"",
             "timeout": 5,
             "statusMessage": "MegaRuchacz: wpis do rejestru pracy"
           }

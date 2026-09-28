@@ -132,6 +132,29 @@ Dokumentacja zrodlowa: repo `openai/codex/docs/*.md` to same odsylacze; tresc je
 - Sprawdzanie, co Codex dostaje na start, BEZ logowania: `codex debug prompt-input`
   (z `CODEX_HOME=<katalog>` dla innego katalogu domowego).
 - `codex --worktree` ISTNIEJE (`codex --help` 0.157: "Run the session in a new managed Git worktree").
+- (2026-09-28, P11) Codex JEST zalogowany, ale zywe logowanie trzyma Orka w
+  `...\orca\codex-runtime-home\home\auth.json` i sama kopiuje je do `~\.codex\auth.json`
+  (plik w `~\.codex` bywa nieaktualny - kopia sprzed synchronizacji dala 401).
+- JAK CODEX 0.157 ODPALA HOOK NA WINDOWS (sprawdzone sonda w prawdziwym procesie):
+  `powershell.exe -NoProfile -Command "<commandWindows>"` - opakowaniem jest PowerShell
+  uzytkownika, NIE `cmd /C` (to `cmd` jest tylko w kodzie `main` jako zapas, gdy nie ma
+  powloki). Skutki: (1) `$zmienna` w `commandWindows` jest rozwijana przez opakowanie,
+  zanim polecenie ruszy - przypisania `$p=...` psuja hook (ParserError); (2) `||` nie dziala
+  (PowerShell 5.1). Bezpieczna postac: `node "<skrypt>" "<arg>"` albo
+  `powershell ... -File "<skrypt>" -Param "<arg>"` - bez `$`. Stdin i UTF-8 przechodza.
+  Zrodlo: `codex-rs/hooks/src/engine/command_runner.rs` (`build_command`) +
+  `codex-rs/core/src/session/mod.rs` (`build_hooks_config`).
+- OKNA: Codex odpala hooki bez `CREATE_NO_WINDOW` (`codex-rs/utils/pty/src/win/job.rs` -
+  tylko `CREATE_SUSPENDED`). Gdy Codex MA konsole (terminal, ConPTY Orki, ukryta konsola
+  od rodzica z `windowsHide`) - hook ja dziedziczy i okna nie ma. Gdy Codex dziala BEZ
+  konsoli - opakowanie PowerShella dostaje nowa, widoczna konsole, zanim ruszy nasze
+  polecenie; tego nie da sie schowac z `hooks.json`. W tym trybie sam Codex daje ~12 okien
+  na wiadomosc (git itp.). `conhost --headless` w poleceniu hooka niczego nie chowa i
+  UCINA jego stdout. Pomiary: `.megaruchacz\raporty\P11.md`.
+- Test Codeksa bez tokenow: tymczasowy `CODEX_HOME` z `model_provider` wskazujacym na
+  lokalny udawany serwer Responses API (SSE) - pelna sesja z hookami, a cialo zapytania
+  pokazuje, co hook dokleil do kontekstu. Projektowy `.codex\hooks.json` laduje sie
+  tylko w projekcie z `trust_level = "trusted"`.
 - ORKA A AGENTS.md (kod Orki 1.4.210, `resources\app.asar.unpacked\out\main\chunks\codex-home-paths-*.js`):
   przy KAZDYM starcie Codeksa w Orce (`prepareForCodexLaunch`) Orka przenosi z `~/.codex` do
   swojego CODEX_HOME: `AGENTS.md`, `skills`, `hooks` (katalog), `plugins`, `plugin-state`,
