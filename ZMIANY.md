@@ -4,6 +4,11 @@ Każda zmiana wypychana na gita dostaje tu wpis. Numer rośnie wg zasady:
 pierwsza cyfra — przebudowa łamiąca zgodność, druga — nowa funkcja,
 trzecia — poprawka.
 
+## 0.22.1 — 2026-09-29
+
+- **OpenDesign usunięty z bazy skilli** — na prośbę użytkownika. To osobna aplikacja do
+  projektowania, a nie skille, więc nie ma czego pokazywać w zakładce „Skille”.
+
 ## 0.22.0 — 2026-09-29
 
 - **Nowa zakładka „Skille” w oknie MegaRuchacza — polecane skille z opisem po polsku.**

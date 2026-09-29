@@ -147,16 +147,5 @@
         @{ Nazwa = 'writing-for-agents';            Sciezka = 'skills/productivity/writing-for-agents';           Opis = 'Zasady pisania dokumentów dla agentów: skille, AGENTS.md, CLAUDE.md.' }
       )
     }
-    @{
-      Id      = 'open-design'
-      Nazwa   = 'OpenDesign (nexu-io)'
-      Adres   = 'https://github.com/nexu-io/open-design'
-      Galaz   = 'main'
-      Sciezka = 'skills'
-      Rodzaj  = 'aplikacja'
-      Opis    = 'Osobna aplikacja do projektowania (program na komputer z własnym serwerem), a nie zestaw skilli.'
-      Uwaga   = 'To nie są skille do zainstalowania w Claude Code ani Codeksie. W repozytorium leży aplikacja OpenDesign; jej 163 „skille” to w większości (139) krótkie odsyłacze do cudzych repozytoriów, a reszta działa tylko w jej własnym programie (serwer „od”). Żeby z niej korzystać, instaluje się samą aplikację - MegaRuchacz niczego stąd nie kopiuje.'
-      Skille  = @()
-    }
   )
 }
