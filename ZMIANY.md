@@ -4,6 +4,30 @@ Każda zmiana wypychana na gita dostaje tu wpis. Numer rośnie wg zasady:
 pierwsza cyfra — przebudowa łamiąca zgodność, druga — nowa funkcja,
 trzecia — poprawka.
 
+## 0.22.0 — 2026-09-29
+
+- **Nowa zakładka „Skille” w oknie MegaRuchacza — polecane skille z opisem po polsku.**
+  Baza (`skille\katalog.psd1`) ma 73 skille z pięciu zestawów: Superpowers, Impeccable,
+  Taste Skill, Ponytail i skille Matta Pococka; przy każdym kilka słów, do czego jest.
+  Szósty adres z listy, OpenDesign, to osobna aplikacja do projektowania, a nie skille —
+  stoi w zakładce z wyjaśnieniem, nic się z niej nie instaluje. Działa samo po restarcie
+  nadzorcy (przy najbliższym logowaniu do Windows) — `wdroz.ps1` nie jest do tego potrzebny.
+- **Wykrywa, co już masz, i bierze to pod opiekę bez ruszania plików.** Każdy skill na dysku
+  jest porównywany z całą historią źródła: najnowsza wersja, któraś starsza, albo
+  „zmieniony ręcznie” (nie pasuje do żadnej wersji autora). Pierwszy przebieg na komputerze
+  tylko spisuje stan — niczego nie podmienia.
+- **Raz dziennie sam sprawdza źródła i pobiera nowsze wersje** skilli pod opieką — w tle,
+  bez żadnego okna, odpalany przez nadzorcę (jedno sprawdzenie na dobę, znacznik dnia).
+  Przed każdą podmianą robi kopię starej wersji (`~\.claude\mr\skille\kopie\`), a każda
+  zmiana trafia do dziennika (`~\.claude\mr\skille\dziennik.log`): skąd, z której wersji
+  na którą, kiedy. Skilla zmienionego ręcznie nie nadpisuje nigdy sam.
+- **Przyciski w zakładce:** Zainstaluj, Aktualizuj teraz (przy skillu zmienionym ręcznie
+  pyta o zgodę), Cofnij ostatnią aktualizację (przywraca kopię co do bajtu), Sprawdź teraz.
+  Błąd sieci albo złe źródło widać na czerwono w zakładce i jako sprawę na Przeglądzie.
+- Instaluje dla Claude Code (`~\.claude\skills`) i — gdy na komputerze jest Codex — dla
+  Codeksa (`~\.agents\skills`); opencode czyta oba te katalogi sam. To samo z wiersza
+  poleceń: `narzedzia\skille.ps1` (opis trybów w nagłówku pliku).
+
 ## 0.21.3 — 2026-09-28
 
 - **Na starcie sesji nie pokazuje się już rachunek policzony starą wersją.** Po zmianie

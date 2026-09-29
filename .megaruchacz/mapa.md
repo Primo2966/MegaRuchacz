@@ -546,7 +546,7 @@ sie w KAZDYM projekcie Claude Code na tej maszynie, nie tylko w `claude-worker`.
   wykresu, z wlasnym rysowaniem slupkow jako fallback). `zasobnik/stan-nadzorcy.ps1`
   jest DOTSOURCE'owany (`. (Join-Path $PSScriptRoot "stan-nadzorcy.ps1")`) - to NIE
   jest osobny proces, dzieli scope zmiennych `$script:` z nadzorca.ps1.
-- OKNO MA DWA WIDOKI, nie zakladki `TabControl`: `Pokaz-Widok([string]$nazwa)`
+- OKNO MA CZTERY WIDOKI (od 0.22.0: Przeglad, Szczegoly, Warstwy pamieci, Skille - patrz sekcja "Polecane skille"), nie zakladki `TabControl`: `Pokaz-Widok([string]$nazwa)`
   przelacza widocznosc dwoch panelow (`$script:WidokPrzeglad` / `$script:WidokSzczegoly`,
   oba `Dock = Fill`, jeden na wierzchu drugiego) i styl dwoch przyciskow-przelacznikow
   `$script:BPrzeglad` / `$script:BSzczegoly` (funkcja `Przycisk-Przelacznika`,
@@ -631,3 +631,52 @@ sie w KAZDYM projekcie Claude Code na tej maszynie, nie tylko w `claude-worker`.
   "ladunek hooka" (`.claude\megaruchacz-sesja.json` itp.) wymaga wywolania
   `Ladunek-Hooka` (wyciaga pole JSON), a NIE zwyklego odczytu pliku - inaczej podglad
   pokazalby surowy JSON zamiast tekstu, ktory naprawde leci do modelu.
+
+## Polecane skille (od 0.22.0, raport P18)
+
+- `skille/katalog.psd1` - BAZA: zrodla (Id, Nazwa, Adres, Galaz, Sciezka, Opis, Rodzaj
+  `skille`/`aplikacja`, Uwaga) i skille (Nazwa = katalog w repo, Opis po polsku; opcjonalnie
+  Sciezka pelna, Folder = nazwa u uzytkownika, Robocza). Nowe zrodlo = jeden blok. UTF-8 z BOM,
+  wartosci w POJEDYNCZYCH cudzyslowach (PowerShell traktuje „ ” jak cudzyslow i rozbija "...").
+  Czytane `Import-PowerShellDataFile`. `code-review` Matta ma `Folder = matt-code-review`
+  (uzytkownik zmienil nazwe i odwolania w 4 innych skillach - te 5 wykrywa sie jako "zmienione").
+- `narzedzia/skille.ps1` - CALA logika (UTF-8 z BOM). Tryby `-Tryb stan|wykryj|instaluj|aktualizuj|
+  cofnij|codziennie`, `-Skill`, `-ZeZrodla`, `-KatalogDomowy` (testy na kopii), `-Katalog`
+  (podmiana bazy), `-BezSieci`, `-Wymus`, `-Json` (stan dla okna, ASCII: \uXXXX). Funkcje po nazwie:
+  `Przygotuj-Zrodlo` (wlasny czesciowy klon `--filter=blob:none` + sparse na sciezki skilli,
+  `core.autocrlf=false`, fetch + `reset --hard origin/<galaz>` - to NASZA kopia), `Najnowsze-Wersje`
+  (jedno `ls-tree`), `Historia-Zrodla` (jedno `git log --first-parent -m --root --raw` z pathspec
+  `:(glob)**/<nazwa>/**`, odtwarza kazdy stan kazdego katalogu o nazwie skilla - takze sprzed
+  przeniesien w repo), `Odcisk-Lokalny` (skrot gita "blob" surowy + po CRLF->LF, typ C#
+  `MegaRuchacz.SkilleOdcisk`), `Ocen-Cel` (brak/zgodny/starszy/zmieniony), `Wykryj` (przejecie pod
+  opieke), `Aktualizuj-Skill`, `Instaluj-Skill`, `Cofnij-Skill`, `Zrob-Kopie`, `Wgraj-Wersje`,
+  `Stan-Dla-Okna`. Git przez `System.Diagnostics.Process` z `CreateNoWindow`, bez pytan o haslo.
+  Zamek `Local\MegaRuchacz-Skille-<skrot domu>`. Kod: 0 ok, 1 blad, 2 zle wywolanie, 3 zajete.
+- STAN poza repo: `~/.claude/mr/skille/` - `stan.json` (per skill per cel: opieka, commit, pliki
+  = odcisk wersji, stan, wstrzymany po cofnieciu; najnowszy; zmiana = ostatnia aktualizacja),
+  `znacznik.txt` (codzienny przebieg: dzien/start/koniec/wynik/powod/zaktualizowano/pierwszy),
+  `dziennik.log`, `operacja.txt` + `operacja.log` (ostatnia operacja dla okna), `kopie/<folder>/
+  <stempel>/<cel>/` + `kopia.txt` + `<cel>.spis` (limit 10 kopii na skill), `repo/<id>/`, `tmp/`.
+- CELE: `claude` = `~/.claude/skills` (zawsze); `codex` = `~/.agents/skills`, gdy jest `~/.codex`
+  albo katalog Codeksa Orki (Codex 0.157 czyta `$HOME/.agents/skills` - sprawdzone
+  `codex debug prompt-input`; `$HOME` bierze z profilu Windows, NIE ze zmiennej srodowiskowej,
+  wiec na kopii domu tego nie sprawdzisz). opencode czyta `~/.claude/skills` i `~/.agents/skills`
+  sam - osobnego celu nie ma (dubel nazwy = ostrzezenie w jego logu). Skill z
+  `allow_implicit_invocation: false` (np. `retro`) Codex pomija na liscie w promcie - to nie blad.
+- REGULY: pierwszy przebieg `codziennie` na maszynie tylko spisuje (`pierwszy: True`); aktualizacja
+  tylko skilli pod opieka w stanie `starszy`; `zmieniony` nigdy bez `-Wymus` (okno pyta);
+  po `cofnij` skill `wstrzymany` (codzienny go pomija, jawne `aktualizuj -Skill` zdejmuje);
+  `instaluj` wgrywa tam, gdzie brak, i doprowadza starsze do najnowszej.
+- CODZIENNIE: dozor nadzorcy (`Dozor` w `zasobnik/nadzorca.ps1`) -> `Czy-Sprawdzac-Skille`
+  (znacznik z dzis? inna operacja? dlawik 120 min w procesie) -> `Ruszaj-Skille` -> `Odpal-W-Tle`
+  (conhost --headless). Funkcje w `zasobnik/stan-nadzorcy.ps1`, sekcja "polecane skille (P18)":
+  `Stan-Skilli` (-Tryb stan -Json przez `Wolaj-Skrypt`), `Operacja-Na-Skillach` (przyciski, w tle),
+  `Problemy-Skilli` (karta na Przegladzie: blad, urwany przebieg, >= 2 dni bez sprawdzenia).
+  Zadnego zadania w Harmonogramie.
+- ZAKLADKA: czwarty widok `skille` (`$script:WidokSkille`, przycisk `$script:BSkille`, panel
+  przelacznika 530 px). Lista to wiersze `TableLayoutPanel` w przewijanym panelu (opis zawiniety,
+  nie ucinany - ListView ucinal trzema kropkami), naglowki zrodel, grupa "spoza bazy". Funkcje:
+  `Napelnij-Skille`, `Wiersz-Skilla`, `Naglowek-Zrodla`, `Pokaz-Info-Skilla`, `Podglad-Skilla`,
+  `Wybierz-Skill`, `Rusz-Operacje-Skilli` + `Sprawdz-Operacje-Skilli` (zegar 2 s na `operacja.txt`).
+- TEST okna bez ekranu: kopia nadzorcy z wlasnym zamkiem, bez dozoru, `StartPosition Manual`
+  na (-5000, 0), `ShowInTaskbar = $false`, zrzut `DrawToBitmap` (wzor: `zasobnik/test-p7.ps1`).

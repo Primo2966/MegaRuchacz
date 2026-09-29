@@ -63,6 +63,9 @@
 #    to nie wiem czego". Jedyne porownanie: udzial w calym dziennym zuzyciu
 #    tokenow w rozmowach z Claude (Zuzycie-Dzienne w stan-nadzorcy.ps1).
 #    Procent otwarcia okna rozmowy zostal tylko w karcie "Otwarcie okna rozmowy".
+# 10. 29.09.2026 (P18): czwarta zakladka "Skille" - polecane skille z bazy
+#    skille\katalog.psd1, stan, przyciski Zainstaluj / Aktualizuj teraz / Cofnij.
+#    Dozor raz na dobe odpala w tle narzedzia\skille.ps1 -Tryb codziennie.
 #
 # PRZYCISKU [ODSWIEZ] NIE MA I NIE MA GO BYC. Istnial tylko dlatego, ze okno
 # nie odswiezalo sie samo - byl obejsciem braku, nie funkcja. Dzis okno przelicza
@@ -292,6 +295,12 @@ function Zbierz-Problemy($d, $wywrotki, [string]$blad, $czasDanych) {
     $lista += Problem "uwaga" "Przy poprzednim przebiegu coś się nie udało" (
       "MegaRuchacz potknął się w tle. Pełna treść jest w zakładce Szczegóły.") ((@($wywrotki)) -join " | ")
   }
+
+  # Skille (P18): nieudane albo dawno niewykonane codzienne sprawdzenie - sam plik
+  # znacznika, bez wolania skryptu.
+  try {
+    foreach ($p in (Problemy-Skilli)) { $lista += Problem $p.Waga $p.Tytul $p.Porada $p.Pelne }
+  } catch { Zanotuj-Wywrotke "odczyt znacznika skilli" $_ }
 
   # Czerwone przed zoltymi, zolte przed informacjami: pierwsza rzecz na ekranie
   # ma byc ta, ktora naprawde czegos wymaga, a nie ta, ktorej akurat nie wiemy.
@@ -1016,6 +1025,18 @@ function Dozor($pokazDymek, [bool]$zKolejka, [bool]$zSieci) {
     }
   } catch { Zanotuj-Wywrotke "decyzja o starcie cyklu" $_ }
 
+  # Polecane skille (P18) - raz na dobe sprawdzenie i pobranie nowszych wersji,
+  # w tle i bez okna. Pierwszy przebieg na maszynie tylko spisuje, co jest.
+  try {
+    $cs = Czy-Sprawdzac-Skille
+    if ($cs.Ruszac) {
+      Notuj "dozor: sprawdzam skille ($($cs.Powod))"
+      if (-not (Ruszaj-Skille)) { Zanotuj-Wywrotke "start codziennego sprawdzenia skilli" "Odpal-W-Tle nie wystartowal narzedzia\skille.ps1" }
+    } else {
+      Notuj "dozor: skilli nie sprawdzam - $($cs.Powod)"
+    }
+  } catch { Zanotuj-Wywrotke "decyzja o sprawdzeniu skilli" $_ }
+
   # Alarmy - jeden na sprawe na dobe, zeby nie uczyly ignorowania.
   foreach ($a in @($d.Alarmy)) {
     if (Alarm-Juz-Byl $a.Temat) { Notuj "alarm [$($a.Temat)] juz dzis byl - nie powtarzam"; continue }
@@ -1166,6 +1187,25 @@ $script:PodgladWarstwy = $null
 # Odpowiedz Warstwy-Pamieci - liczona dopiero przy wejsciu w zakladke, bo wola
 # osobny proces, a przeglad ma sie otwierac bez czekania.
 $script:DaneWarstw     = $null
+# Zakladka "Skille" (P18): lista po lewej (wiersze-karty, bo opis ma sie zawinac,
+# a nie uciac trzema kropkami), szczegoly i przyciski po prawej.
+$script:BSkille        = $null   # czwarty przycisk przelacznika
+$script:WidokSkille    = $null
+$script:LSkille        = $null   # zdanie o bezpieczenstwie + podsumowanie
+$script:BSkilleTeraz   = $null   # "Sprawdz teraz" - wszystkie skille
+$script:ListaSkilli    = $null   # przewijany panel z wierszami
+$script:SkilleInfo     = $null   # dwie kolumny o wybranym skillu
+$script:SkillePrzyciski = $null
+$script:BSkillInstaluj = $null
+$script:BSkillAktualizuj = $null
+$script:BSkillCofnij   = $null
+$script:SkillePodglad  = $null   # co sie zmienilo / wynik operacji
+$script:DaneSkilli     = $null   # odpowiedz Stan-Skilli
+$script:SkillWybrany   = ""
+$script:WierszeSkilli  = @{}
+$script:ZegarSkilli    = $null
+$script:SkilleOperacjaOd = $null
+$script:SkilleOperacjaOpis = ""
 $script:Pasek          = $null
 $script:BAktualizuj    = $null
 $script:LAktualizuj    = $null
@@ -2752,17 +2792,420 @@ function Pokaz-Widok([string]$nazwa) {
   $script:Widok = $nazwa
   $szcz = ($nazwa -eq "szczegoly")
   $warst = ($nazwa -eq "warstwy")
-  $przeg = (-not ($szcz -or $warst))
+  $skil = ($nazwa -eq "skille")
+  $przeg = (-not ($szcz -or $warst -or $skil))
   $script:WidokSzczegoly.Visible = $szcz
   $script:WidokWarstwy.Visible = $warst
+  $script:WidokSkille.Visible = $skil
   $script:WidokPrzeglad.Visible = $przeg
   Styl-Przelacznika $script:BPrzeglad $przeg
   Styl-Przelacznika $script:BSzczegoly $szcz
   Styl-Przelacznika $script:BWarstwy $warst
+  Styl-Przelacznika $script:BSkille $skil
   if ($szcz -and (-not $script:SzczegolyZajete)) { Napelnij-Szczegoly }
   if ($warst) {
     if ($script:DaneWarstw -and $script:DaneWarstw.Powod) { $script:DaneWarstw = $null }
     if (($null -eq $script:DaneWarstw) -or ($script:ListaWarstw.Items.Count -eq 0)) { Napelnij-Warstwy }
+  }
+  if ($skil) { Napelnij-Skille }
+}
+
+# ------------------------------------------------------------ zakladka Skille (P18)
+# Dane liczy narzedzia\skille.ps1 -Tryb stan -Json (Stan-Skilli w stan-nadzorcy.ps1) -
+# tutaj jest tylko wyglad i przyciski. Przyciski NIE czekaja na koniec operacji: skrypt
+# idzie w tle bez okna, a zegar co 2 s zaglada do operacja.txt i odmalowuje zakladke.
+
+$ZDANIE_BEZPIECZENSTWA = "Skille to instrukcje od zewnętrznych autorów. Aktualizują się same raz dziennie, wyłącznie z listy zaufanych źródeł poniżej - każda zmiana jest zapisana i da się ją cofnąć."
+
+function Data-Krotko([string]$t) {
+  $d = Data-Lub-Nic $t
+  if (-not $d) { return "" }
+  return $d.ToString('yyyy-MM-dd')
+}
+
+function Wersja-Krotko([string]$commit, [string]$data) {
+  if (-not $commit) { return "nieznana" }
+  $k = $commit.Substring(0, [math]::Min(7, $commit.Length))
+  $d = Data-Krotko $data
+  if ($d) { return "z $d (oznaczenie $k)" }
+  return "oznaczenie $k"
+}
+
+# Stan skilla po ludzku: krotki napis na liste i kolor. Blad sprawdzenia wygrywa na
+# liscie (czerwony), ale szczegoly mowia tez, co wiadomo z ostatniego udanego razu.
+function Napis-Skilla($s) {
+  $wstrzymany = @($s.cele | Where-Object { $_.wstrzymany }).Count -gt 0
+  if ($s.blad) { return @("nie udało się sprawdzić", $script:KolPilne) }
+  if ($s.dzisZaktualizowany -and $s.stan -eq "zgodny") { return @("nowa wersja pobrana dziś", $script:KolDobrze) }
+  switch ("$($s.stan)") {
+    "zgodny"    { return @("aktualny", $script:KolDobrze) }
+    "starszy"   { if ($wstrzymany) { return @("cofnięty - nie aktualizuję sam", $script:KolSzary) }; return @("czeka nowsza wersja", $script:KolUwaga) }
+    "zmieniony" { return @("zmieniony ręcznie - nie ruszam", $script:KolUwaga) }
+    "brak"      { return @("nie zainstalowany", $script:KolSzary) }
+    "nieznany"  { return @("jeszcze nie sprawdzony", $script:KolSzary) }
+  }
+  return @("$($s.stan)", $script:KolSzary)
+}
+
+function Zdanie-Stanu-Skilla($s) {
+  $wstrzymany = @($s.cele | Where-Object { $_.wstrzymany }).Count -gt 0
+  switch ("$($s.stan)") {
+    "zgodny"    { return "Masz najnowszą wersję od autora." }
+    "starszy"   {
+      if ($wstrzymany) { return "Masz starszą wersję, bo cofnąłeś ostatnią aktualizację. Sam jej nie ponowię - kliknij `„Aktualizuj teraz`”, gdy zechcesz." }
+      return "Masz starszą wersję od autora. Nowsza podmieni się sama przy najbliższym codziennym sprawdzeniu (z kopią starej) - albo kliknij `„Aktualizuj teraz`”." }
+    "zmieniony" { return "Ktoś zmienił ten skill ręcznie - jego treść nie pasuje do żadnej wersji autora. Nie nadpisuję go sam. `„Aktualizuj teraz`” zapyta o zgodę, a Twoja wersja trafi do kopii." }
+    "brak"      { return "Nie masz go zainstalowanego." }
+    "nieznany"  { return "Jest na dysku, ale jeszcze go nie sprawdzałem - kliknij `„Sprawdź teraz`”." }
+  }
+  return "$($s.stan)"
+}
+
+function Opis-Celu($c) {
+  switch ("$($c.stan)") {
+    "brak"      { return "nie zainstalowany" }
+    "zgodny"    { return "aktualny, wersja $(Wersja-Krotko $c.commit $c.data)" }
+    "starszy"   { return "starsza wersja $(Wersja-Krotko $c.commit $c.data)$(if ($c.wstrzymany) { ' - cofnięty, wstrzymany' })" }
+    "zmieniony" { return "zmieniony ręcznie" }
+    "nieznany"  { return "jeszcze nie sprawdzony" }
+  }
+  return "$($c.stan)"
+}
+
+# Wiersz listy: nazwa i stan w pierwszej linii, opis zawiniety pod spodem. Caly
+# wiersz jest klikalny (Tag = nazwa skilla); wybrany ma szare tlo.
+function Wiersz-Skilla($s, [int]$szer) {
+  $t = New-Object System.Windows.Forms.TableLayoutPanel
+  $t.ColumnCount = 2
+  $t.RowCount = 2
+  $t.AutoSize = $true
+  $t.AutoSizeMode = [System.Windows.Forms.AutoSizeMode]::GrowAndShrink
+  $t.MinimumSize = New-Object System.Drawing.Size($szer, 0)
+  $t.MaximumSize = New-Object System.Drawing.Size($szer, 0)
+  $t.Padding = New-Object System.Windows.Forms.Padding(14, 7, 12, 7)
+  $t.Margin = New-Object System.Windows.Forms.Padding(0)
+  $t.BackColor = $script:TloKarty
+  $t.Cursor = [System.Windows.Forms.Cursors]::Hand
+  $t.ColumnStyles.Add((New-Object System.Windows.Forms.ColumnStyle([System.Windows.Forms.SizeType]::Percent, 100))) | Out-Null
+  $t.ColumnStyles.Add((New-Object System.Windows.Forms.ColumnStyle([System.Windows.Forms.SizeType]::AutoSize))) | Out-Null
+  $nazwa = "$($s.folder)"
+  if ($s.robocza) { $nazwa += "  · wersja robocza autora" }
+  $ln = Etykieta $nazwa $script:CzZwyklaGruba $script:KolTekst
+  $ln.UseMnemonic = $false
+  $ns = Napis-Skilla $s
+  $ls = Etykieta $ns[0] $script:CzMalaGruba $ns[1]
+  $ls.UseMnemonic = $false
+  $ls.Anchor = [System.Windows.Forms.AnchorStyles]::Right
+  $lo = Etykieta-Zawijana "$($s.opis)" $script:CzMala $script:KolSzary ($szer - 30)
+  $lo.UseMnemonic = $false
+  $t.Controls.Add($ln, 0, 0)
+  $t.Controls.Add($ls, 1, 0)
+  $t.Controls.Add($lo, 0, 1)
+  $t.SetColumnSpan($lo, 2)
+  foreach ($c in @($t, $ln, $ls, $lo)) {
+    $c.Tag = "$($s.nazwa)"
+    $c.Add_Click({ param($nadawca, $e) try { Wybierz-Skill "$($nadawca.Tag)" } catch { Zanotuj-Wywrotke "wybor skilla" $_ } })
+  }
+  # cienka kreska pod wierszem
+  $t.Add_Paint({ param($nadawca, $e) try { $e.Graphics.DrawLine($script:PioroRamki, 12, $nadawca.Height - 1, $nadawca.Width - 12, $nadawca.Height - 1) } catch { if (-not $script:RamkaZawiodla) { $script:RamkaZawiodla = $true; Zanotuj-Wywrotke "kreska pod skillem" $_ } } })
+  return $t
+}
+
+function Naglowek-Zrodla($z, [int]$szer) {
+  $p = Pionowy $szer
+  $p.Padding = New-Object System.Windows.Forms.Padding(14, 14, 12, 6)
+  $p.BackColor = $script:TloZnacz
+  $zainst = @($z.skille | Where-Object { $_.stan -ne "brak" }).Count
+  $ile = @($z.skille).Count
+  $tytul = "$($z.nazwa)"
+  if ($z.rodzaj -eq "skille") { $tytul += "  -  $ile $(Odmiana $ile 'skill' 'skille' 'skilli'), masz $zainst" }
+  $lt = Etykieta-Zawijana $tytul $script:CzGruba $script:KolTekst ($szer - 26)
+  $lt.UseMnemonic = $false
+  $p.Controls.Add($lt)
+  $lo = Etykieta-Zawijana "$($z.opis)" $script:CzMala $script:KolSzary ($szer - 26)
+  $lo.UseMnemonic = $false
+  $p.Controls.Add($lo)
+  if ($z.rodzaj -ne "skille") {
+    $lu = Etykieta-Zawijana "$($z.uwaga)" $script:CzMala $script:KolUwaga ($szer - 26)
+    $lu.UseMnemonic = $false
+    $p.Controls.Add($lu)
+  } elseif ($z.blad) {
+    $lb = Etykieta-Zawijana "Nie udało się sprawdzić ($(Data-Krotko $z.sprawdzono)): $($z.blad)" $script:CzMala $script:KolPilne ($szer - 26)
+    $lb.UseMnemonic = $false
+    $p.Controls.Add($lb)
+  } elseif ($z.sprawdzono) {
+    $p.Controls.Add((Etykieta-Zawijana "Sprawdzone $($z.sprawdzono). Najnowsza wersja autora: $(Wersja-Krotko $z.commit $z.data)." $script:CzMala $script:KolSzary ($szer - 26)))
+  }
+  return $p
+}
+
+function Znajdz-Skill([string]$nazwa) {
+  if (-not $script:DaneSkilli -or -not $script:DaneSkilli.Dane) { return $null }
+  foreach ($z in @($script:DaneSkilli.Dane.zrodla)) {
+    foreach ($s in @($z.skille)) { if ($s.nazwa -eq $nazwa) { return @($s, $z) } }
+  }
+  return $null
+}
+
+function Zdanie-Skilli($d) {
+  $l = $d.liczniki
+  $t = ""
+  $t += "W bazie $($l.wBazie) $(Odmiana $l.wBazie 'skill' 'skille' 'skilli') - aktualne: $($l.zgodne), czeka nowsza wersja: $($l.starsze), zmienione ręcznie: $($l.zmienione), niezainstalowane: $($l.brak)."
+  if ($l.dzisZaktualizowane -gt 0) { $t += " Dziś pobrano nowe wersje: $($l.dzisZaktualizowane)." }
+  if ($l.bledy -gt 0) { $t += " Nie udało się sprawdzić: $($l.bledy)." }
+  $zn = $d.znacznik
+  if ($zn -and $zn.dzien) {
+    $t += " Codzienne sprawdzenie: $($zn.start)"
+    if ($zn.wynik -eq "blad") { $t += " - BŁĄD." } elseif ($zn.wynik -eq "pracuje") { $t += " - trwa." } else { $t += " - w porządku." }
+  } else { $t += " Codziennego sprawdzenia jeszcze nie było." }
+  return $t
+}
+
+function Napelnij-Skille([bool]$odNowa = $true) {
+  if (-not $script:ListaSkilli -or $script:ListaSkilli.IsDisposed) { return }
+  if ($odNowa -or ($null -eq $script:DaneSkilli)) {
+    $script:LSkille.ForeColor = $script:KolSzary
+    $script:LSkille.Text = "Zbieram listę skilli..."
+    $script:Okno.Refresh()
+    try { $script:DaneSkilli = Stan-Skilli }
+    catch {
+      Zanotuj-Wywrotke "lista skilli" $_
+      $script:DaneSkilli = [pscustomobject]@{ Dane = $null; Powod = $_.Exception.Message }
+    }
+  }
+  $ds = $script:DaneSkilli
+  $lista = $script:ListaSkilli
+  $lista.SuspendLayout()
+  try {
+    $script:WierszeSkilli = @{}
+    $wnetrze = $lista.Controls[0]
+    Wyczysc-Panel $wnetrze
+    if ($ds.Powod -or -not $ds.Dane) {
+      $script:LSkille.ForeColor = $script:KolPilne
+      $script:LSkille.Text = "NIE UDAŁO SIĘ ZEBRAĆ LISTY SKILLI: $($ds.Powod)"
+      Pokaz-Info-Skilla $null
+      $script:SkillePodglad.Text = ("Lista jest pusta, bo jej zebranie się nie udało - to nie znaczy, że nie masz skilli." + "`r`n`r`n" +
+        "Powód: $($ds.Powod)" + "`r`n`r`n" + "Spróbuj ręcznie:" + "`r`n" +
+        "powershell -ExecutionPolicy Bypass -File $(Skrypt-Skilli)")
+      return
+    }
+    $d = $ds.Dane
+    $szer = [math]::Max(300, $lista.ClientSize.Width - [System.Windows.Forms.SystemInformation]::VerticalScrollBarWidth - 2)
+    foreach ($z in @($d.zrodla)) {
+      $wnetrze.Controls.Add((Naglowek-Zrodla $z $szer))
+      foreach ($s in @($z.skille)) {
+        $w = Wiersz-Skilla $s $szer
+        $script:WierszeSkilli["$($s.nazwa)"] = $w
+        $wnetrze.Controls.Add($w)
+      }
+    }
+    $spoza = @($d.spozaBazy | ForEach-Object { "$($_.folder)" } | Select-Object -Unique)
+    if ($spoza.Count -gt 0) {
+      $p = Pionowy $szer
+      $p.Padding = New-Object System.Windows.Forms.Padding(14, 14, 12, 12)
+      $p.BackColor = $script:TloZnacz
+      $p.Controls.Add((Etykieta-Zawijana "Zainstalowane, spoza bazy  -  $($spoza.Count)" $script:CzGruba $script:KolTekst ($szer - 26)))
+      $p.Controls.Add((Etykieta-Zawijana "Twoje własne i z innych źródeł. MegaRuchacz ich nie sprawdza i nie rusza." $script:CzMala $script:KolSzary ($szer - 26)))
+      $lsp = Etykieta-Zawijana ($spoza -join ", ") $script:CzMala $script:KolTekst ($szer - 26)
+      $lsp.UseMnemonic = $false
+      $p.Controls.Add($lsp)
+      $wnetrze.Controls.Add($p)
+    }
+    $script:LSkille.ForeColor = $script:KolTekst
+    if ($d.liczniki.bledy -gt 0 -or ($d.znacznik -and $d.znacznik.wynik -eq "blad")) { $script:LSkille.ForeColor = $script:KolPilne }
+    $script:LSkille.Text = Zdanie-Skilli $d
+    if ($script:SkillWybrany -and (Znajdz-Skill $script:SkillWybrany)) { Wybierz-Skill $script:SkillWybrany }
+    else { $script:SkillWybrany = ""; Pokaz-Info-Skilla $null; Pokaz-Przeglad-Skilli }
+  } finally {
+    $lista.ResumeLayout($true)
+    # etykieta sama dopasowuje wysokosc (AutoSize z MaximumSize)
+  }
+}
+
+# Prawa strona, gdy nic nie jest wybrane: czym jest ta zakladka, ostatnie codzienne
+# sprawdzenie i ostatnia operacja - zeby wynik klikniecia nie znikal po odswiezeniu.
+function Pokaz-Przeglad-Skilli {
+  if (-not $script:SkillePodglad -or $script:SkillePodglad.IsDisposed) { return }
+  $d = $script:DaneSkilli.Dane
+  $l = New-Object System.Collections.Generic.List[string]
+  $l.Add("Kliknij skill po lewej, żeby zobaczyć, co robi, jaką masz wersję i co się zmieniło przy ostatniej aktualizacji.")
+  $l.Add("")
+  $l.Add("Jak to działa:")
+  $l.Add("- Raz dziennie MegaRuchacz sam sprawdza źródła i pobiera nowsze wersje skilli, które masz pod opieką.")
+  $l.Add("- Przed każdą podmianą robi kopię starej wersji. `„Cofnij ostatnią aktualizację`” przywraca ją co do bajtu.")
+  $l.Add("- Skilla zmienionego ręcznie nie nadpisuje nigdy sam.")
+  $l.Add("- Gdzie instaluje: " + ((@($d.cele | Where-Object { $_.jest }) | ForEach-Object { "$($_.nazwa) ($($_.katalog))" }) -join "; ") + ". opencode czyta te same katalogi.")
+  $zn = $d.znacznik
+  $l.Add("")
+  if ($zn -and $zn.dzien) {
+    $l.Add("Ostatnie codzienne sprawdzenie: $($zn.start) - $($zn.koniec), wynik: $(if ($zn.wynik -eq 'ok') { 'w porządku' } else { $zn.wynik }), pobranych nowych wersji: $($zn.zaktualizowano).")
+    if ($zn.pierwszy -eq "True") { $l.Add("To był pierwszy przebieg na tym komputerze - tylko spisał, co masz. Nowsze wersje pobiera od następnego.") }
+    if ($zn.powod) { $l.Add("Powód błędu: $($zn.powod)") }
+  } else { $l.Add("Codziennego sprawdzenia jeszcze nie było - ruszy samo w ciągu kwadransa.") }
+  $op = $d.operacja
+  if ($op -and $op.tryb -and $op.tryb -ne "codziennie") {
+    $l.Add("Ostatnia operacja z przycisku: $($op.tryb) $($op.skill) - $($op.start), wynik: $($op.wynik).")
+    if ($op.powod) { $l.Add("Powód: $($op.powod)") }
+  }
+  $l.Add("")
+  $l.Add("Dziennik zmian: $($d.dziennik)")
+  $l.Add("Kopie zapasowe: $($d.kopie)")
+  $script:SkillePodglad.Text = ($l -join "`r`n")
+}
+
+function Pokaz-Info-Skilla($para) {
+  $info = $script:SkilleInfo
+  if (-not $info -or $info.IsDisposed) { return }
+  $info.SuspendLayout()
+  try {
+    Wyczysc-Panel $info
+    $szer = [math]::Max(300, $info.Parent.ClientSize.Width - $info.Parent.Padding.Horizontal - 12)
+    if (-not $para) {
+      $t = Etykieta-Zawijana "Polecane skille" $script:CzSrednia $script:KolTekst $szer
+      $info.Controls.Add($t)
+      Ustaw-Przyciski-Skilla $null
+      return
+    }
+    $s = $para[0]; $z = $para[1]
+    $tyt = "$($s.folder)"
+    $t = Etykieta-Zawijana $tyt $script:CzSrednia $script:KolTekst $szer
+    $t.UseMnemonic = $false
+    $t.Margin = New-Object System.Windows.Forms.Padding(0, 0, 0, 8)
+    $info.Controls.Add($t)
+    $e = 130
+    $info.Controls.Add((Wiersz-Dwukolumnowy "Do czego jest" "$($s.opis)" $script:KolTekst $szer $e))
+    $ns = Napis-Skilla $s
+    $info.Controls.Add((Wiersz-Dwukolumnowy "Stan" (Zdanie-Stanu-Skilla $s) $ns[1] $szer $e))
+    if ($s.blad) { $info.Controls.Add((Wiersz-Dwukolumnowy "Błąd" "$($s.blad)" $script:KolPilne $szer $e)) }
+    foreach ($c in @($s.cele)) { $info.Controls.Add((Wiersz-Dwukolumnowy "$($c.nazwa)" (Opis-Celu $c) $script:KolTekst $szer $e)) }
+    if ($s.najnowszy) { $info.Controls.Add((Wiersz-Dwukolumnowy "Najnowsza" (Wersja-Krotko $s.najnowszy.commit $s.najnowszy.data) $script:KolTekst $szer $e)) }
+    if ($s.sprawdzono) { $info.Controls.Add((Wiersz-Dwukolumnowy "Sprawdzone" "$($s.sprawdzono)" $script:KolTekst $szer $e)) }
+    $info.Controls.Add((Wiersz-Dwukolumnowy "Źródło" "$($z.nazwa) - $($z.adres)" $script:KolSzary $szer $e))
+    Ustaw-Przyciski-Skilla $s
+  } finally { $info.ResumeLayout($true) }
+}
+
+function Ustaw-Przyciski-Skilla($s) {
+  $pracuje = [bool]$script:SkilleOperacjaOd
+  $script:BSkilleTeraz.Enabled = -not $pracuje
+  $script:SkillePrzyciski.Visible = [bool]$s
+  if (-not $s) { return }
+  $inst = ($s.stan -eq "brak") -or (@($s.brakujeW).Count -gt 0)
+  $akt = ($s.stan -eq "starszy") -or ($s.stan -eq "zmieniony")
+  $cof = ($null -ne $s.zmiana) -and (@("aktualizacja", "nadpisanie") -contains "$($s.zmiana.rodzaj)")
+  $script:BSkillInstaluj.Enabled = $inst -and -not $pracuje
+  # Zainstalowany u jednego narzedzia, brak u drugiego - przycisk mowi wprost, gdzie doda.
+  $script:BSkillInstaluj.Text = $(if (($s.stan -ne "brak") -and (@($s.brakujeW).Count -gt 0)) { "Dodaj dla: " + (@($s.brakujeW) -join ", ") } else { "Zainstaluj" })
+  $script:BSkillAktualizuj.Enabled = $akt -and -not $pracuje
+  $script:BSkillCofnij.Enabled = $cof -and -not $pracuje
+}
+
+# Podglad: co sie zmienilo przy ostatniej aktualizacji (pliki, opisy zmian od autora),
+# a dla zmienionego recznie - czym rozni sie od najblizszej wersji autora.
+function Podglad-Skilla($s) {
+  $l = New-Object System.Collections.Generic.List[string]
+  foreach ($c in @($s.cele)) {
+    if ($c.najblizszy) { $l.Add("$($c.nazwa): czym Twoja wersja różni się od autora - $($c.najblizszy)"); $l.Add("") }
+  }
+  $zm = $s.zmiana
+  if ((-not $zm) -and ($s.stan -eq "brak")) {
+    $gdzie = (@($script:DaneSkilli.Dane.cele | Where-Object { $_.jest }) | ForEach-Object { "$($_.nazwa)" }) -join " i "
+    $l.Add("Nie masz go jeszcze. `„Zainstaluj`” wgra najnowszą wersję od autora dla: $gdzie. Od tej chwili będzie się sam aktualizował raz dziennie.")
+  } elseif ((-not $zm) -and ($s.stan -eq "zmieniony")) {
+    $l.Add("Nie aktualizuję go sam, bo Twoja wersja różni się od każdej wersji autora - aktualizacja skasowałaby Twoje zmiany.")
+  } elseif (-not $zm) {
+    $l.Add("Od kiedy jest pod opieką MegaRuchacza, ten skill nie był jeszcze aktualizowany.")
+  } elseif ($zm.rodzaj -eq "cofniecie") {
+    $l.Add("Ostatnio: cofnięcie aktualizacji, $($zm.kiedy).")
+    $l.Add("Przywrócona kopia: $($zm.kopia)")
+    if ($zm.poprzednia) { $l.Add("Wersja sprzed cofnięcia leży w: $($zm.poprzednia)") }
+  } else {
+    $l.Add("Ostatnia aktualizacja: $($zm.kiedy)$(if ($zm.rodzaj -eq 'nadpisanie') { ' (nadpisanie wersji zmienionej ręcznie, za Twoją zgodą)' }).")
+    $l.Add("Wersja: $(Wersja-Krotko $zm.z $zm.zData)  ->  $(Wersja-Krotko $zm.na $zm.naData)")
+    $l.Add("Pliki: nowe $(@($zm.dodane).Count), zmienione $(@($zm.zmienione).Count), usunięte $(@($zm.usuniete).Count).")
+    foreach ($p in @($zm.dodane)) { $l.Add("  + $p") }
+    foreach ($p in @($zm.zmienione)) { $l.Add("  ~ $p") }
+    foreach ($p in @($zm.usuniete)) { $l.Add("  - $p") }
+    if (@($zm.opisy).Count -gt 0) {
+      $l.Add("")
+      $l.Add("Opisy zmian od autora (po angielsku, najnowsze na górze):")
+      foreach ($o in @($zm.opisy)) { $l.Add("  $o") }
+    }
+    $l.Add("")
+    $l.Add("Kopia poprzedniej wersji: $($zm.kopia)")
+  }
+  return ($l -join "`r`n")
+}
+
+function Wybierz-Skill([string]$nazwa) {
+  $para = Znajdz-Skill $nazwa
+  if (-not $para) { return }
+  foreach ($k in @($script:WierszeSkilli.Keys)) {
+    $w = $script:WierszeSkilli[$k]
+    if ($w -and -not $w.IsDisposed) {
+      $w.BackColor = $(if ($k -eq $nazwa) { $script:TloPrzel } else { $script:TloKarty })
+    }
+  }
+  $script:SkillWybrany = $nazwa
+  $wiersz = $script:WierszeSkilli[$nazwa]
+  if ($wiersz -and -not $wiersz.IsDisposed) { $script:ListaSkilli.ScrollControlIntoView($wiersz) }
+  Pokaz-Info-Skilla $para
+  $script:SkillePodglad.Text = Podglad-Skilla $para[0]
+  $script:SkillePodglad.SelectionStart = 0
+  $script:SkillePodglad.ScrollToCaret()
+}
+
+# Klikniecie przycisku: start w tle, zegar co 2 s. Koniec rozpoznajemy po operacja.txt
+# z poczatkiem nie wczesniejszym niz klikniecie i wynikiem innym niz "pracuje".
+function Rusz-Operacje-Skilli([string]$tryb, [string]$skill, [bool]$wymus, [string]$opis) {
+  $powod = Operacja-Na-Skillach $tryb $skill $wymus
+  if ($powod) {
+    $script:SkillePodglad.Text = "NIE UDAŁO SIĘ URUCHOMIĆ: $powod"
+    return
+  }
+  $script:SkilleOperacjaOd = [datetime]::Now.AddSeconds(-1)
+  $script:SkilleOperacjaOpis = $opis
+  $script:SkillePodglad.Text = "$opis`r`n`r`nPracuję w tle - to potrwa od kilku sekund do kilku minut (pierwsze pobranie źródeł jest najdłuższe). Okno odświeży się samo."
+  Ustaw-Przyciski-Skilla $(if ($skill) { (Znajdz-Skill $skill)[0] } else { $null })
+  if (-not $script:ZegarSkilli) {
+    $script:ZegarSkilli = New-Object System.Windows.Forms.Timer
+    $script:ZegarSkilli.Interval = 2000
+    $script:ZegarSkilli.Add_Tick({
+      try { Sprawdz-Operacje-Skilli }
+      catch { $script:ZegarSkilli.Stop(); $script:SkilleOperacjaOd = $null; Zanotuj-Wywrotke "zegar operacji na skillach" $_ }
+    })
+  }
+  $script:ZegarSkilli.Start()
+}
+
+function Sprawdz-Operacje-Skilli {
+  if (-not $script:SkilleOperacjaOd) { $script:ZegarSkilli.Stop(); return }
+  $op = Operacja-Skilli
+  $start = Data-Lub-Nic $op["start"]
+  $minelo = ([datetime]::Now - $script:SkilleOperacjaOd).TotalSeconds
+  $koniec = $false; $tekst = ""
+  if ($start -and ($start -ge $script:SkilleOperacjaOd) -and ($op["wynik"] -ne "pracuje")) {
+    $koniec = $true
+    $log = @()
+    try { $log = [System.IO.File]::ReadAllLines((Join-Path (Katalog-Stanu-Skilli) "operacja.log"), [System.Text.Encoding]::UTF8) }
+    catch { $log = @("(nie udało się odczytać wydruku operacji: $($_.Exception.Message))") }
+    $tekst = "$($script:SkilleOperacjaOpis) - $(if ($op['wynik'] -eq 'ok') { 'GOTOWE' } else { 'SKOŃCZONE Z BŁĘDEM' }) ($($op['koniec']))`r`n`r`n" + ($log -join "`r`n")
+  } elseif (($op["wynik"] -eq "pracuje") -and $start -and ($start -lt $script:SkilleOperacjaOd) -and ($minelo -gt 10)) {
+    $koniec = $true
+    $tekst = "Nie ruszyłem, bo właśnie trwa inna operacja na skillach ($($op['tryb']) od $($op['start'])). Spróbuj za chwilę."
+  } elseif ($minelo -gt 900) {
+    $koniec = $true
+    $tekst = "Po 15 minutach operacja wciąż nie zapisała wyniku. Sprawdź dziennik: $(Join-Path (Katalog-Stanu-Skilli) 'dziennik.log')"
+    Zanotuj-Wywrotke "operacja na skillach" "brak wyniku po 15 min ($($script:SkilleOperacjaOpis))"
+  }
+  if (-not $koniec) { return }
+  $script:ZegarSkilli.Stop()
+  $script:SkilleOperacjaOd = $null
+  if ($script:WidokSkille -and -not $script:WidokSkille.IsDisposed) {
+    Napelnij-Skille $true
+    $script:SkillePodglad.Text = $tekst
+    $script:SkillePodglad.SelectionStart = 0
+    $script:SkillePodglad.ScrollToCaret()
   }
 }
 
@@ -2817,6 +3260,7 @@ function Odswiez-Dane {
       Napelnij-Szczegoly
     }
     if ($script:Widok -eq "warstwy") { Napelnij-Warstwy }
+    if (($script:Widok -eq "skille") -and (-not $script:SkilleOperacjaOd)) { Napelnij-Skille }
   } catch {
     # Cisza jest zakazana: nieudane przeliczenie MA byc widoczne w oknie jako
     # zolta karta, a nie schowane za starymi liczbami udajacymi biezace.
@@ -2913,16 +3357,19 @@ function Pokaz-Okno {
   $script:LPodtytul.Location = New-Object System.Drawing.Point($script:Margines, 54)
   # Przelacznik trzech widokow na linii tytulu, po prawej; podtytul biegnie pod
   # nim na cala szerokosc.
+  # P18: czwarty przycisk "Skille" - panel szerszy o 104 px (100 px przycisku + 4 odstepu).
   $przel = New-Object System.Windows.Forms.Panel
-  $przel.Size = New-Object System.Drawing.Size(426, 38)
-  $przel.Location = New-Object System.Drawing.Point(($script:SzerOkna - $script:Margines - 426), 10)
+  $przel.Size = New-Object System.Drawing.Size(530, 38)
+  $przel.Location = New-Object System.Drawing.Point(($script:SzerOkna - $script:Margines - 530), 10)
   $przel.BackColor = $script:TloPrzel
   $script:BPrzeglad  = Przycisk-Przelacznika "Przegląd" 3 124
   $script:BSzczegoly = Przycisk-Przelacznika "Szczegóły" 131 124
   $script:BWarstwy   = Przycisk-Przelacznika "Warstwy pamięci" 259 164
+  $script:BSkille    = Przycisk-Przelacznika "Skille" 427 100
   $przel.Controls.Add($script:BPrzeglad)
   $przel.Controls.Add($script:BSzczegoly)
   $przel.Controls.Add($script:BWarstwy)
+  $przel.Controls.Add($script:BSkille)
   $script:Naglowek.Controls.Add($lTytul)
   $script:Naglowek.Controls.Add($script:LPodtytul)
   $script:Naglowek.Controls.Add($przel)
@@ -3072,8 +3519,118 @@ function Pokaz-Okno {
   $script:WidokWarstwy.Controls.Add($cialoW)
   $script:WidokWarstwy.Controls.Add($script:LWarstwy)
 
+  # Widok skilli (P18): u gory zdanie o bezpieczenstwie z podsumowaniem i przycisk
+  # "Sprawdz teraz", pod nimi lista (wiersze z zawinietym opisem, pogrupowane wedlug
+  # zrodla) i karta szczegolow z przyciskami. Ten sam obszar, okno nie rosnie.
+  $script:WidokSkille = New-Object System.Windows.Forms.Panel
+  $script:WidokSkille.Dock = [System.Windows.Forms.DockStyle]::Fill
+  $script:WidokSkille.BackColor = $script:TloOkna
+  $script:WidokSkille.Padding = New-Object System.Windows.Forms.Padding($script:Margines, 4, $script:Margines, 14)
+  $script:WidokSkille.Visible = $false
+
+  # Gora: po lewej zdanie o bezpieczenstwie (szare, stale) i pod nim podsumowanie
+  # (kolor wedlug stanu), po prawej przycisk. Zdanie o bezpieczenstwie nie czerwienieje
+  # przy bledzie - czerwone jest tylko to, co naprawde sie nie udalo.
+  $goraS = New-Object System.Windows.Forms.Panel
+  $goraS.Dock = [System.Windows.Forms.DockStyle]::Top
+  $goraS.Height = 64
+  $goraS.BackColor = $script:TloOkna
+  $prawaS = New-Object System.Windows.Forms.Panel
+  $prawaS.Dock = [System.Windows.Forms.DockStyle]::Right
+  $prawaS.Width = 164
+  $prawaS.Padding = New-Object System.Windows.Forms.Padding(14, 2, 0, 0)
+  $script:BSkilleTeraz = New-Object System.Windows.Forms.Button
+  $script:BSkilleTeraz.Text = "Sprawdź teraz"
+  $script:BSkilleTeraz.Font = $script:CzZwykla
+  $script:BSkilleTeraz.FlatStyle = [System.Windows.Forms.FlatStyle]::System
+  $script:BSkilleTeraz.Height = 34
+  $script:BSkilleTeraz.Dock = [System.Windows.Forms.DockStyle]::Top
+  $prawaS.Controls.Add($script:BSkilleTeraz)
+  $lewaS = Pionowy 0
+  $lewaS.Dock = [System.Windows.Forms.DockStyle]::Fill
+  $lewaS.AutoSize = $false
+  $szerZdania = $script:SzerTresc - 164 - 4
+  $lBezp = Etykieta-Zawijana $ZDANIE_BEZPIECZENSTWA $script:CzMala $script:KolSzary $szerZdania
+  $lBezp.Margin = New-Object System.Windows.Forms.Padding(0, 0, 0, 4)
+  $script:LSkille = Etykieta-Zawijana "Zbieram listę skilli..." $script:CzZwyklaGruba $script:KolTekst $szerZdania
+  $script:LSkille.UseMnemonic = $false
+  $lewaS.Controls.Add($lBezp)
+  $lewaS.Controls.Add($script:LSkille)
+  $goraS.Controls.Add($lewaS)
+  $goraS.Controls.Add($prawaS)
+  # Wysokosc gory idzie za tekstem - podsumowanie nie ma prawa uciac sie pod lista.
+  $script:LSkille.Add_SizeChanged({ param($nadawca, $e) try { $nadawca.Parent.Parent.Height = [math]::Max(48, $nadawca.Bottom + 12) } catch { Zanotuj-Wywrotke "wysokosc podsumowania skilli" $_ } })
+
+  $cialoS = New-Object System.Windows.Forms.Panel
+  $cialoS.Dock = [System.Windows.Forms.DockStyle]::Fill
+  $cialoS.BackColor = $script:TloOkna
+
+  $kartaListaS = New-Object System.Windows.Forms.Panel
+  $kartaListaS.Dock = [System.Windows.Forms.DockStyle]::Left
+  $kartaListaS.Width = [int]($script:SzerTresc * 0.56)
+  $kartaListaS.BackColor = $script:TloKarty
+  $kartaListaS.Padding = New-Object System.Windows.Forms.Padding(1)
+  $kartaListaS.Add_Paint({ param($nadawca, $e) Obrysuj $nadawca $e })
+  $script:ListaSkilli = New-Object System.Windows.Forms.Panel
+  $script:ListaSkilli.Dock = [System.Windows.Forms.DockStyle]::Fill
+  $script:ListaSkilli.AutoScroll = $true
+  $script:ListaSkilli.BackColor = $script:TloKarty
+  $wnetrzeS = Pionowy 0
+  $wnetrzeS.Location = New-Object System.Drawing.Point(0, 0)
+  $script:ListaSkilli.Controls.Add($wnetrzeS)
+  $kartaListaS.Controls.Add($script:ListaSkilli)
+
+  $odstepS = New-Object System.Windows.Forms.Panel
+  $odstepS.Dock = [System.Windows.Forms.DockStyle]::Left
+  $odstepS.Width = 14
+  $odstepS.BackColor = $script:TloOkna
+
+  $kartaInfoS = New-Object System.Windows.Forms.Panel
+  $kartaInfoS.Dock = [System.Windows.Forms.DockStyle]::Fill
+  $kartaInfoS.BackColor = $script:TloKarty
+  $kartaInfoS.Padding = New-Object System.Windows.Forms.Padding(18, 14, 6, 6)
+  $kartaInfoS.Add_Paint({ param($nadawca, $e) Obrysuj $nadawca $e })
+  $script:SkillePodglad = New-Object System.Windows.Forms.TextBox
+  $script:SkillePodglad.Multiline = $true
+  $script:SkillePodglad.ReadOnly = $true
+  $script:SkillePodglad.MaxLength = [int]::MaxValue
+  $script:SkillePodglad.WordWrap = $true
+  $script:SkillePodglad.BorderStyle = [System.Windows.Forms.BorderStyle]::None
+  $script:SkillePodglad.ScrollBars = [System.Windows.Forms.ScrollBars]::Vertical
+  $script:SkillePodglad.Font = $script:CzMala
+  $script:SkillePodglad.BackColor = $script:TloKarty
+  $script:SkillePodglad.ForeColor = $script:KolTekst
+  $script:SkillePodglad.Dock = [System.Windows.Forms.DockStyle]::Fill
+  $script:SkillePrzyciski = Poziomy
+  $script:SkillePrzyciski.Dock = [System.Windows.Forms.DockStyle]::Top
+  $script:SkillePrzyciski.Padding = New-Object System.Windows.Forms.Padding(0, 4, 0, 10)
+  $script:BSkillInstaluj = New-Object System.Windows.Forms.Button
+  $script:BSkillAktualizuj = New-Object System.Windows.Forms.Button
+  $script:BSkillCofnij = New-Object System.Windows.Forms.Button
+  foreach ($para in @(@($script:BSkillInstaluj, "Zainstaluj", 140), @($script:BSkillAktualizuj, "Aktualizuj teraz", 130), @($script:BSkillCofnij, "Cofnij ostatnią aktualizację", 200))) {
+    $para[0].Text = $para[1]
+    $para[0].Font = $script:CzZwykla
+    $para[0].FlatStyle = [System.Windows.Forms.FlatStyle]::System
+    $para[0].Size = New-Object System.Drawing.Size($para[2], 32)
+    $para[0].Margin = New-Object System.Windows.Forms.Padding(0, 0, 8, 0)
+    $script:SkillePrzyciski.Controls.Add($para[0])
+  }
+  $script:SkilleInfo = Pionowy 0
+  $script:SkilleInfo.Dock = [System.Windows.Forms.DockStyle]::Top
+  $script:SkilleInfo.BackColor = $script:TloKarty
+  $kartaInfoS.Controls.Add($script:SkillePodglad)
+  $kartaInfoS.Controls.Add($script:SkillePrzyciski)
+  $kartaInfoS.Controls.Add($script:SkilleInfo)
+
+  $cialoS.Controls.Add($kartaInfoS)
+  $cialoS.Controls.Add($odstepS)
+  $cialoS.Controls.Add($kartaListaS)
+  $script:WidokSkille.Controls.Add($cialoS)
+  $script:WidokSkille.Controls.Add($goraS)
+
   # Kolejnosc dodawania ma znaczenie: WinForms dokuje od ostatnio dodanej
   # kontrolki, wiec wypelniajace widoki ida PIERWSZE, a naglowek i pasek po nich.
+  $f.Controls.Add($script:WidokSkille)
   $f.Controls.Add($script:WidokWarstwy)
   $f.Controls.Add($script:WidokSzczegoly)
   $f.Controls.Add($script:WidokPrzeglad)
@@ -3091,6 +3648,11 @@ function Pokaz-Okno {
     $script:PanelZmian = $null; $script:LinkZmian = $null
     $script:BWarstwy = $null; $script:WidokWarstwy = $null; $script:LWarstwy = $null
     $script:ListaWarstw = $null; $script:PodgladWarstwy = $null; $script:DaneWarstw = $null
+    if ($script:ZegarSkilli) { $script:ZegarSkilli.Stop() }
+    $script:BSkille = $null; $script:WidokSkille = $null; $script:LSkille = $null; $script:BSkilleTeraz = $null
+    $script:ListaSkilli = $null; $script:SkilleInfo = $null; $script:SkillePrzyciski = $null; $script:SkillePodglad = $null
+    $script:BSkillInstaluj = $null; $script:BSkillAktualizuj = $null; $script:BSkillCofnij = $null
+    $script:DaneSkilli = $null; $script:WierszeSkilli = @{}; $script:SkilleOperacjaOd = $null
     $script:Widok = "przeglad"
     $script:SzczegolyZajete = $false
   })
@@ -3111,6 +3673,49 @@ function Pokaz-Okno {
     $script:SzczegolyZajete = $false
     Pokaz-Widok "warstwy"
   })
+  $script:BSkille.Add_Click({
+    if ($script:Widok -eq "skille") { return }
+    $script:SzczegolyZajete = $false
+    Pokaz-Widok "skille"
+  })
+  # Przyciski skilli nie wydaja tokenow - pytaja tylko wtedy, gdy maja nadpisac
+  # skill zmieniony recznie (domyslnie podswietlone "Nie").
+  $script:BSkilleTeraz.Add_Click({
+    try { Rusz-Operacje-Skilli "aktualizuj" "" $false "Sprawdzam wszystkie źródła i pobieram nowsze wersje skilli pod opieką" }
+    catch { Zanotuj-Wywrotke "przycisk Sprawdz teraz (skille)" $_ }
+  })
+  $script:BSkillInstaluj.Add_Click({
+    try {
+      $n = $script:SkillWybrany
+      if ($n) { Rusz-Operacje-Skilli "instaluj" $n $false "Instaluję $n" }
+    } catch { Zanotuj-Wywrotke "przycisk Zainstaluj (skille)" $_ }
+  })
+  $script:BSkillAktualizuj.Add_Click({
+    try {
+      $n = $script:SkillWybrany
+      $para = Znajdz-Skill $n
+      if (-not $para) { return }
+      $wymus = $false
+      if ($para[0].stan -eq "zmieniony") {
+        $odp = [System.Windows.Forms.MessageBox]::Show($script:Okno,
+          ("Skill `„$($para[0].folder)`” był zmieniony ręcznie - jego treść nie pasuje do żadnej wersji autora." + "`r`n`r`n" +
+           "Czy zastąpić go najnowszą wersją od autora? Twoja wersja trafi do kopii zapasowej i przycisk `„Cofnij ostatnią aktualizację`” ją przywróci." + "`r`n`r`n" +
+           "Po kliknięciu Nie nie stanie się nic."),
+          "Zastąpić skill zmieniony ręcznie?", [System.Windows.Forms.MessageBoxButtons]::YesNo,
+          [System.Windows.Forms.MessageBoxIcon]::Question, [System.Windows.Forms.MessageBoxDefaultButton]::Button2)
+        if ($odp -ne [System.Windows.Forms.DialogResult]::Yes) { Notuj "skille: nadpisanie $n - uzytkownik nie potwierdzil"; return }
+        $wymus = $true
+      }
+      Rusz-Operacje-Skilli "aktualizuj" $n $wymus "Aktualizuję $n"
+    } catch { Zanotuj-Wywrotke "przycisk Aktualizuj teraz (skille)" $_ }
+  })
+  $script:BSkillCofnij.Add_Click({
+    try {
+      $n = $script:SkillWybrany
+      if ($n) { Rusz-Operacje-Skilli "cofnij" $n $false "Cofam ostatnią aktualizację $n" }
+    } catch { Zanotuj-Wywrotke "przycisk Cofnij (skille)" $_ }
+  })
+
   # Klikniecie warstwy pokazuje jej tresc po prawej. Wywrotka podgladu idzie
   # do dziennika i na ekran - nie zostawia starego podgladu udajacego nowy.
   $script:ListaWarstw.Add_SelectedIndexChanged({
