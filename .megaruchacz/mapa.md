@@ -652,10 +652,24 @@ sie w KAZDYM projekcie Claude Code na tej maszynie, nie tylko w `claude-worker`.
   Czytane `Import-PowerShellDataFile`. `code-review` Matta ma `Folder = matt-code-review`
   (uzytkownik zmienil nazwe i odwolania w 4 innych skillach - te 5 wykrywa sie jako "zmienione").
 - `narzedzia/skille.ps1` - CALA logika (UTF-8 z BOM). Tryby `-Tryb stan|wykryj|instaluj|aktualizuj|
-  cofnij|codziennie`, `-Skill`, `-ZeZrodla`, `-KatalogDomowy` (testy na kopii), `-Katalog`
-  (podmiana bazy), `-BezSieci`, `-Wymus`, `-Json` (stan dla okna, ASCII: \uXXXX). Funkcje po nazwie:
-  `Przygotuj-Zrodlo` (wlasny czesciowy klon `--filter=blob:none` + sparse na sciezki skilli,
-  `core.autocrlf=false`, fetch + `reset --hard origin/<galaz>` - to NASZA kopia), `Najnowsze-Wersje`
+  cofnij|codziennie|usun`, `-Skill`, `-ZeZrodla`, `-KatalogDomowy` (testy na kopii), `-Katalog`
+  (podmiana bazy), `-BezSieci`, `-Wymus`, `-Przerwy "5,15,30,60,120"` (przerwy przed ponowieniami;
+  do prob skracac), `-Json` (stan dla okna, ASCII: \uXXXX). Funkcje po nazwie:
+  SIEC (od 0.22.3, P20): `Krok-Pobrania` (clone `--filter=blob:none --no-checkout` albo fetch;
+  inny adres = klon od nowa) i `Krok-Rozpakowania` (sparse-checkout set + `reset --hard` - dociaga
+  brakujace pliki z sieci) ida przez `Z-Ponowieniem` (rundami: wszystkie zrodla naraz, potem po
+  przerwie tylko nieudane; kazda proba = wpis `proba` w dzienniku; `siec = $false` konczy od razu).
+  `Czy-Siec` (clone/fetch: kazda porazka = siec; rozpakowanie: po tresci bledu),
+  `Powod-Sieci-Po-Ludzku`. UWAGA: zmienna `$SEKUNDY_PRZERW`, nie `$PRZERWY` - PowerShell nie
+  rozroznia wielkosci liter i `$PRZERWY` to parametr `-Przerwy` typu tekst (zlapane w tescie).
+  PRZENOSINY: `Szukaj-Przenosin` (jedno `ls-tree --name-only` calego drzewa; brak skilla pod
+  sciezka -> jeden katalog o tej nazwie z SKILL.md = `przeniesiony` w stanie + `$sk.Sciezka`,
+  zaden = `usuniety` (NIE blad), kilka = blad bez zgadywania), `Zastosuj-Przenosiny` (stan ->
+  sciezki przy starcie, takze w trybie `stan`), `Usun-Skill` (tylko skill `usuniety`, z kopia
+  `rodzaj: usuniecie`; `cofnij` go przywraca). Obiekt skilla z bazy: `SciezkaWBazie`, `Sciezka`
+  (moze byc nadpisana), `Usuniety`, `Niepewny`.
+  `Przygotuj-Zrodlo` (po kroku pobrania: przenosiny, rozpakowanie z ponowieniami, najnowszy commit;
+  wlasny czesciowy klon + sparse na sciezki skilli, `core.autocrlf=false` - to NASZA kopia), `Najnowsze-Wersje`
   (jedno `ls-tree`), `Historia-Zrodla` (jedno `git log --first-parent -m --root --raw` z pathspec
   `:(glob)**/<nazwa>/**`, odtwarza kazdy stan kazdego katalogu o nazwie skilla - takze sprzed
   przeniesien w repo), `Odcisk-Lokalny` (skrot gita "blob" surowy + po CRLF->LF, typ C#
@@ -677,7 +691,11 @@ sie w KAZDYM projekcie Claude Code na tej maszynie, nie tylko w `claude-worker`.
 - REGULY: pierwszy przebieg `codziennie` na maszynie tylko spisuje (`pierwszy: True`); aktualizacja
   tylko skilli pod opieka w stanie `starszy`; `zmieniony` nigdy bez `-Wymus` (okno pyta);
   po `cofnij` skill `wstrzymany` (codzienny go pomija, jawne `aktualizuj -Skill` zdejmuje);
-  `instaluj` wgrywa tam, gdzie brak, i doprowadza starsze do najnowszej.
+  `instaluj` wgrywa tam, gdzie brak, i doprowadza starsze do najnowszej. Skill `usuniety` przez
+  autora: bez aktualizacji i instalacji, kopia u uzytkownika nietknieta, stan zbiorczy `usuniety`
+  (licznik `usuniete`); `Aktualizuj-Skill` przed kopia sprawdza, czy `SKILL.md` nowej wersji jest
+  w kopii zrodla (2026-09-30 `retro` poszlo do podmiany spod nieistniejacej sciezki).
+  W stanie per skill: `przeniesiony` (z, na, kiedy, commit), `usuniety` (od, sciezka, commit).
 - CODZIENNIE: dozor nadzorcy (`Dozor` w `zasobnik/nadzorca.ps1`) -> `Czy-Sprawdzac-Skille`
   (znacznik z dzis? inna operacja? dlawik 120 min w procesie) -> `Ruszaj-Skille` -> `Odpal-W-Tle`
   (conhost --headless). Funkcje w `zasobnik/stan-nadzorcy.ps1`, sekcja "polecane skille (P18)":
@@ -686,8 +704,19 @@ sie w KAZDYM projekcie Claude Code na tej maszynie, nie tylko w `claude-worker`.
   Zadnego zadania w Harmonogramie.
 - ZAKLADKA: czwarty widok `skille` (`$script:WidokSkille`, przycisk `$script:BSkille`, panel
   przelacznika 530 px). Lista to wiersze `TableLayoutPanel` w przewijanym panelu (opis zawiniety,
-  nie ucinany - ListView ucinal trzema kropkami), naglowki zrodel, grupa "spoza bazy". Funkcje:
-  `Napelnij-Skille`, `Wiersz-Skilla`, `Naglowek-Zrodla`, `Pokaz-Info-Skilla`, `Podglad-Skilla`,
-  `Wybierz-Skill`, `Rusz-Operacje-Skilli` + `Sprawdz-Operacje-Skilli` (zegar 2 s na `operacja.txt`).
+  nie ucinany - ListView ucinal trzema kropkami). Od 0.22.3 GRUPY ZWIJANE: na starcie same
+  naglowki (`Grupa-Zrodla` + `Liczby-Grupy` -> `Naglowek-Grupy`: strzalka, nazwa, stan z prawej,
+  opis, liczby, blad pobrania; pasek z lewej `$script:ZnacznikiGrup` czerwony = problem, bursztyn
+  = nowsza wersja); klik -> `Przelacz-Grupe` -> `Napelnij-Skille $false $true` (sama lista, prawa
+  strona bez zmian). Rozwiniete w `$script:GrupySkilli` (id -> $true, zerowane w FormClosed).
+  Grupa "spoza bazy" ma id `__spoza`. Przycisk `$script:BSkillUsun` ("Usun u mnie") stoi w miejscu
+  "Aktualizuj teraz" (widoczny jeden z nich), `Cofnij` po usunieciu = "Przywroc usuniety". Funkcje:
+  `Napelnij-Skille`, `Wiersz-Skilla`, `Naglowek-Grupy`, `Wiersz-Sprawdzenia`, `Pokaz-Info-Skilla`,
+  `Podglad-Skilla`, `Wybierz-Skill`, `Rusz-Operacje-Skilli` + `Sprawdz-Operacje-Skilli` (zegar 2 s
+  na `operacja.txt`).
 - TEST okna bez ekranu: kopia nadzorcy z wlasnym zamkiem, bez dozoru, `StartPosition Manual`
   na (-5000, 0), `ShowInTaskbar = $false`, zrzut `DrawToBitmap` (wzor: `zasobnik/test-p7.ps1`).
+  PULAPKA (P20): okno testowe bez `-Proba` dziala naprawde, a `Wymus-Pokazanie` robi mu
+  `SetForegroundWindow` - klawisze, ktore uzytkownik akurat pisze, trafiaja w jego przyciski.
+  W tescie: usun `SetForegroundWindow`, `KeyPreview` + tlumienie `KeyDown`, `Ruszaj-Cykl` na sucho,
+  `Application.add_ThreadException` (inaczej wyjatek pokazuje na ekranie okno bledu .NET).

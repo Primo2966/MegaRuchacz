@@ -2305,7 +2305,7 @@ function Problemy-Skilli {
   $wynik = "$($zn['wynik'])"
   if ($wynik -eq "blad") {
     $lista += [pscustomobject]@{ Waga = "uwaga"; Tytul = "Skille: nie udało się sprawdzić nowych wersji"
-      Porada = "Codzienne sprawdzenie ($($zn['dzien'])) trafiło na błąd - najczęściej brak internetu albo niedostępne źródło. Szczegóły w zakładce Skille. Skille, które masz, działają dalej."
+      Porada = "Codzienne sprawdzenie ($($zn['dzien'])) trafiło na błąd. Pobranie ze źródła jest ponawiane 5 razy, więc chwilowa czkawka sieci tu nie trafia - to raczej dłuższy brak internetu albo niedostępne źródło. Grupa z czerwonym paskiem w zakładce Skille pokazuje szczegóły. Skille, które masz, działają dalej."
       Pelne = "$($zn['powod'])" }
   } elseif ($wynik -eq "pracuje") {
     $od = Data-Lub-Nic $zn["start"]

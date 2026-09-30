@@ -4,6 +4,27 @@ Każda zmiana wypychana na gita dostaje tu wpis. Numer rośnie wg zasady:
 pierwsza cyfra — przebudowa łamiąca zgodność, druga — nowa funkcja,
 trzecia — poprawka.
 
+## 0.22.3 — 2026-09-30
+
+- **Skille w grupach zwijanych.** Zakładka „Skille” pokazuje na starcie same grupy (źródła):
+  nazwa, jedno zdanie opisu i liczby — ile skilli, ile masz, ile ma nowszą wersję, ile ma problem
+  (plus zmienione ręcznie i usunięte przez autora, gdy są). Kliknięcie grupy rozwija ją; okno
+  pamięta, co rozwinięte, do zamknięcia. Grupa z problemem ma czerwony pasek z lewej, z nowszą
+  wersją do pobrania — bursztynowy. „Zainstalowane, spoza bazy” to też zwinięta grupa.
+- **Pobranie ze źródła jest ponawiane 5 razy** (po 5 s, 15 s, 30 s, 1 min, 2 min), każda próba
+  w dzienniku; błąd pobrania dopiero po ostatniej, z powodem po ludzku („pod adresem … nie ma
+  repozytorium”, „brak internetu”…), widoczny przy grupie. Wszystkie źródła czekają naraz, więc
+  bez internetu przebieg trwa ~4 min, nie 20. Błędy, które nie są siecią, nie są ponawiane.
+- **Poranny błąd 2026-09-30 to nie była awaria sieci:** Matt Pocock przeniósł `implement-spec`,
+  `pr` i `retro` z `in-progress` do `engineering` i usunął `resolving-merge-conflicts`.
+  Teraz: skill przeniesiony przez autora MegaRuchacz sam znajduje w nowym miejscu i aktualizuje
+  normalnie (z kopią); skill usunięty przez autora to szary stan „autor go usunął — Twoja kopia
+  działa”, nic się nie kasuje samo, a przycisk „Usuń u mnie” kasuje go z kopią zapasową
+  („Przywróć usunięty” cofa). Baza skilli wskazuje już nowe miejsca trzech przeniesionych.
+- Naprawione: aktualizacja nie rusza już skilla, którego nowej wersji nie ma w kopii źródła
+  (rano `retro` poszło do podmiany ze starą ścieżką — kopia zadziałała i skill był cały, ale nie
+  powinno do tego dojść). `retro` jest już w najnowszej wersji autora.
+
 ## 0.22.2 — 2026-09-30
 
 - **Koniec z workiem `do-nazwania.md` — każde zestawienie trafia do pliku z nazwą, która mówi,
