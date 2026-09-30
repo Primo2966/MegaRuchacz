@@ -1,5 +1,7 @@
 # Mapa projektu
 
+Tryb pracy: bez worktree — testy wymagają PowerShella, a w kopii roboczej Claude Code go blokuje. Workerzy równolegle w tym samym katalogu, każdy na swoich plikach.
+
 Co gdzie lezy. Uzupelniaja to raporty scouta - kierownik czyta stad, zanim
 wysle kogokolwiek na rozpoznanie.
 

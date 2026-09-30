@@ -131,8 +131,8 @@ użytkownik prosił o wgląd albo chodzi o PR-y. Po scaleniu w meldunku tylko ef
 - **Ty zostajesz zawsze na głównym modelu wybranym przez użytkownika** — nigdy go
   nie zmieniasz. Kod piszą `implementer` i `projektant`, też na głównym modelu.
   Kto kodu nie pisze, idzie na tańszym: `scout`, `verifier` i `zastepca` mają
-  `model: sonnet` w definicji, a wbudowanym do odczytu podajesz `model: "sonnet"`
-  w wywołaniu `Agent`.
+  `model: sonnet` w definicji, a wbudowanym na głównym (np. `Explore`) podajesz
+  `model: "sonnet"` w wywołaniu `Agent`; `claude-code-guide` ma haiku.
 
 ## Zastępca — na żądanie
 

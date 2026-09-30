@@ -4,7 +4,7 @@
 # Co robi (tylko dla narzedzi, ktore widzi na maszynie):
 #   opencode    ~/.config/opencode/agents/*.md      cztery role + wtyczka rejestru
 #               ~/.config/opencode/plugins/mr-log.js
-#   Claude Code ~/.claude/agents/*.md               cztery role
+#   Claude Code ~/.claude/agents/*.md               piec rol (cztery + projektant)
 #               ~/.claude/megaruchacz-mr-log.js     rejestr workerow
 #               ~/.claude/mr/orchestrator-reminder.json  ladunek przypomnienia
 #               ~/.claude/settings.json             JEDEN komplet hookow: straznik
@@ -15,7 +15,11 @@
 #                                                   ponowne uruchomienie naprawia
 #                                                   (duplikaty, stare "cat"), nie dubluje.
 #   Codex       ~/.codex/AGENTS.md                  blok zasad kierownika
+#               ~/.codex/agents/*.toml              cztery role
 #               ~/.codex/hooks.json                 DOPISANE hooki rejestru
+#               Role i hooki Codeksa TYLKO z -Codex albo tam, gdzie MegaRuchacz
+#               juz je zalozyl (jego hooki w ~/.codex/hooks.json albo role
+#               w ~/.codex/agents); inaczej jedna linia "pominiete".
 #               Codex w Orce (CODEX_HOME Orki) dostaje ~/.codex/AGENTS.md od
 #               samej Orki, przy kazdym starcie - do katalogu Orki nic nie
 #               piszemy (szczegoly: narzedzia\kierownik-cele.ps1)
@@ -45,6 +49,9 @@
 #   powershell -ExecutionPolicy Bypass -File narzedzia\instaluj-globalnie.ps1
 #   -Usun        zdejmuje wszystko, co ta instalacja zalozyla
 #   -Proba       pokazuje plan, nic nie zapisuje
+#   -Codex       role (~/.codex/agents) i hooki rejestru (~/.codex/hooks.json)
+#                Codeksa, takze od zera; bez tej flagi instalator utrzymuje je
+#                tylko tam, gdzie MegaRuchacz juz je zalozyl
 #   -KatalogDomowy <kat>   do testow (podmienia baze ~\)
 #   -WariantZasad auto|claude|opencode   wariant bloku w ~/.claude/CLAUDE.md;
 #                auto (domyslnie) = claude, gdy Claude Code na tej maszynie pracuje
@@ -60,6 +67,7 @@ param(
   [switch]$BezPytania,
   [switch]$Usun,
   [switch]$Proba,
+  [switch]$Codex,
   [ValidateSet("auto", "claude", "opencode")]
   [string]$WariantZasad = "auto"
 )
@@ -232,7 +240,8 @@ if (-not (Test-Path $KatalogDomowy)) { Write-Error "Nie ma katalogu domowego: $K
 $KatalogDomowy = (Resolve-Path $KatalogDomowy).Path
 
 $Claude   = Get-Command claude   -CommandType Application -ErrorAction SilentlyContinue | Select-Object -First 1
-$Codex    = Get-Command codex    -CommandType Application -ErrorAction SilentlyContinue | Select-Object -First 1
+# Nie $Codex - tak nazywa sie przelacznik -Codex (PowerShell nie rozroznia wielkosci liter).
+$KomendaCodex = Get-Command codex -CommandType Application -ErrorAction SilentlyContinue | Select-Object -First 1
 $Opencode = Get-Command opencode -CommandType Application -ErrorAction SilentlyContinue | Select-Object -First 1
 $Node     = Get-Command node     -CommandType Application -ErrorAction SilentlyContinue | Select-Object -First 1
 
@@ -241,8 +250,51 @@ $DomCodex    = Join-Path $KatalogDomowy ".codex"
 $DomOpencode = Join-Path $KatalogDomowy ".config\opencode"
 $DomCodexOrki = Katalog-Codex-Orki $KatalogDomowy
 $JestClaude   = ($null -ne $Claude)   -or (Test-Path $DomClaude)
-$JestCodex    = ($null -ne $Codex)    -or (Test-Path $DomCodex) -or ($null -ne $DomCodexOrki)
+$JestCodex    = ($null -ne $KomendaCodex) -or (Test-Path $DomCodex) -or ($null -ne $DomCodexOrki)
 $JestOpencode = ($null -ne $Opencode) -or (Test-Path $DomOpencode)
+
+# Role, ktore instalator zaklada, zdejmuje (-Usun) i sprawdza. projektant jest tylko
+# w szablonach Claude Code (szablony-global\claude\agents) - opencode ma cztery.
+$RoleClaude   = @("implementer", "scout", "verifier", "zastepca", "projektant")
+$RoleOpencode = @("implementer", "scout", "verifier", "zastepca")
+
+# Czy MegaRuchacz juz skonfigurowal tu Codeksa: jego hooki w ~/.codex/hooks.json
+# (polecenie z mr-log-codex.js albo statusMessage "MegaRuchacz...") albo jego role
+# w ~/.codex/agents (znacznik kierownik-template). Zwraca powod albo $null.
+function Codex-Od-MegaRuchacza($domCodex) {
+  $plik = Join-Path $domCodex "hooks.json"
+  if (Test-Path $plik) {
+    $s = $null
+    try { $s = (Czytaj $plik).TrimStart([char]0xFEFF) | ConvertFrom-Json }
+    catch { Write-Host "UWAGA  $plik nie jest czystym JSON-em - nie widze w nim hookow MegaRuchacza" -ForegroundColor Yellow }
+    if ($s -and $s.hooks) {
+      foreach ($z in $s.hooks.PSObject.Properties.Name) {
+        foreach ($g in @($s.hooks.$z)) {
+          foreach ($h in @($g.hooks)) {
+            if (-not $h) { continue }
+            if ((("" + $h.command + " " + $h.commandWindows) -match 'mr-log-codex\.js') -or (("" + $h.statusMessage) -like "MegaRuchacz*")) {
+              return "sa juz hooki MegaRuchacza w ~/.codex/hooks.json"
+            }
+          }
+        }
+      }
+    }
+  }
+  foreach ($r in @(Get-ChildItem (Join-Path $domCodex "agents\*.toml") -ErrorAction SilentlyContinue)) {
+    if ((Get-Content $r.FullName -Raw) -match "kierownik-template") { return "sa juz role MegaRuchacza w ~/.codex/agents" }
+  }
+  return $null
+}
+
+# Role i hooki Codeksa w ~/.codex - tylko na zyczenie (-Codex) albo tam, gdzie
+# MegaRuchacz juz je zalozyl (tak jest na komputerze domowym). Do 2026-09-30 szly
+# przy kazdym uruchomieniu, gdy tylko bylo widac Codeksa - takze tam, gdzie nikt
+# o nie nie prosil (raport P25: cofane recznie). Blok zasad w ~/.codex/AGENTS.md
+# idzie jak dotad, za samym $JestCodex.
+$PowodCodex = $null
+if ($Codex) { $PowodCodex = "flaga -Codex"; $JestCodex = $true }
+elseif ($JestCodex) { $PowodCodex = Codex-Od-MegaRuchacza $DomCodex }
+$RoleHookiCodex = ($null -ne $PowodCodex)
 
 # Zasady kierownika w dwoch wariantach - kazdy plik instrukcji dostaje ten, ktory
 # pasuje do narzedzia, ktore go czyta. Do 0.21.0 oba pliki dostawaly wariant
@@ -294,7 +346,10 @@ if ($JestOpencode) {
   $gdzieOc = if ($Wariant -eq "claude") { "kopia ~/.claude/CLAUDE.md w ~/.config/opencode/AGENTS.md (wariant: opencode)" } else { "przez ~/.claude/CLAUDE.md (wariant: $Wariant)" }
   Write-Host "  - opencode    : role w ~/.config/opencode/agents, wtyczka rejestru w ~/.config/opencode/plugins, zasady: $gdzieOc"
 }
-if ($JestCodex)    { Write-Host "  - Codex       : role w ~/.codex/agents, rejestr + hooki w ~/.codex/hooks.json, zasady w ~/.codex/AGENTS.md" }
+if ($JestCodex) {
+  if ($RoleHookiCodex) { Write-Host "  - Codex       : role w ~/.codex/agents, rejestr + hooki w ~/.codex/hooks.json, zasady w ~/.codex/AGENTS.md (bo: $PowodCodex)" }
+  else { Write-Host "  - Codex       : zasady w ~/.codex/AGENTS.md" }
+}
 if ($DomCodexOrki) { Write-Host "  - Codex w Orce: Orka sama kopiuje ~/.codex/AGENTS.md do $DomCodexOrki przy starcie Codeksa" }
 if (-not ($JestClaude -or $JestOpencode -or $JestCodex)) { Write-Host "  (zadnego nie widze)" -ForegroundColor Yellow }
 Write-Host ""
@@ -321,7 +376,7 @@ if ($Usun) {
     else { Kopia-Zapasowa $kopiaOc; Remove-Item $kopiaOc -Force; Write-Host "OK  usunieta kopia zasad dla opencode (opencode czyta znowu ~/.claude/CLAUDE.md)" }
   }
 
-  foreach ($r in @("implementer","scout","verifier","zastepca")) {
+  foreach ($r in $RoleClaude) {   # nadzbior rol opencode - brakujace pliki pomija Test-Path
     foreach ($p in @((Join-Path $DomClaude "agents\$r.md"), (Join-Path $DomOpencode "agents\$r.md"))) {
       if ((Test-Path $p) -and ((Get-Content $p -Raw) -match "kierownik-template")) {
         if ($Proba) { Write-Host "PROBA  usunalbym $p" } else { Remove-Item $p -Force; Write-Host "OK  usuniete $p" }
@@ -392,7 +447,8 @@ Write-Host ""
 Write-Host "--- role ---"
 if ($JestOpencode) { Wstaw-Agentow (Join-Path $Zrodlo "szablony-opencode\agents") (Join-Path $DomOpencode "agents") "*.md" "~/.config/opencode/agents" }
 if ($JestClaude)   { Wstaw-Agentow (Join-Path $Zrodlo "szablony-global\claude\agents") (Join-Path $DomClaude "agents") "*.md" "~/.claude/agents" }
-if ($JestCodex)    { Wstaw-Agentow (Join-Path $Zrodlo "szablony-codex\agents") (Join-Path $DomCodex "agents") "*.toml" "~/.codex/agents" }
+if ($RoleHookiCodex) { Wstaw-Agentow (Join-Path $Zrodlo "szablony-codex\agents") (Join-Path $DomCodex "agents") "*.toml" "~/.codex/agents" }
+else { Write-Host "--  Codex: role i hooki pominiete (wlaczysz flaga -Codex)" }
 Write-Host ""
 
 # =============================================================== REJESTR =====
@@ -432,7 +488,7 @@ if ($JestClaude) {
   Ustaw-Klucz-Json (Join-Path $DomClaude "settings.json") "worktree" ([pscustomobject]@{ baseRef = "fresh"; bgIsolation = "worktree" })
 }
 
-if ($JestCodex) {
+if ($RoleHookiCodex) {
   # Globalny hook Codeksa nie zna projektu z gory - mr-log-codex.js bierze go
   # z $CODEX_PROJECT_DIR albo z biezacego katalogu (process.cwd()).
   $absLog = (Join-Path $Zrodlo "narzedzia\mr-log-codex.js") -replace '\\','/'
@@ -465,8 +521,10 @@ if (-not $Proba) {
 # =========================================================== SAMOSPRAWDZENIE ===
 Write-Host ""
 Write-Host "--- samosprawdzenie ---"
-foreach ($r in @("implementer","scout","verifier","zastepca")) {
+foreach ($r in $RoleClaude) {
   if ($JestClaude)   { Sprawdz "~/.claude/agents/$r.md" (Test-Path (Join-Path $DomClaude "agents\$r.md")) "brak pliku" }
+}
+foreach ($r in $RoleOpencode) {
   if ($JestOpencode) { Sprawdz "~/.config/opencode/agents/$r.md" (Test-Path (Join-Path $DomOpencode "agents\$r.md")) "brak pliku" }
 }
 if ($JestClaude) {
@@ -518,7 +576,7 @@ if ($KopiaOpencodePotrzebna -and -not $Proba) {
 }
 if ($JestOpencode) { Sprawdz "wtyczka ~/.config/opencode/plugins/mr-log.js" (Test-Path (Join-Path $DomOpencode "plugins\mr-log.js")) "brak pliku" }
 Nie-Sprawdzono "czy narzedzia naprawde wczytaja role i hooki - to widac dopiero po zamknieciu i otwarciu okna"
-Nie-Sprawdzono "rejestr pod Codeksem globalnie: hook nie zna projektu z gory, bierze go z CODEX_PROJECT_DIR albo biezacego katalogu - wymaga potwierdzenia na maszynie z Codeksem"
+if ($RoleHookiCodex) { Nie-Sprawdzono "rejestr pod Codeksem globalnie: hook nie zna projektu z gory, bierze go z CODEX_PROJECT_DIR albo biezacego katalogu - wymaga potwierdzenia na maszynie z Codeksem" }
 
 if ($script:Kopie.Count -gt 0) {
   Write-Host ""; Write-Host "Kopie zapasowe:"; $script:Kopie | ForEach-Object { Write-Host "  $_" }
