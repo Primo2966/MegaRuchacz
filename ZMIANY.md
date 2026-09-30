@@ -4,6 +4,17 @@ Każda zmiana wypychana na gita dostaje tu wpis. Numer rośnie wg zasady:
 pierwsza cyfra — przebudowa łamiąca zgodność, druga — nowa funkcja,
 trzecia — poprawka.
 
+## 0.23.1 — 2026-09-30
+
+- **Okno nadzorcy znów liczy w tle — koniec z fałszywym alarmem antywirusa.** Po aktualizacji
+  sygnatur (30.09) Microsoft Defender brał sposób, w jaki okno liczyło swoje dane w tle, za narzędzie
+  do omijania zabezpieczeń PowerShella (fałszywy alarm na naszym własnym kodzie) i wywracał to
+  liczenie — na komputerze domowym padał dozór co kwadrans oraz ekran ładowania okna, a w biurze
+  czekało to samo po najbliższej aktualizacji. Liczenie przebudowane na zwykły, przejrzysty sposób:
+  każdy krok liczy się w osobnym, niewidocznym procesie `powershell.exe` (skrypt `licz-krok.ps1`),
+  bez konstrukcji, które antywirus bierze za podejrzane. Okno wygląda i działa tak samo jak wcześniej:
+  stały rozmiar, ekran ładowania z krokami, limity czasu, drugie otwarcie dnia od razu z kartami.
+
 ## 0.23.0 — 2026-09-30
 
 - **Taniej na tokenach — bez drogich workerów.** Koniec z workerem „general-purpose” (ładował

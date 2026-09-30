@@ -109,9 +109,7 @@ $script:SzczegolyZajete = $false
 # Liczenie w tle i ekran ladowania (P21) - opis przy Rusz-Krok.
 $script:StanKawalkow   = @{}     # UWAGA: nie "$script:Kawalki" - PowerShell nie rozroznia wielkosci liter, to bylby $KAWALKI. id kawalka danych -> Czas, Nieudany, Krok (trwajacy), Ostatni
 $script:KolejkaKrokow  = New-Object System.Collections.ArrayList   # czekaja na wolne miejsce
-$script:KrokiAktywne   = New-Object System.Collections.ArrayList   # otwieraja watek albo licza
-$script:WolniRobotnicy = New-Object System.Collections.ArrayList   # otwarte watki bez pracy
-$script:Zombie         = New-Object System.Collections.ArrayList   # przerwane po limicie, do sprzatniecia
+$script:KrokiAktywne   = New-Object System.Collections.ArrayList   # kroki z uruchomionym procesem
 $script:ZegarKrokow    = $null
 $script:KrokDozoru     = $null
 $script:CzasyKrokow    = @{}     # id -> ile trwal ostatnio (s), do paska postepu

@@ -459,7 +459,7 @@ $menu.Items.Add((Nowa-Pozycja "Otwórz okno MegaRuchacza" { Pokaz-Okno })) | Out
 $menu.Items.Add((Nowa-Pozycja "Przelicz liczby teraz (nic nie kosztuje)" {
   try {
     # P21: w tle - ikona i otwarte okno nie staja na czas liczenia.
-    $k = Przelicz-W-Tle 'Zbierz-Wszystko $true $true'
+    $k = Przelicz-W-Tle $true
     $script:StanKawalkow["rozbicie"].Czas = $null
     if (-not $k.Po) {
       $k.Po = {

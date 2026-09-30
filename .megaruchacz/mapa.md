@@ -257,12 +257,16 @@ inwentarz warstw z 25.09, budowa okna sprzed podzialu, pomiary P23/P30 w calosci
   w `~\.claude\.megaruchacz-zasobnik.log`); krok w tle - blad z nazwa modulu. Kody: 1 w -Raz = alarm,
   2 zly -Zrodlo, 3 odmowa startu.
 - Zakladki (panele `Dock=Fill` przelaczane `Pokaz-Widok`, nie `TabControl`): Przeglad, Szczegoly,
-  Warstwy pamieci, Skille. Wszystko, co wola skrypty, liczy sie w RUNSPACE'ACH (`w-tle.ps1`), ktore
-  dot-source'uja `$script:NadzTenPlik`: kawalki `$KAWALKI` (dane, start, zuzycie, rozbicie, warstwy,
-  skille, koszt) i `$WIDOK_KAWALKI` (czego potrzebuje zakladka); stan `$script:StanKawalkow`
-  (PULAPKA: nie `$script:Kawalki` - PS nie rozroznia wielkosci liter). Silnik: `Rusz-Krok` -> kolejka
-  (`$KROKI_NARAZ` = 3) -> `Przydziel-Robotnika` -> `Uruchom-Krok` -> zegar 150 ms `Obsluz-Kroki`
-  (limit -> `Przerwij-Krok`) -> `Zakoncz-Krok` -> `Po-Kroku` / `Wyrenderuj-Widok`.
+  Warstwy pamieci, Skille. Wszystko, co wola skrypty, liczy sie w OSOBNYCH PROCESACH powershell.exe
+  (`w-tle.ps1` -> skrypt kroku `nadzorca\licz-krok.ps1`, ktory dot-source'uje `$script:NadzTenPlik`
+  i liczy kawalek po NAZWIE switchem; P38: dawniej runspace'y, ale kod watku skladany ze stringa
+  wygladal Defenderowi na omijanie zabezpieczen PowerShella - falszywy alarm na wlasnym kodzie):
+  kawalki `$KAWALKI` (dane, start, zuzycie, rozbicie, warstwy, skille, koszt) i `$WIDOK_KAWALKI`
+  (czego potrzebuje zakladka); stan `$script:StanKawalkow` (PULAPKA: nie `$script:Kawalki` - PS nie
+  rozroznia wielkosci liter). Silnik: `Rusz-Krok` -> kolejka (`$KROKI_NARAZ` = 3) -> `Przydziel-Proces`
+  (powershell.exe -NoProfile -File, wynik Export-Clixml do pliku tymczasowego, limit -> zabicie procesu)
+  -> zegar 150 ms `Obsluz-Kroki` -> `Odbierz-Krok` / `Przerwij-Krok` -> `Zakoncz-Krok` -> `Po-Kroku`
+  / `Wyrenderuj-Widok`.
   `Wejdz-Do-Widoku`: brak danych z dzis albo Nieudany -> ekran ladowania (`ladowanie.ps1`:
   `Pokaz-Ladowanie`, `Odmaluj-Kroki`, `Straznik-Ladowania`); starsze niz `-Minut` -> ciche
   odswiezenie. `Napelnij-*` TYLKO rysuja. Okno: stala wysokosc `min($WYS_OKNA_MAX=1400, obszar-40)`

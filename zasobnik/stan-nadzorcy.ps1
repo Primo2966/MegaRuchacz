@@ -30,7 +30,7 @@
 #   stan-skille.ps1     polecane skille: codzienne sprawdzenie, operacje, stan
 #   stan-zbieranie.ps1  Zbierz-Wszystko - jeden obiekt danych dla okna i dozoru
 # "Ten plik" w komentarzach modulow znaczy stan-nadzorcy.ps1 razem z modulami -
-# tak wczytuje go okno, watki w tle (KOD_KROKU w nadzorca\w-tle.ps1) i osobny
+# tak wczytuje go okno, osobne procesy krokow (nadzorca\licz-krok.ps1) i osobny
 # proces liczenia zuzycia ($script:NadzTenPlik). Brak modulu, blad skladni albo
 # plik bez znacznika na koncu (pusty albo uciety) = wyjatek z nazwa modulu:
 # nadzorca.ps1 odmawia wtedy startu, a krok w tle konczy sie bledem z tym

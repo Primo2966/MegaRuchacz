@@ -74,7 +74,7 @@ function Rusz-Dozor {
     Notuj "dozor: poprzedni przebieg jeszcze trwa (od $($script:KrokDozoru.Od)) - ten pomijam"
     return
   }
-  $k = Nowy-Krok "dozor" "" "Dozór" 'Zbierz-Wszystko $true $true' $LIMIT_DOZORU
+  $k = Nowy-Krok "dozor" "" "Dozór" "dane" $true $LIMIT_DOZORU
   $k.Po = { param($k) Po-Dozorze $k }
   $script:KrokDozoru = $k
   [void]$script:KolejkaKrokow.Add($k)
