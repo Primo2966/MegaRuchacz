@@ -158,6 +158,8 @@ foreach ($kotwica in @('MegaRuchacz-Nadzorca-TEST-P7', 'dozor wylaczony w tescie
 }
 $kopiaOkna = Join-Path $tmp "nadzorca-test.ps1"
 [System.IO.File]::WriteAllText($kopiaOkna, $kod, (New-Object System.Text.UTF8Encoding($true)))
+# Od P28a okno to nadzorca.ps1 i moduly w zasobnik\nadzorca\ - kopia szuka ich obok siebie.
+Copy-Item -LiteralPath (Join-Path $Kopia "zasobnik\nadzorca") -Destination (Join-Path $tmp "nadzorca") -Recurse
 $r = Wolaj $kopiaOkna @("-Zrodlo", $Kopia, "-KatalogDomowy", $Dom, "-Pokaz", "-Proba")
 if (Test-Path $raportOkna) {
   $txt = Get-Content -LiteralPath $raportOkna -Encoding UTF8

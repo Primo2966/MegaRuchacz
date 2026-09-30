@@ -1,0 +1,186 @@
+﻿# zasobnik\nadzorca\stan-cykl.ps1 - czesc zasobnik\stan-nadzorcy.ps1 (patrz
+# BUDOWA w jego naglowku). Cykl wiedzy: co o nim wiadomo (Stan-Cyklu - pliki
+# w .claude\wiedza i kolejka z wyciagnij-fakty.ps1 -Kolejka), ile godzin stoi
+# (Godzin-Od-Cyklu), wiersze dla okna (Opis-Cyklu), czy ma dzis ruszyc
+# (Czy-Ruszac-Cykl) i start w tle (Ruszaj-Cykl - na sucho przy -Proba).
+# Skad wolane: stan-zbieranie.ps1, dozor.ps1 (decyzja i start), okno.ps1
+# (przycisk czytania rozmow), szczegoly.ps1. Wczytuje go stan-nadzorcy.ps1
+# kropka - same definicje.
+
+# ------------------------------------------------------------------ cykl wiedzy
+
+# Wszystko, co wiadomo o cyklu: kiedy chodzil, ile czeka w kolejce, ile kosztowal.
+# $zKolejka = $true doklada przebieg probny wylawiania (nie wola modelu, ~0,4 s) -
+# w oknie tak, w dozorze tylko wtedy, gdy i tak zaraz startujemy cykl.
+function Stan-Cyklu([bool]$zKolejka) {
+  $c = [pscustomobject]@{
+    Data       = $null     # kiedy ostatnio sie skonczyl (z cykl-ostatni.txt)
+    Status     = $null
+    Opis       = $null
+    Zaleglosc  = $null     # ile przebiegow zostalo wg ostatniego podsumowania
+    Kawalki    = $null     # ile kawalkow rozmow czeka NA ZYWO
+    Przebiegi  = $null
+    Pracuje    = $false
+    Koszt      = $null     # tokeny ostatniego przebiegu
+    KosztData  = $null
+    KosztOpis  = $null
+    KosztWywolan = $null   # ile wywolan modelu zlozylo sie na ten koszt - z tego
+                           # i tylko z tego liczy sie szacunek przed przyciskiem
+    Powody     = @()       # czego nie dalo sie odczytac i dlaczego
+  }
+
+  $plikOstatni = Join-Path $script:NadzWiedza "cykl-ostatni.txt"
+  if (Test-Path $plikOstatni) {
+    $k = Czytaj-Klucze $plikOstatni
+    $c.Data      = Data-Lub-Nic $k["data"]
+    $c.Status    = $k["status"]
+    $c.Opis      = $k["opis"]
+    if ($k["zaleglosc"] -match '^\d+$') { $c.Zaleglosc = [int]$k["zaleglosc"] }
+    if (-not $c.Data) { $c.Powody += "w ${plikOstatni} nie ma czytelnej daty (klucz 'data')" }
+  } else {
+    $c.Powody += "nie ma ${plikOstatni} - cykl nie zakonczyl na tej maszynie ani jednego przebiegu"
+  }
+
+  $postep = Czytaj-Klucze (Join-Path $script:NadzWiedza ".cykl-postep")
+  if ($postep["stan"] -eq "pracuje") {
+    $kiedy = Data-Lub-Nic $postep["czas"]
+    # Znacznik starszy niz trzy godziny to nie praca, tylko przebieg, ktory padl
+    # w polowie - tak samo liczy to straznik przed startem cyklu.
+    if ($kiedy -and (([datetime]::Now - $kiedy).TotalHours -lt 3)) { $c.Pracuje = $true }
+  }
+
+  $plikKosztu = Join-Path $script:NadzWiedza ".koszt-cyklu.txt"
+  if (Test-Path $plikKosztu) {
+    $k = Czytaj-Klucze $plikKosztu
+    $c.KosztData = Data-Lub-Nic $k["data"]
+    if ($k["tokeny"] -match '^\d+$') { $c.Koszt = [long]$k["tokeny"] }
+    if ($k["wywolania"] -match '^\d+$') { $c.KosztWywolan = [int]$k["wywolania"] }
+    $czesci = @()
+    if ($k["wywolania"] -match '^\d+$') { $czesci += "$($k['wywolania']) wywolan $($k['narzedzie'])" }
+    if ($k["fakty"] -match '^\d+$')     { $czesci += "$($k['fakty']) faktow" }
+    if ($czesci.Count -gt 0) { $c.KosztOpis = ($czesci -join ", ") }
+    if ($null -eq $c.Koszt) { $c.Powody += "w ${plikKosztu} nie ma liczby tokenow" }
+  } else {
+    $c.Powody += "nie ma ${plikKosztu} - cykl nigdy nie policzyl swojego kosztu"
+  }
+
+  if ($zKolejka) {
+    $wyciagnij = Join-Path $script:NadzZrodlo "narzedzia\wyciagnij-fakty.ps1"
+    $r = Wolaj-Skrypt $wyciagnij @("-Zrodlo", ('"' + $script:NadzZrodlo + '"'), "-Kolejka") 90
+    if ($r.ok -and $r.kod -eq 0) {
+      $k = Klucze-Z-Tekstu $r.tekst
+      if ($k["kolejka.kawalki"]   -match '^\d+$') { $c.Kawalki   = [int]$k["kolejka.kawalki"] }
+      if ($k["kolejka.przebiegi"] -match '^\d+$') { $c.Przebiegi = [int]$k["kolejka.przebiegi"] }
+      if ($null -eq $c.Kawalki) { $c.Powody += "przebieg probny wylawiania nie oddal liczb kolejki" }
+    } else {
+      $powod = $r.powod
+      if (-not $powod) { $powod = "kod wyjscia $($r.kod)" }
+      $c.Powody += "nie dalo sie policzyc kolejki na zywo (${powod}) - zostaje liczba z ostatniego podsumowania"
+    }
+  }
+  return $c
+}
+
+# Ile godzin cykl stoi. $null, gdy nie wiadomo - i wtedy TEZ jest problem,
+# bo brak daty ostatniego przebiegu znaczy, ze cykl nie skonczyl nigdy.
+function Godzin-Od-Cyklu($c) {
+  if (-not $c.Data) { return $null }
+  return [int]([datetime]::Now - $c.Data).TotalHours
+}
+
+function Opis-Cyklu($c, $o = $null) {
+  $linie = @()
+  if ($c.Data) {
+    $godzin = Godzin-Od-Cyklu $c
+    $kiedy = "$($c.Data.ToString('yyyy-MM-dd HH:mm'))"
+    $waga = ""
+    if ($godzin -lt 24) { $kiedy = "$kiedy (dziś, $godzin h temu)" }
+    else { $kiedy = "$kiedy ($([int]($godzin / 24)) dni temu)"; $waga = "uwaga" }
+    $linie += Wiersz "Ostatnia nauka" $kiedy $waga
+    $st = $c.Status
+    $wagaSt = ""
+    if (-not $st) { $st = "nie wiadomo - w pliku stanu nie ma pola 'status'"; $wagaSt = "uwaga" }
+    $linie += Wiersz "Jak poszła" $st $wagaSt
+    if ($c.Opis) { $linie += Wiersz "" $c.Opis "szary" }
+  } else {
+    $linie += Wiersz "Ostatnia nauka" "nigdy albo nie da się tego odczytać" "pilne"
+  }
+  if ($c.Pracuje) { $linie += Wiersz "Teraz" "nauka właśnie pracuje" }
+
+  if ($null -ne $c.Kawalki) {
+    $ogon = ""
+    if ($null -ne $c.Przebiegi) { $ogon = " ($($c.Przebiegi) $(Odmiana ([int]$c.Przebiegi) 'porcja' 'porcje' 'porcji') do modelu)" }
+    $linie += Wiersz "Czeka na przeczytanie" "$(Liczba-Ludzka $c.Kawalki) $(Odmiana ([int]$c.Kawalki) 'fragment rozmów' 'fragmenty rozmów' 'fragmentów rozmów')${ogon}"
+  } elseif ($null -ne $c.Zaleglosc) {
+    $linie += Wiersz "Czeka na przeczytanie" "$($c.Zaleglosc) $(Odmiana ([int]$c.Zaleglosc) 'porcja' 'porcje' 'porcji') według ostatniego podsumowania (na żywo nie policzone)" "uwaga"
+  } else {
+    $linie += Wiersz "Czeka na przeczytanie" "nie wiadomo" "uwaga"
+  }
+
+  if ($null -ne $c.Koszt) {
+    $kiedy = "nieznanego dnia"
+    if ($c.KosztData) { $kiedy = $c.KosztData.ToString('yyyy-MM-dd') }
+    $ogon = ""
+    if ($c.KosztOpis) { $ogon = " - $($c.KosztOpis)" }
+    # $o = Opis-Startu: procent jednego otwarcia sesji obok tokenow (P15)
+    $js = Jak-Sesji $c.Koszt $o
+    if ($js) { $js = " ($js)" }
+    $linie += Wiersz "Ostatni koszt nauki" "~$(Liczba-Ludzka $c.Koszt) tokenów${js}, ${kiedy}${ogon}"
+    $linie += Wiersz "" "to PRAWDZIWE wywołanie modelu, osobno od rachunku za pamięć" "szary"
+  } else {
+    $linie += Wiersz "Ostatni koszt nauki" "jeszcze ani razu nie policzony" "uwaga"
+  }
+  foreach ($p in $c.Powody) { $linie += Wiersz "Czego nie wiem" "$p" "uwaga" }
+  return ,$linie
+}
+
+# Czy cykl ma dzis ruszyc. Warunek ten sam, co dzis w straznik-zasad.ps1:
+# inna data w .cykl-stan niz dzisiejsza (albo przebieg odlozony, czyli taki,
+# ktorego w ogole nie bylo), do tego zaden przebieg nie pracuje w tej chwili.
+# Pusta kolejka jest jedynym powodem, zeby nie ruszac - kolejki, ktorej nie
+# umiemy odczytac, nie udajemy i cykl idzie, bo sam powie, co mu przeszkadza.
+function Czy-Ruszac-Cykl {
+  $w = [pscustomobject]@{ Ruszac = $false; Powod = "" }
+  $skrypt = Join-Path $script:NadzZrodlo "narzedzia\cykl-dzienny.ps1"
+  if (-not (Test-Path $skrypt)) {
+    $w.Powod = "nie ma ${skrypt}"
+    return $w
+  }
+  if (-not (Test-Path (Join-Path $script:NadzZrodlo "lore\pyproject.toml"))) {
+    $w.Powod = "nie ma modulu pamieci (lore) - cykl nie mialby czego czytac"
+    return $w
+  }
+  $dzis = Get-Date -Format 'yyyy-MM-dd'
+  $stan = Czytaj-Klucze (Join-Path $script:NadzWiedza ".cykl-stan")
+  if (($stan["data"] -eq $dzis) -and ($stan["status"] -ne "odlozony")) {
+    $w.Powod = "cykl chodzil juz dzis ($dzis, status $($stan['status']))"
+    return $w
+  }
+  $c = Stan-Cyklu $false
+  if ($c.Pracuje) {
+    $w.Powod = "cykl wlasnie pracuje"
+    return $w
+  }
+  $w.Ruszac = $true
+  $w.Powod = "ostatni przebieg: $($stan['data']), dzis jest $dzis"
+  return $w
+}
+
+function Ruszaj-Cykl {
+  $skrypt = Join-Path $script:NadzZrodlo "narzedzia\cykl-dzienny.ps1"
+  $argumenty = '-Zrodlo "' + $script:NadzZrodlo + '" -KatalogDomowy "' + $script:NadzDom + '"'
+  if ($script:NadzProba) {
+    Write-Host "[proba] NIE startuje cyklu: powershell -File ${skrypt} ${argumenty}"
+    return $true
+  }
+  $poszlo = Odpal-W-Tle $skrypt $argumenty
+  if ($poszlo) {
+    Notuj "wystartowal cykl wiedzy"
+    try { Dopisz-Klucze $script:NadzPlikStanu @{ "cykl.ruszony" = (Get-Date -Format 'yyyy-MM-dd HH:mm:ss') } }
+    catch { Notuj "nie udalo sie zapisac znacznika startu cyklu" }
+  }
+  return $poszlo
+}
+
+# Znacznik dla stan-nadzorcy.ps1: ten plik wczytal sie do konca.
+$script:NadzModuly["cykl"] = $true
