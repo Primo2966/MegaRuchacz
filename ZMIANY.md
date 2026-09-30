@@ -4,6 +4,28 @@ Każda zmiana wypychana na gita dostaje tu wpis. Numer rośnie wg zasady:
 pierwsza cyfra — przebudowa łamiąca zgodność, druga — nowa funkcja,
 trzecia — poprawka.
 
+## 0.22.4 — 2026-09-30
+
+- **Okno nadzorcy otwiera się spokojnie.** Przyczyna „dzikiego” otwierania rano (nagrana zrzutami
+  co 200 ms): okno wstawało za niskie (liczone dla pustych kart), potem na ~4 s przestawało
+  reagować, bo liczyło dane w swoim wątku, a gdy dane doszły — rosło o ~260 px i przesuwało się,
+  a po kolejnych 3 s karty przestawiały się jeszcze raz. Teraz okno ma od pierwszej chwili stały
+  rozmiar i samo go nie zmienia (staje tam, gdzie je ostatnio zostawiono).
+- **Ekran ładowania z listą kroków.** Dopóki zakładka nie ma kompletu danych z dziś, zamiast niej
+  stoi karta „Wczytuję dane” z paskiem postępu i krokami („Liczę koszt otwarcia okna rozmowy”,
+  „Sprawdzam dzienne zużycie tokenów”, „Sprawdzam skille”…): kółko — czeka, kręcący się znak —
+  liczy (z sekundami), ptaszek — gotowe. Karty pokazują się raz, w komplecie. Dotyczy wszystkich
+  zakładek.
+- **Liczenie w tle — okno reaguje od razu.** Wszystko, co woła skrypty (rachunek, pomiar otwarcia,
+  zużycie, rozbicie, warstwy, skille, przebieg dozoru co kwadrans), liczy się w osobnych wątkach.
+  Okno można w tym czasie przesuwać i przełączać zakładki.
+- **Drugie otwarcie tego samego dnia — od razu karty**, bez ekranu ładowania; liczby starsze niż
+  kwadrans odświeżają się po cichu i karta odmalowuje się raz, na końcu.
+- **Krok, który się nie uda, mówi o tym przy sobie** (czerwony krzyżyk i powód po ludzku), reszta się
+  ładuje, a ekran ładowania schodzi po 5 s (albo od razu przyciskiem). Każdy krok ma limit czasu
+  wynikający z limitów tego, co woła (np. rachunek 180 s, pomiar 150 s, zużycie 60 s + 30 s) — po nim
+  jest przerywany. Ekran ładowania, który mimo to by stał, zdejmuje strażnik i zostawia żółtą kartę.
+
 ## 0.22.3 — 2026-09-30
 
 - **Skille w grupach zwijanych.** Zakładka „Skille” pokazuje na starcie same grupy (źródła):

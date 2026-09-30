@@ -583,12 +583,35 @@ sie w KAZDYM projekcie Claude Code na tej maszynie, nie tylko w `claude-worker`.
   `narzedzia/koszt-pamieci.ps1` jako ODDZIELNY PROCES (`Wolaj-Skrypt`, timeout 120 s)
   z przelacznikiem `-Rozbicie` albo `-Dane -Zwykly`, i dostaja z powrotem GOTOWY TEKST
   (linie do wyswietlenia), nie strukture danych.
-- ODSWIEZANIE: `Odswiez-Dane` (bez sieci: `Zbierz-Wszystko $false $true`) wolane
-  przez `Zaplanuj-Przeliczenie` - jednorazowy `System.Windows.Forms.Timer` 150 ms
-  odpalany w `Pokaz-Okno` przy KAZDYM otwarciu okna. NIE MA petli/timera dzialajacego
-  w tle podczas gdy okno stoi otwarte - dane sa swieze tylko na wejsciu do okna.
-  Osobno jest `Dozor` (funkcja w nadzorca.ps1, l.660) - petla NotifyIcon z timerem
-  co `-Minut` (domyslnie 15) do dymkow/alarmow, niezalezna od okna.
+- ODSWIEZANIE (od 0.22.4, P21 - `Odswiez-Dane`, `Zaplanuj-Przeliczenie` i `Dopasuj-Wysokosc`
+  USUNIETE): sekcja "liczenie w tle i ekran ladowania" w `nadzorca.ps1`. Wszystko, co wola
+  skrypty, liczy sie w RUNSPACE'ACH (watkach w tym samym procesie), ktore dot-source'uja
+  `$script:NadzTenPlik` (= stan-nadzorcy.ps1) - dlatego `Zbierz-Wszystko` mieszka od 0.22.4
+  w `stan-nadzorcy.ps1`. Kawalki danych `$KAWALKI` (dane, start, zuzycie, rozbicie, warstwy,
+  skille: Napis, Kod, Limit, Zwykle, PowodToBlad) i `$WIDOK_KAWALKI` (czego potrzebuje ktora
+  zakladka). Stan: `$script:StanKawalkow` (Czas, Nieudany, Krok, Ostatni) - PULAPKA: nie
+  `$script:Kawalki`, bo PowerShell nie rozroznia wielkosci liter i to bylby `$KAWALKI` (zlapane).
+  Silnik: `Rusz-Krok` -> kolejka (max `$KROKI_NARAZ` = 3) -> `Przydziel-Robotnika` (runspace
+  `OpenAsync`) -> `Uruchom-Krok` (BeginInvoke `$KOD_KROKU`) -> zegar `$script:ZegarKrokow` 150 ms
+  `Obsluz-Kroki` (koniec -> `Odbierz-Krok`, limit -> `Przerwij-Krok` BeginStop + `Zombie`) ->
+  `Zakoncz-Krok` (wynik do `$script:Dane/Start/Zuzycie/Rozbicie/DaneWarstw/DaneSkilli`, porazka
+  = ten sam obiekt z Powodem co stare catch, `Powod-Kawalka` = stan "uwaga") -> `Po-Kroku` /
+  `Odswiez-Widoczne` / `Wyrenderuj-Widok` (flagi `$script:DoOdmalowania`). Wejscie do zakladki:
+  `Wejdz-Do-Widoku` (brak danych z dzis albo Nieudany -> ekran ladowania `Pokaz-Ladowanie`;
+  starsze niz `$MINUT_SWIEZOSCI` = `-Minut` -> ciche odswiezenie; kroki ogladanej zakladki na
+  poczatek kolejki). Ekran ladowania: panel `$script:WidokLadowania` dodany do formularza
+  PIERWSZY (lezy na wierzchu), `Zbuduj-Ladowanie`, `Wiersz-Kroku`, `Odmaluj-Kroki` (co 150 ms
+  tylko teksty), `Sprawdz-Ladowanie` (po bledzie stoi `$SEKUNDY_PO_BLEDZIE` = 5 s albo do
+  "Pokaz od razu"), `Straznik-Ladowania` (awaryjne zdjecie po limicie + zolta karta).
+  `Napelnij-Szczegoly/Warstwy/Skille` TYLKO rysuja. Dozor: `Rusz-Dozor` (dane w tle) ->
+  `Po-Dozorze` -> `Dozor-Po-Danych` (decyzje w watku okna); `Dozor` (calosc naraz) zostal dla `-Raz`.
+  Okno: stala wysokosc `min($WYS_OKNA_MAX=1400, obszar-40)` liczona raz w `Pokaz-Okno`,
+  polozenie `$script:PolozenieOkna` (FormClosing), dane NIE sa zerowane w FormClosed.
+- TEST OTWARCIA (P21): nagrywarka w scratchpadzie sesji P21 (`Rejestrator.cs` - watek poza
+  watkiem okna: `GetWindowRect`, `PrintWindow`, wysokosci kart; zegar kontrolny 50 ms w watku
+  okna = wykrywanie zablokowania). UWAGA: `SendMessageTimeout` NIE wykrywa blokady - czekanie
+  .NET w watku STA (WaitForExit) obsluguje wiadomosci wysylane, wiec okno "odpowiada", choc nie
+  maluje i nie przyjmuje klikniec.
 - CZY LISTA "WARSTW PAMIECI" JUZ ISTNIEJE JAKO DANE: CZESCIOWO. W
   `narzedzia/koszt-pamieci.ps1` (funkcja glowna, ok. l.1364-1435) budowane sa
   tablice `$kubWiadomosc` i `$kubSesja` - kazdy element to `Pozycja(Nazwa, Znaki,

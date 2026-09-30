@@ -69,10 +69,16 @@
 # 11. 30.09.2026 (P20): lista skilli w grupach zwijanych (na starcie same naglowki
 #    z liczbami, pasek z lewej przy grupie z problemem albo nowsza wersja), stan
 #    "autor usunal" (szary) i przycisk "Usun u mnie" z kopia zapasowa.
+# 12. 30.09.2026 (P21): uzytkownik: "zeby tak dziwnie nie otwierala sie, gdy rano
+#    ja klikam ... zeby nie zmieniala swojego rozmiaru w dziki sposob". Okno ma od
+#    pierwszej chwili stala wysokosc, wszystko, co wola skrypty, liczy sie w watkach
+#    w tle (sekcja "liczenie w tle i ekran ladowania"), a zakladka bez kompletu
+#    danych z dzis ma nad soba ekran ladowania z lista krokow.
 #
 # PRZYCISKU [ODSWIEZ] NIE MA I NIE MA GO BYC. Istnial tylko dlatego, ze okno
-# nie odswiezalo sie samo - byl obejsciem braku, nie funkcja. Dzis okno przelicza
-# sie przy kazdym otwarciu i przy kazdym przebiegu dozoru; recznemu sprawdzeniu
+# nie odswiezalo sie samo - byl obejsciem braku, nie funkcja. Dzis okno liczy
+# od nowa przy otwarciu to, czego nie ma z dzis, starsze niz kwadrans odswieza
+# po cichu, a dozor przelicza wszystko co kwadrans; recznemu sprawdzeniu
 # zostala pozycja w menu ikony, dla tego, kto wlasnie cos poprawil i chce
 # zobaczyc skutek natychmiast.
 #
@@ -210,40 +216,8 @@ function Ikona-Nadzorcy {
 
 # ------------------------------------------------------------- zbieranie danych
 
-# Cztery rzeczy ze zlecenia, w kolejnosci od najczesciej ogladanej: rachunek,
-# cykl, wersja, alarmy - plus slad samego nadzorcy, bo on tez ma nie milczec
-# o sobie. Zbierane raz, zeby dozor i okno nie liczyly tego samego dwa razy.
-function Zbierz-Wszystko([bool]$zSieci, [bool]$zKolejka) {
-  $d = [pscustomobject]@{ Wersja = $null; Cykl = $null; Rachunek = $null; Alarmy = @(); Informacje = @(); Pamiec = $null; Przeliczanie = $null }
-
-  try { $d.Wersja = Stan-Wersji $zSieci }
-  catch { Zanotuj-Wywrotke "odczyt wersji narzedzia" $_ }
-
-  # Oba odczyty to same pliki na dysku, bez wolania skryptow - ulamek sekundy.
-  try { $d.Pamiec = Stan-Zmian-Pamieci }
-  catch { Zanotuj-Wywrotke "odczyt zmian w pamieci" $_ }
-
-  try { $d.Przeliczanie = Postep-Przeliczania }
-  catch { Zanotuj-Wywrotke "odczyt postepu przeliczania archiwum" $_ }
-
-  try { $d.Cykl = Stan-Cyklu $zKolejka }
-  catch { Zanotuj-Wywrotke "odczyt stanu cyklu" $_ }
-
-  try { $d.Rachunek = Linia-Rachunku }
-  catch { Zanotuj-Wywrotke "rachunek za pamiec (linia)" $_ }
-
-  if ($d.Cykl -and $d.Rachunek) {
-    try { $d.Alarmy = Zbierz-Alarmy $d.Cykl $d.Rachunek }
-    catch { Zanotuj-Wywrotke "skladanie alarmow" $_ }
-  }
-  # Zolte informacje (np. nauka nadrabiala zaleglosc) - osobno od alarmow, bo
-  # alarmy ida na dymek, a informacja nie ma prawa wyskakiwac jak ostrzezenie.
-  if ($d.Rachunek) {
-    try { $d.Informacje = Zbierz-Informacje $d.Rachunek }
-    catch { Zanotuj-Wywrotke "skladanie informacji o koszcie nauki" $_ }
-  }
-  return $d
-}
+# Zbierz-Wszystko mieszka od 0.22.4 (P21) w stan-nadzorcy.ps1: okno liczy dane
+# w watku w tle, ktory wczytuje sam stan-nadzorcy.ps1 - funkcja musi byc tam.
 
 # ------------------------------------------------------- co wymaga uwagi TERAZ
 
@@ -425,7 +399,7 @@ function Zbuduj-Przod($d, $problemy, $czas, $start, $zuzycie = $null) {
   $l += "MegaRuchacz - nadzorca                      [ Przegląd | Szczegóły | Warstwy pamięci ]   <- przełącznik widoków u góry okna"
   $stempel = "przed chwilą"
   if ($czas) { $stempel = $czas.ToString('yyyy-MM-dd HH:mm:ss') }
-  $l += "liczby sprawdzone: $stempel  (okno przelicza je samo przy każdym otwarciu i co $Minut min)"
+  $l += "liczby sprawdzone: $stempel  (okno odświeża je samo w tle co $Minut min; starsze niż dzisiejsze liczy od nowa przy otwarciu)"
   $l += ""
 
   $l += "WERDYKT   (w oknie: pierwsza karta, duże zdanie - zielone: mało, czerwone: dużo, żółte: nie wiadomo)"
@@ -1011,7 +985,14 @@ function Podpowiedz($d) {
 # godziny wewnatrz Stan-Wersji.
 function Dozor($pokazDymek, [bool]$zKolejka, [bool]$zSieci) {
   $d = Zbierz-Wszystko $zSieci $zKolejka
+  Dozor-Po-Danych $d $pokazDymek
+  return $d
+}
 
+# Druga polowa dozoru - decyzje na gotowych danych. Osobno od P21: w ikonie dane
+# licza sie w watku w tle (Rusz-Dozor), a decyzje zapadaja tu, w watku okna,
+# gdy dane przyjda - w tej samej kolejnosci co dotad.
+function Dozor-Po-Danych($d, $pokazDymek) {
   # Cykl wiedzy - to jest teraz GLOWNY wyzwalacz, niezalezny od hookow.
   try {
     $czy = Czy-Ruszac-Cykl
@@ -1049,7 +1030,6 @@ function Dozor($pokazDymek, [bool]$zKolejka, [bool]$zSieci) {
   }
 
   Zapisz-Obecnosc "dozor"
-  return $d
 }
 
 # --------------------------------------------------------------- tryby bez GUI
@@ -1173,7 +1153,8 @@ $script:ListaSzczegolow = $null  # karty sekcji w zakladce Szczegoly (od 25.09.2
 $script:KartaStart     = $null   # karta "Otwarcie sesji" na Przegladzie
 $script:KartaWerdykt   = $null   # jedno zdanie na samej gorze: MegaRuchacz kosztuje malo / duzo / nie wiadomo (P15)
 # Pomiar otwarcia sesji z transkryptow (Pomiar-Startu). Liczony przy otwarciu okna
-# i przy recznym przeliczeniu - nie w dozorze co kwadrans, bo nikt go wtedy nie oglada.
+# (gdy nie ma swiezego) i przy recznym przeliczeniu - nie w dozorze co kwadrans,
+# bo nikt go wtedy nie oglada.
 $script:Start          = $null
 $script:UdzialStartu   = 0.0
 # Dzienne zuzycie tokenow w rozmowach z Claude (Zuzycie-Dzienne, P17) - jedyne
@@ -1218,7 +1199,6 @@ $script:BAktualizuj    = $null
 $script:LAktualizuj    = $null
 $script:BCykl          = $null
 $script:LCykl          = $null
-$script:ZegarOtwarcia  = $null
 $script:PanelZmian     = $null   # linie zmian w pamieci, schowane pod "pokaz zmiany"
 $script:LinkZmian      = $null
 # Rozwiniecie listy zmian przezywa przeliczenie okna - inaczej lista zwijalaby
@@ -1251,6 +1231,31 @@ $script:Problemy  = @()
 # nowszej wersji), przeliczenie danych NIE ma go podmieniac - uzytkownik
 # czytalby wtedy co innego, niz przed chwila kliknal.
 $script:SzczegolyZajete = $false
+# Liczenie w tle i ekran ladowania (P21) - opis przy Rusz-Krok.
+$script:StanKawalkow   = @{}     # UWAGA: nie "$script:Kawalki" - PowerShell nie rozroznia wielkosci liter, to bylby $KAWALKI. id kawalka danych -> Czas, Nieudany, Krok (trwajacy), Ostatni
+$script:KolejkaKrokow  = New-Object System.Collections.ArrayList   # czekaja na wolne miejsce
+$script:KrokiAktywne   = New-Object System.Collections.ArrayList   # otwieraja watek albo licza
+$script:WolniRobotnicy = New-Object System.Collections.ArrayList   # otwarte watki bez pracy
+$script:Zombie         = New-Object System.Collections.ArrayList   # przerwane po limicie, do sprzatniecia
+$script:ZegarKrokow    = $null
+$script:KrokDozoru     = $null
+$script:CzasyKrokow    = @{}     # id -> ile trwal ostatnio (s), do paska postepu
+$script:BladZegaraKrokow = ""
+$script:Ladowanie      = $null   # ekran ladowania na wierzchu: widok, kawalki, kroki, od, BladOd
+$script:WidokLadowania = $null
+$script:ListaKrokow    = $null
+$script:WierszeKrokow  = @{}
+$script:PasekLadowania = $null
+$script:PostepLadowania = 0.0
+$script:LLadowanieTytul = $null
+$script:LLadowanieOpis = $null
+$script:LLadowanieStopka = $null
+$script:BPokazTeraz    = $null
+$script:TykKrokow      = 0
+$script:DoOdmalowania  = @{ przeglad = $true; szczegoly = $true; warstwy = $true; skille = $true }
+$script:SkillePoOperacji = $null
+$script:PolozenieOkna  = $null   # gdzie uzytkownik zostawil okno - nastepne otwarcie stanie tam samo
+$script:PrzydzialPoPokazaniu = $false   # w trakcie budowy okna kroki tylko staja w kolejce (P21)
 
 # --- wyglad ------------------------------------------------------------------
 # KOLOR TYLKO TAM, GDZIE NIESIE ZNACZENIE. Czerwony wylacznie przy sprawie,
@@ -2032,6 +2037,11 @@ function Wstaw-Wykres($gospodarz, $st) {
 
 function Odmaluj-Podtytul {
   if (-not $script:LPodtytul -or $script:LPodtytul.IsDisposed) { return }
+  if ($script:Ladowanie) {
+    $script:LPodtytul.ForeColor = $script:KolSzary
+    $script:LPodtytul.Text = "Wczytuję dane - postęp krok po kroku poniżej."
+    return
+  }
   if ($script:Licze) {
     $script:LPodtytul.ForeColor = $script:KolSzary
     if ($script:DaneCzas) {
@@ -2053,7 +2063,7 @@ function Odmaluj-Podtytul {
   $script:LPodtytul.ForeColor = $script:KolSzary
   $kiedy = "przed chwilą"
   if ($script:DaneCzas) { $kiedy = Kiedy-Ludzko $script:DaneCzas }
-  $script:LPodtytul.Text = "Sprawdzone $kiedy. Okno liczy to samo przy każdym otwarciu i co $Minut min w tle."
+  $script:LPodtytul.Text = "Sprawdzone $kiedy. Liczby odświeżają się same w tle co $Minut min."
 }
 
 function Karta-Problemu($p) {
@@ -2368,8 +2378,8 @@ function Dodaj-Zmiany-Pamieci {
 
   $script:LinkZmian.Add_LinkClicked({
     $script:ZmianyRozwiniete = -not $script:ZmianyRozwiniete
+    # Okno nie rosnie od rozwiniecia (P21) - Przeglad sie przewija.
     Ustaw-Rozwiniecie-Zmian
-    Dopasuj-Wysokosc
   })
 }
 
@@ -2392,29 +2402,20 @@ function Odmaluj-Przyciski {
   $script:BCykl.Enabled    = $n.CyklWlaczony
 }
 
-# Wysokosc dobierana pod PRZEGLAD, a nie na sztywno: na zwyklym ekranie okno
-# ma sie miescic bez przewijania. Szczegoly zajmuja to samo miejsce (widok
-# obok, nie pod spodem), wiec przelaczenie nie szarpie oknem. Gdy tresc i tak
-# nie miesci sie na ekranie, przeglad sie przewija - nic nie znika.
-function Dopasuj-Wysokosc {
-  if (-not $script:Okno -or $script:Okno.IsDisposed) { return }
-  try {
-    $script:Root.PerformLayout()
-    $ramka = $script:Okno.Height - $script:Okno.ClientSize.Height
-    $trzeba = $script:Naglowek.Height + $script:Root.PreferredSize.Height + $script:WidokPrzeglad.Padding.Vertical +
-              $script:Pasek.Height + $ramka + 4
-    $obszar = [System.Windows.Forms.Screen]::FromControl($script:Okno).WorkingArea
-    $script:Okno.Height = [math]::Max([math]::Min(760, $obszar.Height - 40), [math]::Min($trzeba, $obszar.Height - 40))
-    # Okno wysrodkowane przy starcie na innej wysokosci po zmianie wysokosci
-    # wystawaloby dolem za ekran - a razem z nim przyciski.
-    if ($script:Okno.Bottom -gt $obszar.Bottom) {
-      $script:Okno.Top = [math]::Max($obszar.Top, $obszar.Bottom - $script:Okno.Height)
-    }
-  } catch { Zanotuj-Wywrotke "dobranie wysokosci okna" $_ }
-}
+# DOPASUJ-WYSOKOSC USUNIETE (P21, 30.09.2026). Dobieralo wysokosc okna pod tresc
+# Przegladu po KAZDYM odmalowaniu - a tresc rosla w miare dochodzenia danych, wiec
+# okno wstawalo w 1089 px (puste karty) i po kilku sekundach skakalo do 1347 px,
+# przesuwajac sie w gore. Teraz wysokosc liczy sie raz, przy budowie okna
+# (Wysokosc-Okna), a Przeglad, gdy sie nie miesci, przewija sie w miejscu.
 
 function Odmaluj-Okno {
   if (-not $script:Okno -or $script:Okno.IsDisposed) { return }
+  # Przewiniecie przezywa odmalowanie - ciche odswiezenie w tle nie ma prawa
+  # wyrzucic czytajacego na gore.
+  $przewiniecie = 0
+  try { if ($script:WidokPrzeglad) { $przewiniecie = -$script:WidokPrzeglad.AutoScrollPosition.Y } }
+  catch { Zanotuj-Wywrotke "odczyt przewiniecia przegladu" $_ }
+  $script:DoOdmalowania["przeglad"] = $false
   $script:Okno.SuspendLayout()
   try {
     Odmaluj-Podtytul
@@ -2434,7 +2435,10 @@ function Odmaluj-Okno {
   } finally {
     $script:Okno.ResumeLayout($true)
   }
-  Dopasuj-Wysokosc
+  if ($przewiniecie -gt 0) {
+    try { $script:WidokPrzeglad.AutoScrollPosition = New-Object System.Drawing.Point(0, $przewiniecie) }
+    catch { Zanotuj-Wywrotke "przywrocenie przewiniecia przegladu" $_ }
+  }
 }
 
 # --- dane dla okna -----------------------------------------------------------
@@ -2451,17 +2455,12 @@ function Pokaz-Karty-Szczegolow($karty) {
   catch { Zanotuj-Wywrotke "przewiniecie szczegolow na gore" $_ }
 }
 
+# Samo rysowanie - rozbicie liczy krok w tle "rozbicie" (P21), a do czasu, az
+# bedzie, nad zakladka stoi ekran ladowania.
 function Napelnij-Szczegoly {
   if (-not $script:ListaSzczegolow -or $script:ListaSzczegolow.IsDisposed) { return }
-  if ($null -eq $script:Rozbicie) {
-    Pokaz-Karty-Szczegolow @(Karta-Komunikatu "Liczę rozbicie rachunku..." @("To potrwa kilka sekund.") $null)
-    $script:Okno.Refresh()
-    try { $script:Rozbicie = Rachunek-Rozbicie }
-    catch {
-      Zanotuj-Wywrotke "rachunek za pamiec (rozbicie)" $_
-      $script:Rozbicie = @("  NIE UDALO SIE POLICZYC ROZBICIA: $($_.Exception.Message)")
-    }
-  }
+  if ($null -eq $script:Rozbicie) { return }
+  $script:DoOdmalowania["szczegoly"] = $false
   try {
     $karty = @()
     foreach ($s in (Sekcje-Szczegolow $script:Dane $script:Wywrotki $script:Rozbicie $script:Start)) { $karty += (Karta-Sekcji $s) }
@@ -2637,18 +2636,11 @@ function Dopasuj-Etykiete($l) {
   } catch { Zanotuj-Wywrotke "dopasowanie wysokosci podsumowania warstw" $_ }
 }
 
+# Samo rysowanie - liste liczy krok w tle "warstwy" (P21).
 function Napelnij-Warstwy {
   if (-not $script:ListaWarstw -or $script:ListaWarstw.IsDisposed) { return }
-  if ($null -eq $script:DaneWarstw) {
-    $script:LWarstwy.ForeColor = $script:KolSzary
-    $script:LWarstwy.Text = "Zbieram listę warstw pamięci..."
-    $script:Okno.Refresh()
-    try { $script:DaneWarstw = Warstwy-Pamieci }
-    catch {
-      Zanotuj-Wywrotke "lista warstw pamieci" $_
-      $script:DaneWarstw = [pscustomobject]@{ Warstwy = @(); Uwagi = @(); Powod = $_.Exception.Message; Wygenerowano = ""; TrybGlobalny = $null; Projekt = "" }
-    }
-  }
+  if ($null -eq $script:DaneWarstw) { return }
+  $script:DoOdmalowania["warstwy"] = $false
   $dw = $script:DaneWarstw
   $lv = $script:ListaWarstw
   $lv.BeginUpdate()
@@ -2792,8 +2784,9 @@ function Pokaz-Podglad($wa) {
 
 # Przelaczenie widoku. Szczegoly napelniaja sie przy wejsciu - chyba ze stoi
 # w nich odpowiedz na klikniecie (SzczegolyZajete), ktorej nie wolno podmienic.
-# Warstwy licza sie przy pierwszym wejsciu; nieudana proba liczy sie od nowa
-# przy nastepnym, zamiast zostawiac na ekranie stary blad.
+# Od P21 dane kazdej zakladki licza sie w tle (Wejdz-Do-Widoku): brak danych z dzis
+# = ekran ladowania, dane nieswieze = widok od razu i ciche odswiezenie. Nieudana
+# proba liczy sie od nowa przy nastepnym wejsciu, zamiast zostawiac stary blad.
 function Pokaz-Widok([string]$nazwa) {
   if (-not $script:Okno -or $script:Okno.IsDisposed) { return }
   $script:Widok = $nazwa
@@ -2809,12 +2802,7 @@ function Pokaz-Widok([string]$nazwa) {
   Styl-Przelacznika $script:BSzczegoly $szcz
   Styl-Przelacznika $script:BWarstwy $warst
   Styl-Przelacznika $script:BSkille $skil
-  if ($szcz -and (-not $script:SzczegolyZajete)) { Napelnij-Szczegoly }
-  if ($warst) {
-    if ($script:DaneWarstw -and $script:DaneWarstw.Powod) { $script:DaneWarstw = $null }
-    if (($null -eq $script:DaneWarstw) -or ($script:ListaWarstw.Items.Count -eq 0)) { Napelnij-Warstwy }
-  }
-  if ($skil) { Napelnij-Skille }
+  Wejdz-Do-Widoku $nazwa
 }
 
 # ------------------------------------------------------------ zakladka Skille (P18)
@@ -3053,7 +3041,7 @@ function Wiersz-Sprawdzenia($z, [int]$szer) {
 function Przelacz-Grupe([string]$id) {
   if (-not $id) { return }
   $script:GrupySkilli[$id] = -not [bool]$script:GrupySkilli[$id]
-  Napelnij-Skille $false $true
+  Napelnij-Skille $true
   $n = $script:NaglowkiGrup[$id]
   if ($n -and -not $n.IsDisposed) { $script:ListaSkilli.ScrollControlIntoView($n) }
 }
@@ -3083,18 +3071,11 @@ function Zdanie-Skilli($d) {
 
 # $tylkoLista - rozwiniecie/zwiniecie grupy: przebudowa samej listy z danych, ktore juz
 # sa, bez ruszania prawej strony (wynik operacji ani wybrany skill nie znikaja).
-function Napelnij-Skille([bool]$odNowa = $true, [bool]$tylkoLista = $false) {
+# Samo rysowanie - stan skilli liczy krok w tle "skille" (P21).
+function Napelnij-Skille([bool]$tylkoLista = $false) {
   if (-not $script:ListaSkilli -or $script:ListaSkilli.IsDisposed) { return }
-  if ($odNowa -or ($null -eq $script:DaneSkilli)) {
-    $script:LSkille.ForeColor = $script:KolSzary
-    $script:LSkille.Text = "Zbieram listę skilli..."
-    $script:Okno.Refresh()
-    try { $script:DaneSkilli = Stan-Skilli }
-    catch {
-      Zanotuj-Wywrotke "lista skilli" $_
-      $script:DaneSkilli = [pscustomobject]@{ Dane = $null; Powod = $_.Exception.Message }
-    }
-  }
+  if ($null -eq $script:DaneSkilli) { return }
+  if (-not $tylkoLista) { $script:DoOdmalowania["skille"] = $false }
   $ds = $script:DaneSkilli
   $lista = $script:ListaSkilli
   $lista.SuspendLayout()
@@ -3376,10 +3357,13 @@ function Sprawdz-Operacje-Skilli {
   $script:ZegarSkilli.Stop()
   $script:SkilleOperacjaOd = $null
   if ($script:WidokSkille -and -not $script:WidokSkille.IsDisposed) {
-    Napelnij-Skille $true
     $script:SkillePodglad.Text = $tekst
     $script:SkillePodglad.SelectionStart = 0
     $script:SkillePodglad.ScrollToCaret()
+    # Lista po operacji liczy sie w tle (P21); wynik operacji wraca na prawa
+    # strone po przebudowie listy (Wyrenderuj-Widok).
+    $script:SkillePoOperacji = $tekst
+    [void](Rusz-Krok "skille")
   }
 }
 
@@ -3415,54 +3399,740 @@ function Odswiez-Zuzycie {
   $script:ZegarZuzycia.Start()
 }
 
-# Przeliczenie BEZ zagladania do sieci - po nowsza wersje chodzi dozor, ktory
-# nikogo nie trzyma. Dzieki temu otwarcie okna nie czeka na gita.
-function Odswiez-Dane {
-  $script:Licze = $true
-  Odmaluj-Podtytul
-  if ($script:Okno -and -not $script:Okno.IsDisposed) { $script:Okno.Refresh() }
-  try {
-    $script:Dane = Zbierz-Wszystko $false $true
-    $script:DaneCzas = [datetime]::Now
-    $script:DaneBlad = $null
-    $script:Rozbicie = $null
-    $script:DaneWarstw = $null
-    try { $script:Start = Pomiar-Startu }
-    catch { Zanotuj-Wywrotke "pomiar otwarcia okna rozmowy" $_; $script:Start = [pscustomobject]@{ Powod = "pomiar się wywrócił: $($_.Exception.Message)"; MrSesja = $null } }
-    Odswiez-Zuzycie
-    if (($script:Widok -eq "szczegoly") -and (-not $script:SzczegolyZajete)) {
-      Napelnij-Szczegoly
-    }
-    if ($script:Widok -eq "warstwy") { Napelnij-Warstwy }
-    if (($script:Widok -eq "skille") -and (-not $script:SkilleOperacjaOd)) { Napelnij-Skille }
-  } catch {
-    # Cisza jest zakazana: nieudane przeliczenie MA byc widoczne w oknie jako
-    # zolta karta, a nie schowane za starymi liczbami udajacymi biezace.
-    Zanotuj-Wywrotke "przeliczenie danych dla okna" $_
-    $script:DaneBlad = $_.Exception.Message
-  }
-  $script:Licze = $false
+# --- liczenie w tle i ekran ladowania (P21, 30.09.2026) ----------------------
+# Uzytkownik: "Czy mozna cos zrobic z sama apka, zeby tak dziwnie nie otwierala
+# sie, gdy rano ja klikam? Nie moze byc jakies okno postepu wczytywanych danych,
+# zeby nie zmieniala swojego rozmiaru w dziki sposob?"
+#
+# NAGRANIE PRZED ZMIANA (P21, zrzuty co 200 ms + zegar kontrolny watku okna)
+# pokazalo trzy rzeczy naraz: okno wstawalo w wysokosci policzonej dla PUSTYCH
+# kart (1089 px); 150 ms pozniej caly interfejs stawal na ~3,7 s, bo Odswiez-Dane
+# wolalo koszt-pamieci.ps1 (-Dane, -Start) w watku okna; potem karty rosly,
+# Dopasuj-Wysokosc podnosilo okno do 1347 px, a po kolejnych 3 s (dzienne
+# zuzycie) karty przestawialy sie jeszcze raz. Zakladki stawaly na 1,2-2,2 s.
+#
+# TERAZ:
+# - okno ma od pierwszej chwili stala wysokosc (Pokaz-Okno) i samo jej nie zmienia,
+# - wszystko, co wola skrypty, liczy sie w osobnych watkach (runspace'ach), ktore
+#   wczytuja stan-nadzorcy.ps1; watek okna co 150 ms tylko zaglada, co gotowe,
+# - zakladka bez kompletu danych z dzis ma nad soba ekran ladowania z lista krokow;
+#   karty buduja sie RAZ, z kompletem, i dopiero wtedy ekran znika,
+# - dane z dzis pokazuja sie od razu; starsze niz $MINUT_SWIEZOSCI min odswiezaja
+#   sie po cichu i zakladka odmalowuje sie raz, gdy odswiezanie sie skonczy,
+# - kazdy krok ma limit czasu wyprowadzony z limitow tego, co wola (nizej); po nim
+#   krok jest przerywany, a ekran ladowania mowi przy nim, co sie stalo.
+
+# Ile krokow naraz. Kazdy to watek plus zwykle jeden proces powershell.exe
+# (~70 MB). Trzy wystarczaja, zeby trzy kroki Przegladu szly rownolegle;
+# reszta zakladek dochodzi, gdy zwolni sie miejsce.
+$KROKI_NARAZ = 3
+# Dozor przelicza dane co $Minut min - liczby mlodsze niz to sa tak swieze, jak
+# cokolwiek, co okno mogloby policzyc. Takie pokazujemy bez liczenia.
+$MINUT_SWIEZOSCI = [math]::Max(1, $Minut)
+# Po nieudanym kroku ekran ladowania stoi jeszcze tyle sekund z bledem na wierzchu
+# (z przyciskiem "Pokaz od razu"): tyle trwa przeczytanie jednego zdania. Ten sam
+# powod zostaje potem w karcie i w Szczegolach - nic nie znika.
+$SEKUNDY_PO_BLEDZIE = 5
+# Najwyzsza wysokosc okna. Przeglad z kompletem danych zmierzony 30.09.2026 =
+# 1351 px okna; 1400 zostawia miejsce na karte problemu. Na nizszym ekranie okno
+# ma obszar roboczy minus 40 px, a Przeglad sie przewija - jak dotad.
+$WYS_OKNA_MAX = 1400
+# LIMITY CZASU KROKOW - kazdy z limitu tego, co krok woła, nie "na oko":
+#  - koszt-pamieci.ps1 i skille.ps1 ida przez Wolaj-Skrypt z wlasnym limitem
+#    (120 s / 90 s) i same oddaja powod "nie skonczyl w N s". Limit kroku = tamten
+#    + 30 s na start watku (zmierzone ~0,3 s) i odczyt: przerwanie przez okno to
+#    ostatnia deska ratunku, gdyby watek utknal gdzie indziej;
+#  - "dane" wola jeszcze gita bez sieci (Stan-Wersji, Stan-Cyklu, po 10 s) -> 180 s;
+#  - dozor pobiera dodatkowo z sieci (git fetch 25 s) -> 240 s;
+#  - dzienne zuzycie czeka na osobny proces liczacy: P17 zmierzyl 6-7 s dla 337 MB
+#    transkryptow, 30.09 bylo 2,7 s - 60 s to ~10 razy zapasu na zimny dysk. Potem
+#    karta mowi "jeszcze sie liczy" i dociaga wynik sama (Odswiez-Zuzycie), a samo
+#    liczenie ma swoj limit $MINUT_LICZENIA_ZUZYCIA w stan-nadzorcy.ps1.
+$SEKUNDY_ZUZYCIA = 60
+$LIMIT_DOZORU = 240
+# Kawalki danych. Zwykle = ile sekund zwykle trwa (do paska postepu, zanim krok
+# zmierzy sie sam). PowodToBlad = zwrocony powod to porazka (nastepne wejscie
+# liczy od nowa z ekranem ladowania); przy pozostalych powod to wynik ("nie
+# zmierzono, bo..."), ktory karta pokazuje, a liczyc od nowa nie ma po co.
+$KAWALKI = [ordered]@{
+  dane     = @{ Napis = "Sprawdzam stan MegaRuchacza i liczę rachunek za pamięć"; Kod = 'Zbierz-Wszystko $false $true'; Limit = 180; Zwykle = 3; PowodToBlad = $false }
+  start    = @{ Napis = "Liczę koszt otwarcia okna rozmowy"; Kod = 'Pomiar-Startu'; Limit = 150; Zwykle = 2; PowodToBlad = $false }
+  zuzycie  = @{ Napis = "Sprawdzam dzienne zużycie tokenów"; Limit = ($SEKUNDY_ZUZYCIA + 30); Zwykle = 4; PowodToBlad = $false
+                Kod = ('$z = Zuzycie-Dzienne $false; $do = [datetime]::Now.AddSeconds(' + $SEKUNDY_ZUZYCIA + '); ' +
+                       'while (($z.Stan -eq "licze") -and ([datetime]::Now -lt $do)) { Start-Sleep -Milliseconds 400; $z = Zuzycie-Dzienne $false }; $z') }
+  rozbicie = @{ Napis = "Liczę rozbicie rachunku pozycja po pozycji"; Kod = 'Rachunek-Rozbicie'; Limit = 150; Zwykle = 2; PowodToBlad = $true }
+  warstwy  = @{ Napis = "Zbieram listę warstw pamięci"; Kod = 'Warstwy-Pamieci'; Limit = 150; Zwykle = 2; PowodToBlad = $true }
+  skille   = @{ Napis = "Sprawdzam skille"; Kod = 'Stan-Skilli'; Limit = 120; Zwykle = 2; PowodToBlad = $true }
+}
+# Czego potrzebuje kazda zakladka, zeby pokazac karty w komplecie.
+$WIDOK_KAWALKI = @{
+  przeglad  = @("dane", "start", "zuzycie")
+  szczegoly = @("dane", "start", "rozbicie")
+  warstwy   = @("warstwy")
+  skille    = @("skille")
+}
+$NAZWY_WIDOKOW = @{ przeglad = "Przegląd"; szczegoly = "Szczegóły"; warstwy = "Warstwy pamięci"; skille = "Skille" }
+foreach ($id in $KAWALKI.Keys) { $script:StanKawalkow[$id] = [pscustomobject]@{ Id = $id; Czas = $null; Nieudany = $false; Krok = $null; Ostatni = $null } }
+
+# Kod wykonywany w watku w tle. Wczytuje stan-nadzorcy.ps1 (raz na watek), ustawia
+# te same sciezki co okno i oddaje wynik razem z wywrotkami, zeby trafily do
+# okna, a nie zginely razem z watkiem. NadzZuzycieOdpalone jedzie tam i z powrotem:
+# to dlawik "liczenie zuzycia najwyzej raz na ... min" z Zuzycie-Dzienne.
+$KOD_KROKU = @'
+param($PlikStanu, $Zrodlo, $Dom, $Proba, $Kod, $Odpalone)
+if (-not (Get-Command Ustaw-Nadzorce -ErrorAction SilentlyContinue)) { . $PlikStanu }
+Ustaw-Nadzorce $Zrodlo $Dom $Proba
+$script:NadzZuzycieOdpalone = $Odpalone
+$wynik = & ([scriptblock]::Create($Kod))
+[pscustomobject]@{ Wynik = $wynik; Wywrotki = @($script:NadzWywrotki); Odpalone = $script:NadzZuzycieOdpalone }
+'@
+
+function Czas-Kawalka([string]$id) {
+  # dane przychodza takze z dozoru - ich czas to czas danych w oknie
+  if ($id -eq "dane") { if ($script:Dane) { return $script:DaneCzas } else { return $null } }
+  return $script:StanKawalkow[$id].Czas
 }
 
-# Okno ODSWIEZA SIE SAMO przy kazdym otwarciu - dlatego nie ma przycisku
-# [Odswiez]. Przeliczenie rusza dopiero po odmalowaniu okna (stad zegar na
-# 150 ms zamiast wolania wprost): uzytkownik widzi najpierw liczby z bufora
-# razem z godzina, z ktorej pochodza, a nie pusty ekran przez kilka sekund.
-function Zaplanuj-Przeliczenie {
-  if (-not $script:ZegarOtwarcia) {
-    $script:ZegarOtwarcia = New-Object System.Windows.Forms.Timer
-    $script:ZegarOtwarcia.Add_Tick({
-      $script:ZegarOtwarcia.Stop()
-      Odswiez-Dane
-      Odmaluj-Okno
-      if ($script:Ikona) {
-        try { $script:Ikona.Text = Podpowiedz $script:Dane } catch { Zanotuj-Wywrotke "podpowiedz przy ikonie" $_ }
+# Brak = nie ma danych z dzis albo ostatnia proba sie nie udala. Wtedy zakladka
+# czeka na nie za ekranem ladowania.
+function Brakuje-Kawalka([string]$id) {
+  $c = Czas-Kawalka $id
+  if (-not $c) { return $true }
+  if ($c.Date -ne [datetime]::Today) { return $true }
+  if (($id -ne "dane") -and $script:StanKawalkow[$id].Nieudany) { return $true }
+  return $false
+}
+
+function Nieswiezy-Kawalek([string]$id) {
+  $c = Czas-Kawalka $id
+  if (-not $c) { return $true }
+  if ($id -eq "zuzycie") {
+    # srednia dzienna nie zmienia sie w ciagu dnia - z dzis znaczy swieza
+    if ($script:Zuzycie -and ($script:Zuzycie.Stan -eq "jest")) { return $false }
+    if ($script:Zuzycie -and ($script:Zuzycie.Stan -eq "licze")) { return $true }
+  }
+  return ((([datetime]::Now - $c).TotalMinutes) -ge $MINUT_SWIEZOSCI)
+}
+
+function Krok-Trwa($k) { return ($k -and (@("czeka", "otwiera", "liczy") -contains $k.Stan)) }
+
+function Nowy-Krok([string]$id, [string]$kawalek, [string]$napis, [string]$kod, [int]$limit) {
+  return [pscustomobject]@{
+    Id = $id; Kawalek = $kawalek; Napis = $napis; Kod = $kod; Limit = $limit
+    Stan = "czeka"; Od = $null; Koniec = $null; Powod = ""; Wynik = $null
+    PS = $null; Uchwyt = $null; Robotnik = $null; Po = $null
+  }
+}
+
+# Start kroku dla kawalka danych. Trwajacy krok nie rusza drugi raz - oddajemy
+# ten, ktory juz liczy. $kod podmienia polecenie (menu: dane razem z siecia).
+function Rusz-Krok([string]$id, [string]$kod = "") {
+  $kaw = $script:StanKawalkow[$id]
+  if (Krok-Trwa $kaw.Krok) { return $kaw.Krok }
+  $def = $KAWALKI[$id]
+  if (-not $kod) { $kod = $def.Kod }
+  $k = Nowy-Krok $id $id $def.Napis $kod $def.Limit
+  $kaw.Krok = $k
+  [void]$script:KolejkaKrokow.Add($k)
+  if (@("dane", "start", "zuzycie") -contains $id) { $script:Licze = $true }
+  Wlacz-Zegar-Krokow
+  Obsluz-Kroki
+  return $k
+}
+
+# Dozor co kwadrans: dane w tle, decyzje po powrocie (Dozor-Po-Danych). Gdy
+# poprzedni przebieg jeszcze trwa, ten jest pomijany - dwa naraz nie maja sensu.
+function Rusz-Dozor {
+  if (Krok-Trwa $script:KrokDozoru) {
+    Notuj "dozor: poprzedni przebieg jeszcze trwa (od $($script:KrokDozoru.Od)) - ten pomijam"
+    return
+  }
+  $k = Nowy-Krok "dozor" "" "Dozór" 'Zbierz-Wszystko $true $true' $LIMIT_DOZORU
+  $k.Po = { param($k) Po-Dozorze $k }
+  $script:KrokDozoru = $k
+  [void]$script:KolejkaKrokow.Add($k)
+  Wlacz-Zegar-Krokow
+  Obsluz-Kroki
+}
+
+function Po-Dozorze($k) {
+  if (($k.Stan -eq "blad") -or ($k.Stan -eq "czas")) {
+    Zanotuj-Wywrotke "przebieg dozoru" $k.Powod
+    return
+  }
+  $d = $k.Wynik
+  try { Dozor-Po-Danych $d $script:Dymek } catch { Zanotuj-Wywrotke "przebieg dozoru (decyzje)" $_ }
+  $script:Dane = $d
+  $script:DaneCzas = [datetime]::Now
+  $script:DaneBlad = $null
+  Po-Kroku "dane"
+}
+
+function Wlacz-Zegar-Krokow {
+  if (-not $script:ZegarKrokow) {
+    $script:ZegarKrokow = New-Object System.Windows.Forms.Timer
+    $script:ZegarKrokow.Interval = 150
+    $script:ZegarKrokow.Add_Tick({
+      try { Obsluz-Kroki; $script:BladZegaraKrokow = "" }
+      catch {
+        # Nie przerywamy (kroki musza sie dokonczyc), ale kazda NOWA wywrotka idzie do
+        # dziennika. "Nowa" = inne miejsce w kodzie, a nie inny tekst - tekst potrafi
+        # nosic zmieniajaca sie liczbe i zasypalby dziennik co 150 ms (zlapane w probie P21).
+        $klucz = "$($_.Exception.GetType().Name)@$($_.InvocationInfo.ScriptLineNumber)"
+        if ($script:BladZegaraKrokow -ne $klucz) {
+          $script:BladZegaraKrokow = $klucz
+          Zanotuj-Wywrotke "zegar krokow w tle" $_
+        }
       }
+      try { Straznik-Ladowania }
+      catch { if ($script:BladZegaraKrokow -ne "straznik") { $script:BladZegaraKrokow = "straznik"; Zanotuj-Wywrotke "straznik ekranu ladowania" $_ } }
     })
   }
-  $script:ZegarOtwarcia.Stop()
-  $script:ZegarOtwarcia.Interval = 150
-  $script:ZegarOtwarcia.Start()
+  if (-not $script:ZegarKrokow.Enabled) { $script:ZegarKrokow.Start() }
+}
+
+# Serce: co 150 ms. Konczy gotowe kroki, przerywa te po limicie, daje prace
+# czekajacym, sprzata przerwane watki, odmalowuje ekran ladowania.
+function Obsluz-Kroki {
+  $teraz = [datetime]::Now
+  foreach ($k in @($script:KrokiAktywne)) {
+    $minelo = 0
+    if ($k.Od) { $minelo = ($teraz - $k.Od).TotalSeconds }
+    if ($k.Stan -eq "otwiera") {
+      $st = "$($k.Robotnik.RunspaceStateInfo.State)"
+      if ($st -eq "Opened") { Uruchom-Krok $k }
+      elseif (($st -eq "Broken") -or ($st -eq "Closed")) {
+        $pw = "$($k.Robotnik.RunspaceStateInfo.Reason)"
+        try { $k.Robotnik.Dispose() } catch { Notuj "nie dalo sie zwolnic zepsutego watku: $($_.Exception.Message)" }
+        $k.Robotnik = $null
+        Zakoncz-Krok $k "blad" "nie udało się uruchomić liczenia w tle ($pw)"
+      }
+      elseif ($minelo -gt $k.Limit) { Przerwij-Krok $k }
+    } elseif ($k.Stan -eq "liczy") {
+      if ($k.Uchwyt.IsCompleted) { Odbierz-Krok $k }
+      elseif ($minelo -gt $k.Limit) { Przerwij-Krok $k }
+    }
+  }
+  while ((-not $script:PrzydzialPoPokazaniu) -and ($script:KrokiAktywne.Count -lt $KROKI_NARAZ) -and ($script:KolejkaKrokow.Count -gt 0)) {
+    $k = $script:KolejkaKrokow[0]
+    $script:KolejkaKrokow.RemoveAt(0)
+    Przydziel-Robotnika $k
+  }
+  foreach ($z in @($script:Zombie)) {
+    $st = "$($z.PS.InvocationStateInfo.State)"
+    if (@("Stopped", "Completed", "Failed") -contains $st) {
+      try { $z.PS.Dispose(); if ($z.Rs) { $z.Rs.Dispose() } } catch { Notuj "nie dalo sie zwolnic przerwanego watku: $($_.Exception.Message)" }
+      $script:Zombie.Remove($z)
+    }
+  }
+  $script:Licze = $false
+  foreach ($id in @("dane", "start", "zuzycie")) { if (Krok-Trwa $script:StanKawalkow[$id].Krok) { $script:Licze = $true } }
+  if ($script:Ladowanie) { Sprawdz-Ladowanie }
+  $pusto = ($script:KrokiAktywne.Count -eq 0) -and ($script:KolejkaKrokow.Count -eq 0) -and ($script:Zombie.Count -eq 0) -and (-not $script:Ladowanie)
+  if ($pusto) {
+    # Nic nie liczy - watki oddaja pamiec, zegar staje. Nastepne otwarcie
+    # okna otworzy nowe (w tle, ~0,2 s).
+    foreach ($rs in @($script:WolniRobotnicy)) {
+      try { $rs.Dispose() } catch { Notuj "nie dalo sie zwolnic watku: $($_.Exception.Message)" }
+    }
+    $script:WolniRobotnicy.Clear()
+    if ($script:ZegarKrokow) { $script:ZegarKrokow.Stop() }
+  }
+}
+
+function Przydziel-Robotnika($k) {
+  $k.Od = [datetime]::Now
+  [void]$script:KrokiAktywne.Add($k)
+  if ($script:WolniRobotnicy.Count -gt 0) {
+    $k.Robotnik = $script:WolniRobotnicy[0]
+    $script:WolniRobotnicy.RemoveAt(0)
+    Uruchom-Krok $k
+    return
+  }
+  try {
+    # OpenAsync: otwarcie watku (~0,2 s) nie blokuje okna; krok rusza w Obsluz-Kroki,
+    # gdy watek jest gotowy.
+    $rs = [runspacefactory]::CreateRunspace()
+    $rs.ThreadOptions = [System.Management.Automation.Runspaces.PSThreadOptions]::ReuseThread
+    $k.Robotnik = $rs
+    $k.Stan = "otwiera"
+    $rs.OpenAsync()
+  } catch {
+    Zakoncz-Krok $k "blad" "nie udało się utworzyć wątku do liczenia w tle: $($_.Exception.Message)"
+  }
+}
+
+function Uruchom-Krok($k) {
+  try {
+    $ps = [powershell]::Create()
+    $ps.Runspace = $k.Robotnik
+    [void]$ps.AddScript($KOD_KROKU).AddArgument($script:NadzTenPlik).AddArgument($script:NadzZrodlo).AddArgument($script:NadzDom).AddArgument([bool]$script:NadzProba).AddArgument($k.Kod).AddArgument($script:NadzZuzycieOdpalone)
+    $k.PS = $ps
+    $k.Uchwyt = $ps.BeginInvoke()
+    $k.Stan = "liczy"
+  } catch {
+    Zakoncz-Krok $k "blad" "nie udało się uruchomić liczenia w tle: $($_.Exception.Message)"
+  }
+}
+
+function Odbierz-Krok($k) {
+  $opak = $null; $blad = ""
+  try {
+    $wy = $k.PS.EndInvoke($k.Uchwyt)
+    if ($wy.Count -gt 0) { $opak = $wy[$wy.Count - 1] }
+    if (-not $opak -or ($null -eq $opak.PSObject.Properties["Wynik"])) {
+      $bl = @($k.PS.Streams.Error | Select-Object -First 1)
+      $blad = "liczenie nie oddało wyniku"
+      if ($bl.Count -gt 0) { $blad += ": $($bl[0])" }
+      $opak = $null
+    }
+  } catch {
+    $e = $_.Exception
+    while ($e.InnerException) { $e = $e.InnerException }
+    $blad = "$($e.Message)"
+  }
+  # Watek wraca do puli tylko po czystym koncu - po wywrotce zaczynamy na swiezym.
+  try { $k.PS.Dispose() } catch { Notuj "nie dalo sie zwolnic polecenia w tle: $($_.Exception.Message)" }
+  if ($k.Robotnik) {
+    if ($blad) { try { $k.Robotnik.Dispose() } catch { Notuj "nie dalo sie zwolnic watku po wywrotce: $($_.Exception.Message)" } }
+    else { [void]$script:WolniRobotnicy.Add($k.Robotnik) }
+  }
+  $k.PS = $null; $k.Robotnik = $null
+  if ($blad) { Zakoncz-Krok $k "blad" $blad; return }
+  foreach ($w in @($opak.Wywrotki)) { if ($w) { $script:NadzWywrotki += "$w" } }
+  if ($k.Id -eq "zuzycie") { $script:NadzZuzycieOdpalone = $opak.Odpalone }
+  $k.Wynik = $opak.Wynik
+  Zakoncz-Krok $k "ok" ""
+}
+
+function Przerwij-Krok($k) {
+  $pw = "nie skończyło się w $($k.Limit) s - przerwałem"
+  if ($k.PS) {
+    try { [void]$k.PS.BeginStop($null, $null) } catch { Notuj "przerwanie kroku $($k.Id): $($_.Exception.Message)" }
+    [void]$script:Zombie.Add([pscustomobject]@{ PS = $k.PS; Rs = $k.Robotnik })
+  } elseif ($k.Robotnik) {
+    try { $k.Robotnik.Dispose() } catch { Notuj "nie dalo sie zwolnic watku po limicie: $($_.Exception.Message)" }
+  }
+  $k.PS = $null; $k.Robotnik = $null
+  Zanotuj-Wywrotke "liczenie w tle: $($k.Napis)" $pw
+  Zakoncz-Krok $k "czas" $pw
+}
+
+# Wynik kroku trafia do zmiennych okna. Porazka (wywrotka albo limit) zostawia
+# po sobie powod w tych samych miejscach, w ktorych stawialy go stare "catch" -
+# karta mowi "nie zmierzono, bo...", a nie pokazuje pustki.
+function Zakoncz-Krok($k, [string]$stan, [string]$powod) {
+  $script:KrokiAktywne.Remove($k)
+  $k.Koniec = [datetime]::Now
+  $k.Stan = $stan
+  $k.Powod = $powod
+  if ($k.Od) { $script:CzasyKrokow[$k.Id] = ($k.Koniec - $k.Od).TotalSeconds }
+  $id = $k.Kawalek
+  if ($id) {
+    $porazka = ($stan -ne "ok")
+    try {
+      switch ($id) {
+        "dane" {
+          if ($porazka) { $script:DaneBlad = $powod }
+          else { $script:Dane = $k.Wynik; $script:DaneCzas = $k.Koniec; $script:DaneBlad = $null }
+        }
+        "start" {
+          if ($porazka) { $script:Start = [pscustomobject]@{ Powod = "pomiar się wywrócił: $powod"; MrSesja = $null } }
+          else { $script:Start = $k.Wynik }
+        }
+        "zuzycie" {
+          if ($porazka) { $script:Zuzycie = [pscustomobject]@{ Stan = "brak"; Powod = "odczyt się wywrócił: $powod" } }
+          else {
+            $script:Zuzycie = $k.Wynik
+            # dalej liczy (dluzej niz $SEKUNDY_ZUZYCIA) - zegar co 3 s dociagnie wynik sam
+            if ($script:Zuzycie.Stan -eq "licze") { Odswiez-Zuzycie }
+          }
+        }
+        "rozbicie" {
+          if ($porazka) { $script:Rozbicie = @("  NIE UDALO SIE POLICZYC ROZBICIA: $powod") }
+          else { $script:Rozbicie = $k.Wynik }
+        }
+        "warstwy" {
+          if ($porazka) { $script:DaneWarstw = [pscustomobject]@{ Warstwy = @(); Uwagi = @(); Powod = $powod; Wygenerowano = ""; TrybGlobalny = $null; Projekt = "" } }
+          else { $script:DaneWarstw = $k.Wynik }
+        }
+        "skille" {
+          if ($porazka) { $script:DaneSkilli = [pscustomobject]@{ Dane = $null; Powod = $powod } }
+          else { $script:DaneSkilli = $k.Wynik }
+        }
+      }
+    } catch { Zanotuj-Wywrotke "przyjecie wyniku kroku $id" $_ }
+    if ($porazka) {
+      if ($stan -eq "blad") { Zanotuj-Wywrotke "liczenie w tle: $($k.Napis)" $powod }
+    } else {
+      # Krok przeszedl, ale oddal powod ("nie zmierzono, bo...") - to tez ma byc
+      # widac przy kroku, nie tylko w karcie.
+      $pw = ""
+      try { $pw = Powod-Kawalka $id } catch { Zanotuj-Wywrotke "powod kroku $id" $_ }
+      if ($pw) { $k.Stan = "uwaga"; $k.Powod = $pw }
+    }
+    $kaw = $script:StanKawalkow[$id]
+    $kaw.Czas = $k.Koniec
+    $kaw.Nieudany = $porazka -or (($k.Stan -eq "uwaga") -and $KAWALKI[$id].PowodToBlad)
+    $kaw.Ostatni = $k
+    if ($kaw.Krok -eq $k) { $kaw.Krok = $null }
+  }
+  if ($k.Po) {
+    try { & $k.Po $k } catch { Zanotuj-Wywrotke "dokonczenie kroku $($k.Id)" $_ }
+  }
+  if ($id) { Po-Kroku $id }
+}
+
+# Powod, ktory zwrocil sam wynik - pusty, gdy wszystko jest.
+function Powod-Kawalka([string]$id) {
+  switch ($id) {
+    "dane" {
+      if (-not $script:Dane) { return "nic nie wróciło" }
+      if (-not $script:Dane.Rachunek) { return "rachunek za pamięć się nie policzył - szczegóły w dzienniku nadzorcy" }
+      if ($script:Dane.Rachunek.Powod) { return "rachunek za pamięć: $($script:Dane.Rachunek.Powod)" }
+      if (-not $script:Dane.Cykl) { return "nie odczytałem stanu nauki z rozmów - szczegóły w dzienniku nadzorcy" }
+    }
+    "start" { if ($script:Start -and $script:Start.Powod) { return "nie zmierzono, bo $($script:Start.Powod)" } }
+    "zuzycie" {
+      if ($script:Zuzycie -and ($script:Zuzycie.Stan -eq "licze")) { return "liczy się dłużej niż $SEKUNDY_ZUZYCIA s - pokażę resztę, a porównanie dojdzie samo, gdy będzie" }
+      if ($script:Zuzycie -and ($script:Zuzycie.Stan -eq "brak")) { return "$($script:Zuzycie.Powod)" }
+    }
+    "rozbicie" {
+      $l = @(@($script:Rozbicie) | Where-Object { "$_" -match 'NIE UDALO SIE|RACHUNEK PUSTY' } | Select-Object -First 1)
+      if ($l.Count -gt 0) { return "$($l[0])".Trim() }
+    }
+    "warstwy" { if ($script:DaneWarstw -and $script:DaneWarstw.Powod) { return "$($script:DaneWarstw.Powod)" } }
+    "skille" { if ($script:DaneSkilli -and $script:DaneSkilli.Powod) { return "$($script:DaneSkilli.Powod)" } }
+  }
+  return ""
+}
+
+# Po kazdym kroku: zakladki, ktore z niego korzystaja, sa do odmalowania. Ekran
+# ladowania decyduje sam (Sprawdz-Ladowanie); bez niego biezaca zakladka
+# odmalowuje sie RAZ, gdy zaden z jej krokow juz nie liczy.
+function Po-Kroku([string]$id) {
+  foreach ($w in @($WIDOK_KAWALKI.Keys)) { if (@($WIDOK_KAWALKI[$w]) -contains $id) { $script:DoOdmalowania[$w] = $true } }
+  if (($id -eq "dane") -and $script:Ikona) {
+    try { $script:Ikona.Text = Podpowiedz $script:Dane } catch { Zanotuj-Wywrotke "podpowiedz przy ikonie" $_ }
+  }
+  if (-not $script:Okno -or $script:Okno.IsDisposed) { return }
+  if ($script:Ladowanie) { return }
+  Odswiez-Widoczne
+}
+
+function Odswiez-Widoczne {
+  $w = $script:Widok
+  if (-not $script:DoOdmalowania[$w]) { Odmaluj-Podtytul; return }
+  foreach ($id in @($WIDOK_KAWALKI[$w])) { if (Krok-Trwa $script:StanKawalkow[$id].Krok) { Odmaluj-Podtytul; return } }
+  Wyrenderuj-Widok $w
+}
+
+function Wyrenderuj-Widok([string]$w) {
+  switch ($w) {
+    "przeglad"  { Odmaluj-Okno }
+    "szczegoly" {
+      Odmaluj-Podtytul
+      if (-not $script:SzczegolyZajete) {
+        # Budowa kilkudziesieciu kart trwa ~1,3 s (zmierzone 30.09.2026) i musi isc
+        # w watku okna. Za pierwszym razem najpierw jedno zdanie, zeby klikniecie
+        # dalo znak od razu, a nie wygladalo na zawieszenie.
+        if ($script:ListaSzczegolow -and ($script:ListaSzczegolow.Controls.Count -eq 0) -and $script:Okno.Visible) {
+          Pokaz-Karty-Szczegolow @(Karta-Komunikatu "Układam zakładkę..." @("Kilkadziesiąt kart z liczbami - to trwa około sekundy.") $null)
+          $script:Okno.Update()
+        }
+        Napelnij-Szczegoly
+      }
+    }
+    "warstwy"   { Odmaluj-Podtytul; Napelnij-Warstwy }
+    "skille" {
+      Odmaluj-Podtytul
+      # w trakcie operacji z przycisku lista stoi (zegar operacji ja odswiezy po koncu)
+      $narysowana = $script:ListaSkilli -and ($script:ListaSkilli.Controls.Count -gt 0) -and ($script:ListaSkilli.Controls[0].Controls.Count -gt 0)
+      if ($script:SkilleOperacjaOd -and $narysowana) { return }
+      Napelnij-Skille
+      if ($script:SkillePoOperacji -and $script:SkillePodglad -and -not $script:SkillePodglad.IsDisposed) {
+        $script:SkillePodglad.Text = $script:SkillePoOperacji
+        $script:SkillePodglad.SelectionStart = 0
+        $script:SkillePodglad.ScrollToCaret()
+      }
+      $script:SkillePoOperacji = $null
+    }
+  }
+}
+
+# Wejscie do zakladki (takze przy otwarciu okna). Brak danych z dzis -> ekran
+# ladowania; dane nieswieze -> zakladka od razu, odswiezenie po cichu. Przy
+# otwarciu okna w tle rusza tez to, czego brakuje innym zakladkom - przelaczenie
+# ma byc od razu.
+function Wejdz-Do-Widoku([string]$widok, [bool]$otwarcie = $false) {
+  if (-not $script:Okno -or $script:Okno.IsDisposed) { return }
+  if (($widok -eq "szczegoly") -and $script:SzczegolyZajete) { Ukryj-Ladowanie; return }
+  $ids = @($WIDOK_KAWALKI[$widok])
+  $kroki = @{}
+  $brak = $false
+  foreach ($id in $ids) {
+    $b = Brakuje-Kawalka $id
+    if ($b) { $brak = $true }
+    if ($b -or (Nieswiezy-Kawalek $id)) { $kroki[$id] = Rusz-Krok $id }
+    elseif (Krok-Trwa $script:StanKawalkow[$id].Krok) { $kroki[$id] = $script:StanKawalkow[$id].Krok }
+  }
+  if ($otwarcie) {
+    foreach ($w in @("przeglad", "szczegoly", "warstwy", "skille")) {
+      foreach ($id in @($WIDOK_KAWALKI[$w])) { if (Brakuje-Kawalka $id) { [void](Rusz-Krok $id) } }
+    }
+  }
+  # Kroki ogladanej zakladki na poczatek kolejki - nie czekaja za tlem innych zakladek.
+  foreach ($id in @($ids)[($ids.Count - 1)..0]) {
+    $k = $script:StanKawalkow[$id].Krok
+    if ($k -and ($k.Stan -eq "czeka") -and $script:KolejkaKrokow.Contains($k)) {
+      $script:KolejkaKrokow.Remove($k)
+      $script:KolejkaKrokow.Insert(0, $k)
+    }
+  }
+  Obsluz-Kroki
+  if ($brak) { Pokaz-Ladowanie $widok $ids $kroki; return }
+  Ukryj-Ladowanie
+  if ($script:DoOdmalowania[$widok]) { Wyrenderuj-Widok $widok } else { Odmaluj-Podtytul }
+}
+
+# Recznie zlecone przeliczenie (menu, po pobraniu nowszej wersji): Przeglad zostaje
+# na ekranie, liczy sie w tle i odmalowuje raz na koncu.
+function Przelicz-W-Tle([string]$kodDanych = "") {
+  $k = Rusz-Krok "dane" $kodDanych
+  [void](Rusz-Krok "start")
+  [void](Rusz-Krok "zuzycie")
+  return $k
+}
+
+# --- ekran ladowania -----------------------------------------------------------
+# Biala karta na miejscu zakladki: tytul, jedno zdanie, pasek postepu i lista
+# krokow - kazdy z kolkiem (czeka), obracajacym sie znakiem (liczy), ptaszkiem
+# (gotowe), wykrzyknikiem (gotowe z powodem) albo krzyzykiem (nie udalo sie / po
+# limicie), z czasem po prawej i powodem po ludzku pod spodem. Wiersze maja stale
+# wymiary - zmienia sie tylko tekst, wiec nic nie skacze.
+$ZNAK_CZEKA = [string][char]0x25CB
+$ZNAKI_LICZY = @([string][char]0x25D0, [string][char]0x25D3, [string][char]0x25D1, [string][char]0x25D2)
+$ZNAK_OK = [string][char]0x2713
+$ZNAK_BLAD = [string][char]0x2717
+
+function Zbuduj-Ladowanie {
+  $p = New-Object System.Windows.Forms.Panel
+  $p.Dock = [System.Windows.Forms.DockStyle]::Fill
+  $p.AutoScroll = $true
+  $p.BackColor = $script:TloOkna
+  $p.Padding = New-Object System.Windows.Forms.Padding($script:Margines, 4, $script:Margines, 8)
+  $p.Visible = $false
+  $root = Pionowy $script:SzerTresc
+  $root.Dock = [System.Windows.Forms.DockStyle]::Top
+  $karta = Nowa-Karta $script:SzerKarty
+  $karta.Padding = New-Object System.Windows.Forms.Padding(28, 22, 28, 22)
+  $szer = $script:SzerKarty - 56
+  $script:LLadowanieTytul = Etykieta "Wczytuję dane" $script:CzTytul $script:KolTekst
+  $script:LLadowanieOpis = Etykieta-Zawijana "" $script:CzZwykla $script:KolSzary $szer
+  $script:LLadowanieOpis.Margin = New-Object System.Windows.Forms.Padding(0, 6, 0, 0)
+  $script:PasekLadowania = New-Object System.Windows.Forms.PictureBox
+  $script:PasekLadowania.Size = New-Object System.Drawing.Size($szer, 8)
+  $script:PasekLadowania.Margin = New-Object System.Windows.Forms.Padding(0, 16, 0, 18)
+  $script:PasekLadowania.Add_Paint({ param($nadawca, $e) Rysuj-Pasek-Ladowania $e.Graphics $nadawca.ClientSize })
+  $script:ListaKrokow = Pionowy $szer
+  $script:LLadowanieStopka = Etykieta-Zawijana "" $script:CzMala $script:KolSzary $szer
+  $script:LLadowanieStopka.Margin = New-Object System.Windows.Forms.Padding(0, 10, 0, 0)
+  $script:BPokazTeraz = New-Object System.Windows.Forms.Button
+  $script:BPokazTeraz.Text = "Pokaż od razu"
+  $script:BPokazTeraz.Font = $script:CzZwykla
+  $script:BPokazTeraz.FlatStyle = [System.Windows.Forms.FlatStyle]::System
+  $script:BPokazTeraz.Size = New-Object System.Drawing.Size(160, 32)
+  $script:BPokazTeraz.Margin = New-Object System.Windows.Forms.Padding(0, 10, 0, 0)
+  $script:BPokazTeraz.Visible = $false
+  $script:BPokazTeraz.Add_Click({
+    try { if ($script:Ladowanie) { $script:Ladowanie.Od_Razu = $true; Sprawdz-Ladowanie } }
+    catch { Zanotuj-Wywrotke "przycisk Pokaz od razu" $_ }
+  })
+  foreach ($c in @($script:LLadowanieTytul, $script:LLadowanieOpis, $script:PasekLadowania, $script:ListaKrokow, $script:LLadowanieStopka, $script:BPokazTeraz)) { $karta.Controls.Add($c) }
+  $root.Controls.Add($karta)
+  $p.Controls.Add($root)
+  return $p
+}
+
+function Rysuj-Pasek-Ladowania($g, $rozmiar) {
+  try {
+    $w = [int]$rozmiar.Width; $h = [int]$rozmiar.Height
+    $tlo = New-Object System.Drawing.SolidBrush($script:KolCc)
+    $pel = New-Object System.Drawing.SolidBrush($script:KolMr)
+    try {
+      $g.FillRectangle($tlo, 0, 0, $w, $h)
+      $g.FillRectangle($pel, 0, 0, [int]($w * [math]::Min(1.0, [math]::Max(0.0, $script:PostepLadowania))), $h)
+    } finally { $tlo.Dispose(); $pel.Dispose() }
+  } catch {
+    if (-not $script:RysowanieZawiodlo) { $script:RysowanieZawiodlo = $true; Zanotuj-Wywrotke "rysowanie paska postepu" $_ }
+  }
+}
+
+function Wiersz-Kroku([string]$id, [int]$szer) {
+  $kol = Pionowy $szer
+  $w = Poziomy
+  $z = Etykieta $ZNAK_CZEKA $script:CzGruba $script:KolSzary
+  $z.AutoSize = $false; $z.Size = New-Object System.Drawing.Size(28, 26); $z.Margin = New-Object System.Windows.Forms.Padding(0)
+  $n = Etykieta $KAWALKI[$id].Napis $script:CzZwykla $script:KolTekst
+  $n.AutoSize = $false; $n.Size = New-Object System.Drawing.Size(($szer - 28 - 250), 26); $n.Margin = New-Object System.Windows.Forms.Padding(0)
+  $n.UseMnemonic = $false
+  $s = Etykieta "" $script:CzZwykla $script:KolSzary
+  $s.AutoSize = $false; $s.Size = New-Object System.Drawing.Size(250, 26); $s.Margin = New-Object System.Windows.Forms.Padding(0)
+  $s.TextAlign = [System.Drawing.ContentAlignment]::TopRight
+  $w.Controls.Add($z); $w.Controls.Add($n); $w.Controls.Add($s)
+  $d = Etykieta-Zawijana "" $script:CzMala $script:KolPilne ($szer - 28)
+  $d.Margin = New-Object System.Windows.Forms.Padding(28, 0, 0, 8)
+  $d.UseMnemonic = $false
+  $d.Visible = $false
+  $kol.Controls.Add($w); $kol.Controls.Add($d)
+  $script:WierszeKrokow[$id] = @{ Znak = $z; Napis = $n; Stan = $s; Szczegol = $d }
+  return $kol
+}
+
+function Pokaz-Ladowanie([string]$widok, $ids, $kroki) {
+  if (-not $script:WidokLadowania -or $script:WidokLadowania.IsDisposed) { return }
+  $script:Ladowanie = [pscustomobject]@{ Widok = $widok; Kawalki = @($ids); Kroki = $kroki; Od = [datetime]::Now; BladOd = $null; Od_Razu = $false }
+  $szer = $script:SzerKarty - 56
+  $script:WidokLadowania.SuspendLayout()
+  try {
+    Wyczysc-Panel $script:ListaKrokow
+    $script:WierszeKrokow = @{}
+    foreach ($id in $ids) { $script:ListaKrokow.Controls.Add((Wiersz-Kroku $id $szer)) }
+    if ($widok -eq "przeglad") {
+      if ((-not $script:DaneCzas) -or ($script:DaneCzas.Date -ne [datetime]::Today) -or (-not $script:Start)) { $o = "Pierwsze otwarcie dziś - liczę wszystko od nowa. Zwykle trwa to kilka sekund." }
+      else { $o = "Części liczb nie ma jeszcze z dzisiaj - liczę je teraz. Zwykle trwa to kilka sekund." }
+    } else {
+      $o = "Zakładka `„$($NAZWY_WIDOKOW[$widok])`” potrzebuje danych, których jeszcze nie ma - zbieram je."
+    }
+    $script:LLadowanieOpis.Text = "$o Okno możesz w tym czasie przesuwać i przełączać zakładki - liczenie idzie w tle."
+    $script:BPokazTeraz.Visible = $false
+    Odmaluj-Kroki
+    $script:WidokLadowania.Visible = $true
+  } finally { $script:WidokLadowania.ResumeLayout($true) }
+  Odmaluj-Podtytul
+}
+
+function Ukryj-Ladowanie {
+  $script:Ladowanie = $null
+  if ($script:WidokLadowania -and -not $script:WidokLadowania.IsDisposed) { $script:WidokLadowania.Visible = $false }
+}
+
+function Ustaw-Tekst($kontrolka, [string]$tekst, $kolor) {
+  if ($kontrolka.Text -ne $tekst) { $kontrolka.Text = $tekst }
+  if ($kolor -and ($kontrolka.ForeColor -ne $kolor)) { $kontrolka.ForeColor = $kolor }
+}
+
+function Sekundy-Ludzko([double]$s) {
+  $pl = [System.Globalization.CultureInfo]::GetCultureInfo("pl-PL")
+  if ($s -lt 10) { return ($s.ToString("0.0", $pl) + " s") }
+  return ([int][math]::Round($s)).ToString() + " s"
+}
+
+# Odmalowanie wierszy - tylko teksty i kolory, bez przebudowy (wolane co 150 ms).
+function Odmaluj-Kroki {
+  $l = $script:Ladowanie
+  if (-not $l) { return }
+  $script:TykKrokow++
+  $teraz = [datetime]::Now
+  $suma = 0.0
+  foreach ($id in $l.Kawalki) {
+    $r = $script:WierszeKrokow[$id]
+    if (-not $r) { continue }
+    $k = $l.Kroki[$id]
+    $szczegol = ""
+    if (-not $k) {
+      $c = Czas-Kawalka $id
+      Ustaw-Tekst $r.Znak $ZNAK_OK $script:KolDobrze
+      Ustaw-Tekst $r.Stan $(if ($c) { "gotowe wcześniej (z $($c.ToString('HH:mm')))" } else { "gotowe" }) $script:KolSzary
+      $suma += 1.0
+    } else {
+      switch ($k.Stan) {
+        "czeka" { Ustaw-Tekst $r.Znak $ZNAK_CZEKA $script:KolSzary; Ustaw-Tekst $r.Stan "czeka na swoją kolej" $script:KolSzary }
+        { ($_ -eq "otwiera") -or ($_ -eq "liczy") } {
+          $s = 0.0; if ($k.Od) { $s = ($teraz - $k.Od).TotalSeconds }
+          Ustaw-Tekst $r.Znak $ZNAKI_LICZY[[int]([math]::Floor($script:TykKrokow / 2)) % 4] $script:KolMr
+          Ustaw-Tekst $r.Stan "liczę... $(Sekundy-Ludzko $s)" $script:KolTekst
+          $zw = [double]$KAWALKI[$id].Zwykle
+          if ($script:CzasyKrokow.ContainsKey($id)) { $zw = [math]::Max(0.5, [double]$script:CzasyKrokow[$id]) }
+          $suma += [math]::Min(0.9, $s / (1.5 * $zw))
+        }
+        "ok" { Ustaw-Tekst $r.Znak $ZNAK_OK $script:KolDobrze; Ustaw-Tekst $r.Stan "gotowe ($(Sekundy-Ludzko (($k.Koniec - $k.Od).TotalSeconds)))" $script:KolSzary; $suma += 1.0 }
+        "uwaga" {
+          Ustaw-Tekst $r.Znak "!" $script:KolUwaga; Ustaw-Tekst $r.Stan "gotowe, ale z uwagą" $script:KolUwaga; $suma += 1.0
+          $szczegol = $k.Powod
+        }
+        "blad" { Ustaw-Tekst $r.Znak $ZNAK_BLAD $script:KolPilne; Ustaw-Tekst $r.Stan "nie udało się" $script:KolPilne; $suma += 1.0; $szczegol = $k.Powod }
+        "czas" { Ustaw-Tekst $r.Znak $ZNAK_BLAD $script:KolPilne; Ustaw-Tekst $r.Stan "przerwane po $($k.Limit) s" $script:KolPilne; $suma += 1.0; $szczegol = $k.Powod }
+      }
+    }
+    if ($szczegol) {
+      $kolS = $script:KolPilne; if ($k.Stan -eq "uwaga") { $kolS = $script:KolUwaga }
+      Ustaw-Tekst $r.Szczegol ((Z-Wielkiej $szczegol).TrimEnd('.') + ".") $kolS
+      if (-not $r.Szczegol.Visible) { $r.Szczegol.Visible = $true }
+    } elseif ($r.Szczegol.Visible) { $r.Szczegol.Visible = $false }
+  }
+  $n = [math]::Max(1, @($l.Kawalki).Count)
+  $p = $suma / $n
+  if ([math]::Abs($p - $script:PostepLadowania) -gt 0.001) { $script:PostepLadowania = $p; $script:PasekLadowania.Invalidate() }
+  if ($l.BladOd) {
+    $zostalo = [int][math]::Max(0.0, [math]::Ceiling([double]$SEKUNDY_PO_BLEDZIE - ($teraz - $l.BladOd).TotalSeconds))
+    Ustaw-Tekst $script:LLadowanieStopka "Nie wszystko się udało - powód stoi przy kroku wyżej. Resztę pokażę za $([math]::Max(0, $zostalo)) s; ten sam powód zostanie w karcie i w zakładce Szczegóły." $script:KolUwaga
+  } else {
+    $lim = ($l.Kawalki | ForEach-Object { $KAWALKI[$_].Limit } | Measure-Object -Maximum).Maximum
+    Ustaw-Tekst $script:LLadowanieStopka "Żaden krok nie liczy się bez końca: najdłużej po $lim s przerywam go i piszę tu, dlaczego." $script:KolSzary
+  }
+}
+
+# Czy ekran ladowania moze zejsc: wszystkie kroki tej zakladki skonczone. Gdy ktorys
+# sie nie udal, ekran stoi jeszcze $SEKUNDY_PO_BLEDZIE s (albo do "Pokaz od razu").
+# Karty buduja sie POD ekranem ladowania i dopiero potem on znika - jedno odmalowanie.
+function Sprawdz-Ladowanie {
+  $l = $script:Ladowanie
+  if (-not $l) { return }
+  Odmaluj-Kroki
+  $zle = $false
+  foreach ($id in $l.Kawalki) {
+    $k = $l.Kroki[$id]
+    if (-not $k) { continue }
+    if (Krok-Trwa $k) { return }
+    if ($k.Stan -ne "ok") { $zle = $true }
+  }
+  if ($zle) {
+    if (-not $l.BladOd) {
+      $l.BladOd = [datetime]::Now
+      $script:BPokazTeraz.Visible = $true
+      Odmaluj-Kroki
+      return
+    }
+    if ((-not $l.Od_Razu) -and ((([datetime]::Now) - $l.BladOd).TotalSeconds -lt $SEKUNDY_PO_BLEDZIE)) { return }
+  }
+  $w = $l.Widok
+  if ($w -eq $script:Widok) { Wyrenderuj-Widok $w }
+  Ukryj-Ladowanie
+  Odmaluj-Podtytul
+}
+
+# Ostatnia deska ratunku: ekran ladowania, ktory stoi dluzej niz najdluzszy limit
+# jego krokow + czas na przeczytanie bledu + 15 s zapasu, zdejmujemy sila - cos
+# poszlo nie tak w samym oknie (np. wywrotka w Obsluz-Kroki przy kazdym tyknieciu).
+# Nie po cichu: wywrotka do dziennika i zolta karta "nie udalo sie przeliczyc".
+function Straznik-Ladowania {
+  $l = $script:Ladowanie
+  if (-not $l) { return }
+  $lim = ($l.Kawalki | ForEach-Object { $KAWALKI[$_].Limit } | Measure-Object -Maximum).Maximum + $SEKUNDY_PO_BLEDZIE + 15
+  $minelo = ([datetime]::Now - $l.Od).TotalSeconds
+  if ($minelo -le $lim) { return }
+  $pw = "ekran ładowania stał ponad $lim s, więc zdjąłem go awaryjnie - część liczb może być niepełna (szczegóły w dzienniku nadzorcy)"
+  Zanotuj-Wywrotke "ekran ladowania" $pw
+  $script:DaneBlad = $pw
+  Ukryj-Ladowanie
+  try { Wyrenderuj-Widok $script:Widok } catch { Zanotuj-Wywrotke "odmalowanie po zdjeciu ekranu ladowania" $_ }
+}
+
+# Ekran pod kursorem - tam jest ikona, ktora wlasnie kliknieto.
+function Obszar-Okna {
+  try { return [System.Windows.Forms.Screen]::FromPoint([System.Windows.Forms.Cursor]::Position).WorkingArea }
+  catch { Zanotuj-Wywrotke "ekran pod kursorem" $_; return [System.Windows.Forms.Screen]::PrimaryScreen.WorkingArea }
 }
 
 # --- budowa okna -------------------------------------------------------------
@@ -3472,8 +4142,7 @@ function Pokaz-Okno {
     $script:Okno.WindowState = [System.Windows.Forms.FormWindowState]::Normal
     $script:Okno.Show()
     Wymus-Pokazanie $script:Okno
-    Odmaluj-Okno
-    Zaplanuj-Przeliczenie
+    Wejdz-Do-Widoku $script:Widok
     return
   }
 
@@ -3481,8 +4150,22 @@ function Pokaz-Okno {
   $f.Text = "MegaRuchacz"
   $f.FormBorderStyle = [System.Windows.Forms.FormBorderStyle]::FixedSingle
   $f.MaximizeBox = $false
+  # STALY ROZMIAR OD PIERWSZEJ CHWILI (P21): wysokosc z ekranu, raz - okno nie
+  # rosnie ani nie skacze w miare dochodzenia danych. Polozenie: tam, gdzie
+  # uzytkownik zostawil okno ostatnio (gdy nadal miesci sie na ktoryms ekranie),
+  # inaczej srodek ekranu pod kursorem.
+  $obszar = Obszar-Okna
   $f.ClientSize = New-Object System.Drawing.Size($script:SzerOkna, 720)
-  $f.StartPosition = [System.Windows.Forms.FormStartPosition]::CenterScreen
+  $f.Height = [int][math]::Min($WYS_OKNA_MAX, $obszar.Height - 40)
+  $f.StartPosition = [System.Windows.Forms.FormStartPosition]::Manual
+  $poz = New-Object System.Drawing.Point(($obszar.Left + [int](($obszar.Width - $f.Width) / 2)), ($obszar.Top + [int](($obszar.Height - $f.Height) / 2)))
+  if ($script:PolozenieOkna) {
+    $prost = New-Object System.Drawing.Rectangle($script:PolozenieOkna, $f.Size)
+    foreach ($ekran in [System.Windows.Forms.Screen]::AllScreens) {
+      if ($ekran.WorkingArea.Contains($prost)) { $poz = $script:PolozenieOkna; break }
+    }
+  }
+  $f.Location = $poz
   $f.BackColor = $script:TloOkna
   $f.Font = $script:CzZwykla
   try { $f.Icon = Ikona-Nadzorcy } catch { Zanotuj-Wywrotke "ikona okna" $_ }
@@ -3805,15 +4488,31 @@ function Pokaz-Okno {
   $script:WidokSkille.Controls.Add($cialoS)
   $script:WidokSkille.Controls.Add($goraS)
 
+  # Ekran ladowania (P21) - ten sam obszar co zakladki, dodany PIERWSZY, wiec lezy
+  # na wierzchu wszystkich widokow i zaslania je, dopoki zakladka nie ma kompletu.
+  $script:WidokLadowania = Zbuduj-Ladowanie
+
   # Kolejnosc dodawania ma znaczenie: WinForms dokuje od ostatnio dodanej
   # kontrolki, wiec wypelniajace widoki ida PIERWSZE, a naglowek i pasek po nich.
+  $f.Controls.Add($script:WidokLadowania)
   $f.Controls.Add($script:WidokSkille)
   $f.Controls.Add($script:WidokWarstwy)
   $f.Controls.Add($script:WidokSzczegoly)
   $f.Controls.Add($script:WidokPrzeglad)
   $f.Controls.Add($script:Naglowek)
   $f.Controls.Add($script:Pasek)
+  # Polozenie zapamietane do nastepnego otwarcia - okno staje tam, gdzie je zostawiono.
+  $f.Add_FormClosing({
+    try { if ($script:Okno.WindowState -eq [System.Windows.Forms.FormWindowState]::Normal) { $script:PolozenieOkna = $script:Okno.Location } }
+    catch { Zanotuj-Wywrotke "zapamietanie polozenia okna" $_ }
+  })
   $f.Add_FormClosed({
+    # Dane (DaneWarstw, DaneSkilli, Rozbicie...) zostaja - to nie kontrolki. Drugie
+    # otwarcie tego samego dnia pokazuje je od razu (P21); swiezosc pilnuja kawalki.
+    $script:Ladowanie = $null; $script:WidokLadowania = $null; $script:ListaKrokow = $null; $script:WierszeKrokow = @{}
+    $script:PasekLadowania = $null; $script:LLadowanieTytul = $null; $script:LLadowanieOpis = $null
+    $script:LLadowanieStopka = $null; $script:BPokazTeraz = $null
+    foreach ($w in @($script:DoOdmalowania.Keys)) { $script:DoOdmalowania[$w] = $true }
     $script:Okno = $null; $script:Root = $null; $script:Naglowek = $null
     $script:WidokPrzeglad = $null; $script:WidokSzczegoly = $null
     $script:LPodtytul = $null; $script:PanelProblemy = $null; $script:PanelLiczby = $null
@@ -3824,12 +4523,12 @@ function Pokaz-Okno {
     $script:BCykl = $null; $script:LCykl = $null
     $script:PanelZmian = $null; $script:LinkZmian = $null
     $script:BWarstwy = $null; $script:WidokWarstwy = $null; $script:LWarstwy = $null
-    $script:ListaWarstw = $null; $script:PodgladWarstwy = $null; $script:DaneWarstw = $null
+    $script:ListaWarstw = $null; $script:PodgladWarstwy = $null
     if ($script:ZegarSkilli) { $script:ZegarSkilli.Stop() }
     $script:BSkille = $null; $script:WidokSkille = $null; $script:LSkille = $null; $script:BSkilleTeraz = $null
     $script:ListaSkilli = $null; $script:SkilleInfo = $null; $script:SkillePrzyciski = $null; $script:SkillePodglad = $null
     $script:BSkillInstaluj = $null; $script:BSkillAktualizuj = $null; $script:BSkillCofnij = $null; $script:BSkillUsun = $null
-    $script:DaneSkilli = $null; $script:WierszeSkilli = @{}; $script:SkilleOperacjaOd = $null
+    $script:WierszeSkilli = @{}; $script:SkilleOperacjaOd = $null; $script:SkillePoOperacji = $null
     $script:GrupySkilli = @{}; $script:NaglowkiGrup = @{}; $script:ZnacznikiGrup = @{}
     $script:Widok = "przeglad"
     $script:SzczegolyZajete = $false
@@ -3944,9 +4643,11 @@ function Pokaz-Okno {
       "To jest odpowiedź na kliknięcie, nie zwykła zawartość szczegółów. Kliknij [Przegląd], żeby wrócić do liczb.")) $null)
     $script:Okno.Refresh()
     $script:BAktualizuj.Enabled = $true
-    $script:Rozbicie = $null
-    Odswiez-Dane
-    Odmaluj-Okno
+    # Po pobraniu nowszej wersji liczby licza sie od nowa w tle (P21); rozbicie
+    # i warstwy moga byc juz z innego kodu - przy wejsciu w zakladke licza sie od nowa.
+    $script:StanKawalkow["rozbicie"].Czas = $null
+    $script:StanKawalkow["warstwy"].Czas = $null
+    [void](Przelicz-W-Tle)
   })
 
   # JEDYNY przycisk w tym oknie, ktory wydaje tokeny - i dlatego jedyny, ktory
@@ -4016,11 +4717,21 @@ function Pokaz-Okno {
   $bZamknij.Add_Click({ $script:Okno.Close() })
 
   $script:Okno = $f
-  Pokaz-Widok "przeglad"
+  # Tresc (karty albo ekran ladowania) sklada sie PRZED pokazaniem okna - pierwsze
+  # odmalowanie jest od razu docelowe, bez pustych kart (P21).
+  $script:Widok = "przeglad"
+  Styl-Przelacznika $script:BPrzeglad $true
+  Styl-Przelacznika $script:BSzczegoly $false
+  Styl-Przelacznika $script:BWarstwy $false
+  Styl-Przelacznika $script:BSkille $false
+  Odmaluj-Przyciski
+  # Watki do liczenia otwieraja sie dopiero PO pokazaniu okna - okno ma stanac
+  # na ekranie jak najszybciej, a kroki i tak juz stoja na liscie jako "czeka".
+  $script:PrzydzialPoPokazaniu = $true
+  try { Wejdz-Do-Widoku "przeglad" $true } finally { $script:PrzydzialPoPokazaniu = $false }
   $f.Show()
   Wymus-Pokazanie $f
-  Odmaluj-Okno
-  Zaplanuj-Przeliczenie
+  Obsluz-Kroki
 }
 
 # ----------------------------------------------------------------- ikona i menu
@@ -4071,17 +4782,16 @@ $menu.Items.Add((Nowa-Pozycja "Otwórz okno MegaRuchacza" { Pokaz-Okno })) | Out
 # menu nazwana "przelicz liczby" nie ma prawa wydac ani jednego tokena.
 $menu.Items.Add((Nowa-Pozycja "Przelicz liczby teraz (nic nie kosztuje)" {
   try {
-    $d = Zbierz-Wszystko $true $true
-    $script:Dane = $d
-    $script:DaneCzas = [datetime]::Now
-    $script:DaneBlad = $null
-    $script:Rozbicie = $null
-    try { $script:Start = Pomiar-Startu }
-    catch { Zanotuj-Wywrotke "pomiar otwarcia okna rozmowy" $_; $script:Start = [pscustomobject]@{ Powod = "pomiar się wywrócił: $($_.Exception.Message)"; MrSesja = $null } }
-    Odswiez-Zuzycie
-    $script:Ikona.Text = Podpowiedz $d
-    Odmaluj-Okno
-    Pokaz-Dymek "MegaRuchacz: przeliczone" "Liczby sa swieze. Kliknij ikone, zeby je zobaczyc."
+    # P21: w tle - ikona i otwarte okno nie staja na czas liczenia.
+    $k = Przelicz-W-Tle 'Zbierz-Wszystko $true $true'
+    $script:StanKawalkow["rozbicie"].Czas = $null
+    if (-not $k.Po) {
+      $k.Po = {
+        param($k)
+        if (($k.Stan -eq "ok") -or ($k.Stan -eq "uwaga")) { Pokaz-Dymek "MegaRuchacz: przeliczone" "Liczby sa swieze. Kliknij ikone, zeby je zobaczyc." }
+        else { Pokaz-Dymek "MegaRuchacz: nie przeliczylem" "Nie udalo sie przeliczyc liczb: $($k.Powod)" }
+      }
+    }
   } catch {
     Zanotuj-Wywrotke "reczne przeliczenie z menu" $_
     Pokaz-Dymek "MegaRuchacz: nie przeliczylem" "Nie udalo sie przeliczyc liczb: $($_.Exception.Message)"
@@ -4113,16 +4823,10 @@ $script:Zegar.Add_Tick({
   }
   try {
     # $zSieci = $true: po nowsza wersje zaglada dozor, bo tu nikt nie czeka
-    # przed ekranem. Okno dostaje gotowa odpowiedz i otwiera sie od razu.
-    $d = Dozor $script:Dymek $true $true
-    $script:Dane = $d
-    $script:DaneCzas = [datetime]::Now
-    $script:DaneBlad = $null
-    $script:Rozbicie = $null
-    $script:Ikona.Text = Podpowiedz $d
-    # Otwarte okno ma sie odswiezyc samo - uzytkownik nie ma go zamykac
-    # i otwierac po to, zeby zobaczyc nowe liczby.
-    Odmaluj-Okno
+    # przed ekranem. Od P21 dane licza sie w watku w tle (git fetch potrafi trwac
+    # do 25 s, a otwarte okno ani ikona nie maja wtedy stawac); decyzje, alarmy
+    # i odmalowanie otwartego okna - w Po-Dozorze, gdy dane przyjda.
+    Rusz-Dozor
   } catch { Zanotuj-Wywrotke "przebieg dozoru" $_ }
 })
 $script:Zegar.Start()
