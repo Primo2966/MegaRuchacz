@@ -499,6 +499,17 @@ sie w KAZDYM projekcie Claude Code na tej maszynie, nie tylko w `claude-worker`.
   `zrodla.md`, `kandydaci.md` i pliki stanu `.cykl-*`, `.archiwum-stan.json`, `.wiedza-stan.txt`
   itd.) - STALE dane referencyjne, czytane tylko gdy rozmowa ich dotyczy (odsylacze w sekcji
   "Dane referencyjne" globalnego CLAUDE.md). Pisze automat cyklu + czlowiek recznie.
+  Od 0.22.2: KAZDY plik `*.md` z wiedza ma odsylacz w "### Dane referencyjne" (format
+  `- \`wiedza/<plik>\` — <opis>`); nie ma pliku-worka `do-nazwania.md`. Zestawienie
+  ("referencyjna") idzie do pliku nazwanego przez model (`lore\lore\facts.py`: schemat
+  `FACTS_SCHEMA` wymaga `plik`, `with_known_files()` dokleja liste istniejacych plikow) albo
+  do nazwy z tresci (`name_from_text`); bez nazwy -> zostaje w "Biezace" + UWAGA w stanie.
+  Nowy plik + odsylacz zapisuje razem `lore\lore\verify.py` (`place_references`, wycofanie
+  przy bledzie: `undo_references`); straznik kompletnosci `ensure_pointers` w kazdym cyklu,
+  plus meldunek przy starcie okna `Zglos-Odsylacze` w `narzedzia\straznik-zasad.ps1`.
+  Pliki techniczne bez odsylacza: `facts.TECHNICAL_FILES` (kandydaci, zrodla, historia-zmian,
+  uspione, README) i pliki z kropka. Klucze stanu w `.wiedza-stan.txt`: `nowe_pliki_wiedzy`,
+  `odsylacze_dopisane`, `bez_odsylacza`, `bez_nazwy_pliku`, `bez_miejsca_na_odsylacz`.
 - Lore przez narzedzia MCP `lore_search` / `lore_context` - wywolywane przez model NA ZADANIE
   (instrukcja: jedno wyszukanie na start niebanalnego zadania). Baza:
   `C:\Users\<uzytkownik>\.claude\lore.db` (SQLite, ~425 MB), obejmuje transkrypty wszystkich sesji

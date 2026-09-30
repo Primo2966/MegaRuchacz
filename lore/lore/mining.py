@@ -245,7 +245,7 @@ def ask_model(text: str) -> str:
     Which agent CLI the machine has is decided there, once, so a Codex-only machine digs through the
     archive as well; the only thing this job changes is the instruction.
     """
-    return facts.ask_model(text, instruction=PROMPT)
+    return facts.ask_model(text, instruction=facts.with_known_files(PROMPT))
 
 
 # ---------------------------------------------------------------- the whole run

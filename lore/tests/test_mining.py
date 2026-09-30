@@ -393,7 +393,7 @@ def test_with_claude_alone_the_mining_instruction_goes_to_claude(unforced, calle
     monkeypatch.setattr(facts.shutil, "which", installed("claude"))
 
     assert mining.ask_model("material") == "odpowiedz"
-    assert called["argv"] == ["/bin/claude", *facts.MODEL_ARGS, mining.PROMPT]
+    assert called["argv"] == ["/bin/claude", *facts.MODEL_ARGS, facts.with_known_files(mining.PROMPT)]
     assert called["stdin"] == "material"  # the instruction is the dig's own, not the daily one
 
 
@@ -406,7 +406,7 @@ def test_with_codex_alone_the_dig_still_has_a_model(unforced, called, monkeypatc
     answer_file = called["argv"][called["argv"].index("--output-last-message") + 1]
     assert called["argv"] == ["/bin/codex",
                               *(answer_file if a == facts.ANSWER_SLOT else a for a in facts.CODEX_ARGS)]
-    assert called["stdin"] == f"{mining.PROMPT}\n\nmaterial"  # codex exec takes one prompt
+    assert called["stdin"] == f"{facts.with_known_files(mining.PROMPT)}\n\nmaterial"  # one prompt
 
 
 def test_with_no_tool_at_all_the_error_says_what_was_looked_for(unforced, monkeypatch):

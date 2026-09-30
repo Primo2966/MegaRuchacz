@@ -487,12 +487,58 @@ def test_a_reference_fact_gets_a_file_name_and_a_pointer_line(one_chunk):
     assert [f.file for f in facts.waiting_facts()] == ["struktura-sku.md"]  # and it survives a re-read
 
 
-def test_a_reference_fact_without_a_name_still_gets_one(one_chunk):
+def test_a_reference_fact_without_a_name_gets_one_made_of_its_text(one_chunk):
     facts.run(ask=sorted_answer({"tresc": "Warianty pojemności: 10, 30, 50, 100 ml.",
                                  "warstwa": "referencyjna"}), conn=one_chunk.conn)
 
-    assert labels(facts.CANDIDATES_PATH) == [f"referencyjna:{facts.UNNAMED_FILE}"]
-    assert f"      odsyłacz: Szczegóły w ~/.claude/wiedza/{facts.UNNAMED_FILE}" in written(facts.CANDIDATES_PATH)
+    # never a sack file: the name is derived from the words of the fact itself
+    assert labels(facts.CANDIDATES_PATH) == ["referencyjna:warianty-pojemnosci.md"]
+    assert "do-nazwania" not in written(facts.CANDIDATES_PATH)
+
+
+@pytest.mark.parametrize("given", ["", "do-nazwania.md", "inne.md", "kandydaci.md", "zrodla.md",
+                                   "123.md", "---", "C:\\x\\notatki.md"])
+def test_a_name_that_says_nothing_is_refused_and_replaced_by_one_from_the_text(one_chunk, given):
+    facts.run(ask=sorted_answer({"tresc": "Konto Tailscale: Przyklad2966.", "warstwa": "referencyjna",
+                                 "plik": given, "odsylacz": "Konto Tailscale"}), conn=one_chunk.conn)
+
+    assert labels(facts.CANDIDATES_PATH) == ["referencyjna:konto-tailscale-przyklad.md"]
+
+
+def test_a_reference_fact_with_no_word_to_name_it_by_keeps_no_file(one_chunk):
+    facts.run(ask=sorted_answer({"tresc": "OL-100, OL-200, 1L, 5L, 10 ml.", "warstwa": "referencyjna"}),
+              conn=one_chunk.conn)
+
+    # no file name at all — lore.verify leaves such a fact in the current layer and reports it
+    assert labels(facts.CANDIDATES_PATH) == ["referencyjna:"]
+    assert [f.file for f in facts.waiting_facts()] == [""]
+
+
+def test_a_path_or_polish_letters_in_the_name_are_tidied_not_refused():
+    assert facts.file_name("~/.claude/wiedza/Sprawy odblokowania ASIN.md") == "sprawy-odblokowania-asin.md"
+    assert facts.file_name("łączenia-ssh") == "laczenia-ssh.md"
+
+
+def test_the_schema_demands_a_file_name_for_a_listing():
+    schema = json.loads(facts.FACTS_SCHEMA)
+    shapes = schema["properties"]["fakty"]["items"]["anyOf"]
+    listing = next(s for s in shapes if s["properties"]["warstwa"]["enum"] == ["referencyjna"])
+    assert {"plik", "odsylacz"} <= set(listing["required"])
+    assert listing["properties"]["plik"]["pattern"] == facts.FILE_PATTERN
+    assert all("plik" not in s["properties"] for s in shapes if s is not listing)
+
+
+def test_the_model_is_shown_the_files_already_there(one_chunk):
+    facts.KNOWLEDGE_DIR.mkdir(parents=True, exist_ok=True)
+    (facts.KNOWLEDGE_DIR / "polaczenia-ssh.md").write_text("# SSH przez Tailscale\n", encoding="utf-8")
+    (facts.KNOWLEDGE_DIR / "kandydaci.md").write_text("# Kandydaci\n", encoding="utf-8")
+    facts.RULES_PATH.write_text("## Co wiem\n\n### Dane referencyjne\n\n"
+                                "- `wiedza/polaczenia-ssh.md` — SSH biuro-dom\n", encoding="utf-8")
+
+    prompt = facts.with_known_files(facts.HARVEST_PROMPT)
+
+    assert "- polaczenia-ssh.md — SSH biuro-dom" in prompt  # the description from the pointer
+    assert "kandydaci.md" not in prompt.split(facts.KNOWN_FILES_NOTE)[1]  # machinery is not a target
 
 
 def test_a_missing_or_made_up_layer_falls_back_to_the_safest_shelf(one_chunk):

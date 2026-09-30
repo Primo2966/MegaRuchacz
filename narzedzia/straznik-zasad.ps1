@@ -2733,6 +2733,30 @@ try {
     Write-Host "MegaRuchacz: $ile $slowo na Twoja decyzje - powiedz 'pokaz fakty', zeby je przejrzec."
   }
 
+  # Kazdy plik z wiedza w ~\.claude\wiedza ma miec odsylacz w "### Dane referencyjne" - inaczej
+  # agent nie wie, ze plik istnieje (decyzja uzytkownika 2026-09-30). Dopisuje go sam cykl Lore
+  # (lore.verify.ensure_pointers); tu tylko mowimy glosno, gdy ktoregos brakuje, bo cykl chodzi
+  # raz na dobe, a plik mogl przybyc recznie. Cisza = wszystkie maja odsylacz. Pliki techniczne
+  # (bez odsylacza z zalozenia) - ta sama lista co TECHNICAL_FILES w lore\lore\facts.py.
+  function Zglos-Odsylacze {
+    $katalog = Join-Path $KatalogDomowy ".claude\wiedza"
+    $zasady  = Join-Path $KatalogDomowy ".claude\CLAUDE.md"
+    if (-not (Test-Path $katalog) -or -not (Test-Path $zasady)) { return }
+    $techniczne = @("kandydaci.md", "zrodla.md", "historia-zmian.md", "uspione.md", "README.md")
+    $tekst = Czytaj-Tekst $zasady
+    if ($null -eq $tekst) { throw "nie da sie przeczytac $zasady" }
+    $m = [regex]::Match($tekst, '(?ms)^###\s+Dane referencyjne[^\r\n]*$(.*?)(?=^#|^<!-- MegaRuchacz:|\z)')
+    $sekcja = if ($m.Success) { $m.Groups[1].Value } else { "" }
+    $brak = @()
+    foreach ($plik in @(Get-ChildItem -LiteralPath $katalog -Filter "*.md" -File)) {
+      if ($plik.Extension -ne ".md" -or $plik.Name.StartsWith(".") -or $techniczne -contains $plik.Name) { continue }
+      if ($sekcja -notmatch ('`wiedza[/\\]' + [regex]::Escape($plik.Name) + '`')) { $brak += $plik.Name }
+    }
+    if ($brak.Count -eq 0) { return }
+    Write-Host ("MegaRuchacz: pliki wiedzy bez odsylacza w 'Dane referencyjne': " + ($brak -join ", ") +
+      " - agent o nich nie wie. Najblizszy cykl Lore dopisze odsylacz sam, a jesli nie da rady, powie dlaczego.")
+  }
+
   # Jedna linia o dziennym cyklu pamieci (cykl-dzienny.ps1) - i tylko wtedy, gdy cos
   # wymaga uwagi: cykl sie nie udal albo zostala zaleglosc. Przy czystym stanie cisza,
   # tak jak reszta straznika. O koszcie pamieci nie ma tu ani slowa: to osobna linia,
@@ -2772,6 +2796,7 @@ try {
   try { Pilnuj-Przypomnienia-Zawsze } catch { Zanotuj-Wywrotke "podmiana starego hooka przypomnienia" $_ }
   try { Pilnuj-Wersji }    catch { Zanotuj-Wywrotke "pilnowanie wersji wdrozenia" $_ }
   try { Zglos-Kandydatow } catch { Zanotuj-Wywrotke "poczekalnia faktow" $_ }
+  try { Zglos-Odsylacze }  catch { Zanotuj-Wywrotke "odsylacze plikow wiedzy" $_ }
   try { Zglos-Cykl }       catch { Zanotuj-Wywrotke "meldunek o cyklu" $_ }
   # Wywrotki z przebiegow bez widowni i cisza po stronie Codeksa - tu jest
   # jedyne miejsce, w ktorym maja szanse dotrzec do czlowieka.

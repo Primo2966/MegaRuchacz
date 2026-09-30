@@ -68,7 +68,8 @@ from pathlib import Path
 
 from .db import CLAUDE_HOME, log
 from .facts import (DORMANT_NAME, PENDING_NOTE, SESSIONS_FIELD, SIGHTED, SIGHTED_AGAIN,
-                    SOURCES_HEADER, SOURCES_NAME, dormant_entry, normalize)
+                    SOURCES_HEADER, SOURCES_NAME, TECHNICAL_FILES, describe_file, dormant_entry,
+                    file_name, name_from_text, normalize, pointers_in)
 
 KNOWLEDGE_DIR = CLAUDE_HOME / "wiedza"
 CANDIDATES_PATH = KNOWLEDGE_DIR / "kandydaci.md"
@@ -1441,28 +1442,167 @@ REFERENCE_HEADER = """# {name}
 Zestawienie wyłowione z rozmów. W trwałej wiedzy stoi w jego miejsce jedna linia odsyłacza —
 ten plik czytamy tylko wtedy, gdy rozmowa go dotyczy.
 """
+# How long the description of a pointer made out of the text of a fact may get — a pointer is one
+# line of the durable layer, paid for in every session; ~100 characters is what the pointers the
+# user wrote by hand take (measured on the real "Dane referencyjne", 2026-09-30: 60-150).
+POINTER_TEXT_LIMIT = 90
+_PATH_IN_POINTER = re.compile(r"(?:szczeg[oó][lł]y\s+w\s+)?`?(?:~?[/\\]?\.claude[/\\])?wiedza[/\\][^\s`]*`?",
+                              re.IGNORECASE)
+_POINTER_LEAD = re.compile(r"(?:\s*[—–:-]\s*|\s+)(?:w|we|patrz|zob\.?|szczeg[oó][lł]y\s+w)?\s*$",
+                           re.IGNORECASE)
 
 
-def write_reference(candidate: Candidate, day: str | None = None) -> str | None:
-    """The listing itself, put away in wiedza/<plik>; returns the path when something was written.
+def reference_name(candidate: Candidate) -> str:
+    """The file a listing goes to: the name it came with when that is a real name, otherwise one
+    derived from its text; '' when there is no sensible name at all — then no file is made."""
+    return file_name(candidate.detail) or name_from_text(candidate.text)
+
+
+def pointer_line(name: str, description: str) -> str:
+    """The pointer in the shape of the ones the user wrote by hand."""
+    return f"- `wiedza/{name}` — {description}"
+
+
+def pointer_description(pointer: str, text: str) -> str:
+    """What the pointer says about the file: the model's line without the path in it (the path is
+    in front of it already), or the start of the fact itself when the model gave nothing."""
+    what = " ".join(_PATH_IN_POINTER.sub("", pointer or "").split())
+    # "Budowa SKU — w <path>": with the path gone, the "— w" that led to it goes as well
+    what = _POINTER_LEAD.sub("", what).strip(" —–-:;,.")
+    if not what:
+        what = " ".join(text.split()).rstrip(".")
+    if len(what) > POINTER_TEXT_LIMIT:
+        what = what[:POINTER_TEXT_LIMIT - 1].rstrip() + "…"
+    return what
+
+
+def add_pointer(lines: list[str], line: str) -> list[str]:
+    """The pointer at the end of "### Dane referencyjne" (the subsection is made when missing)."""
+    bounds = section_bounds(lines)
+    if bounds is None:
+        return lines
+    start, end = bounds
+    return lines[:start] + insert_entry(lines[start:end], [line], REFERENCE_SUBSECTION) + lines[end:]
+
+
+def knowledge_files() -> list[Path]:
+    """The files of wiedza\\ that hold knowledge and so need a pointer (see facts.TECHNICAL_FILES)."""
+    try:
+        found = sorted(KNOWLEDGE_DIR.glob("*.md"))
+    except OSError:
+        return []
+    return [p for p in found if p.is_file() and not p.name.startswith(".")
+            and p.name not in TECHNICAL_FILES]
+
+
+def ensure_pointers(ws: "Workspace", writable: list[Path], room: int | None
+                    ) -> tuple[list[str], list[tuple[str, str]], int | None]:
+    """The completeness guard: every knowledge file has its pointer in "Dane referencyjne" of every
+    instruction file that has the section. A missing one is written, described by the file's own
+    heading (or its first line); one that cannot be — nothing to describe it with, or no room under
+    the ceiling — is returned with the reason, to be reported, never passed over in silence.
+
+    Returns (names that got a pointer, [(name, why not)], the room left).
+    """
+    added, missing = [], []
+    for path in knowledge_files():
+        lacking = [p for p in writable if path.name not in pointers_in(ws.lines[p])]
+        if not lacking:
+            continue
+        what = describe_file(path, POINTER_TEXT_LIMIT)
+        if not what:
+            missing.append((path.name, "plik nie ma naglowka ani tresci, z ktorej da sie opisac odsylacz"))
+            continue
+        line = pointer_line(path.name, what)
+        if room is not None and len(line) + 1 > room:
+            missing.append((path.name, f"odsylacz nie miesci sie w progu {STABLE_LIMIT} znakow warstwy stalej"))
+            continue
+        for p in lacking:
+            ws.lines[p] = add_pointer(ws.lines[p], line)
+        if room is not None:
+            room -= len(line) + 1
+        added.append(path.name)
+    return added, missing, room
+
+
+def write_reference(name: str, text: str, day: str | None = None) -> tuple[Path | None, str | None]:
+    """The listing itself, put away in wiedza/<name>. Returns (the file, its text before): the file
+    is None when the listing already stood there; the text is None when the file is new — which is
+    what undo_references needs to take the write back.
 
     Written once per run, not once per instruction file: the pointer belongs to every tool, the
     listing belongs to the disk.
     """
-    name = candidate.detail or "do-nazwania.md"
     target = KNOWLEDGE_DIR / Path(name).name  # never outside the knowledge directory
-    key = normalize(candidate.text)
+    key = normalize(text)
     existing = _read(target)
     if existing is not None:
         if key in {normalize(_entry_text(line)) for line in existing.splitlines()}:
-            return None
+            return None, existing
         backup_file(target, day)
     KNOWLEDGE_DIR.mkdir(parents=True, exist_ok=True)
     with open(target, "a", encoding="utf-8", newline="\n") as f:
         if existing is None:
             f.write(REFERENCE_HEADER.format(name=target.stem))
-        f.write(f"\n- {candidate.text}\n")
-    return str(target)
+        f.write(f"\n- {text}\n")
+    return target, existing
+
+
+def _demote(candidate: Candidate) -> None:
+    """A listing that gets no file stays in the current layer as itself — visible, ageing out like
+    any other entry, never lost and never put into a sack file."""
+    candidate.layer, candidate.detail, candidate.pointer = "biezaca", "", ""
+
+
+def place_references(ws: "Workspace", writable: list[Path], approved: list[Candidate],
+                     room: int | None, out: dict) -> tuple[list[tuple[Candidate, str, bool]], int | None]:
+    """Decides, in memory, where each listing goes: (candidate, file, new?). A new file gets its
+    pointer in "Dane referencyjne" right here — in the same pass that decides to make it — so that
+    there never is a file without one. The files themselves are written later, by run()."""
+    placed: list[tuple[Candidate, str, bool]] = []
+    made: set[str] = set()
+    for c in approved:
+        if c.layer != "referencyjna":
+            continue
+        name = reference_name(c)
+        if not name:
+            out["unnamed"].append(c.text)
+            _demote(c)
+            continue
+        new = name not in made and not (KNOWLEDGE_DIR / name).is_file()
+        if new:
+            line = pointer_line(name, pointer_description(c.pointer, c.text))
+            if room is not None and len(line) + 1 > room:
+                out["no_room"].append(c.text)
+                _demote(c)
+                continue
+            for p in writable:
+                if name not in pointers_in(ws.lines[p]):
+                    ws.lines[p] = add_pointer(ws.lines[p], line)
+            if room is not None:
+                room -= len(line) + 1
+            made.add(name)
+            out["new_files"].append(name)
+        c.detail = name
+        placed.append((c, name, new))
+    return placed, room
+
+
+def undo_references(written: list[tuple[Path, str | None]]) -> list[str]:
+    """Takes the listings of a failed run back: a new file goes away, a grown one gets its old text
+    back — so that no file stays in wiedza\\ without its pointer. Returns what could not be undone."""
+    left = []
+    for target, before in reversed(written):
+        try:
+            if before is None:
+                target.unlink()
+            else:
+                with open(target, "w", encoding="utf-8", newline="") as f:
+                    f.write(before)
+        except OSError as e:
+            left.append(f"{target}: {e}")
+            log(f"ALARM: {target} could not be taken back after the failed write: {e}")
+    return left
 
 
 # ---------------------------------------------------------------- where a fact came from
@@ -1505,6 +1645,16 @@ def note_source(candidate: Candidate, files: list[Path], day: str) -> None:
     if candidate.layer == "referencyjna":
         origin += f"; odsyłacz: {candidate.shown.replace('|', '/')}"
     _note(f"- {day} | {WRITTEN} | biezaca -> {_where(files)} | {origin} | {candidate.text}\n",
+          candidate.text)
+
+
+def note_reference(candidate: Candidate, name: str, new: bool, day: str) -> None:
+    """One line: the listing went to its file — a new one (with its pointer) or one already there.
+    'referencyjna ->' on purpose: read_trail takes only 'biezaca' and 'stala' writes as the
+    automaton's entries of the rules, and a listing never stands in the rules."""
+    origin = f"wyłowiony {candidate.day}" if candidate.day else "wyłowiony kiedyś (wpis bez daty)"
+    origin += "; nowy plik z odsyłaczem" if new else "; dopisany do istniejącego pliku"
+    _note(f"- {day} | {WRITTEN} | referencyjna -> wiedza/{name} | {origin} | {candidate.text}\n",
           candidate.text)
 
 
@@ -1817,6 +1967,15 @@ def _state(r: dict, day: str) -> dict[str, str]:
         "przestaly_sie_potwierdzac": str(len(r["stale"])),
         "pliki": str(len(r["files"])),
         "kopie": str(len(r["backups"])),
+        # the files of wiedza\: made in this run (each together with its pointer), pointers the
+        # completeness guard wrote for files that had none, and what could not get one
+        "nowe_pliki_wiedzy": ", ".join(r["new_files"]) or "0",
+        "odsylacze_dopisane": ", ".join(r["pointers_added"]) or "0",
+        "bez_odsylacza": ", ".join(name for name, _ in r["unpointed"]) or "0",
+        # listings that got no file: no sensible name, or no room for their pointer — they stay
+        # in the current layer instead
+        "bez_nazwy_pliku": str(len(r["unnamed"])),
+        "bez_miejsca_na_odsylacz": str(len(r["no_room"])),
         "powod": r["powod"],
     }
 
@@ -1829,6 +1988,27 @@ def _reason(r: dict) -> str:
     """
     if r.get("note"):
         return r["note"]
+    # what went wrong with the files of wiedza\ goes FIRST: the start of the line is what survives
+    # when it is cut to fit somewhere
+    alarms = []
+    if r["unpointed"]:
+        alarms.append(f"UWAGA: {len(r['unpointed'])} plikow wiedzy bez odsylacza ("
+                      + ", ".join(f"{name}: {why}" for name, why in r["unpointed"]) + ")")
+    if r["unnamed"]:
+        alarms.append(f"UWAGA: {len(r['unnamed'])} zestawien bez sensownej nazwy pliku - zostaly"
+                      f" w biezacej, pliku nie zalozono")
+    if r["no_room"]:
+        alarms.append(f"UWAGA: {len(r['no_room'])} zestawien bez miejsca na odsylacz (prog"
+                      f" {STABLE_LIMIT} znakow) - zostaly w biezacej, pliku nie zalozono")
+    reason = _plain_reason(r)
+    if r["new_files"]:
+        reason += f"; nowe pliki wiedzy z odsylaczem: {', '.join(r['new_files'])}"
+    if r["pointers_added"]:
+        reason += f"; dopisane brakujace odsylacze: {', '.join(r['pointers_added'])}"
+    return "; ".join(alarms + [reason])
+
+
+def _plain_reason(r: dict) -> str:
     entered, promoted = len(r["entered"]), len(r["promoted"])
     tail = []
     if r["deferred"]:
@@ -1856,6 +2036,8 @@ def _reason(r: dict) -> str:
         return "nic nie doszlo: " + ", ".join(held)
     if r["waiting"]:
         return f"nic nie doszlo: {r['waiting']} wpisow zostalo w poczekalni"
+    if r["references"]:
+        return f"do biezacej nic nie doszlo; zestawienia odlozone do plikow: {len(r['references'])}"
     return "nic nie doszlo: w poczekalni nie bylo nowych faktow"
 
 
@@ -1887,7 +2069,8 @@ def run(dry_run: bool = False, exists=None, day: str | None = None) -> dict:
            "healed": [], "backups": [], "files": [], "added": {}, "entered": [], "promoted": [],
            "expired": [], "own_old": [], "references": [], "stable_chars": 0, "compared": 0,
            "replaced": [], "slept": [], "woken": [], "pending": 0, "changes": [],
-           "report": [], "powod": ""}
+           "report": [], "powod": "", "new_files": [], "pointers_added": [], "unpointed": [],
+           "unnamed": [], "no_room": []}
     files = instruction_files()
     out["files"] = [str(path) for path in files]
     ws = Workspace()
@@ -1936,10 +2119,6 @@ def run(dry_run: bool = False, exists=None, day: str | None = None) -> dict:
             write_state(out, today)
         return out
 
-    for c in reviewed.approved:  # a newcomer's pointer stands for its listing, as in note_source
-        if c.layer == "referencyjna":
-            trail.pointers[fact_key(c.shown)] = fact_key(c.text)
-
     # 1. what nobody confirmed for SLEEP_DAYS leaves the durable layer — the automaton's entries only
     slept = []
     for e in standing:
@@ -1949,6 +2128,14 @@ def run(dry_run: bool = False, exists=None, day: str | None = None) -> dict:
             slept.append((e, last))
     left = min((room_for_facts(_without(original[p], [e for e, _ in slept])) for p in writable),
                default=None)
+
+    # 1a. the listings: each to its file in wiedza\ — a file there already, or a new one that comes
+    #     together with its pointer in "Dane referencyjne". No sensible name, or no room for the
+    #     pointer: no file at all, the fact stays in the current layer and the run says so.
+    placed, left = place_references(ws, writable, reviewed.approved, left, out)
+    reviewed.approved = [c for c in reviewed.approved if c.layer != "referencyjna"]
+    # 1b. the completeness guard: every knowledge file on the disk has its pointer
+    out["pointers_added"], out["unpointed"], left = ensure_pointers(ws, writable, left)
 
     # 2. the newer versions — out of the waiting room, and those waiting on a pinned entry that
     #    have now been heard in a second conversation
@@ -2037,18 +2224,45 @@ def run(dry_run: bool = False, exists=None, day: str | None = None) -> dict:
         out["report"] = report_lines(journal + [c.record(today) for c in changes.done], today)
         return out
 
-    for path in files:
-        if ws.lines[path] != original[path]:
-            out["backups"].append(str(backup_file(path)))
-            _write(path, ws.lines[path], ws.newline[path])
+    # The listings first, the rules right after them — and a failure anywhere in between takes
+    # back everything written so far: a file never stays in wiedza\ without its pointer, nor a
+    # pointer in the rules without its file.
+    listings: list[tuple[Path, str | None]] = []
+    rules_written: list[Path] = []
+    noted: list[tuple[Candidate, str, bool]] = []
+    try:
+        for c, name, new in placed:
+            target, before = write_reference(name, c.text, day)
+            if target is not None:
+                listings.append((target, before))
+                out["references"].append(str(target))
+                noted.append((c, name, new))
+        for path in files:
+            if ws.lines[path] != original[path]:
+                out["backups"].append(str(backup_file(path)))
+                rules_written.append(path)
+                _write(path, ws.lines[path], ws.newline[path])
+    except OSError as e:
+        left_behind = undo_references(listings)
+        for path in rules_written:
+            try:
+                _write(path, original[path], ws.newline[path])
+            except OSError as again:
+                left_behind.append(f"{path}: {again}")
+        out["status"] = "blad"
+        out["note"] = (f"ALARM: zapis wiedzy sie nie udal ({e}) - pliki zestawien i odsylacze"
+                       f" wycofane, poczekalnia nietknieta"
+                       + (f"; NIE udalo sie wycofac: {'; '.join(left_behind)}" if left_behind else ""))
+        out["powod"] = _reason(out)
+        out["report"] = report_lines(journal, today)
+        write_state(out, today)
+        raise RuntimeError(out["note"]) from e
     if ws.lines[dormant_path] != original[dormant_path]:
         _write(dormant_path, ws.lines[dormant_path], ws.newline[dormant_path])
     save_changes(changes.done, today)
+    for c, name, new in noted:
+        note_reference(c, name, new, today)
     for candidate in reviewed.approved:
-        if candidate.layer == "referencyjna":
-            target = write_reference(candidate, day)
-            if target:
-                out["references"].append(target)
         if candidate.text in entered:
             note_source(candidate, writable, today)
     written_on = {fact_key(text): d for d, text in current}
@@ -2142,6 +2356,16 @@ def _report(r: dict) -> None:
         log(f"  ~ {fact}  — confirmed again, the warning is gone")
     for target in r["references"]:
         log(f"listing put away in: {target}")
+    for name in r["new_files"]:
+        log(f"new knowledge file, with its pointer in '{REFERENCE_SUBSECTION}': {name}")
+    for name in r["pointers_added"]:
+        log(f"pointer written for a knowledge file that had none: {name}")
+    for name, why in r["unpointed"]:
+        log(f"ALARM: {name} has no pointer in '{REFERENCE_SUBSECTION}' - {why}")
+    for fact in r["unnamed"]:
+        log(f"UWAGA: no sensible file name - left in the current layer: {fact[:80]}")
+    for fact in r["no_room"]:
+        log(f"UWAGA: no room for the pointer - no file made, left in the current layer: {fact[:80]}")
     for backup in r["backups"]:
         log(f"copy taken before the change: {backup}")
     for line in r["report"]:  # the day's changes, each with the id that takes it back

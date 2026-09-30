@@ -127,7 +127,23 @@ INDEXED = "COALESCE(NULLIF(indexed_at, ''), ts)"
 LAYERS = ("stala", "biezaca", "referencyjna")
 SECTIONS = ("uzytkownik", "firma", "projekty", "praca")  # the subsections of "## Co wiem"
 DEFAULT_LAYER, DEFAULT_SECTION = "stala", "projekty"  # the safest guess: visible and easy to move
-UNNAMED_FILE = "do-nazwania.md"  # a listing the model refused to name still has to land somewhere
+# A listing lands in a file whose name says what is in it — there is no catch-all file. The user's
+# decision (2026-09-30): a sack of unrelated facts under a placeholder name, pointed at from nowhere,
+# is exactly what he does not want. A name the model did not give is derived from the text
+# (name_from_text); when even that fails, the fact stays in the current layer and the run says so.
+FILE_PATTERN = r"^[a-z0-9]+(-[a-z0-9]+)*\.md$"
+MAX_STEM_CHARS = 60
+# names that say nothing about the content — refused exactly like a missing name
+GENERIC_STEMS = frozenset({"do-nazwania", "bez-nazwy", "plik", "pliki", "nowy", "nowy-plik", "inne",
+                           "rozne", "notatki", "lista", "zestawienie", "zestawienia", "dane",
+                           "fakty", "wiedza", "readme", "misc", "notes", "todo"})
+# The files of wiedza\ that are the machinery, not knowledge: the waiting room, the trail, the
+# history of changes, the dormant facts, the note about the directory itself. Never the target of
+# a listing, and they need no pointer in "Dane referencyjne" — the rules name them where they
+# explain the mechanism. Every other *.md there is knowledge and must have its pointer
+# (lore.verify.ensure_pointers; narzedzia\straznik-zasad.ps1 keeps the same list).
+TECHNICAL_FILES = frozenset({"kandydaci.md", "zrodla.md", "historia-zmian.md", "uspione.md",
+                             "README.md"})
 GROUP_HEADINGS = {"stala": "## Trwałe", "biezaca": "## Bieżące",
                   "referencyjna": "## Do osobnych plików"}
 
@@ -138,20 +154,33 @@ GROUP_HEADINGS = {"stala": "## Trwałe", "biezaca": "## Bieżące",
 # --permission-prompts none: nobody is sitting at the console at 08:05 to answer a prompt.
 # --json-schema: `claude -p` is an agent, not a text endpoint — asked for plain text it adds
 #   questions and offers of help around the list. A schema gives a list and nothing else.
+#   Two shapes of an item: a listing ("referencyjna") cannot come back without "plik" and
+#   "odsylacz", and the name has to look like a file name — the schema says so, not only the prompt.
 FACTS_SCHEMA = json.dumps({
     "type": "object",
-    "properties": {"fakty": {"type": "array", "items": {
-        "type": "object",
-        "properties": {
-            "tresc": {"type": "string"},
-            "warstwa": {"type": "string", "enum": list(LAYERS)},
-            "podsekcja": {"type": "string", "enum": list(SECTIONS)},
-            "plik": {"type": "string"},
-            "odsylacz": {"type": "string"},
+    "properties": {"fakty": {"type": "array", "items": {"anyOf": [
+        {
+            "type": "object",
+            "properties": {
+                "tresc": {"type": "string"},
+                "warstwa": {"type": "string", "enum": ["stala", "biezaca"]},
+                "podsekcja": {"type": "string", "enum": list(SECTIONS)},
+            },
+            "required": ["tresc", "warstwa"],
+            "additionalProperties": False,
         },
-        "required": ["tresc", "warstwa"],
-        "additionalProperties": False,
-    }}},
+        {
+            "type": "object",
+            "properties": {
+                "tresc": {"type": "string"},
+                "warstwa": {"type": "string", "enum": ["referencyjna"]},
+                "plik": {"type": "string", "pattern": FILE_PATTERN},
+                "odsylacz": {"type": "string"},
+            },
+            "required": ["tresc", "warstwa", "plik", "odsylacz"],
+            "additionalProperties": False,
+        },
+    ]}}},
     "required": ["fakty"],
     "additionalProperties": False,
 }, ensure_ascii=False)
@@ -169,9 +198,14 @@ Wypisz fakty, które warto znać w każdym nowym oknie rozmowy, i każdemu przyp
 - "biezaca" — sprawy w toku: co jest otwarte, co czeka na czyjąś decyzję, co się zacięło, jaki
   eksperyment trwa. Zmienia się w dniach.
 - "referencyjna" — długie zestawienia: listy, tabele, struktury numeracji, wyliczenia wariantów.
-  Poznajesz je po tym, że są długie i wyliczające, a nie po temacie. Do takiego faktu podaj
-  "plik" — krótką nazwę pliku bez polskich znaków, np. "struktura-sku.md" — oraz "odsylacz",
-  jedną linię, która stanie w trwałej wiedzy w miejsce całego zestawienia.
+  Poznajesz je po tym, że są długie i wyliczające, a nie po temacie. Do takiego faktu MUSISZ podać
+  "plik" i "odsylacz". "plik" — nazwa pliku w katalogu wiedzy: opisowa, po polsku, bez polskich
+  znaków, małymi literami, słowa rozdzielone myślnikami, z końcówką .md, np.
+  "sprawy-odblokowania-amazon.md" albo "struktura-sku.md". Najpierw sprawdź listę istniejących
+  plików (jeśli jest podana na końcu) — gdy temat pasuje do któregoś, podaj DOKŁADNIE jego nazwę,
+  a fakt zostanie tam dopisany; nowy plik tylko wtedy, gdy żaden nie pasuje. Nigdy nazwy ogólnej
+  ("inne.md", "notatki.md", "rozne.md"). "odsylacz" — jedno krótkie zdanie, co jest w tym
+  pliku, bez ścieżki; stanie w trwałej wiedzy jako opis pliku.
 
 Pomiń opisy błędów i wszystko, co i tak widać w kodzie (nazwy plików, funkcji, struktura
 repozytorium).
@@ -196,6 +230,17 @@ czyli agent tego nie wiedział, a powinien; "zapamietaj" — wprost kazał to za
 poprawiane — faktów NIGDY nie bierz z linii "model:", tylko z linii "user:". Przy poprawce faktem
 jest to, jak jest naprawdę według użytkownika, a nie to, co agent twierdził."""
 HARVEST_PROMPT = PROMPT + SELECTION_NOTE
+
+# glued to the end of the instruction at the moment of the call (with_known_files) — the list
+# changes with every new file, so it cannot be part of a constant
+KNOWN_FILES_NOTE = """
+
+Istniejące pliki w katalogu wiedzy (nazwa — co w nim jest). Zestawienie na temat któregoś z nich
+dopisz do niego, podając w "plik" dokładnie tę nazwę:
+"""
+NO_FILES_NOTE = """
+
+W katalogu wiedzy nie ma jeszcze żadnego pliku z zestawieniami."""
 
 CANDIDATES_HEADER = """# Kandydaci do trwałej wiedzy
 
@@ -660,8 +705,92 @@ def ask_model(material: str, instruction: str = PROMPT) -> str:
 
 
 def ask_harvest(material: str) -> str:
-    """The daily harvest's call: the base instruction plus what the chosen material is."""
-    return ask_model(material, instruction=HARVEST_PROMPT)
+    """The daily harvest's call: the base instruction plus what the chosen material is, plus the
+    files already there — so that a listing on a known topic joins its file instead of a new one."""
+    return ask_model(material, instruction=with_known_files(HARVEST_PROMPT))
+
+
+# ---------------------------------------------------------------- the files of the knowledge
+
+_REFERENCE_HEADING = re.compile(r"^###\s+Dane referencyjne", re.IGNORECASE)
+# one pointer line of "Dane referencyjne": - `wiedza/plik.md` — what is in it
+_POINTER_ENTRY = re.compile(r"`wiedza[/\\]([^`]+)`\s*(?:[—–-]\s*(.*))?$")
+
+
+def knowledge_files() -> list[Path]:
+    """Every file of wiedza\\ that holds knowledge — the ones that need a pointer in the rules.
+    Not the machinery (TECHNICAL_FILES), not the state files starting with a dot, not the copies."""
+    try:
+        found = sorted(KNOWLEDGE_DIR.glob("*.md"))
+    except OSError:
+        return []
+    return [p for p in found if p.is_file() and not p.name.startswith(".")
+            and p.name not in TECHNICAL_FILES]
+
+
+def reference_section(lines: list[str]) -> tuple[int, int] | None:
+    """(heading, end) of the "### Dane referencyjne" subsection — the line of its heading and the
+    first line past its body. None when the rules have no such subsection."""
+    for i, line in enumerate(lines):
+        if _REFERENCE_HEADING.match(line.strip()):
+            end = i + 1
+            while end < len(lines) and not lines[end].lstrip().startswith("#") \
+                    and not lines[end].strip().startswith("<!-- MegaRuchacz:"):
+                end += 1
+            return i, end
+    return None
+
+
+def pointers_in(lines: list[str]) -> dict[str, str]:
+    """File name -> its description, for every pointer of "Dane referencyjne". Only that
+    subsection counts: a mention in a current entry ages out with it, and then the file is lost."""
+    bounds = reference_section(lines)
+    out: dict[str, str] = {}
+    if bounds is None:
+        return out
+    for line in lines[bounds[0] + 1:bounds[1]]:
+        m = _POINTER_ENTRY.search(line)
+        if m and line.lstrip().startswith(("-", "*")):
+            out.setdefault(Path(m.group(1).strip()).name, (m.group(2) or "").strip())
+    return out
+
+
+def describe_file(path: Path, limit: int = 100) -> str:
+    """One line saying what is in a file: its heading, or — when the heading is only the file's
+    own name — its first line of content. '' when there is nothing to go by."""
+    found = ""
+    for line in _lines(path):
+        text = line.strip()
+        if not text or text.startswith("<!--"):
+            continue
+        if text.startswith("#"):
+            heading = text.lstrip("#").strip()
+            if heading and heading.lower().replace(" ", "-") != path.stem.lower():
+                found = heading
+                break
+            continue
+        found = _BULLET.sub("", text)
+        break
+    found = " ".join(found.split())
+    return found if len(found) <= limit else found[:limit - 1].rstrip() + "…"
+
+
+def known_files() -> dict[str, str]:
+    """The files a listing may join: name -> what is in it (its pointer, else the file itself)."""
+    pointed: dict[str, str] = {}
+    for path in instruction_paths():
+        for name, what in pointers_in(_lines(path)).items():
+            pointed.setdefault(name, what)
+    return {p.name: pointed.get(p.name) or describe_file(p) for p in knowledge_files()}
+
+
+def with_known_files(instruction: str) -> str:
+    """The instruction with the list of the files already in wiedza\\ glued to its end."""
+    files = known_files()
+    if not files:
+        return instruction + NO_FILES_NOTE
+    return instruction + KNOWN_FILES_NOTE + "\n".join(
+        f"- {name} — {what or 'bez opisu'}" for name, what in files.items())
 
 
 # ---------------------------------------------------------------- what the day cost
@@ -1117,7 +1246,7 @@ _REASON_COLUMNS = {selection.CORRECTION: "poprawki", selection.REPETITION: "powt
 SURVIVAL_KEYS = ("wylowione", "wpisane", "nadal_w_wiedzy", "zastapione", "cofniete", "wygasle",
                  "uspione", "zniknely_bez_sladu", "nie_weszly")
 # the files in wiedza/ that are bookkeeping, not knowledge — a fact "found" there is not in force
-_NOT_KNOWLEDGE = {CANDIDATES_PATH.name, SOURCES_NAME, "historia-zmian.md", DORMANT_NAME, "README.md"}
+_NOT_KNOWLEDGE = TECHNICAL_FILES
 
 
 def learning_journal_path() -> Path:
@@ -1332,18 +1461,59 @@ def _as_fact(raw) -> Fact | None:
     if layer not in LAYERS:
         return Fact(text)
     if layer == "referencyjna":
-        name = file_name(str(item.get("plik") or ""))
+        # no name, or a name that says nothing: derived from the text; '' when even that fails —
+        # lore.verify then leaves the fact in the current layer and reports it, never a sack file
+        name = file_name(str(item.get("plik") or "")) or name_from_text(text)
         pointer = " ".join(str(item.get("odsylacz") or "").split())
-        return Fact(text, layer, file=name, pointer=pointer or f"Szczegóły w ~/.claude/wiedza/{name}")
+        return Fact(text, layer, file=name, pointer=pointer)
     section = str(item.get("podsekcja") or "").strip().lower()
     return Fact(text, layer, section if section in SECTIONS else DEFAULT_SECTION)
 
 
 def file_name(proposed: str) -> str:
-    """The model's file name, made harmless: ASCII, no path, always .md."""
-    stem = re.sub(r"\.md$", "", proposed.strip().lower()).translate(_POLISH)
-    stem = re.sub(r"[^a-z0-9]+", "-", stem).strip("-")
-    return f"{stem}.md" if stem else UNNAMED_FILE
+    """The model's file name, made harmless: ASCII, no path, always .md — or '' when what is left
+    is no name at all (empty, generic, one of the machinery files, digits only)."""
+    base = re.split(r"[\\/]", proposed.strip())[-1]
+    stem = re.sub(r"\.md$", "", base.lower()).translate(_POLISH)
+    stem = re.sub(r"[^a-z0-9]+", "-", stem).strip("-")[:MAX_STEM_CHARS].strip("-")
+    name = f"{stem}.md"
+    return name if valid_file_name(name) else ""
+
+
+def valid_file_name(name: str) -> bool:
+    """A name that says what is in the file: kebab-case, .md, a real word in it, not generic."""
+    if not re.fullmatch(FILE_PATTERN, name or ""):
+        return False
+    stem = name[:-3]
+    if stem in GENERIC_STEMS or name.lower() in {t.lower() for t in TECHNICAL_FILES}:
+        return False
+    return len(stem) <= MAX_STEM_CHARS and re.search(r"[a-z]{3}", stem) is not None
+
+
+# words that carry no topic — skipped when a name is derived from the text of a fact
+_NAME_STOPWORDS = frozenset("""
+    jest byl byla bylo beda bedzie oraz ktory ktora ktore ktorych ktorym tylko przez jako przy
+    jego tego tych temu takze juz nie dla ale albo kiedy wtedy potem teraz zawsze nigdy bardzo
+    kazdy kazda kazde wszystkie wszystko moze musi trzeba wolno maja mial miala mialo ktos gdzie
+    jaki jaka jakie tutaj takie taki taka swoj swoja swoje wiele malo wiecej mniej duzo sama samo
+    uzytkownik uzytkownika uzytkownikowi firma firmy firmie
+""".split())
+MAX_NAME_WORDS = 3
+
+
+def name_from_text(text: str) -> str:
+    """A file name made out of the fact itself, without a model: its first words that carry a
+    topic ("Konto Tailscale: Przyklad2966." -> "konto-tailscale-przyklad.md"). '' when no word
+    qualifies — then there is no sensible name, and no file is made."""
+    words: list[str] = []
+    for raw in re.findall(r"[^\W\d_]+", text.lower()):
+        word = raw.translate(_POLISH)
+        if len(word) < 4 or not word.isascii() or word in _NAME_STOPWORDS or word in words:
+            continue
+        words.append(word)
+        if len(words) == MAX_NAME_WORDS:
+            break
+    return file_name("-".join(words)) if words else ""
 
 
 def _structured(output: str) -> list | None:
@@ -1382,7 +1552,7 @@ def waiting_facts() -> list[Fact]:
         layer, detail = m.group(1) or DEFAULT_LAYER, (m.group(2) or "").strip()
         text = _REASON.sub("", m.group(3)).strip()
         if layer == "referencyjna":
-            out.append(Fact(text, layer, file=detail or UNNAMED_FILE))
+            out.append(Fact(text, layer, file=detail))
         else:
             out.append(Fact(text, layer, detail if detail in SECTIONS else DEFAULT_SECTION))
     return out
@@ -1619,6 +1789,11 @@ def _report(r: dict) -> None:
             log(f"heard again (only a sighting in {SOURCES_NAME}): {len(again)}")
         for fact in r["added"]:
             log(f"  + ({fact.label()}) {fact.text}")
+        for fact in r["added"]:
+            if fact.layer == "referencyjna" and not fact.file:
+                log(f"UWAGA: zestawienie bez sensownej nazwy pliku (model jej nie podal, z tresci"
+                    f" tez sie nie dala wyprowadzic) - lore.verify zostawi je w Biezacych:"
+                    f" {fact.text[:80]}")
     if r["pending"]:
         log(f"backlog: {r['pending']} chosen messages waiting, about {r['runs_left']} more run(s)"
             f" — catch up with:  -Nadrabiaj {r['runs_left']}")

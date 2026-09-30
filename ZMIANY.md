@@ -4,6 +4,27 @@ Każda zmiana wypychana na gita dostaje tu wpis. Numer rośnie wg zasady:
 pierwsza cyfra — przebudowa łamiąca zgodność, druga — nowa funkcja,
 trzecia — poprawka.
 
+## 0.22.2 — 2026-09-30
+
+- **Koniec z workiem `do-nazwania.md` — każde zestawienie trafia do pliku z nazwą, która mówi,
+  co w nim jest.** Model musi podać nazwę pliku (wymusza to i polecenie, i schemat odpowiedzi),
+  dostaje listę istniejących plików wiedzy z opisami i dopisuje do pasującego, zamiast zakładać
+  nowy. Gdy nazwy nie poda albo poda byle jaką („inne.md”), nazwa powstaje z pierwszych słów
+  faktu (np. `konto-tailscale-przyklad.md`). Gdy i to się nie da — fakt zostaje w „Bieżących”,
+  a podsumowanie cyklu zaczyna się od „UWAGA”. Pliku bez sensownej nazwy nie ma nigdy.
+- **Nowy plik wiedzy powstaje zawsze razem ze swoim odsyłaczem w „Dane referencyjne”.**
+  Odsyłacz nie czeka już na drugą rozmowę w „Bieżących” (stamtąd po 14 dniach znikał i plik
+  zostawał bez śladu). Brak miejsca pod progiem 8 000 znaków = pliku nie zakładam, fakt zostaje
+  w „Bieżących”, cykl to melduje. Nieudany zapis = pliki zestawień i odsyłacze wycofane.
+- **Strażnik kompletności:** każdy cykl sprawdza, czy każdy plik z wiedzą w `~\.claude\wiedza`
+  ma odsyłacz, i brakujący dopisuje sam (opis z nagłówka pliku); czego nie da rady — melduje.
+  Przy otwarciu okna strażnik zasad mówi jedną linią, gdy któregoś odsyłacza brakuje.
+  Bez odsyłacza z założenia zostają tylko pliki techniczne: `kandydaci.md`, `zrodla.md`,
+  `historia-zmian.md`, `uspione.md`, `README.md` i pliki z kropką.
+- Stary `do-nazwania.md` rozłożony na właściwe pliki (`amazon-ebay.md`, `maszyny.md`,
+  `polaczenia-ssh.md`, nowe `sprawy-odblokowania-amazon.md` i `alibaba-konto-i-dostawcy.md`)
+  i usunięty; dopisany brakujący odsyłacz do `amazon-ads-dostep-dane.md`.
+
 ## 0.22.1 — 2026-09-29
 
 - **OpenDesign usunięty z bazy skilli** — na prośbę użytkownika. To osobna aplikacja do

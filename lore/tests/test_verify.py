@@ -639,9 +639,10 @@ def test_a_reference_fact_leaves_a_pointer_and_the_listing_goes_to_a_file(sandbo
 
     r = verify.run()
 
-    # the pointer is a new fact like any other: into the current layer first
-    assert "- [2026-09-16] Budowa SKU zestawów" in subsection(sandbox, "### Bieżące")
-    assert "Budowa SKU zestawów" not in subsection(sandbox, "### Dane referencyjne")
+    # a new file comes together with its pointer, straight in "Dane referencyjne" — the path the
+    # model put into its line is dropped, it stands in front of the description already
+    assert "- `wiedza/struktura-sku.md` — Budowa SKU zestawów\n" in subsection(sandbox, "### Dane referencyjne")
+    assert "Budowa SKU" not in subsection(sandbox, "### Bieżące")
     assert "SET3-Probny" not in rules_text(sandbox)  # the listing itself never enters the rules
     listing = (sandbox / "wiedza" / "struktura-sku.md").read_text(encoding="utf-8")
     assert "SET3-Probny[010203] to olejki 01, 02 i 03." in listing
@@ -1172,22 +1173,180 @@ def test_a_fact_already_durable_is_not_moved_nor_doubled(sandbox):
     assert rules_text(sandbox) == before
 
 
-def test_a_pointer_is_promoted_when_its_listing_was_heard_twice(sandbox):
+def test_a_pointer_does_not_wait_for_a_second_conversation(sandbox):
+    """The file exists from the first run on, so its pointer does too — a file whose only trace is
+    an entry of the current layer is lost the day that entry ages out."""
     listing = "SET3-Probny[010203] to olejki 01, 02 i 03."
-    pointer = "Budowa SKU zestawów — w ~/.claude/wiedza/struktura-sku.md"
     heard(listing, "referencyjna:struktura-sku.md", "rozmowa-a")
     waiting_room(sandbox, entry(listing, "referencyjna:struktura-sku.md"),
-                 f"      odsyłacz: {pointer}\n")
-    verify.run(day="2026-09-17")
-    assert pointer in subsection(sandbox, "### Bieżące")
-    heard(listing, "referencyjna:struktura-sku.md", "rozmowa-b", day="2026-09-17", again=True)
+                 "      odsyłacz: Budowa SKU zestawów\n")
 
-    r = verify.run(day="2026-09-18")
+    r = verify.run(day="2026-09-17")
 
-    assert r["promoted"] == [pointer]
-    assert f"- {pointer}" in subsection(sandbox, "### Dane referencyjne")
-    assert pointer not in subsection(sandbox, "### Bieżące")
+    assert r["promoted"] == [] and r["new_files"] == ["struktura-sku.md"]
+    assert "`wiedza/struktura-sku.md` — Budowa SKU zestawów" in subsection(sandbox, "### Dane referencyjne")
     assert "SET3-Probny" not in rules_text(sandbox)
+
+
+# ---------------------------------------------------------------- every file of wiedza\ has a name and a pointer
+
+SSH_POINTER = "- `wiedza/polaczenia-ssh.md` — SSH biuro-dom przez Tailscale"
+
+
+def knowledge(sandbox, name: str, text: str) -> Path:
+    p = sandbox / "wiedza" / name
+    p.parent.mkdir(parents=True, exist_ok=True)
+    p.write_text(text, encoding="utf-8")
+    return p
+
+
+def with_pointer(sandbox, line: str) -> None:
+    (sandbox / "CLAUDE.md").write_text(
+        rules_text(sandbox).replace("### Dane referencyjne\n\n_(pusto)_\n",
+                                    f"### Dane referencyjne\n\n{line}\n"), encoding="utf-8")
+
+
+def pointers(sandbox) -> list[str]:
+    lines = rules_text(sandbox).splitlines()
+    start, end = facts.reference_section(lines)
+    return [line for line in lines[start + 1:end] if line.startswith("- ")]
+
+
+def wiedza_files(sandbox) -> set[str]:
+    return {p.name for p in (sandbox / "wiedza").glob("*.md")}
+
+
+def test_a_named_listing_gets_its_file_and_its_pointer(sandbox):
+    waiting_room(sandbox,
+                 entry("Sprawa 10987654321: ASIN odblokowany na amazon.de po wysłaniu SDS.",
+                       "referencyjna:sprawy-odblokowania-amazon.md"),
+                 "      odsyłacz: Sprawy odblokowania ASIN na Amazonie\n")
+
+    r = verify.run()
+
+    listing = (sandbox / "wiedza" / "sprawy-odblokowania-amazon.md").read_text(encoding="utf-8")
+    assert "Sprawa 10987654321" in listing
+    assert pointers(sandbox) == ["- `wiedza/sprawy-odblokowania-amazon.md` — Sprawy odblokowania ASIN na Amazonie"]
+    assert r["new_files"] == ["sprawy-odblokowania-amazon.md"]
+    assert state(sandbox)["nowe_pliki_wiedzy"] == "sprawy-odblokowania-amazon.md"
+    assert "sprawy-odblokowania-amazon.md" in trail(sandbox)
+
+
+@pytest.mark.parametrize("label", ["referencyjna:", "referencyjna:do-nazwania.md", "referencyjna"])
+def test_a_listing_without_a_real_name_gets_one_from_its_text_never_a_sack(sandbox, label):
+    waiting_room(sandbox, entry("Konto Tailscale: Przyklad2966.", label))
+
+    verify.run()
+
+    assert "konto-tailscale-przyklad.md" in wiedza_files(sandbox)
+    assert "do-nazwania.md" not in wiedza_files(sandbox)
+    assert pointers(sandbox) == ["- `wiedza/konto-tailscale-przyklad.md` — Konto Tailscale: Przyklad2966"]
+
+
+def test_a_listing_with_no_word_to_name_it_by_stays_in_the_current_layer_out_loud(sandbox):
+    waiting_room(sandbox, entry("OL-100, OL-200, 1L, 5L, 10 ml.", "referencyjna:"))
+
+    r = verify.run()
+
+    assert wiedza_files(sandbox) == {"kandydaci.md", "zrodla.md"}  # no file without a sensible name
+    assert "- [2026-09-16] OL-100, OL-200, 1L, 5L, 10 ml." in subsection(sandbox, "### Bieżące")
+    assert pointers(sandbox) == []
+    s = state(sandbox)
+    assert r["unnamed"] == ["OL-100, OL-200, 1L, 5L, 10 ml."] and s["bez_nazwy_pliku"] == "1"
+    assert s["powod"].startswith("UWAGA: 1 zestawien bez sensownej nazwy pliku")
+
+
+def test_a_listing_on_the_topic_of_a_file_already_there_joins_it(sandbox):
+    knowledge(sandbox, "polaczenia-ssh.md", "# SSH przez Tailscale\n\n- Z domu: ssh <uzytkownik>@<ADRES-IP>\n")
+    with_pointer(sandbox, SSH_POINTER)
+    waiting_room(sandbox, entry("Konto Tailscale: Przyklad2966.", "referencyjna:polaczenia-ssh.md"),
+                 "      odsyłacz: Konto Tailscale\n")
+
+    r = verify.run()
+
+    text = (sandbox / "wiedza" / "polaczenia-ssh.md").read_text(encoding="utf-8")
+    assert text.startswith("# SSH przez Tailscale") and "- Konto Tailscale: Przyklad2966." in text
+    assert r["new_files"] == [] and wiedza_files(sandbox) == {"polaczenia-ssh.md", "kandydaci.md", "zrodla.md"}
+    assert pointers(sandbox) == [SSH_POINTER]  # the old pointer, not a second one
+
+
+def test_the_guard_writes_the_pointer_a_knowledge_file_lacks(sandbox):
+    knowledge(sandbox, "amazon-ads.md", "# Amazon Ads API - dane dostepowe\n\nProfil LWA: X\n")
+    knowledge(sandbox, "zapachy.md", "# zapachy\n\n- Olejek 02 to cytryna.\n")
+    for technical in ("README.md", "kandydaci.md", "zrodla.md", "historia-zmian.md", "uspione.md"):
+        knowledge(sandbox, technical, "# techniczny\n")
+    knowledge(sandbox, ".ukryty.md", "# stan\n")
+
+    r = verify.run()
+
+    assert pointers(sandbox) == ["- `wiedza/amazon-ads.md` — Amazon Ads API - dane dostepowe",
+                                 "- `wiedza/zapachy.md` — Olejek 02 to cytryna."]
+    assert r["pointers_added"] == ["amazon-ads.md", "zapachy.md"] and r["unpointed"] == []
+    assert state(sandbox)["odsylacze_dopisane"] == "amazon-ads.md, zapachy.md"
+    verify.run()
+    assert len(pointers(sandbox)) == 2  # written once
+
+
+def test_the_guard_reports_a_file_it_cannot_describe(sandbox):
+    knowledge(sandbox, "pusty.md", "\n\n")
+
+    r = verify.run()
+
+    assert pointers(sandbox) == []
+    assert [name for name, _ in r["unpointed"]] == ["pusty.md"]
+    s = state(sandbox)
+    assert s["bez_odsylacza"] == "pusty.md" and s["powod"].startswith("UWAGA: 1 plikow wiedzy bez odsylacza")
+
+
+def test_the_guard_changes_nothing_in_a_dry_run(sandbox):
+    knowledge(sandbox, "amazon-ads.md", "# Amazon Ads API\n")
+    before = rules_text(sandbox)
+
+    r = verify.run(dry_run=True)
+
+    assert r["pointers_added"] == ["amazon-ads.md"] and rules_text(sandbox) == before
+
+
+def test_no_room_for_the_pointer_means_no_file_and_the_fact_stays_in_the_current_layer(sandbox, monkeypatch):
+    monkeypatch.setattr(verify, "STABLE_LIMIT", verify.stable_chars(rules_text(sandbox).splitlines()) + 10)
+    waiting_room(sandbox, entry("Sprawa 10987654321: ASIN odblokowany na amazon.de.",
+                                "referencyjna:sprawy-odblokowania-amazon.md"))
+
+    r = verify.run()
+
+    assert "sprawy-odblokowania-amazon.md" not in wiedza_files(sandbox)
+    assert pointers(sandbox) == []
+    assert "Sprawa 10987654321" in subsection(sandbox, "### Bieżące")
+    assert r["no_room"] and state(sandbox)["bez_miejsca_na_odsylacz"] == "1"
+
+
+def test_a_failed_write_of_the_pointer_leaves_no_orphaned_file(sandbox, monkeypatch):
+    knowledge(sandbox, "polaczenia-ssh.md", "# SSH przez Tailscale\n")
+    with_pointer(sandbox, SSH_POINTER)
+    waiting_room(sandbox,
+                 entry("Sprawa 10987654321: ASIN odblokowany na amazon.de.",
+                       "referencyjna:sprawy-odblokowania-amazon.md"),
+                 entry("Konto Tailscale: Przyklad2966.", "referencyjna:polaczenia-ssh.md"))
+    rules_before = rules_text(sandbox)
+    ssh_before = (sandbox / "wiedza" / "polaczenia-ssh.md").read_text(encoding="utf-8")
+    room_before = verify.CANDIDATES_PATH.read_text(encoding="utf-8")
+    real_write = verify._write
+
+    def failing(path, lines, newline):
+        if Path(path).name == "CLAUDE.md":
+            raise OSError("dysk pelny")
+        real_write(path, lines, newline)
+
+    monkeypatch.setattr(verify, "_write", failing)
+    with pytest.raises(RuntimeError, match="wycofane"):
+        verify.run()
+
+    assert "sprawy-odblokowania-amazon.md" not in wiedza_files(sandbox)  # the new file is gone
+    assert (sandbox / "wiedza" / "polaczenia-ssh.md").read_text(encoding="utf-8") == ssh_before
+    assert rules_text(sandbox) == rules_before
+    assert verify.CANDIDATES_PATH.read_text(encoding="utf-8") == room_before  # tried again tomorrow
+    s = state(sandbox)
+    assert s["przebieg"] == "blad" and s["powod"].startswith("ALARM: zapis wiedzy sie nie udal")
 
 
 # ---------------------------------------------------------------- the current layer ages out
