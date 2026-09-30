@@ -27,7 +27,8 @@
 # MegaRuchacza w otwarciu sesji ($AlarmUdzialuOtwarcia) - patrz Rachunek-Narzedzia.
 function Pomiar-Otwarcia([bool]$zWorkerami) {
   $katTranskryptow = Join-Path $katKlaudii "projects"
-  $rolyWorkerow = @("implementer", "scout", "verifier", "zastepca")
+  # ta sama lista co $RoleClaude w narzedzia\instaluj-globalnie.ps1
+  $rolyWorkerow = @("implementer", "scout", "verifier", "zastepca", "projektant")
   # Ile ostatnich sesji / workerow do mediany i z jakiego okresu. 10 sesji i 14 dni,
   # bo zestaw narzedzi (serwery MCP) zmienia sie co kilka tygodni, a starsze sesje
   # mierzylyby inna konfiguracje niz dzisiejsza. Workerow jest wiecej - 20.

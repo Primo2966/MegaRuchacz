@@ -929,6 +929,42 @@ function Napraw-Hooki-Codex($celCodex, $zrodlo, $projekt, $stempel) {
   return $wynik
 }
 
+# Czy Codex w tym projekcie jest sprawa MegaRuchacza. Tak, gdy MegaRuchacz juz go tu
+# postawil - jego hooki w <projekt>\.codex\hooks.json (statusMessage "MegaRuchacz..."
+# albo polecenie z mr-log-codex.js) albo jego role w <projekt>\.codex\agents (znacznik
+# kierownik-template); te same slady, po ktorych instalator globalny poznaje ~/.codex
+# (Codex-Od-MegaRuchacza w instaluj-globalnie.ps1) - albo gdy projekt ma to jawnie
+# wlaczone: "codex: tak" w .claude\megaruchacz-wersja.txt (odpowiednik flagi -Codex
+# instalatora). Zwraca powod (pusty = nie) i uwage, gdy hooks.json nie da sie odczytac.
+function Codex-W-Projekcie($projekt) {
+  $w = [ordered]@{ powod = ""; uwaga = "" }
+  $stanW = Czytaj-Klucze (Join-Path $projekt ".claude\megaruchacz-wersja.txt")
+  if ("$($stanW['codex'])" -match '^(t|tak|y|yes)$') { $w.powod = "codex: tak w .claude\megaruchacz-wersja.txt"; return $w }
+  $celCodex = Join-Path $projekt ".codex"
+  $raw = Czytaj-Tekst (Join-Path $celCodex "hooks.json")
+  if ($raw) {
+    $s = $null
+    try { $s = $raw.TrimStart([char]0xFEFF) | ConvertFrom-Json }
+    catch { $w.uwaga = ".codex\hooks.json nie jest czystym JSON-em, wiec nie widze w nim hookow MegaRuchacza" }
+    if ($s -and $s.hooks) {
+      foreach ($z in $s.hooks.PSObject.Properties.Name) {
+        foreach ($g in @($s.hooks.$z)) {
+          foreach ($h in @($g.hooks)) {
+            if (-not $h) { continue }
+            if ((("" + $h.command + " " + $h.commandWindows) -match 'mr-log-codex\.js') -or (("" + $h.statusMessage) -like "MegaRuchacz*")) {
+              $w.powod = "sa juz hooki MegaRuchacza w .codex\hooks.json"; return $w
+            }
+          }
+        }
+      }
+    }
+  }
+  foreach ($r in @(Get-ChildItem (Join-Path $celCodex "agents\*.toml") -ErrorAction SilentlyContinue)) {
+    if ((Czytaj-Tekst $r.FullName) -match "kierownik-template") { $w.powod = "sa juz role MegaRuchacza w .codex\agents"; return $w }
+  }
+  return $w
+}
+
 # Czesc codeksowa wdrozenia: role w .codex\agents\, zasady i ladunki hookow
 # w .megaruchacz\, blok zasad w AGENTS.md. Nanosimy ja na tych samych zasadach
 # co czesc dla Claude Code - z jednym wyjatkiem, ktory siedzi w Napraw-Hooki-Codex.
@@ -936,13 +972,24 @@ function Nanies-Poprawki-Codex($zrodlo, $projekt, $stempel) {
   $celCodex = Join-Path $projekt ".codex"
   $celMega  = Join-Path $projekt ".megaruchacz"
   # Bez .megaruchacz\ to nie jest wdrozenie dla narzedzia - nie zakladamy go sami.
-  # O obecnosci Codeksa w projekcie rozstrzyga katalog .codex\ (wdroz.ps1 go zaklada,
-  # gdy Codeksa widzi - takze po $env:CODEX_HOME, ktorego straznik z premedytacja
-  # nie czyta). Gdy katalogu nie ma, a Codeksa nie widac - nie ma czego odswiezac.
   if (-not (Test-Path $celMega)) { return }
-  if (-not (Test-Path $celCodex) -and -not $JestCodex) { return }
   $szablony = Join-Path $zrodlo "szablony-codex"
   if (-not (Test-Path $szablony)) { return }
+  # Czesc codeksowa zakladamy i utrzymujemy tylko tam, gdzie jest sprawa MegaRuchacza
+  # (Codex-W-Projekcie). Do 2026-09-30 wystarczalo, ze Codeksa widac na maszynie - i kazda
+  # aktualizacja zakladala .codex\agents i .codex\hooks.json w projektach, w ktorych nikt
+  # o to nie prosil (raport P31). Gdy Codeksa nie ma ani tu, ani na maszynie, nie ma
+  # o czym mowic; w pozostalych przypadkach jedna linia zamiast cichego pominiecia.
+  $codexTu = Codex-W-Projekcie $projekt
+  if (-not $codexTu.powod) {
+    if (-not (Test-Path $celCodex) -and -not $JestCodex) { return }
+    $dlaczego = ""
+    if ($codexTu.uwaga) { $dlaczego = "$($codexTu.uwaga); " }
+    Mow ("MegaRuchacz: Codex w tym projekcie: role i hooki pominiete (${dlaczego}wlaczysz linia 'codex: tak' w " +
+         "$(Join-Path $projekt '.claude\megaruchacz-wersja.txt') - wejda przy nastepnej aktualizacji wdrozenia).")
+    return
+  }
+  Notuj "codex w projekcie: $($codexTu.powod)"
 
   New-Item -ItemType Directory -Force -Path (Join-Path $celCodex "agents") | Out-Null
   foreach ($p in @(Get-ChildItem (Join-Path $szablony "agents\*.toml") -ErrorAction SilentlyContinue)) {
@@ -1958,12 +2005,32 @@ function Policz-Koszt([string]$narzedzie = "Claude") {
 # godziny linie policzona stara wersja ("ALARM: ... prog 300"), bo data miescila
 # sie w $GODZIN_MIEDZY_KOSZTAMI. Stara liczba z innego rachunku to nie liczba
 # "troche nieswieza", tylko inna liczba - nie pokazujemy jej wcale.
+# Od P27 rachunek to plik wejsciowy plus moduly narzedzia\koszt\*.ps1, wiec odcisk
+# idzie z CALOSCI: nazwa i SHA256 kazdego pliku (kolejnosc porzadkowa, niezalezna od
+# ustawien jezyka). Z samego pliku wejsciowego zmiana w module zostawialaby w oknie
+# linie policzona stara wersja az do $GODZIN_KOSZT_STARY. Starsza kopia narzedzia bez
+# katalogu koszt\ - sam plik. Skroty liczymy wprost, bez Get-FileHash: jego pierwsze
+# wywolanie w procesie kosztuje ~150 ms (zmierzone 30.09.2026), a to hook startowy.
 # "" = nie da sie policzyc odcisku (wtedy zadna linia nie jest wazna).
 function Odcisk-Rachunku {
   $skrypt = Join-Path $Zrodlo "narzedzia\koszt-pamieci.ps1"
   if (-not (Test-Path $skrypt)) { return "" }
-  try { return (Get-FileHash -Algorithm SHA256 -LiteralPath $skrypt -ErrorAction Stop).Hash.Substring(0, 16) }
-  catch { Zanotuj-Wywrotke "odcisk skryptu rachunku" $_; return "" }
+  $sha = $null
+  try {
+    $pliki = @($skrypt)
+    $moduly = Join-Path $Zrodlo "narzedzia\koszt"
+    if (Test-Path -LiteralPath $moduly -PathType Container) {
+      $nazwy = [string[]]@(Get-ChildItem -LiteralPath $moduly -Filter *.ps1 -File -ErrorAction Stop | ForEach-Object { $_.Name })
+      [Array]::Sort($nazwy, [StringComparer]::OrdinalIgnoreCase)
+      $pliki += @($nazwy | ForEach-Object { Join-Path $moduly $_ })
+    }
+    $sha = [System.Security.Cryptography.SHA256]::Create()
+    $sklad = @($pliki | ForEach-Object {
+      (Split-Path -Leaf $_) + "=" + [System.BitConverter]::ToString($sha.ComputeHash([System.IO.File]::ReadAllBytes($_))).Replace("-", "")
+    }) -join "`n"
+    return [System.BitConverter]::ToString($sha.ComputeHash([System.Text.Encoding]::UTF8.GetBytes($sklad))).Replace("-", "").Substring(0, 16)
+  } catch { Zanotuj-Wywrotke "odcisk skryptu rachunku" $_; return "" }
+  finally { if ($sha) { $sha.Dispose() } }
 }
 
 # Odczyt linii z pliku podrecznego razem z ocena, czy wolno ja pokazac.

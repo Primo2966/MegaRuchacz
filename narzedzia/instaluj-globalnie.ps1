@@ -61,8 +61,15 @@
 # gdzies wdroz.ps1, po instalacji globalnej uruchom go tam ponownie - wykryje
 # instalacje globalna i nie dolozy drugiego wpisu do rejestru.
 
+# [CmdletBinding()]: nieznana flaga (np. literowka -Codx) konczy sie bledem "A parameter
+# cannot be found that matches parameter name" i kodem 1, zanim cokolwiek sie zmieni.
+# Zwykly param() wrzucal ja po cichu do $args i instalator szedl dalej bez niej (raport P31).
+# PULAPKA PS 5.1: w skrypcie z [CmdletBinding()] uruchomionym przez -File $PSScriptRoot
+# w wartosci domyslnej parametru jest PUSTY (sprawdzone 30.09.2026) - dlatego domyslne
+# $Zrodlo liczymy dopiero pod param(), tak jak straznik-zasad.ps1.
+[CmdletBinding()]
 param(
-  [string]$Zrodlo = (Split-Path -Parent $PSScriptRoot),
+  [string]$Zrodlo = "",
   [string]$KatalogDomowy = $HOME,
   [switch]$BezPytania,
   [switch]$Usun,
@@ -71,6 +78,7 @@ param(
   [ValidateSet("auto", "claude", "opencode")]
   [string]$WariantZasad = "auto"
 )
+if (-not $Zrodlo) { $Zrodlo = Split-Path -Parent $PSScriptRoot }
 
 $Stempel = Get-Date -Format "yyyyMMdd-HHmmss"
 $script:Kopie = @()
