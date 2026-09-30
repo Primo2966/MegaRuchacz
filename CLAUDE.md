@@ -30,3 +30,33 @@ niezależnych miejscach. Dotyczy wszystkiego, co budujemy w tym projekcie.
 próbował złamać, było 2026-09-17 martwe w trzech przypadkach na trzy — zawsze
 wyglądało na działające. Dopóki nie widziałeś, jak reaguje na złamanie, nie liczy
 się za zrobione.
+
+## Konwencje pracy w tym repo
+
+Każdy worker dostaje ten plik sam — kierownik nie wkleja tych zasad do zleceń.
+
+- **Bez worktree.** Testy wymagają PowerShella, a w kopii roboczej Claude Code blokuje
+  każde jego wywołanie. Workerzy pracują równolegle w tym samym katalogu, każdy
+  wyłącznie na plikach ze swojego zlecenia.
+- **Kodowanie plików sprawdzasz przed zmianą i po niej** — BOM i końce linii, bajtowo
+  (np. `node`), bo narzędzia Git Bash przekłamują CR (`sed -i` je zdejmuje, `grep`
+  źle liczy). Pliki `.ps1` z polskimi znakami (np. `zasobnik\nadzorca.ps1`) muszą mieć
+  BOM — bez niego PowerShell 5.1 czyta je jako ANSI.
+- **Testy niewidoczne** — żadnych okien konsoli ani dymków na ekranie użytkownika, także
+  z procesów, które test uruchamia (`-WindowStyle Hidden`, `CreateNoWindow`). Okno
+  nadzorcy testujesz na kopii (wzór `zasobnik\test-p7.ps1`): własny zamek, poza ekranem
+  (-5000, 0), bez paska zadań, ikony i dozoru, `-Proba`, bez `SetForegroundWindow`,
+  klawiatura wyłączona, a bezpiecznik w kopii `stan-nadzorcy.ps1` trzyma cykl wiedzy na
+  sucho (`Ruszaj-Cykl` i spółka). Pułapki: mapa, „TEST okna bez ekranu”. Po teście żadna
+  kopia nie zostaje w procesach.
+- **Commit:** `git add` tylko własnych plików (nigdy `-A`), commit lokalny z linią
+  `Co-Authored-By`, którą podaje Claude Code (zasada „bez atrybucji” dotyczy tylko
+  projektu WMS). Zablokowany indeks (`index.lock`) — odczekaj kilka sekund i ponów.
+- **Push, `ZMIANY.md` i `.megaruchacz\mapa.md` robi kierownik** na koniec rundy — worker
+  podaje w raporcie, co tam dopisać.
+- **Wspólne zasoby** — restart nadzorcy, pliki w `~\.claude`, zadania Harmonogramu,
+  instalatory globalne — rusza tylko worker, któremu zlecenie to wprost przydziela.
+- **Restart nadzorcy** (działający proces zostaje na starym kodzie): zatrzymaj
+  `powershell.exe`, którego wiersz poleceń zawiera `zasobnik\nadzorca.ps1` tego repo
+  (nie kopie testowe), potem `Start-ScheduledTask MegaRuchaczNadzorca` (póki stary
+  działa, Harmonogram odrzuca drugi start) i sprawdź, że proces wstał.

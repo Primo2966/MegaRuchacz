@@ -25,7 +25,8 @@ To nie jest opcjonalne. Bez tego następny worker zacznie od zera.
 Zasady dopisywania:
 
 - Dokładasz do istniejącej sekcji albo zakładasz nową — nie przepisujesz pliku
-  i nie kasujesz cudzych wpisów.
+  i nie kasujesz cudzych wpisów. Istniejącą mapę zmieniasz tylko przez `Edit`
+  (nie `Write`) — równolegle mogą dopisywać inni.
 - Jedna linia na rzecz: `ścieżka` — co tam jest, w kilku słowach.
 - Tylko rzeczy **trwałe**: gdzie co leży, jak nazywają się kluczowe elementy,
   gdzie przebiega granica między modułami.

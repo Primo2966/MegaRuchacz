@@ -981,6 +981,7 @@ def test_with_claude_alone_the_claude_command_line_is_used(unforced, monkeypatch
 
     assert (cli.name, cli.verified) == ("claude", True)
     assert argv[1:] == [*facts.MODEL_ARGS, "instrukcja"]  # the instruction in argv
+    assert argv[argv.index("--model") + 1] == "sonnet"  # background text work, not coding
     assert stdin == "material"  # the material on stdin, where 60 k characters fit
     assert not cli.answer_in_file()  # claude prints the answer, there is no file to point it at
 

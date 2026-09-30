@@ -152,6 +152,10 @@ GROUP_HEADINGS = {"stala": "## Trwałe", "biezaca": "## Bieżące",
 # --no-session-persistence: without it every run leaves a transcript holding yesterday's material,
 #   the indexer picks it up and the next run harvests its own output.
 # --permission-prompts none: nobody is sitting at the console at 08:05 to answer a prompt.
+# --model sonnet: pulling facts out of conversations is background text work, not coding, so it
+#   runs on the cheaper model (the user's decision, 2026-09-30). Without it every run took the
+#   machine's default — opus at high effort. The alias is the one `claude --help` lists (2.1.285);
+#   --safe-mode leaves model selection alone. The archive dig (lore.mining) shares this call.
 # --json-schema: `claude -p` is an agent, not a text endpoint — asked for plain text it adds
 #   questions and offers of help around the list. A schema gives a list and nothing else.
 #   Two shapes of an item: a listing ("referencyjna") cannot come back without "plik" and
@@ -185,7 +189,7 @@ FACTS_SCHEMA = json.dumps({
     "additionalProperties": False,
 }, ensure_ascii=False)
 MODEL_ARGS = ("-p", "--safe-mode", "--no-session-persistence", "--permission-prompts", "none",
-              "--output-format", "json", "--json-schema", FACTS_SCHEMA)
+              "--model", "sonnet", "--output-format", "json", "--json-schema", FACTS_SCHEMA)
 
 PROMPT = """Na wejściu (stdin) dostajesz fragmenty rozmów użytkownika z agentem AI.
 

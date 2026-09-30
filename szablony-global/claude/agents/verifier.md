@@ -1,6 +1,6 @@
 ---
 name: verifier
-description: Worker weryfikujący — sprawdza cudzą zmianę: czy działa, czy nie psuje reszty, czy zgadza się ze zleceniem. Używaj po rundzie implementerów, zanim zamkniesz zadanie.
+description: Worker weryfikujący — sprawdza, czy cudza zmiana działa, nie psuje reszty i zgadza się ze zleceniem. Używaj tylko przy ryzyku (dane na produkcji, kasowanie, bezpieczeństwo, pieniądze), zanim zamkniesz zadanie.
 tools: Read, Grep, Glob, Bash
 model: sonnet
 ---
