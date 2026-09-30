@@ -45,12 +45,16 @@ function Tryb-Dane {
   # Udzial MegaRuchacza w calym otwarciu sesji (domyslne narzedzie) - okno dopisuje
   # z tego procent obok kazdej liczby tokenow. Pusta calosc = nie zmierzono,
   # a udzial.powod mowi dlaczego (okno pokazuje to szaro, bez alarmu).
+  # udzial.prog_tokeny - prog czesci MegaRuchacza w TOKENACH ($AlarmCzesciOtwarcia):
+  # werdykt okna porownuje z nim udzial.mr, tak samo jak alarm "otwarcie". Do
+  # 30.09.2026 byl tu udzial.prog w procentach calosci - nowa nazwa, zeby stare okno
+  # nie wzielo tokenow za procent (bez klucza mowi "nie znam progu").
   Para "udzial.mr"        $rDom.Mr
   Para "udzial.start"     $rDom.TokS
   Para "udzial.wiadomosc" $rDom.TokW
   Para "udzial.calosc"    $rDom.Calosc
   Para "udzial.sesji"     $rDom.Sesji
-  Para "udzial.prog"      $AlarmUdzialuOtwarcia
+  Para "udzial.prog_tokeny" $AlarmCzesciOtwarcia
   Para "udzial.powod"     $rDom.PowodCalosci
   $nr = 0
   foreach ($a in (@($rDom.Alarmy) + @($alarmyInnego) + @($alarmy) + @($informacje) + @($informacjeInnego))) {

@@ -2,16 +2,18 @@
 # w jego naglowku). Karty zakladki Przeglad: werdykt na gorze (Odmaluj-Werdykt),
 # "Ile tokenow naprawde zuzywasz" (Odmaluj-Koszt), otwarcie okna rozmowy z paskiem
 # (Odmaluj-Start), podtytul, karty problemow, nauka z rozmow (Odmaluj-Liczby),
-# statystyka z wykresem (Odmaluj-Statystyke), stan jednym rzutem oka ze zmianami
-# w pamieci (Odmaluj-Stan), przyciski na dole (Odmaluj-Przyciski) i calosc
-# (Odmaluj-Okno). Tresc (co pokazac) jest w przeglad-tresc.ps1, wykres w wykres.ps1.
+# stan jednym rzutem oka ze zmianami w pamieci (Odmaluj-Stan), przyciski na dole
+# (Odmaluj-Przyciski) i calosc (Odmaluj-Okno). Tresc (co pokazac) jest
+# w przeglad-tresc.ps1. Wykres kosztu nauki z 30 dni stal tu do P35 - teraz jest
+# karta w Szczegolach (Panel-Wykresu w wykres.ps1).
 # Skad wolane: w-tle.ps1 (Wyrenderuj-Widok, Odswiez-Zuzycie), ladowanie.ps1
 # (Odmaluj-Podtytul), okno.ps1. Wczytuje go nadzorca.ps1 kropka po zamku jednej
 # kopii - tu sa same definicje.
 
 # --- werdykt na samej gorze Przegladu (P15, 28.09.2026) ------------------------
 # Jedno zdanie duza czcionka, ktore czlowiek nieznajacy MegaRuchacza zrozumie
-# w piec sekund: ile MegaRuchacz kosztuje w stosunku do calosci i czy to malo.
+# w piec sekund: ile MegaRuchacz doklada i czy to malo (od P35 prog w tokenach,
+# procent calosci tylko do pokazania).
 # Stan i slowa sklada Werdykt-Kosztu (stan-nadzorcy.ps1) - tu tylko kolor:
 # zielony = malo, czerwony = duzo, zolty = nie wiadomo (i wtedy tlo karty tez
 # zolte, zeby "nie wiem" nie wygladalo jak "wszystko gra").
@@ -410,9 +412,9 @@ function Odmaluj-Problemy {
 # tokenow w rozmowach z Claude ($zu = Zuzycie-Dzienne) albo, gdy go nie ma,
 # "nie mam z czym porownac, bo ..." na zolto - nigdy zero.
 function Kafelek-Liczby($t, $zu) {
+  # Zwykly odstep pod karta (Nowa-Karta) - do P35 wykres kosztu nauki byl jej
+  # dalszym ciagiem i stal tuz pod nia; teraz jest w Szczegolach.
   $k = Nowa-Karta $script:SzerKarty
-  # bez odstepu pod spodem - wykres kosztu nauki jest dalszym ciagiem tej karty (P15)
-  $k.Margin = New-Object System.Windows.Forms.Padding(0)
   $szer = $script:SzerKarty - 44
   $k.Controls.Add((Etykieta-Zawijana $t.Naglowek $script:CzGruba $script:KolTekst $szer))
   if ($null -ne $t.Liczba) {
@@ -482,117 +484,14 @@ function Odmaluj-Liczby {
   $t = $null
   try { $t = Liczba-Nauki $r $c }
   catch { Zanotuj-Wywrotke "zlozenie kosztu nauki" $_ }
-  $script:StatSama = (-not $t)
   if (-not $t) {
-    $script:PanelLiczby.Controls.Add((Etykieta-Zawijana (
-      "Kosztu nauki jeszcze nie ma - nie udało się go złożyć. Powód jest w zakładce Szczegóły.") $script:CzZwykla $script:KolUwaga $script:SzerTresc))
+    $bl = Etykieta-Zawijana "Kosztu nauki jeszcze nie ma - nie udało się go złożyć. Powód jest w zakładce Szczegóły." $script:CzZwykla $script:KolUwaga $script:SzerTresc
+    # ten sam odstep od karty "Stan", co pod karta nauki
+    $bl.Margin = New-Object System.Windows.Forms.Padding(0, 0, 0, 14)
+    $script:PanelLiczby.Controls.Add($bl)
     return
   }
   $script:PanelLiczby.Controls.Add((Kafelek-Liczby $t $script:Zuzycie))
-}
-
-function Liczba-Boczna($panel, [string]$podpis, [string]$wartosc) {
-  $panel.Controls.Add((Etykieta $podpis $script:CzMala $script:KolSzary))
-  $w = Etykieta $wartosc $script:CzSrednia $script:KolTekst
-  $w.Margin = New-Object System.Windows.Forms.Padding(0, 0, 0, 2)
-  $panel.Controls.Add($w)
-}
-
-function Znak-Legendy($panel, $kolor, [string]$napis) {
-  $kw = New-Object System.Windows.Forms.Panel
-  $kw.Size = New-Object System.Drawing.Size(10, 10)
-  $kw.BackColor = $kolor
-  $kw.Margin = New-Object System.Windows.Forms.Padding(0, 5, 6, 0)
-  $panel.Controls.Add($kw)
-  $t = Etykieta $napis $script:CzMala $script:KolSzary
-  $t.Margin = New-Object System.Windows.Forms.Padding(0, 2, 14, 0)
-  $panel.Controls.Add($t)
-}
-
-function Odmaluj-Statystyke {
-  if (-not $script:KartaStat -or $script:KartaStat.IsDisposed) { return }
-  Wyczysc-Panel $script:KartaStat
-  $r = $null
-  if ($script:Dane) { $r = $script:Dane.Rachunek }
-  $st = $null
-  try { $st = Statystyka-Okna $r }
-  catch { Zanotuj-Wywrotke "statystyka nauki do okna" $_ }
-  $script:StatWykresu = $st
-  $szer = $script:SzerKarty - 44
-  Ustaw-Miare-Wykresu
-
-  $script:KartaStat.Controls.Add((Etykieta "Koszt czytania rozmów - ostatnie 30 dni" $script:CzZwyklaGruba $script:KolTekst))
-  if (-not $st) {
-    $script:KartaStat.Controls.Add((Etykieta-Zawijana "Statystyki nie udało się złożyć - powód jest w dzienniku nadzorcy." $script:CzZwykla $script:KolUwaga $szer))
-    return
-  }
-
-  $wiersz = Poziomy
-  $wiersz.Margin = New-Object System.Windows.Forms.Padding(0, 8, 0, 4)
-  $gospodarz = New-Object System.Windows.Forms.Panel
-  # 130 px, nie 160 (P17): karta nauki dostala zdanie porownania i drobny druk,
-  # a okno ma sie dalej miescic na ekranie bez przewijania.
-  $gospodarz.Size = New-Object System.Drawing.Size(($szer - 340), 130)
-  $gospodarz.Margin = New-Object System.Windows.Forms.Padding(0)
-  $gospodarz.BackColor = [System.Drawing.Color]::White
-  Wstaw-Wykres $gospodarz $st
-  $wiersz.Controls.Add($gospodarz)
-
-  # Liczby po prawej w tej samej mierze, co os: tokeny (P17). Dokladna liczba
-  # drobno w podpisie, zaokraglona duzo.
-  $boczne = Pionowy 300
-  $boczne.Margin = New-Object System.Windows.Forms.Padding(40, 0, 0, 0)
-  $boczna = {
-    param([string]$podpis, $n, [string]$brak)
-    if ($null -eq $n) { Liczba-Boczna $boczne $podpis $brak; return }
-    Liczba-Boczna $boczne "$podpis · dokładnie $(Liczba-Ludzka $n)" "$(Tokeny-Okolo $n) tokenów"
-  }
-  # Trzy liczby, nie cztery (P15): srednia na dzien nauki powtarzala sume
-  # podzielona przez dni i nie mowila laikowi nic nowego - stoi w wydruku -Raport.
-  & $boczna "Ostatnie 7 dni" $st.Suma7 "brak danych"
-  & $boczna "Ostatnie $($st.OknoDni) dni" $st.Suma30 "brak danych"
-  if (($null -ne $st.Typowy) -and ($st.TypowychDni -gt 0)) {
-    & $boczna "Zwykły dzień (z $($st.TypowychDni) $(Odmiana $st.TypowychDni 'dnia' 'dni' 'dni'))" $st.Typowy ""
-  } else {
-    Liczba-Boczna $boczne "Zwykły dzień" "jeszcze nie wiem"
-  }
-  $wiersz.Controls.Add($boczne)
-  $script:KartaStat.Controls.Add($wiersz)
-
-  if ($st.DniZDanymi -gt 0) {
-    $leg = Poziomy
-    $leg.Margin = New-Object System.Windows.Forms.Padding(54, 0, 0, 2)
-    Znak-Legendy $leg $script:KolSlupek "zwykły dzień: rozmowy z poprzedniego dnia"
-    Znak-Legendy $leg $script:KolNadrab "rozmowy z kilku dni naraz"
-    if (@(@($st.Dni) | Where-Object { $_.Nieznane -gt 0 }).Count -gt 0) { Znak-Legendy $leg $script:KolNiezn "nie wiadomo, z których dni" }
-  }
-  # Prog "tu zaczyna sie drogo" pelnym zdaniem - w wierszu legendy, gdy sa
-  # slupki (jedna linia mniej), inaczej osobno. Czerwony tylko wtedy, gdy
-  # czerwona linia stoi na wykresie; gdy prog jest daleko ponad slupkami,
-  # zdanie jest szare - to informacja, nie alarm.
-  if ($null -ne $st.Prog) {
-    $zp = Zdanie-Progu $st $script:Zuzycie
-    $kolP = $script:KolSzary
-    if ((Prog-Widoczny $st) -and ($st.DniZDanymi -gt 0)) { $zp = "- - czerwona linia: tu zaczyna się drogo. $zp"; $kolP = $script:KolPilne }
-    elseif ($st.DniZDanymi -gt 0) { $zp = "$zp Słupki są daleko poniżej." }
-    if ($st.DniZDanymi -gt 0) {
-      $u = Etykieta-Zawijana $zp $script:CzMala $kolP ($szer - 54 - $leg.PreferredSize.Width - 10)
-      $u.Margin = New-Object System.Windows.Forms.Padding(10, 2, 0, 0)
-      $leg.Controls.Add($u)
-    } else {
-      $u = Etykieta-Zawijana $zp $script:CzMala $kolP $szer
-      $u.Margin = New-Object System.Windows.Forms.Padding(0, 4, 0, 0)
-      $script:KartaStat.Controls.Add($u)
-    }
-  }
-  if ($st.DniZDanymi -gt 0) { $script:KartaStat.Controls.Add($leg) }
-  # Uwaga o zbierajacej sie statystyce stoi pod wykresem ZAWSZE, gdy danych jest
-  # malo - takze wtedy, gdy w samym wykresie jest juz jej tresc (bez danych).
-  if ($st.Uwaga -and ($st.DniZDanymi -gt 0)) {
-    $u = Etykieta-Zawijana $st.Uwaga $script:CzMala $script:KolSzary $szer
-    $u.Margin = New-Object System.Windows.Forms.Padding(0, 4, 0, 0)
-    $script:KartaStat.Controls.Add($u)
-  }
 }
 
 # Wiersz karty stanu: "Nauka z rozmow: ostatnio dzis o 09:12" rozdzielone na
@@ -726,7 +625,6 @@ function Odmaluj-Okno {
     Odmaluj-Koszt
     Odmaluj-Start
     Odmaluj-Liczby
-    Odmaluj-Statystyke
     Odmaluj-Stan
     Odmaluj-Przyciski
   } catch {

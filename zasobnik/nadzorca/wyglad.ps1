@@ -20,7 +20,6 @@ $script:WidokSzczegoly = $null   # karty sekcji szczegolow, przewijane
 $script:Root           = $null
 $script:PanelProblemy  = $null
 $script:PanelLiczby    = $null
-$script:KartaStat      = $null
 $script:PanelStan      = $null
 $script:ListaSzczegolow = $null  # karty sekcji w zakladce Szczegoly (od 25.09.2026 zamiast jednego pola tekstu)
 $script:KartaStart     = $null   # karta "Otwarcie sesji" na Przegladzie
@@ -83,13 +82,12 @@ $script:LinkZmian      = $null
 $script:ZmianyRozwiniete = $false
 $script:Widok          = "przeglad"
 # Dane, z ktorych rysuje sie wykres w zdarzeniu Paint - procedura obslugi siega
-# wylacznie po $script:, wiec odkladamy je tutaj przy kazdym odmalowaniu.
+# wylacznie po $script:, wiec odkladamy je tutaj przy kazdym zlozeniu wykresu
+# (od P35 karta w Szczegolach, Panel-Wykresu).
 $script:StatWykresu    = $null
 # Jednostka osi wykresu (Ustaw-Miare-Wykresu): od P17 zawsze tysiace tokenow.
 $script:WykresDz       = 1000.0
 $script:WykresProc     = $false
-# Wykres bez karty nauki nad soba (nie dalo sie jej zlozyc) rysuje pelna ramke.
-$script:StatSama       = $false
 # Wywrotka rysowania meldowana RAZ, a nie przy kazdym odmalowaniu - Paint
 # przychodzi dziesiatki razy na minute i zasypalby dziennik.
 $script:RysowanieZawiodlo = $false

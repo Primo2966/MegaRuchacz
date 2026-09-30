@@ -76,7 +76,8 @@ function Liczba-Nauki($rachunek, $cykl) {
   $naDobe = [pscustomobject]@{
     Naglowek = "Raz dziennie: MegaRuchacz czyta Twoje rozmowy i wyciąga z nich fakty"
     Liczba   = $null
-    Opis     = "Tylko tu MegaRuchacz sam zleca pracę Claude'owi i za nią płacisz. Wszystko inne to tekst dopisany do Twoich rozmów - karta wyżej."
+    # P35: wykres z 30 dni przeszedl z Przegladu do Szczegolow - mowimy, gdzie jest.
+    Opis     = "Tylko tu MegaRuchacz sam zleca pracę Claude'owi i za nią płacisz. Wszystko inne to tekst dopisany do Twoich rozmów - karta wyżej. Wykres z 30 dni - w zakładce Szczegóły."
     Ogon     = ""
     Powod    = ""
     # Za jaki okres i czy to nadrabianie - bez tego drogi dzien nadrabiania
@@ -183,10 +184,11 @@ function Alarm-Z-Rachunku($a, $o) {
                  "(próg $(Liczba-Ludzka $a.Prog)). Najczęściej pomaga skrócenie sekcji 'Co wiem' w pliku z wiedzą. Co urosło - w zakładce Szczegóły.")
     }
     "otwarcie" {
-      # Od 28.09.2026 prog jest procentem calego otwarcia sesji, a nie liczba
-      # tokenow - "7 500 tokenow" nic uzytkownikowi nie mowilo.
-      $tytul = "MegaRuchacz to już $($a.Liczba)% otwarcia okna rozmowy (próg $($a.Prog)%)"
-      $porada = ("Tyle z tego, co Claude wczytuje przy każdym otwarciu okna rozmowy, dokłada MegaRuchacz - resztę sam Claude Code. " +
+      # Od 30.09.2026 (P35) prog jest znow liczba tokenow czesci MegaRuchacza, a nie
+      # procentem calego otwarcia - procent zalezy od wagi dodatkow, ktora ustawia
+      # administrator proxy. Liczba i prog przychodza z rachunku w tokenach.
+      $tytul = "MegaRuchacz dokłada już ~$(Okolo $a.Liczba) tokenów do każdego otwarcia okna rozmowy (próg ~$(Okolo $a.Prog))"
+      $porada = ("Tyle tekstu wchodzi od samego MegaRuchacza przy każdym otwarciu okna rozmowy - resztę dokłada sam Claude Code. " +
                  "To stan plików na teraz, nie koszt jednego dnia. Najczęściej pomaga skrócenie sekcji 'Co wiem'. Co urosło - w zakładce Szczegóły.")
     }
     "udzial" {
@@ -199,10 +201,10 @@ function Alarm-Z-Rachunku($a, $o) {
       if ($m.Success) { $od = $m.Groups[1].Value }
       $tytul = "MegaRuchacz: jego część otwarcia okna rozmowy urosła o $($a.Liczba)% od $od"
       $porada = "Tyle więcej tekstu wchodzi teraz przy każdym otwarciu okna rozmowy niż przy pomiarze z $od. Co doszło - w zakładce Szczegóły."
-      # Skok przy udziale ponizej progu przychodzi jako informacja (waga "info"):
-      # widac go, ale udzial w calym otwarciu sesji wciaz jest maly.
+      # Skok, po ktorym czesc MegaRuchacza jest wciaz ponizej progu, przychodzi jako
+      # informacja (waga "info"): widac go, ale nic sie nie pali.
       if ($a.Waga -eq "info") {
-        $porada = "Udział MegaRuchacza w całym otwarciu okna rozmowy nadal jest poniżej progu, więc to tylko informacja. Co doszło - w zakładce Szczegóły."
+        $porada = "Część MegaRuchacza nadal jest poniżej progu, od którego robi się drogo, więc to tylko informacja. Co doszło - w zakładce Szczegóły."
       }
     }
     "cykl-zwykly" {

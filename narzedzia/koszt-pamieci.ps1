@@ -132,9 +132,9 @@ $ProgPoczekalni = 10
 # niz czlowiek zdazy zauwazyc
 $ProgCiasno     = 80
 # wzrost kosztu od poprzedniego pomiaru, ktory ma byc widoczny. Czerwonym
-# alarmem jest TYLKO wtedy, gdy po skoku udzial MegaRuchacza w otwarciu sesji
-# przekracza $AlarmUdzialuOtwarcia; ponizej to wpis informacyjny - skok z 3%
-# na 4% nikomu nie szkodzi, a czerwien za niego uczy ignorowac alarmy
+# alarmem jest TYLKO wtedy, gdy po skoku czesc MegaRuchacza w otwarciu sesji
+# przekracza $AlarmCzesciOtwarcia; ponizej to wpis informacyjny - skok z 9 000
+# na 11 000 tokenow nikomu nie szkodzi, a czerwien za niego uczy ignorowac alarmy
 $ProgWzrostu    = 20
 
 # --- progi alarmowe ----------------------------------------------------------
@@ -143,17 +143,24 @@ $ProgWzrostu    = 20
 # sie rzadko i zawsze wtedy, gdy jest co zrobic. Kazda zmienia sie tutaj, jedna
 # linijka, i nic poza tym plikiem o nich nie wie.
 #
-# $AlarmUdzialuOtwarcia - PROCENT, jaki MegaRuchacz (start sesji + przypomnienie
-#   przy pierwszej wiadomosci) stanowi w CALYM otwarciu sesji Claude Code.
-#   Calosc to POMIAR z transkryptow (Pomiar-Otwarcia: mediana z ostatnich sesji),
-#   a nie liczba z glowy. 28.09.2026: calosc ~193 000 tokenow, MegaRuchacz
-#   ~7 100, czyli ~3-4%. Prog 10% = niemal trzy razy tyle, co dzis: dopisana
-#   wiedza sie zmiesci, podwojenie zasad tez, ale nie rozrost, przy ktorym
-#   MegaRuchacz zaczyna byc zauwazalna czescia rachunku - a wtedy skracanie ma
-#   sens. Zastapil progi w tokenach (7 500 na start, 300 na wiadomosc) na zyczenie
-#   uzytkownika: "7 500 tokenow" nic nie mowi, "4% otwarcia sesji" mowi wszystko.
-#   Gdy calosci nie zmierzono (brak transkryptow, Codex), alarm NIE swieci -
-#   rachunek mowi wtedy jednym zdaniem, ze nie porownuje, bo nie ma z czym.
+# $AlarmCzesciOtwarcia - LICZBA TOKENOW, ktora MegaRuchacz (start sesji +
+#   przypomnienie przy pierwszej wiadomosci) dokleja do KAZDEGO otwarcia sesji
+#   swojego narzedzia - ta sama czesc, ktora liczy ten rachunek (znaki / 3).
+#   30.09.2026: Claude Code ~9 100 (start 8 968 + przypomnienie 115), Codex ~5 100.
+#   Prog 15 000 = dzisiejsza czesc Claude Code plus ~65%: dopisana wiedza i drobne
+#   zmiany zasad sie zmieszcza, rozrost, przy ktorym skracanie ma sens - juz nie.
+#   DLACZEGO TOKENY, A NIE PROCENT (decyzja uzytkownika 30.09.2026). Do tego dnia
+#   progiem byl procent calego otwarcia sesji (10%). Ale procent zalezy od wagi
+#   dodatkow - opisow narzedzi z serwerow MCP, ktore dokleja Claude Code - a te
+#   ustawia administrator proxy: po wlaczeniu odkladania narzedzi otwarcie spadnie
+#   z ~191 000 do ~75 000 tokenow i te same ~9 100 tokenow MegaRuchacza dalyby
+#   ~12%, czyli czerwony alarm, choc MegaRuchacz nie urosl ani o znak. Stala liczba
+#   tokenow mierzy tylko to, na co MegaRuchacz ma wplyw. Procent calego otwarcia
+#   (calosc z transkryptow, Pomiar-Otwarcia) zostaje do POKAZYWANIA - linia,
+#   rozbicie, raport i okno nadzorcy - ale o alarmie nie decyduje.
+#   Gdy startu sesji nie da sie zmierzyc (nie ma CLAUDE.md, plik sie nie czyta),
+#   czesc wychodzi zanizona i alarm nie swieci - linia mowi wtedy wprost "startu
+#   sesji nie umiem zmierzyc", a okno nadzorcy pokazuje "nie wiadomo".
 # $AlarmUdzialu - jedna pozycja zjadajaca wiecej niz tyle procent swojego
 #   rachunku. Nie chodzi o sam rozmiar, tylko o to, ze skracanie czegokolwiek
 #   innego nic nie da. Dzis najdrozsza pozycja (warstwa stala) ma 64%, wiec prog
@@ -199,7 +206,7 @@ $ProgWzrostu    = 20
 #   trend, a nie przypadek. Dni nadrabiania sie tu nie licza, bo sa jednorazowe.
 # $DniStatystyki - ile ostatnich dni pokazuje statystyka w oknie nadzorcy: tyle,
 #   ile dluzsze okno podsumowania w lore\lore\facts.py (WINDOWS = (7, 30)).
-$AlarmUdzialuOtwarcia = 10
+$AlarmCzesciOtwarcia  = 15000
 $AlarmUdzialu         = 70
 $MinPozycjiDoUdzialu  = 3
 $AlarmCyklu           = 350000

@@ -150,15 +150,9 @@ function Pokaz-Okno {
   $script:PanelLiczby = Poziomy
   $script:PanelLiczby.Margin = New-Object System.Windows.Forms.Padding(0)
 
-  # Wykres to dalszy ciag karty nauki (P15): bez gornej kreski i bez odstepu,
-  # dolna kreska karty nauki robi za przedzialke. Okno ma sie zmiescic na
-  # ekranie bez przewijania - osobna karta kosztowala ~40 px. Gdy karty nauki
-  # nie ma (nie dalo sie jej zlozyc), wykres rysuje pelna ramke sam.
-  $script:KartaStat = Pionowy $script:SzerKarty
-  $script:KartaStat.BackColor = $script:TloKarty
-  $script:KartaStat.Padding = New-Object System.Windows.Forms.Padding(22, 10, 22, 16)
-  $script:KartaStat.Margin = New-Object System.Windows.Forms.Padding(0, 0, 0, 14)
-  $script:KartaStat.Add_Paint({ param($nadawca, $e) Obrysuj-Ciag-Dalszy $nadawca $e })
+  # Wykres kosztu nauki z 30 dni stal tu pod karta nauki do P35 (30.09.2026) -
+  # Przeglad przestal sie miescic bez przewijania, wiec wykres jest teraz karta
+  # w Szczegolach (Sekcje-Szczegolow, Panel-Wykresu).
   $script:PanelStan = Nowa-Karta $script:SzerKarty
   $script:PanelStan.Margin = New-Object System.Windows.Forms.Padding(0)
 
@@ -167,7 +161,6 @@ function Pokaz-Okno {
   $script:Root.Controls.Add($script:KartaKoszt)
   $script:Root.Controls.Add($script:KartaStart)
   $script:Root.Controls.Add($script:PanelLiczby)
-  $script:Root.Controls.Add($script:KartaStat)
   $script:Root.Controls.Add($script:PanelStan)
   $script:WidokPrzeglad.Controls.Add($script:Root)
 
@@ -415,7 +408,7 @@ function Pokaz-Okno {
     $script:Okno = $null; $script:Root = $null; $script:Naglowek = $null
     $script:WidokPrzeglad = $null; $script:WidokSzczegoly = $null
     $script:LPodtytul = $null; $script:PanelProblemy = $null; $script:PanelLiczby = $null
-    $script:KartaStat = $null; $script:PanelStan = $null
+    $script:PanelStan = $null
     $script:BPrzeglad = $null; $script:BSzczegoly = $null; $script:ListaSzczegolow = $null
     $script:KartaStart = $null; $script:KartaWerdykt = $null; $script:PodgladInfo = $null; $script:KartaKoszt = $null
     $script:Pasek = $null; $script:BAktualizuj = $null; $script:LAktualizuj = $null

@@ -3,7 +3,8 @@
 # i -Raport: jedna lista spraw wymagajacych uwagi (Zbierz-Problemy, Problem,
 # Waga-Z-Alarmu, Porada-Z-Alarmu, Ile-Wymaga-Uwagi), napisy przyciskow z szacunkiem
 # kosztu (Napisy-Przyciskow) i Przeglad jako tekst (Zbuduj-Przod, Skladniki-Mr,
-# Linie-Statystyki, Tokeny-Albo-Brak, Koszt-Po-Ludzku, Zdanie-Progu).
+# Tokeny-Albo-Brak, Koszt-Po-Ludzku, Zdanie-Progu) oraz wykres kosztu nauki jako
+# tekst (Linie-Statystyki - od P35 wykres stoi w Szczegolach, tam go wola wydruk).
 # Skad wolane: tryby -Raz i -Raport w nadzorca.ps1, karty w przeglad.ps1 (Odmaluj-*),
 # przyciski w okno.ps1, sekcje w szczegoly.ps1. Wczytuje go nadzorca.ps1 kropka
 # PRZED trybami bez GUI - tu sa same definicje, nic sie nie liczy.
@@ -293,17 +294,8 @@ function Zbuduj-Przod($d, $problemy, $czas, $start, $zuzycie = $null, $koszt = $
     $l += "  |   $($t.Opis)"
   }
   $l += ""
-
-  $st = $null
-  try { $st = Statystyka-Okna $r }
-  catch { Zanotuj-Wywrotke "statystyka nauki do wydruku" $_ }
-  $l += "KOSZT CZYTANIA ROZMÓW - OSTATNIE 30 DNI   (w oknie: dalszy ciąg karty nauki, wykres słupkowy w tysiącach tokenów - $(Opis-Rysownika))"
-  if (-not $st) {
-    $l += "  NIE UDALO SIE ZLOZYC STATYSTYKI - szczegoly w dzienniku nadzorcy"
-  } else {
-    $l += Linie-Statystyki $st $r $zuzycie
-  }
-  $l += ""
+  # Wykres kosztu nauki z 30 dni stoi od P35 w Szczegolach (karta "Koszt czytania
+  # rozmow - ostatnie 30 dni") - w wydruku razem z nimi, w Zbuduj-Szczegoly.
 
   $l += "STAN   (w oknie: karta z dwiema kolumnami - co i jak)"
   if ((Ile-Wymaga-Uwagi $problemy) -eq 0) { $l += "  Wszystko gra - nic nie wymaga Twojej uwagi." }
@@ -343,7 +335,8 @@ function Zbuduj-Przod($d, $problemy, $czas, $start, $zuzycie = $null, $koszt = $
 }
 
 # Statystyka jako tekst: to samo, co wykres w oknie, tylko paskami ze znakow.
-# Sluzy wydrukowi -Raport, czyli sprawdzeniu bez pulpitu.
+# Sluzy wydrukowi -Raport, czyli sprawdzeniu bez pulpitu (od P35 w czesci
+# SZCZEGOLY - Zbuduj-Szczegoly, element "wykres").
 function Linie-Statystyki($st, $rachunek, $zuzycie = $null) {
   $l = @()
   $zDanymi = @(@($st.Dni) | Where-Object { $_.Jest })

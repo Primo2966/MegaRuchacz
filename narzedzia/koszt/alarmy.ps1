@@ -2,7 +2,7 @@
 # w jego naglowku). Trzeci etap (Etap-Ocena): ocena kosztu nauki, rachunek kazdego
 # narzedzia z jego progami i alarmami (Rachunek-Narzedzia -> $rCc, $rCx, $rDom),
 # alarmy nauki z rozmow ($alarmy, $informacje) i jedna linia dla -Zwiezle / -Dane
-# (Linia-Narzedzia -> $liniaZwiezla, $kodWyjscia). Progi ($AlarmUdzialuOtwarcia,
+# (Linia-Narzedzia -> $liniaZwiezla, $kodWyjscia). Progi ($AlarmCzesciOtwarcia,
 # $AlarmCyklu i reszta) stoja na gorze koszt-pamieci.ps1. Skad wolane:
 # koszt-pamieci.ps1 kropka (". Etap-Ocena") przed trybami -Zwiezle, -Dane,
 # -Rozbicie, -TylkoSufity i pelnym raportem.
@@ -63,7 +63,9 @@ function Rachunek-Narzedzia($narz) {
   $r | Add-Member -NotePropertyName ZmianaProc -NotePropertyValue 0
   $r | Add-Member -NotePropertyName Skok -NotePropertyValue $false
   # MegaRuchacz w otwarciu sesji: start + przypomnienie doklejone do pierwszej
-  # wiadomosci (tak samo liczy okno nadzorcy, Opis-Startu). Calosc i Sesji z pomiaru.
+  # wiadomosci (tak samo liczy okno nadzorcy, Opis-Startu). Z ta liczba porownuje
+  # sie prog $AlarmCzesciOtwarcia (NadProgiem). Calosc i Sesji z pomiaru - tylko
+  # do pokazania procentu (Udzial).
   $r | Add-Member -NotePropertyName Mr -NotePropertyValue ([long]($r.TokS + $r.TokW))
   $r | Add-Member -NotePropertyName Calosc -NotePropertyValue $null
   $r | Add-Member -NotePropertyName Sesji -NotePropertyValue 0
@@ -88,8 +90,11 @@ function Rachunek-Narzedzia($narz) {
     $r.Calosc = [long]$otwarcie.Sesje.Mediana
     $r.Sesji  = [int]$otwarcie.Sesje.Liczba
     $r.Udzial = 100.0 * [double]$r.Mr / [double]$r.Calosc
-    $r.NadProgiem = ($r.Udzial -gt $AlarmUdzialuOtwarcia)
   }
+  # Prog w TOKENACH czesci MegaRuchacza, nie w procencie calosci (uzasadnienie przy
+  # $AlarmCzesciOtwarcia) - wiec porownanie nie czeka na pomiar calosci i dziala
+  # tak samo dla Claude Code, jak dla Codeksa.
+  $r.NadProgiem = ($r.Mr -gt $AlarmCzesciOtwarcia)
 
   $r.Ucinane = @(Sortuj-Sufity @($sufity | Where-Object {
     $_.Ucina -and $_.Przekroczony -and ((-not $_.Narzedzie) -or ($_.Narzedzie -eq $narz)) }))
@@ -110,14 +115,18 @@ function Rachunek-Narzedzia($narz) {
 
   if ($r.NadProgiem) {
     $n = Najdrozsza (@($r.KubS) + @($r.KubW))
-    $r.Alarmy += Alarm "$($r.Nazwa): MegaRuchacz to $(Procent-Tekst $r.Udzial) otwarcia sesji (prog $AlarmUdzialuOtwarcia%)" `
-      ("MegaRuchacz dokleja na otwarcie sesji $($r.Nazwa) ~$(Liczba $r.Mr) tokenow (start $(Liczba $r.TokS) + przypomnienie $(Liczba $r.TokW)), " +
-       "czyli $(Procent-Tekst $r.Udzial) calego otwarcia (~$(Liczba $r.Calosc) tokenow, mediana z $($r.Sesji) ostatnich sesji w transkryptach). " +
-       "Prog to $AlarmUdzialuOtwarcia%. To stan plikow na teraz, nie koszt jednego dnia. " +
+    # Procent calego otwarcia tylko do pokazania - bez zmierzonej calosci go nie ma.
+    $wCalosci = ""
+    if ($null -ne $r.Udzial) {
+      $wCalosci = ", czyli $(Procent-Tekst $r.Udzial) calego otwarcia (~$(Liczba $r.Calosc) tokenow, mediana z $($r.Sesji) ostatnich sesji w transkryptach)"
+    }
+    $r.Alarmy += Alarm "$($r.Nazwa): MegaRuchacz to ~$(Liczba $r.Mr) tokenow otwarcia sesji (prog $(Liczba $AlarmCzesciOtwarcia))" `
+      ("MegaRuchacz dokleja na otwarcie sesji $($r.Nazwa) ~$(Liczba $r.Mr) tokenow (start $(Liczba $r.TokS) + przypomnienie $(Liczba $r.TokW))$wCalosci. " +
+       "Prog to $(Liczba $AlarmCzesciOtwarcia) tokenow. To stan plikow na teraz, nie koszt jednego dnia. " +
        "Najdrozsza pozycja: $($n.Nazwa) (~$(Liczba $n.Tokeny) tokenow) - $($n.Rada). Plik: $($n.Skad).") `
-      "$($r.Temat)otwarcie" "pilne" ([int][math]::Round($r.Udzial)) $AlarmUdzialuOtwarcia "stan na teraz, przy kazdym starcie sesji"
+      "$($r.Temat)otwarcie" "pilne" $r.Mr $AlarmCzesciOtwarcia "stan na teraz, przy kazdym starcie sesji"
 
-    # Co ciac - ma sens dopiero, gdy caly udzial jest nad progiem; wczesniej
+    # Co ciac - ma sens dopiero, gdy cala czesc MegaRuchacza jest nad progiem; wczesniej
     # "jedna pozycja to 49%" swiecila na czerwono, choc nic nie trzeba bylo robic.
     foreach ($k in @(
       @{ Poz = $r.KubS; Nazwa = "start sesji" },
@@ -138,12 +147,12 @@ function Rachunek-Narzedzia($narz) {
     # przez noc, czy przez miesiac - a to dwie rozne sprawy.
     $odKiedy = "poprzedniego pomiaru (data nieznana)"
     if ($r.Poprz.Data) { $odKiedy = "pomiaru z $($r.Poprz.Data.ToString('dd.MM HH:mm'))" }
-    $poSkoku = "udzialu w calym otwarciu sesji nie znam ($($r.PowodCalosci))"
-    if ($null -ne $r.Udzial) { $poSkoku = "po skoku MegaRuchacz to $(Procent-Tekst $r.Udzial) otwarcia sesji (prog $AlarmUdzialuOtwarcia%)" }
+    $poSkoku = "po skoku czesc MegaRuchacza to ~$(Liczba $r.Mr) tokenow otwarcia sesji (prog $(Liczba $AlarmCzesciOtwarcia))"
+    if ($null -ne $r.Udzial) { $poSkoku += ", $(Procent-Tekst $r.Udzial) calego otwarcia" }
     $pelny = ("Start sesji $($r.Nazwa) urosl o $($r.ZmianaProc)% od $odKiedy ($(Liczba $r.Poprz.Tokeny) -> $(Liczba $r.TokS) tokenow na kazda sesje); " +
               "$poSkoku. Sprawdz, co doszlo do plikow tego narzedzia albo czy do rachunku nie doszla nowa pozycja (rozbicie wymienia wszystkie).")
-    # Czerwony tylko wtedy, gdy po skoku udzial przekracza prog - sam skok przy
-    # malym udziale to informacja: widac ja, ale nic sie nie pali.
+    # Czerwony tylko wtedy, gdy po skoku czesc MegaRuchacza przekracza prog - sam
+    # skok ponizej progu to informacja: widac ja, ale nic sie nie pali.
     $waga = "info"
     if ($r.NadProgiem) { $waga = "pilne" }
     $a = Alarm "$($r.Nazwa): start sesji +$($r.ZmianaProc)% od $odKiedy" $pelny `
@@ -165,8 +174,9 @@ function Rachunek-Narzedzia($narz) {
 function Linia-Narzedzia($r) {
   # Najpierw PROCENT calego otwarcia sesji - to jest liczba, ktora cos mowi
   # czlowiekowi; tokeny stoja w nawiasie (i z nich czyta liczby nadzorca).
-  # Bez zmierzonej calosci procentu nie ma i linia mowi dlaczego - szaro, bez
-  # alarmu, bo brak pomiaru to nie przekroczenie.
+  # Bez zmierzonej calosci procentu nie ma i linia mowi dlaczego - szaro, bo brak
+  # pomiaru to nie przekroczenie. O alarmie procent nie decyduje (prog jest
+  # w tokenach, $AlarmCzesciOtwarcia) - linia tylko go pokazuje.
   if (-not $r.Jest) {
     $rachunek = "pamiec $($r.Nazwa): $($r.Brak), nie ma czego liczyc"
   } else {
@@ -245,11 +255,12 @@ function Etap-Ocena {
   $alarmy = @()
   $informacje = @()
 
-  # PROG TO PROCENT CALOSCI, NIE LICZBA TOKENOW. Calosc otwarcia sesji bierzemy
-  # z pomiaru w transkryptach Claude Code (Pomiar-Otwarcia, same sesje - bez
-  # workerow, bo nie o nich jest ten prog). Liczymy go tu RAZ, dla wszystkich
-  # trybow, ktore pokazuja linie albo alarmy. Brak pomiaru to NIE zero i NIE alarm:
-  # pole PowodCalosci mowi wtedy, dlaczego nie porownujemy.
+  # CALOSC OTWARCIA SESJI - DO POKAZANIA PROCENTU. Od 30.09.2026 prog alarmu jest
+  # w tokenach czesci MegaRuchacza ($AlarmCzesciOtwarcia), a calosc z pomiaru
+  # w transkryptach Claude Code (Pomiar-Otwarcia, same sesje - bez workerow) daje
+  # juz tylko procent obok liczby. Liczymy ja tu RAZ, dla wszystkich trybow, ktore
+  # pokazuja linie albo alarmy. Brak pomiaru to NIE zero i NIE alarm: pole
+  # PowodCalosci mowi wtedy, dlaczego procentu nie ma.
   $otwarcie = $null
   $bladOtwarcia = ""
   if (-not $TylkoSufity) {

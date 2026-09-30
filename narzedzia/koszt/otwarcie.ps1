@@ -3,8 +3,8 @@
 # (Pomiar-Otwarcia) i tryb -Start, ktory oddaje ten pomiar jako JSON (Tryb-Start) -
 # czyta go okno nadzorcy (zasobnik\stan-nadzorcy.ps1, Pomiar-Startu).
 # Skad wolane: Tryb-Start - koszt-pamieci.ps1 kropka (exit 0 daje on);
-# Pomiar-Otwarcia bez workerow - etap Etap-Ocena (alarmy.ps1), jako podstawa progu
-# udzialu MegaRuchacza w otwarciu sesji.
+# Pomiar-Otwarcia bez workerow - etap Etap-Ocena (alarmy.ps1), jako calosc do
+# procentu MegaRuchacza w otwarciu sesji (tylko do pokazania - prog jest w tokenach).
 
 # --- tryb -Start: ile naprawde kosztuje otwarcie sesji (pomiar, nie szacunek) --
 # Rachunek wyzej liczy tylko to, co dokleja MegaRuchacz (znaki / 3). Nie zna
@@ -23,8 +23,9 @@
 # narzedzi ~27-40 tys., a podagenci ze wszystkimi narzedziami ~150-180 tys. -
 # roznice robia opisy narzedzi, nie tekst MegaRuchacza.
 # Brak transkryptow to NIE zero: JSON ma wtedy Powod i okno mowi "nie zmierzono".
-# Ten sam pomiar (same sesje, bez workerow) jest podstawa progu udzialu
-# MegaRuchacza w otwarciu sesji ($AlarmUdzialuOtwarcia) - patrz Rachunek-Narzedzia.
+# Ten sam pomiar (same sesje, bez workerow) daje procent MegaRuchacza w otwarciu
+# sesji - do pokazania; o alarmie decyduje prog w tokenach ($AlarmCzesciOtwarcia,
+# od 30.09.2026) - patrz Rachunek-Narzedzia.
 function Pomiar-Otwarcia([bool]$zWorkerami) {
   $katTranskryptow = Join-Path $katKlaudii "projects"
   # ta sama lista co $RoleClaude w narzedzia\instaluj-globalnie.ps1

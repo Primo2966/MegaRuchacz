@@ -206,7 +206,7 @@ function Raport-Pelny {
   foreach ($rr in @($rDom, $rInny)) {
     if (-not $rr.Jest) { continue }
     if ($null -ne $rr.Udzial) {
-      Linia "  $($rr.Nazwa): MegaRuchacz to $(Procent-Tekst $rr.Udzial) otwarcia sesji (~$(Liczba $rr.Mr) z ~$(Liczba $rr.Calosc) tokenow, prog $AlarmUdzialuOtwarcia%)."
+      Linia "  $($rr.Nazwa): MegaRuchacz to $(Procent-Tekst $rr.Udzial) otwarcia sesji (~$(Liczba $rr.Mr) z ~$(Liczba $rr.Calosc) tokenow, prog $(Liczba $AlarmCzesciOtwarcia) tokenow)."
     } else {
       Linia "  $($rr.Nazwa): udzialu w calym otwarciu sesji nie porownuje, bo $($rr.PowodCalosci)."
     }

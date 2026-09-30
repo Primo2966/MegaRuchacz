@@ -3,7 +3,8 @@
 # (Etykieta, Etykieta-Zawijana), odstepy, biala karta z ramka (Nowa-Karta,
 # Obrysuj), przyciski i przelacznik zakladek (Nowy-Przycisk, Przycisk-Przelacznika,
 # Styl-Przelacznika), kolor wagi, wiersz dwukolumnowy, tabela, karta sekcji
-# Szczegolow (Karta-Sekcji) i karta komunikatu.
+# Szczegolow (Karta-Sekcji - takze z wykresem, Panel-Wykresu z wykres.ps1) i karta
+# komunikatu.
 # Skad wolane: przeglad.ps1, szczegoly.ps1, warstwy.ps1, skille.ps1, w-tle.ps1,
 # ladowanie.ps1, okno.ps1. Wczytuje go nadzorca.ps1 kropka po zamku jednej kopii -
 # tu sa same definicje.
@@ -69,21 +70,6 @@ function Obrysuj($kontrolka, $e) {
     $e.Graphics.DrawRectangle($script:PioroRamki, 0, 0, $kontrolka.Width - 1, $kontrolka.Height - 1)
   } catch {
     if (-not $script:RamkaZawiodla) { $script:RamkaZawiodla = $true; Zanotuj-Wywrotke "rysowanie ramki karty" $_ }
-  }
-}
-
-# Ramka karty, ktora jest dalszym ciagiem karty nad nia (wykres pod karta
-# nauki): lewa, prawa i dolna kreska. Gorna tylko wtedy, gdy karty nad nia
-# nie ma ($script:StatSama) - inaczej wisialaby bez ramki od gory.
-function Obrysuj-Ciag-Dalszy($kontrolka, $e) {
-  try {
-    $w = $kontrolka.Width - 1; $h = $kontrolka.Height - 1
-    $e.Graphics.DrawLine($script:PioroRamki, 0, 0, 0, $h)
-    $e.Graphics.DrawLine($script:PioroRamki, $w, 0, $w, $h)
-    $e.Graphics.DrawLine($script:PioroRamki, 0, $h, $w, $h)
-    if ($script:StatSama) { $e.Graphics.DrawLine($script:PioroRamki, 0, 0, $w, 0) }
-  } catch {
-    if (-not $script:RamkaZawiodla) { $script:RamkaZawiodla = $true; Zanotuj-Wywrotke "rysowanie ramki wykresu" $_ }
   }
 }
 
@@ -264,6 +250,8 @@ function Karta-Sekcji($s) {
         $k.Controls.Add($l)
       }
       "tabela" { $k.Controls.Add((Tabela-Kontrolka $e $szer)) }
+      # P35: wykres kosztu nauki z liczbami obok (Panel-Wykresu w wykres.ps1)
+      "wykres" { $k.Controls.Add((Panel-Wykresu $e.Statystyka $szer)) }
     }
   }
   return $k

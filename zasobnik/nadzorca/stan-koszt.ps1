@@ -222,14 +222,23 @@ function Zdanie-Wiadomosci($start) {
 # WERDYKT NA SAMEJ GORZE PRZEGLADU (P15). Uzytkownik: "ma byc jasno jak dla
 # laika, ktory nie wie do konca, co to MegaRuchacz, ale wie, ze tokeny kosztuja".
 # Trzy stany i zaden czwarty:
-#   malo        - czesc MegaRuchacza w otwarciu sesji NIE przekracza progu,
-#   duzo        - przekracza (to samo porownanie, co alarm w koszt-pamieci.ps1:
-#                 udzial > $AlarmUdzialuOtwarcia),
-#   nie wiadomo - nie ma zmierzonej calosci albo progu; mowimy wtedy wprost,
-#                 czego brakuje. "Malo" bez pomiaru byloby klamstwem.
-# Prog NIE jest tu wpisany - przychodzi z koszt-pamieci.ps1 -Dane (udzial.prog),
-# gdzie stoi razem z uzasadnieniem. Stan "licze" to tylko chwila przed pierwszym
-# pomiarem po otwarciu okna, nie werdykt.
+#   malo        - czesc MegaRuchacza w otwarciu sesji (start + przypomnienie,
+#                 w tokenach) NIE przekracza progu,
+#   duzo        - przekracza (to samo porownanie, co alarm "otwarcie"
+#                 w koszt-pamieci.ps1: udzial.mr > $AlarmCzesciOtwarcia),
+#   nie wiadomo - czesci MegaRuchacza nie da sie zmierzyc albo nie ma progu;
+#                 mowimy wtedy wprost, czego brakuje. "Malo" bez pomiaru byloby
+#                 klamstwem.
+# P35 (30.09.2026, decyzja uzytkownika): prog jest w TOKENACH, nie w procencie
+# calego otwarcia okna rozmowy. Procent zalezy od wagi dodatkow, ktora ustawia
+# administrator proxy - otwarcie ~191 tys. -> ~75 tys. zrobiloby z tych samych
+# ~9 100 tokenow ~12% i czerwony werdykt. Procent zostaje w zdaniu do POKAZANIA
+# (ten sam, co na karcie otwarcia tuz nizej); bez zmierzonej calosci zdanie mowi
+# same tokeny i dlaczego procentu nie ma - werdykt i tak zapada.
+# Czesc MegaRuchacza i prog NIE sa tu liczone ani wpisane - przychodza z jednego
+# przebiegu koszt-pamieci.ps1 -Dane (udzial.mr, udzial.start, udzial.prog_tokeny),
+# wiec werdykt i alarm nie moga sie rozjechac. Stan "licze" to tylko chwila przed
+# pierwszym pomiarem po otwarciu okna, nie werdykt.
 function Werdykt-Kosztu($start, $rachunek, $cykl, $zuzycie = $null) {
   $w = [pscustomobject]@{ Stan = "licze"; Zdanie = ""; Wyjasnienie = ""; Nauka = ""; Prog = $null; Proc = "" }
   if ($null -eq $start) {
@@ -238,7 +247,9 @@ function Werdykt-Kosztu($start, $rachunek, $cykl, $zuzycie = $null) {
   }
   $k = $null
   if ($rachunek) { $k = $rachunek.Klucze }
-  $w.Prog = Liczba-Z-Klucza $k "udzial.prog"
+  $w.Prog = Liczba-Z-Klucza $k "udzial.prog_tokeny"
+  $mr  = Liczba-Z-Klucza $k "udzial.mr"
+  $mrS = Liczba-Z-Klucza $k "udzial.start"
   $o = Opis-Startu $start
   # P17: nauka w tokenach i jako udzial w calym dziennym zuzyciu - procent
   # otwarcia okna rozmowy nic nie mowil przy koszcie dziennym.
@@ -250,34 +261,66 @@ function Werdykt-Kosztu($start, $rachunek, $cykl, $zuzycie = $null) {
       $w.Nauka += ", ok. $(Procent-Udzialu ([double]$cykl.Koszt) ([double]$zuzycie.Srednia)) Twojego dziennego zużycia tokenów."
     } else { $w.Nauka += " ($(Bez-Porownania $zuzycie))." }
   }
-  if (-not $o.Zmierzone) {
-    $w.Stan = "nie wiadomo"
-    $w.Zdanie = "Nie wiadomo, czy MegaRuchacz kosztuje dużo, czy mało."
-    $w.Wyjasnienie = "Nie zmierzono, ile Claude wczytuje przy otwarciu nowego okna rozmowy, bo $($o.Powod) - więc nie ma do czego porównać."
-    if (($null -ne $o.Mr) -and ($o.Mr -gt 0)) { $w.Wyjasnienie += " Sam MegaRuchacz dokłada ok. $(Okolo $o.Mr) tokenów przy każdym otwarciu okna rozmowy." }
-    return $w
-  }
-  $w.Proc = $o.MrProc
-  # Co to jest "otwarcie sesji" (~194 400 tokenow = 100%) mowi duza liczba na karcie tuz pod spodem - tu tylko prog.
+  if ($o.Zmierzone) { $w.Proc = $o.MrProc }
   if ($null -eq $w.Prog) {
     $pw = "rachunek MegaRuchacza go nie podał"
     if ($rachunek -and $rachunek.Powod) { $pw = "rachunek MegaRuchacza się nie policzył: $($rachunek.Powod)" }
     elseif (-not $rachunek) { $pw = "rachunek MegaRuchacza się nie policzył" }
     $w.Stan = "nie wiadomo"
     $w.Zdanie = "Nie wiadomo, czy MegaRuchacz kosztuje dużo, czy mało."
-    $w.Wyjasnienie = "Jego część to $($o.MrProc) otwarcia okna rozmowy, ale nie znam progu, od którego jest drogo ($pw)."
+    $w.Wyjasnienie = "Nie znam progu, od którego jest drogo ($pw)."
+    # Liczba bez rachunku - z pomiaru otwarcia okna (-Start liczy te same pliki).
+    if (($null -ne $o.Mr) -and ($o.Mr -gt 0)) {
+      $ile = "~$(Okolo $o.Mr) tokenów"
+      if ($w.Proc) { $ile += " ($($w.Proc) otwarcia okna rozmowy)" }
+      $w.Wyjasnienie = "Sam MegaRuchacz dokłada $ile przy każdym otwarciu okna rozmowy, ale nie znam progu, od którego jest drogo ($pw)."
+    }
     return $w
   }
-  if ((100.0 * [double]$o.UdzialMr) -gt [double]$w.Prog) {
+  # Zero za start to nie "za darmo", tylko "nie bylo czego policzyc" (brak CLAUDE.md,
+  # plik sie nie czyta, nie ma w nim niczego od MegaRuchacza) - tak mowi sam rachunek.
+  if (($null -eq $mr) -or ($null -eq $mrS) -or ($mrS -le 0)) {
+    $w.Stan = "nie wiadomo"
+    $w.Zdanie = "Nie wiadomo, czy MegaRuchacz kosztuje dużo, czy mało."
+    $w.Wyjasnienie = ("Rachunek nie zmierzył, ile MegaRuchacz dokłada przy otwarciu okna rozmowy - nie znalazł ani jego zasad, ani wiedzy wczytywanej na starcie " +
+                      "(co dokładnie, pokazuje zakładka Szczegóły). Nie ma czego porównać z progiem.")
+    return $w
+  }
+  # Bez zmierzonej calosci procentu nie ma - werdykt zapada i tak (prog jest w tokenach),
+  # a zdanie mowi, czemu procentu brak. Nigdy 0% i nigdy zgadniety procent.
+  $bezProcentu = ""
+  if (-not $w.Proc) { $bezProcentu = " Jaką to część wszystkiego, co Claude wczytuje przy otwarciu okna, nie wiem, bo $("$($o.Powod)".TrimEnd('.', ' '))." }
+  $ile = "~$(Okolo $mr) tokenów"
+  if ($mr -gt $w.Prog) {
     $w.Stan = "duzo"
-    $w.Zdanie = "MegaRuchacz kosztuje dużo: dokłada $($o.MrProc) do tego, co Claude wczytuje przy każdym otwarciu nowego okna rozmowy."
-    $w.Wyjasnienie = "Drogo robi się już od $($w.Prog)% - warto odchudzić jego zasady albo wiedzę (co ile waży, pokazuje zakładka Szczegóły)."
+    if ($w.Proc) {
+      $w.Zdanie = "MegaRuchacz kosztuje dużo: dokłada $($w.Proc) do tego, co Claude wczytuje przy każdym otwarciu nowego okna rozmowy."
+      $w.Wyjasnienie = "To $ile przy każdym otwarciu okna, a drogo robi się już od ~$(Okolo $w.Prog) tokenów - warto odchudzić jego zasady albo wiedzę (co ile waży, pokazuje zakładka Szczegóły)."
+    } else {
+      $w.Zdanie = "MegaRuchacz kosztuje dużo: dokłada $ile przy każdym otwarciu nowego okna rozmowy."
+      $w.Wyjasnienie = "Drogo robi się już od ~$(Okolo $w.Prog) tokenów - warto odchudzić jego zasady albo wiedzę (co ile waży, pokazuje zakładka Szczegóły).$bezProcentu"
+    }
   } else {
     $w.Stan = "malo"
-    $w.Zdanie = "MegaRuchacz kosztuje mało: dokłada $($o.MrProc) do tego, co Claude wczytuje przy każdym otwarciu nowego okna rozmowy."
-    $w.Wyjasnienie = "Drogo byłoby dopiero od $($w.Prog)%."
+    if ($w.Proc) {
+      $w.Zdanie = "MegaRuchacz kosztuje mało: dokłada $($w.Proc) do tego, co Claude wczytuje przy każdym otwarciu nowego okna rozmowy."
+      $w.Wyjasnienie = "Drogo byłoby, gdyby MegaRuchacz urósł o $(Wzrost-Do-Progu $mr $w.Prog) (dziś $ile przy otwarciu okna)."
+    } else {
+      $w.Zdanie = "MegaRuchacz kosztuje mało: dokłada $ile przy każdym otwarciu nowego okna rozmowy."
+      $w.Wyjasnienie = "Drogo byłoby, gdyby MegaRuchacz urósł o $(Wzrost-Do-Progu $mr $w.Prog).$bezProcentu"
+    }
   }
   return $w
+}
+
+# "ok. 65%" - o ile czesc MegaRuchacza musialaby urosnac, zeby przekroczyc prog.
+# Od 10% w gore co 5 (to zapas na oko, nie pomiar co do procenta), ponizej -
+# dokladnie, ponizej 1% - "mniej niż 1%" (zero czytaloby sie jak "juz drogo").
+function Wzrost-Do-Progu($mr, $prog) {
+  $p = 100.0 * ([double]$prog - [double]$mr) / [math]::Max(1.0, [double]$mr)
+  if ($p -ge 10) { return "ok. $([int]([math]::Round($p / 5.0) * 5))%" }
+  if ($p -ge 1) { return "ok. $([int][math]::Round($p))%" }
+  return "mniej niż 1%"
 }
 
 # Odczyt pojedynczych kluczy z odpowiedzi -Dane. Brak klucza i smiec to $null /

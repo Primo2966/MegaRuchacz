@@ -106,7 +106,7 @@ function Tryb-Rozbicie {
     }
     $b += Kubelek-Rozbicia "Claude Code - RAZ, przy starcie sesji" $kubSesja $tokSesja $brakSesja $dopS
     if ($null -ne $rCc.Calosc) {
-      $b += ("  {0,-20} {1}" -f "", "Razem MegaRuchacz: ~$(Liczba $rCc.Mr) z ~$(Liczba $rCc.Calosc) tokenow otwarcia sesji = $(Procent-Tekst $rCc.Udzial) (prog $AlarmUdzialuOtwarcia%; calosc z $($rCc.Sesji) ostatnich sesji).")
+      $b += ("  {0,-20} {1}" -f "", "Razem MegaRuchacz: ~$(Liczba $rCc.Mr) z ~$(Liczba $rCc.Calosc) tokenow otwarcia sesji = $(Procent-Tekst $rCc.Udzial) (prog $(Liczba $AlarmCzesciOtwarcia) tokenow; calosc z $($rCc.Sesji) ostatnich sesji).")
     } else {
       $b += ("  {0,-20} {1}" -f "", "Udzialu w calym otwarciu sesji nie porownuje, bo $($rCc.PowodCalosci).")
     }

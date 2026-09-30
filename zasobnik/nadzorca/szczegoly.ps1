@@ -1,6 +1,7 @@
 ﻿# zasobnik\nadzorca\szczegoly.ps1 - czesc zasobnik\nadzorca.ps1 (patrz BUDOWA
 # w jego naglowku). Zakladka Szczegoly: lista sekcji (Sekcje-Szczegolow,
-# Sekcja-Kosztu, Dodaj-Rozbicie i klocki Nowa-Sekcja / Dodaj-*), ta sama tresc
+# Sekcja-Kosztu, Dodaj-Rozbicie i klocki Nowa-Sekcja / Dodaj-*, od P35 takze
+# wykres kosztu nauki z 30 dni - Dodaj-Wykres), ta sama tresc
 # jako tekst dla wydruku -Raport (Zbuduj-Szczegoly, Tabela-Na-Tekst), ogonki
 # w tekstach z koszt-pamieci.ps1 (Po-Polsku, $SLOWA_Z_OGONKAMI) i wstawienie kart
 # do zakladki (Napelnij-Szczegoly, Pokaz-Karty-Szczegolow). Same karty rysuje
@@ -48,6 +49,13 @@ function Dodaj-Tabele($s, $kolumny, $wiersze) {
   $w = New-Object System.Collections.ArrayList
   foreach ($r in @($wiersze)) { [void]$w.Add([string[]]@($r)) }
   [void]$s.Elementy.Add([pscustomobject]@{ Rodzaj = "tabela"; Kolumny = @($kolumny); Wiersze = $w })
+}
+
+# Wykres kosztu nauki z liczbami obok (P35) - w oknie rysuje go Karta-Sekcji
+# (Panel-Wykresu w wykres.ps1), wydruk -Raport daje w tym miejscu te same dni
+# paskami ze znakow (Linie-Statystyki). $st = Statystyka-Okna.
+function Dodaj-Wykres($s, $st) {
+  [void]$s.Elementy.Add([pscustomobject]@{ Rodzaj = "wykres"; Statystyka = $st })
 }
 
 # koszt-pamieci.ps1 pisze samym ASCII (tak musi - patrz tamten plik). Do okna
@@ -301,13 +309,21 @@ function Sekcje-Szczegolow($d, $wywrotkiNadzorcy, $rozbicie, $start, $koszt = $n
   else { Dodaj-Tekst $s "Nie udało się odczytać - szczegóły w dzienniku nadzorcy." "uwaga" }
   $lista += $s
 
-  # 5. Historia kosztu nauki - te same dni i sumy, co na wykresie, plus zrodlo.
-  $s = Nowa-Sekcja "Koszt nauki dzień po dniu" "Liczby, z których rysuje się wykres na Przeglądzie."
+  # 5. Wykres kosztu nauki z 30 dni z liczbami obok (P35, 30.09.2026: do tego dnia
+  # stal na Przegladzie - ten przestal sie miescic bez przewijania). Karta nizej
+  # ma te same dni w liczbach i to, skad sa.
   $rach = $null
   if ($d) { $rach = $d.Rachunek }
   $st = $null
   try { $st = Statystyka-Okna $rach }
   catch { Zanotuj-Wywrotke "statystyka nauki do szczegolow" $_ }
+  $s = Nowa-Sekcja "Koszt czytania rozmów - ostatnie 30 dni" "Ile tokenów kosztowała nauka z Twoich rozmów każdego dnia. Te same dni w liczbach i to, skąd są - w karcie niżej."
+  if ($st) { Dodaj-Wykres $s $st }
+  else { Dodaj-Tekst $s "Nie udało się złożyć - szczegóły w dzienniku nadzorcy." "uwaga" }
+  $lista += $s
+
+  # 5a. Historia kosztu nauki - te same dni i sumy, co na wykresie, plus zrodlo.
+  $s = Nowa-Sekcja "Koszt nauki dzień po dniu" "Liczby, z których rysuje się wykres wyżej."
   if ($st) {
     $skad = "nie wiadomo"; $wagaSkad = "uwaga"
     switch ($st.Zrodlo) {
@@ -442,6 +458,10 @@ function Zbuduj-Szczegoly($d, $wywrotkiNadzorcy, $rozbicie, $start, $koszt = $nu
         "tekst"    { $l += "  $($e.Tekst)" }
         "podtytul" { $l += "  -- $($e.Tekst)" }
         "tabela"   { $l += Tabela-Na-Tekst $e }
+        "wykres"   {
+          $l += "  (w oknie: wykres słupkowy w tysiącach tokenów, obok trzy liczby - $(Opis-Rysownika); tutaj te same dni paskami)"
+          $l += Linie-Statystyki $e.Statystyka $null $zuzycie
+        }
       }
     }
     $l += ""
