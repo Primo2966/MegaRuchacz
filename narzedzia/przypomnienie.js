@@ -24,6 +24,17 @@
 // linii na poczatku (patrz alarmArchiwum).
 // Zmienne do testow: MR_ARCHIWUM_STAN (plik stanu), MR_LORE_PYTHON (python Lore),
 // LORE_HOME (katalog bazy - czyta go sam recall.py).
+//
+// Od 2026-09-30 (P26) jeszcze dwie rzeczy:
+//   - DLUGA ROZMOWA: kazde wywolanie modelu czyta cala rozmowe, wiec dluga rozmowa kosztuje
+//     przy kazdym kroku (rozmowa kierownika z 25-30.09 urosla do ~580 tys. tokenow). Skrypt
+//     czyta sama koncowke transkryptu (transcript_path z wejscia), bierze kontekst ostatniej
+//     odpowiedzi modelu i ponad progiem dokleja kierownikowi JEDNA linie: powiedz uzytkownikowi,
+//     ze taniej bedzie nowe okno. Nie przy kazdej wiadomosci - patrz PROG_ROZMOWY i KROK_ROZMOWY.
+//     Stan per rozmowa: ~\.claude\wiedza\.rozmowa-stan.json (do testow: MR_ROZMOWA_STAN).
+//   - POWIADOMIENIA: gdy "wiadomosc" to powiadomienie o koncu workera (<task-notification>),
+//     skrypt nie dokleja NIC - ani zasad, ani archiwum, ani linii o cyklu (P22: 19 z 76
+//     doklejek w rozmowie kierownika szlo do powiadomien, czyli do nikogo).
 
 const fs = require("fs");
 const os = require("os");
@@ -68,6 +79,24 @@ const GODZIN_MIEDZY_ALARMAMI = 6;
 // Pamiec "co juz doklejono w tej rozmowie" - fragment raz doklejony siedzi w historii,
 // drugi raz to czysty koszt. Trzymamy ostatnie rozmowy, starsze wypadaja.
 const PAMIETANYCH_SESJI = 40;
+
+// --- dluga rozmowa (P26) ---
+// Prog: samo otwarcie okna rozmowy to dzis ~194 tys. tokenow (P22: mediana startu 14-30.09),
+// wiec 300 tys. = start + ~100 tys. wlasnej rozmowy. Do ponownej oceny po naprawie proxy,
+// ktore dzis zawyza start (P22 pkt 1: do 11.09 start mial ~63 tys.). Ta sama liczba stoi
+// w narzedzia\straznik-zasad.ps1 i zasobnik\stan-nadzorcy.ps1 ($PROG_DLUGIEJ_ROZMOWY).
+const PROG_ROZMOWY = 300000;
+// Nie przy kazdej wiadomosci: pierwszy raz po przekroczeniu progu, potem co kolejne +100 tys.
+// (jedna linia przy kazdej wiadomosci to szum, ktory uczy ignorowania).
+const KROK_ROZMOWY = 100000;
+// Bufor rozmowy zyje godzine (Claude Code pisze do bufora 1-godzinnego) - po dluzszej przerwie
+// kolejne wywolanie zapisuje do niego cala rozmowe od nowa (P22: 92% zapisow do bufora rozmowy
+// kierownika to takie powroty). Powrot po przerwie z dluga rozmowa to osobny powod linii.
+const MINUT_BUFORA = 60;
+// Czytamy tylko koncowke transkryptu, od konca: 256 KB wystarcza prawie zawsze; gdy ostatnia
+// odpowiedz modelu tam sie nie miesci (za nia np. wielki wynik narzedzia) - 2 MB, potem 8 MB.
+// Czas nie zalezy od dlugosci pliku (transkrypty maja do ~140 MB).
+const KONCOWKI = [256 * 1024, 2 * 1024 * 1024, 8 * 1024 * 1024];
 
 function czytaj(sciezka) {
   try {
@@ -291,6 +320,192 @@ function archiwum(wejscie, budzet, plikStanu) {
   return wynik;
 }
 
+// ---------------------------------------------------------------- dluga rozmowa (P26)
+
+// Powiadomienie o koncu workera (albo innego zadania w tle) to nie wiadomosc uzytkownika.
+// Sprawdzone w transkryptach 30.09.2026: Claude Code wola ten hook takze dla nich - prompt
+// zaczyna sie wtedy od "<task-notification>" (i tak laduje w transkrypcie jako tresc wiadomosci).
+// "[SYSTEM NOTIFICATION - NOT USER INPUT]" (w <system-reminder>) to ta sama rzecz w postaci,
+// w jakiej Claude Code pokazuje ja modelowi przy powiadomieniu w trakcie pracy - lapiemy obie,
+// ale tylko NA POCZATKU promptu: wiadomosc uzytkownika, ktora cytuje powiadomienie, dostaje
+// zasady jak kazda inna.
+function czyPowiadomienie(tresc) {
+  if (typeof tresc !== "string") return false;
+  const p = tresc.replace(/^\s+/, "");
+  if (p.startsWith("<task-notification>")) return true;
+  return /^(<system-reminder>\s*)?\[SYSTEM NOTIFICATION - NOT USER INPUT\]/.test(p);
+}
+
+// Zapis stanu przez plik tymczasowy i podmiane - dwa okna rozmowy naraz nie zostawia
+// polowy pliku. Gdy podmiana nie wyjdzie (plik trzymany przez kogos), zapis wprost.
+function zapiszStan(plik, stan) {
+  const tekst = JSON.stringify(stan, null, 1);
+  try {
+    fs.mkdirSync(path.dirname(plik), { recursive: true });
+    const tmp = plik + ".tmp" + process.pid;
+    fs.writeFileSync(tmp, tekst, "utf8");
+    try { fs.renameSync(tmp, plik); }
+    catch (e) { fs.writeFileSync(plik, tekst, "utf8"); usun(tmp); }
+  } catch (e) {
+    process.stderr.write("przypomnienie.js: nie zapisalem stanu " + plik + ": " + e.message + "\n");
+  }
+}
+
+// Kontekst ostatniej odpowiedzi modelu = input + cache_creation + cache_read z jej usage, czyli
+// tyle, ile czyta kazdy nastepny krok. Czytamy od konca (KONCOWKI), pierwsza linia wycinka
+// jest zwykle ucieta, a ostatnia bywa w trakcie dopisywania - obie pomijamy przy liczeniu
+// "zepsutych". Zepsuta = linia, ktora nie wyglada na obiekt JSON ({...}) albo odpowiedz modelu,
+// ktorej nie da sie odczytac - bez parsowania wszystkiego (wyniki narzedzi maja po kilka MB).
+// Odpowiedzi "<synthetic>" (komunikaty samego Claude Code) maja zera - pomijane.
+function ostatniaOdpowiedz(sciezka) {
+  const fd = fs.openSync(sciezka, "r");
+  try {
+    const rozmiar = fs.fstatSync(fd).size;
+    let zepsute = 0;
+    let ile = 0;
+    for (const n of KONCOWKI) {
+      ile = Math.min(n, rozmiar);
+      const buf = Buffer.alloc(ile);
+      fs.readSync(fd, buf, 0, ile, rozmiar - ile);
+      const linie = buf.toString("utf8").split("\n");
+      if (ile < rozmiar) linie.shift();
+      zepsute = 0;
+      for (let i = linie.length - 1; i >= 0; i--) {
+        const l = linie[i].replace(/\r$/, "");
+        const ostatnia = i === linie.length - 1;
+        if (!l.trim()) continue;
+        if (!ostatnia && !(l.charCodeAt(0) === 123 && l.trimEnd().endsWith("}"))) { zepsute++; continue; }
+        if (l.indexOf('"usage":{') < 0 || l.indexOf('"role":"assistant"') < 0) continue;
+        let o = null;
+        try { o = JSON.parse(l); } catch (e) { if (!ostatnia) zepsute++; continue; }
+        const m = o && o.message;
+        if (!m || m.role !== "assistant" || !m.usage || m.model === "<synthetic>") continue;
+        const u = m.usage;
+        const k = (Number(u.input_tokens) || 0) + (Number(u.cache_creation_input_tokens) || 0) +
+          (Number(u.cache_read_input_tokens) || 0);
+        if (!(k > 0)) continue;
+        return { kontekst: k, czas: Date.parse(o.timestamp), rozmiar, przeczytano: ile, zepsute };
+      }
+      if (ile >= rozmiar) break;
+    }
+    return { kontekst: null, czas: NaN, rozmiar, przeczytano: ile, zepsute };
+  } finally {
+    fs.closeSync(fd);
+  }
+}
+
+// Linia dla kierownika - czysty ASCII, jak reszta doklejanych linii.
+function liniaRozmowy(kontekst, powrot) {
+  let l = "MegaRuchacz: rozmowa ma ~" + Math.round(kontekst / 1000) + " tys. tokenow - powiedz " +
+    "uzytkownikowi jednym zdaniem, ze taniej bedzie otworzyc nowe okno (stan jest w rejestrze, mapie i raportach).";
+  if (powrot) l += " Po przerwie ponad godzine ten powrot zapisal cala rozmowe do bufora od nowa.";
+  if (l.length > MAX_STAN) l = l.slice(0, MAX_STAN - 3) + "...";
+  return l;
+}
+
+// Czy dokleic linie o dlugiej rozmowie. ZAWSZE zapisuje stan ("bylem tu" + wynik) - brak
+// wpisu nie moze znaczyc "wszystko gra". Brak pliku rozmowy (pierwsza wiadomosc nowego okna)
+// i brak odpowiedzi modelu to zwykle stany, nie awarie; awaria to plik, ktorego nie da sie
+// przeczytac albo w ktorym odpowiedzi modelu sa nieczytelne - wtedy linia UWAGA na poczatku
+// (pierwszy raz, przy nowej przyczynie i co GODZIN_MIEDZY_ALARMAMI, jak przy archiwum).
+function dlugaRozmowa(wejscie, prosba, plikStanu) {
+  const start = Date.now();
+  const stan = czytajStan(plikStanu);
+  const sesje = stan.sesje && typeof stan.sesje === "object" ? stan.sesje : {};
+  const w = { linia: "", alarm: "", status: "", powod: "", awaria: false, kontekst: undefined };
+  const awaria = (powod) => { w.status = "awaria"; w.powod = powod; w.awaria = true; };
+  try {
+    if (wejscie === "tty") {
+      w.status = "pominiete"; w.powod = "reczne uruchomienie - brak wejscia hooka";
+    } else if (!prosba || typeof prosba !== "object") {
+      w.status = "bez-wejscia"; w.powod = "hook nie podal danych na wejsciu (brak albo nie JSON)";
+    } else {
+      const sciezka = String(prosba.transcript_path || prosba.transcriptPath || "");
+      const klucz = String(prosba.session_id || prosba.sessionId || sciezka);
+      if (!sciezka) {
+        w.status = "bez-transkryptu"; w.powod = "wejscie hooka bez transcript_path";
+      } else if (!fs.existsSync(sciezka)) {
+        w.status = "brak-pliku"; w.powod = "nie ma (jeszcze) pliku rozmowy " + sciezka;
+      } else if (!fs.statSync(sciezka).isFile()) {
+        awaria("sciezka rozmowy nie jest plikiem (" + sciezka + ")");
+      } else {
+        const o = ostatniaOdpowiedz(sciezka);
+        stan.przeczytano_bajtow = o.przeczytano;
+        stan.rozmiar_pliku = o.rozmiar;
+        if (o.kontekst === null) {
+          if (o.zepsute > 0) awaria("transkrypt uszkodzony: " + o.zepsute + " linii z odpowiedzia modelu nie da sie odczytac (" + sciezka + ")");
+          else { w.status = "brak-odpowiedzi"; w.powod = "w koncowce rozmowy nie ma jeszcze odpowiedzi modelu"; }
+        } else {
+          w.status = "ok";
+          w.kontekst = o.kontekst;
+          const s = (sesje[klucz] && typeof sesje[klucz] === "object") ? sesje[klucz] : {};
+          const przerwa = isNaN(o.czas) ? null : (Date.now() - o.czas) / 60000;
+          if (o.kontekst < PROG_ROZMOWY) {
+            // np. po kompaktowaniu - nastepne przekroczenie progu to znowu "pierwszy raz"
+            delete s.pokazano;
+          } else {
+            const powrot = przerwa !== null && przerwa > MINUT_BUFORA;
+            const pierwszy = typeof s.pokazano !== "number";
+            if (pierwszy || powrot || o.kontekst >= s.pokazano + KROK_ROZMOWY) {
+              w.linia = liniaRozmowy(o.kontekst, powrot);
+              w.status = powrot ? "pokazano-po-przerwie" : "pokazano";
+              s.pokazano = o.kontekst;
+              s.pokazano_czas = new Date().toISOString();
+            }
+          }
+          s.kontekst = o.kontekst;
+          s.przerwa_min = przerwa === null ? null : Math.round(przerwa);
+          s.czas = new Date().toISOString();
+          sesje[klucz] = s;
+        }
+        if (o.zepsute > 0 && !w.awaria) stan.zepsute_linie = o.zepsute; else delete stan.zepsute_linie;
+      }
+    }
+  } catch (e) {
+    awaria("nie odczytalem rozmowy: " + String(e && e.message || e).slice(0, 160));
+  }
+
+  const teraz = new Date();
+  if (w.awaria) {
+    const byla = stan.awaria && stan.awaria.powod === w.powod ? stan.awaria : null;
+    stan.awaria = { powod: w.powod, od: byla ? byla.od : teraz.toISOString(), ile: (byla ? byla.ile : 0) + 1 };
+    const ostatni = stan.alarm && Date.parse(stan.alarm.czas);
+    const swiezy = stan.alarm && stan.alarm.powod === w.powod && !isNaN(ostatni) &&
+      (teraz - ostatni) / 3600000 < GODZIN_MIEDZY_ALARMAMI;
+    if (!swiezy) {
+      stan.alarm = { powod: w.powod, czas: teraz.toISOString() };
+      let l = "UWAGA: ostrzezenie o dlugiej rozmowie nie dziala - " + w.powod +
+        ". Szczegoly: " + plikStanu.replace(os.homedir(), "~");
+      if (l.length > MAX_STAN) l = l.slice(0, MAX_STAN - 3) + "...";
+      w.alarm = l;
+    }
+  } else {
+    delete stan.awaria;
+    delete stan.alarm;
+  }
+  const klucze = Object.keys(sesje).sort((a, b) => String(sesje[b].czas).localeCompare(String(sesje[a].czas)));
+  for (const k of klucze.slice(PAMIETANYCH_SESJI)) delete sesje[k];
+  stan.czas = teraz.toISOString();
+  stan.wynik = w.status;
+  stan.powod = w.powod;
+  stan.ms = Date.now() - start;
+  if (w.kontekst !== undefined) stan.kontekst = w.kontekst; else delete stan.kontekst;
+  stan.sesje = sesje;
+  zapiszStan(plikStanu, stan);
+  return w;
+}
+
+// Slad po pominietym powiadomieniu - dowod, ze hook je rozpoznal, a nie ze milczy z awarii.
+function odnotujPowiadomienie(plikStanu, tresc) {
+  const stan = czytajStan(plikStanu);
+  const p = stan.powiadomienia && typeof stan.powiadomienia === "object" ? stan.powiadomienia : {};
+  p.pominiete = (Number(p.pominiete) || 0) + 1;
+  p.ostatnie = new Date().toISOString();
+  p.poczatek = String(tresc).replace(/\s+/g, " ").slice(0, 60);
+  stan.powiadomienia = p;
+  zapiszStan(plikStanu, stan);
+}
+
 // ---------------------------------------------------------------- calosc
 
 function wypisz(tekst) {
@@ -299,12 +514,33 @@ function wypisz(tekst) {
   process.stdout.write(tekst, () => process.exit(0));
 }
 
+// Powiadomienie ma dostac zero doklejki takze wtedy, gdy cos po drodze sie wywroci -
+// ostatnia deska na dole oddaje wtedy ladunek, a tego dla powiadomienia robic nie wolno.
+let jestPowiadomienie = false;
+
 async function glowna() {
   const plikLadunku = process.argv[2];
   const plikPostepu = process.argv[3] ||
     path.join(os.homedir(), ".claude", "wiedza", ".cykl-postep");
   const plikStanu = process.env.MR_ARCHIWUM_STAN ||
     path.join(os.homedir(), ".claude", "wiedza", ".archiwum-stan.json");
+  const plikRozmowy = process.env.MR_ROZMOWA_STAN ||
+    path.join(os.homedir(), ".claude", "wiedza", ".rozmowa-stan.json");
+
+  // Wejscie hooka NAJPIERW: o tym, ze to powiadomienie, trzeba wiedziec, zanim linia cyklu
+  // zniknie z dysku (meldunek koncowy pokazuje sie tylko raz - nie moze pojsc do powiadomienia).
+  let wejscie = null;
+  try { wejscie = await czytajWejscie(CZAS_WEJSCIA_MS); }
+  catch (e) { process.stderr.write("przypomnienie.js: nie odczytalem wejscia: " + (e && e.message || e) + "\n"); }
+  let prosba = null;
+  if (wejscie && wejscie !== "tty") { try { prosba = JSON.parse(wejscie); } catch (e) { prosba = null; } }
+  const tresc = prosba && (typeof prosba.prompt === "string" ? prosba.prompt : prosba.user_prompt);
+  if (czyPowiadomienie(tresc)) {
+    jestPowiadomienie = true;
+    try { odnotujPowiadomienie(plikRozmowy, tresc); }
+    catch (e) { process.stderr.write("przypomnienie.js: slad powiadomienia: " + (e && e.message || e) + "\n"); }
+    process.exit(0);
+  }
 
   const surowy = plikLadunku ? czytaj(plikLadunku) : null;
   if (!surowy) {
@@ -328,10 +564,19 @@ async function glowna() {
   try { linia = liniaCyklu(plikPostepu); } catch (e) { linia = ""; }
   if (linia) kontekst.additionalContext = linia + "\n" + kontekst.additionalContext;
 
+  // Dluga rozmowa (P26) - na POCZATEK, tak jak linia cyklu: sufit ucina koniec. Liczona przed
+  // budzetem archiwum, zeby calosc dalej miescila sie pod SUFIT_LADUNKU.
+  try {
+    const r = dlugaRozmowa(wejscie, prosba, plikRozmowy);
+    const przod = [r.alarm, r.linia].filter(Boolean).join("\n");
+    if (przod) kontekst.additionalContext = przod + "\n" + kontekst.additionalContext;
+  } catch (e) {
+    process.stderr.write("przypomnienie.js: linia o dlugiej rozmowie padla: " + (e && e.stack || e) + "\n");
+  }
+
   // Podpowiedz z archiwum. Cokolwiek tu padnie, przypomnienie wychodzi nizej bez zmian.
   const zasady = kontekst.additionalContext;
   try {
-    const wejscie = await czytajWejscie(CZAS_WEJSCIA_MS);
     const budzet = Math.min(MAX_ARCHIWUM, SUFIT_LADUNKU - zasady.length - 2);
     const w = archiwum(wejscie, budzet, plikStanu);
     let calosc = zasady;
@@ -349,6 +594,7 @@ glowna().catch((e) => {
   // Ostatnia deska: blad poza podpowiedzia (nie powinien sie zdarzyc). Oddajemy ladunek
   // tak, jak lezy na dysku - dokladnie to, co robilo "cat" - i zostawiamy slad na stderr.
   process.stderr.write("przypomnienie.js: " + (e && e.stack || e) + "\n");
+  if (jestPowiadomienie) process.exit(0);
   const surowy = process.argv[2] ? czytaj(process.argv[2]) : null;
   if (surowy) wypisz(surowy); else process.exit(0);
 });

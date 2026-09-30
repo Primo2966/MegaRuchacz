@@ -74,6 +74,10 @@
 #    pierwszej chwili stala wysokosc, wszystko, co wola skrypty, liczy sie w watkach
 #    w tle (sekcja "liczenie w tle i ekran ladowania"), a zakladka bez kompletu
 #    danych z dzis ma nad soba ekran ladowania z lista krokow.
+# 13. 30.09.2026 (P26): karta "Ile tokenow naprawde zuzywasz" pod werdyktem - dzis
+#    i srednio z 7 dni Twoje rozmowy kontra workerzy, najdrozsi workerzy dnia,
+#    najdluzsze rozmowy z ostatniej doby (krok w tle "koszt", Koszt-Dzis); ta sama
+#    rzecz w pelni jako sekcja w Szczegolach.
 #
 # PRZYCISKU [ODSWIEZ] NIE MA I NIE MA GO BYC. Istnial tylko dlatego, ze okno
 # nie odswiezalo sie samo - byl obejsciem braku, nie funkcja. Dzis okno liczy
@@ -394,7 +398,7 @@ function Skladniki-Mr($start, $o) {
 
 # Przod okna jako tekst: dokladnie te sekcje i w tej samej kolejnosci, co
 # w oknie. Ten wydruk jest jedynym sposobem sprawdzenia ukladu bez pulpitu.
-function Zbuduj-Przod($d, $problemy, $czas, $start, $zuzycie = $null) {
+function Zbuduj-Przod($d, $problemy, $czas, $start, $zuzycie = $null, $koszt = $null) {
   $l = @()
   $l += "MegaRuchacz - nadzorca                      [ Przegląd | Szczegóły | Warstwy pamięci ]   <- przełącznik widoków u góry okna"
   $stempel = "przed chwilą"
@@ -440,6 +444,26 @@ function Zbuduj-Przod($d, $problemy, $czas, $start, $zuzycie = $null) {
     }
     $l += ""
   }
+
+  $l += "ILE TOKENÓW NAPRAWDĘ ZUŻYWASZ   (w oknie: karta pod werdyktem - trzy kolumny obok siebie)"
+  $tk = $null
+  try { $tk = Teksty-Kosztu $koszt $zuzycie } catch { Zanotuj-Wywrotke "prawdziwy koszt do wydruku" $_ }
+  if (-not $tk) {
+    $l += "  NIE UDALO SIE ZLOZYC - szczegoly w dzienniku nadzorcy"
+  } elseif ($tk.Powod) {
+    $l += "  $($tk.Powod)  (żółty napis)"
+  } else {
+    foreach ($r in $tk.Tabela) { $l += ("  {0,-16} {1,-18} {2}" -f $r[0], $r[1], $r[2]) }
+    if ($tk.Udzial) { $l += "  $($tk.Udzial)$(if ($tk.UdzialUwaga) { '  (żółty napis)' })" }
+    $l += "  | $($tk.NaglowekWorkerow)"
+    foreach ($x in $tk.Workerzy) { $l += ("  |   {0,9}  {1}  ({2})" -f $x.Tokeny, $x.Opis, $x.Dopisek) }
+    if ($tk.WorkerzyPusto) { $l += "  |   $($tk.WorkerzyPusto)" }
+    $l += "  | $($tk.NaglowekRozmow)"
+    foreach ($x in $tk.Rozmowy) { $l += ("  |   {0}{1,9}  {2}  ({3})" -f $(if ($x.Dluga) { "! " } else { "  " }), $x.Rozmiar, $x.Tytul, $x.Dopisek) }
+    if ($tk.RozmowyPusto) { $l += "  |   $($tk.RozmowyPusto)" }
+    $l += "  $($tk.Stopka)   (drobnym drukiem)"
+  }
+  $l += ""
 
   $l += "OTWARCIE OKNA ROZMOWY   (w oknie: karta z dużą liczbą i paskiem - MegaRuchacz kontra sam Claude Code)"
   $os = $null
@@ -714,7 +738,78 @@ function Dodaj-Rozbicie($s, $rozbicie, $o = $null) {
   & $zrzuc
 }
 
-function Sekcje-Szczegolow($d, $wywrotkiNadzorcy, $rozbicie, $start) {
+# P26: prawdziwy koszt w calosci - to samo, co karta na Przegladzie, plus liczby
+# odpowiedzi, pelne opisy, projekty i to, jak to policzone.
+function Sekcja-Kosztu($koszt, $zuzycie) {
+  $s = Nowa-Sekcja "Ile tokenów naprawdę zużywasz - Twoje rozmowy i workerzy" ("Wszystkie tokeny z transkryptów Claude Code na tym komputerze, osobno Twoje rozmowy (okna) i workerzy. " +
+    "Każdy krok Claude'a czyta całą rozmowę od nowa, więc liczy się też jej długość.")
+  if (-not $koszt) { Dodaj-Tekst $s "Jeszcze nie policzone - liczy się w tle przy otwarciu okna." "szary"; return $s }
+  if ($koszt.Powod) { Dodaj-Wiersz $s "Dziś" "nie wiem, bo $($koszt.Powod)" "uwaga" }
+  else {
+    $razem = [double]$koszt.Rozmowy + [double]$koszt.Workerzy
+    $dz = "Twoje rozmowy $(Tokeny-Okolo $koszt.Rozmowy) ($(Liczba-Ludzka $koszt.OdpowiedziRozmow) odpowiedzi modelu), " +
+          "workerzy $(Tokeny-Okolo $koszt.Workerzy) ($(Liczba-Ludzka $koszt.OdpowiedziWorkerow)), razem $(Tokeny-Okolo $razem)"
+    if ($razem -gt 0) { $dz += " - workerzy to $(Procent-Udzialu ([double]$koszt.Workerzy) $razem)" }
+    else { $dz = "jeszcze nie było rozmów z Claude" }
+    Dodaj-Wiersz $s "Dziś do $($koszt.Wyliczono.ToString('HH:mm'))" $dz
+  }
+  if ($zuzycie -and ($zuzycie.Stan -eq "jest") -and ($null -ne $zuzycie.SredniaRozmowy)) {
+    $okres = ""
+    if ($zuzycie.Od -and $zuzycie.Do) { $okres = " ($($zuzycie.Od.ToString('dd'))–$($zuzycie.Do.ToString('dd.MM')), rozmowy w $($zuzycie.DniZRozmowami) z $($zuzycie.Dni) dni)" }
+    $sr = [double]$zuzycie.SredniaRozmowy + [double]$zuzycie.SredniaWorkerow
+    Dodaj-Wiersz $s "Średnio dziennie" ("Twoje rozmowy $(Tokeny-Okolo $zuzycie.SredniaRozmowy), workerzy $(Tokeny-Okolo $zuzycie.SredniaWorkerow), " +
+      "razem $(Tokeny-Okolo $sr)$okres - workerzy to $(Procent-Udzialu ([double]$zuzycie.SredniaWorkerow) $sr)")
+    if ($null -ne $zuzycie.Wyjscie) {
+      Dodaj-Wiersz $s "Tekst pisany przez Claude'a" ("$(Tokeny-Okolo ([double]$zuzycie.Wyjscie / [double]$zuzycie.Dni)) tokenów dziennie ($(Liczba-Ludzka $zuzycie.Wyjscie) w $($zuzycie.Dni) dni) - " +
+        "reszta to czytanie rozmowy (w tym z pamięci podręcznej).") "szary"
+    }
+  } elseif ($zuzycie -and ($zuzycie.Stan -eq "licze")) {
+    Dodaj-Wiersz $s "Średnio dziennie" "jeszcze się liczy - za kilka sekund będzie" "szary"
+  } else {
+    $pw = "nie wiem dlaczego"
+    if ($zuzycie -and $zuzycie.Powod) { $pw = $zuzycie.Powod }
+    Dodaj-Wiersz $s "Średnio dziennie" "nie wiem, bo $pw" "uwaga"
+  }
+  if ((-not $koszt.Powod) -and (@($koszt.Najdrozsi).Count -gt 0)) {
+    $ile = ""
+    if ($koszt.WorkerowDzis -gt @($koszt.Najdrozsi).Count) { $ile = " (z $($koszt.WorkerowDzis) dzisiejszych)" }
+    Dodaj-Podtytul $s "Najdroższe zadania workerów dziś$ile"
+    $ws = @()
+    foreach ($w in @($koszt.Najdrozsi)) {
+      $opis = $w.Opis
+      if (-not $opis) { $opis = "bez opisu zadania" }
+      $ws += ,@($opis, "$($w.Rola)", "$($w.Projekt)", (Liczba-Ludzka $w.Wywolania), (Liczba-Ludzka $w.Tokeny))
+    }
+    Dodaj-Tabele $s @(@{ N = "Zadanie"; S = 0 }, @{ N = "Rola"; S = 130 }, @{ N = "Projekt"; S = 190 }, @{ N = "Wywołania"; S = 100; P = $true }, @{ N = "Tokeny"; S = 120; P = $true }) $ws
+    foreach ($w in @($koszt.Najdrozsi)) { if ($w.Uwaga) { Dodaj-Tekst $s "$($w.Opis): $($w.Uwaga)" "uwaga" } }
+  } elseif (-not $koszt.Powod) {
+    Dodaj-Wiersz $s "Workerzy dziś" "żaden jeszcze nie pracował"
+  }
+  if ((-not $koszt.Powod) -and (@($koszt.Najdluzsze).Count -gt 0)) {
+    Dodaj-Podtytul $s "Najdłuższe rozmowy z ostatnich $($koszt.Godzin) h (rozmiar = ile czyta każdy następny krok)"
+    $rs = @()
+    foreach ($r in @($koszt.Najdluzsze)) {
+      $tyt = $r.Tytul
+      if (-not $tyt) { $tyt = "rozmowa bez tytułu" }
+      $uw = ""
+      if ($r.Dluga) { $uw = "! ponad próg - taniej będzie nowe okno" }
+      $rs += ,@($tyt, "$($r.Projekt)", "$(Kiedy-Ludzko $r.Ostatnio)", (Liczba-Ludzka $r.Kontekst), $uw)
+    }
+    Dodaj-Tabele $s @(@{ N = "Rozmowa"; S = 0 }, @{ N = "Projekt"; S = 190 }, @{ N = "Ostatnio"; S = 110 }, @{ N = "Rozmiar"; S = 100; P = $true }, @{ N = "Uwaga"; S = 270 }) $rs
+  }
+  Dodaj-Wiersz $s "Próg długiej rozmowy" ("$(Liczba-Ludzka $koszt.Prog) tokenów: samo otwarcie okna rozmowy to dziś ~194 tys., do tego ~100 tys. rozmowy. " +
+    "Ten sam próg ma ostrzeżenie w rozmowie (przypomnienie) i przy wznowieniu okna (strażnik).") "szary"
+  Dodaj-Wiersz $s "Jak to policzone" ("W każdej odpowiedzi modelu suma input_tokens, cache_creation_input_tokens, cache_read_input_tokens i output_tokens; " +
+    "każda odpowiedź raz (message.id), z jej linii największe wartości. Worker = plik w katalogu subagents, opis zadania z pliku .meta.json obok.") "szary"
+  if (-not $koszt.Powod) {
+    $bl = ""
+    if ($koszt.Bledy -gt 0) { $bl = "; nie dało się otworzyć $($koszt.Bledy), np. $($koszt.Blad)" }
+    Dodaj-Wiersz $s "" "Pliki z ostatnich $($koszt.Godzin) h: $($koszt.Pliki), $($koszt.Mb) MB, liczone $("$($koszt.Sekundy)".Replace('.', ',')) s$bl." $(if ($koszt.Bledy -gt 0) { "uwaga" } else { "szary" })
+  }
+  return $s
+}
+
+function Sekcje-Szczegolow($d, $wywrotkiNadzorcy, $rozbicie, $start, $koszt = $null, $zuzycie = $null) {
   $lista = @()
 
   # 1. Co wymaga uwagi - pelna tresc, razem z komendami, ktorych nie ma na wierzchu.
@@ -739,6 +834,15 @@ function Sekcje-Szczegolow($d, $wywrotkiNadzorcy, $rozbicie, $start) {
     Dodaj-Wiersz $s "" "te same liczby, które strażnik pokazuje przy otwarciu okna rozmowy" "szary"
   }
   $lista += $s
+
+  # 1a. Prawdziwy koszt (P26) - najwieksze pieniadze, wiec zaraz po tym, co wymaga uwagi.
+  try { $lista += (Sekcja-Kosztu $koszt $zuzycie) }
+  catch {
+    Zanotuj-Wywrotke "prawdziwy koszt do szczegolow" $_
+    $s = Nowa-Sekcja "Ile tokenów naprawdę zużywasz - Twoje rozmowy i workerzy" ""
+    Dodaj-Tekst $s "Nie udało się złożyć - powód jest w dzienniku nadzorcy." "uwaga"
+    $lista += $s
+  }
 
   # 2. Otwarcie okna rozmowy - skad liczby z karty na Przegladzie.
   $s = Nowa-Sekcja "Otwarcie okna rozmowy - skąd ta liczba" "Ile tokenów Claude wczytuje, gdy otwierasz nowe okno rozmowy (liczone przy pierwszej wiadomości), i jaka część z tego to MegaRuchacz."
@@ -928,11 +1032,11 @@ function Tabela-Na-Tekst($el) {
   return ,$l
 }
 
-function Zbuduj-Szczegoly($d, $wywrotkiNadzorcy, $rozbicie, $start) {
+function Zbuduj-Szczegoly($d, $wywrotkiNadzorcy, $rozbicie, $start, $koszt = $null, $zuzycie = $null) {
   $l = @()
   $l += "SZCZEGÓŁY   (w oknie: zakładka Szczegóły - każda sekcja to osobna biała karta, najważniejsze na górze)"
   $l += ""
-  foreach ($s in (Sekcje-Szczegolow $d $wywrotkiNadzorcy $rozbicie $start)) {
+  foreach ($s in (Sekcje-Szczegolow $d $wywrotkiNadzorcy $rozbicie $start $koszt $zuzycie)) {
     $l += "== $($s.Tytul.ToUpper()) =="
     if ($s.Opis) { $l += "   $($s.Opis)" }
     foreach ($e in $s.Elementy) {
@@ -1054,12 +1158,14 @@ if ($Raz -or $Raport) {
     try { $start = Pomiar-Startu } catch { Zanotuj-Wywrotke "pomiar otwarcia okna rozmowy" $_ }
     $zu = $null
     try { $zu = Zuzycie-Dzienne $true } catch { Zanotuj-Wywrotke "dzienne zuzycie tokenow" $_ }
+    $ko = $null
+    try { $ko = Koszt-Dzis } catch { Zanotuj-Wywrotke "prawdziwy koszt dnia" $_ }
     $roz = @()
     try { $roz = Rachunek-Rozbicie }
     catch { Zanotuj-Wywrotke "rachunek za pamiec (rozbicie)" $_; $roz = @("  NIE UDALO SIE POLICZYC - szczegoly w dzienniku nadzorcy") }
-    Zbuduj-Przod $d $probl ([datetime]::Now) $start $zu | ForEach-Object { Write-Output $_ }
+    Zbuduj-Przod $d $probl ([datetime]::Now) $start $zu $ko | ForEach-Object { Write-Output $_ }
     Write-Output ""
-    Zbuduj-Szczegoly $d $stare $roz $start | ForEach-Object { Write-Output $_ }
+    Zbuduj-Szczegoly $d $stare $roz $start $ko $zu | ForEach-Object { Write-Output $_ }
     Zapisz-Obecnosc "raport"
     exit 0
   }
@@ -1105,12 +1211,14 @@ if ($Raz -or $Raport) {
   try { $start = Pomiar-Startu } catch { Zanotuj-Wywrotke "pomiar otwarcia okna rozmowy" $_ }
   $zu = $null
   try { $zu = Zuzycie-Dzienne $true } catch { Zanotuj-Wywrotke "dzienne zuzycie tokenow" $_ }
+  $ko = $null
+  try { $ko = Koszt-Dzis } catch { Zanotuj-Wywrotke "prawdziwy koszt dnia" $_ }
   $roz = @()
   try { $roz = Rachunek-Rozbicie }
   catch { Zanotuj-Wywrotke "rachunek za pamiec (rozbicie)" $_; $roz = @("  NIE UDALO SIE POLICZYC - szczegoly w dzienniku nadzorcy") }
-  Zbuduj-Przod $d $probl ([datetime]::Now) $start $zu | ForEach-Object { Write-Output $_ }
+  Zbuduj-Przod $d $probl ([datetime]::Now) $start $zu $ko | ForEach-Object { Write-Output $_ }
   Write-Output ""
-  Zbuduj-Szczegoly $d $stare $roz $start | ForEach-Object { Write-Output $_ }
+  Zbuduj-Szczegoly $d $stare $roz $start $ko $zu | ForEach-Object { Write-Output $_ }
   if (@($d.Alarmy).Count -gt 0) { exit 1 }
   exit 0
 }
@@ -1162,6 +1270,10 @@ $script:UdzialStartu   = 0.0
 # zegar co 3 s zaglada do pliku podrecznego i odmalowuje okno po wyniku.
 $script:Zuzycie        = $null
 $script:ZegarZuzycia   = $null
+# Prawdziwy koszt dnia (Koszt-Dzis, P26): dzis rozmowy kontra workerzy, najdrozsi
+# workerzy, najdluzsze rozmowy. Karta na Przegladzie i sekcja w Szczegolach.
+$script:KosztDzis      = $null
+$script:KartaKoszt     = $null
 $script:PodgladInfo    = $null   # dwie kolumny nad trescia podgladu warstwy
 $script:BWarstwy       = $null   # trzeci przycisk przelacznika
 $script:WidokWarstwy   = $null   # warstwy pamieci: lista po lewej, podglad po prawej
@@ -1644,6 +1756,146 @@ function Odmaluj-Werdykt {
     $x.UseMnemonic = $false
     $x.Margin = New-Object System.Windows.Forms.Padding(0, 6, 0, 0)
     $script:KartaWerdykt.Controls.Add($x)
+  }
+}
+
+# --- karta "Ile tokenow naprawde zuzywasz" na Przegladzie (P26, 30.09.2026) ----
+# Werdykt wyzej mowi, ile doklada sam MegaRuchacz (kilka procent otwarcia okna).
+# P22 pokazal, ze prawdziwe pieniadze sa gdzie indziej: workerzy (60% tokenow
+# w 23-29.09) i dlugie rozmowy (kazdy krok czyta cala rozmowe). Ta karta mowi to
+# wprost, w trzech kolumnach obok siebie, zeby byla niska: dzis i srednia z 7 dni
+# (rozmowy kontra workerzy), najdrozsi workerzy dnia, najdluzsze rozmowy z ostatniej
+# doby - rozmowa ponad progiem z zoltym "!". Opis, ktory sie nie miesci, konczy sie
+# wielokropkiem (widac, ze to nie calosc; calosc w dymku po najechaniu myszka
+# i w Szczegolach). Teksty sklada Teksty-Kosztu (stan-nadzorcy.ps1) - te same co
+# w wydruku -Raport.
+
+# Etykieta o stalej szerokosci, w jednej linii, z wielokropkiem, gdy tekst sie nie
+# miesci - kolumny stoja rowno, a nic nie wyjezdza poza karte po cichu.
+function Etykieta-Stala([string]$tekst, $czcionka, $kolor, [int]$szer, [bool]$doPrawej = $false) {
+  $l = Etykieta $tekst $czcionka $kolor
+  $l.AutoSize = $false
+  $l.AutoEllipsis = $true
+  $l.UseMnemonic = $false
+  $l.Size = New-Object System.Drawing.Size($szer, ($czcionka.Height + 1))
+  $l.Margin = New-Object System.Windows.Forms.Padding(0)
+  if ($doPrawej) { $l.TextAlign = [System.Drawing.ContentAlignment]::TopRight }
+  return $l
+}
+
+function Odmaluj-Koszt {
+  if (-not $script:KartaKoszt -or $script:KartaKoszt.IsDisposed) { return }
+  Wyczysc-Panel $script:KartaKoszt
+  $szer = $script:SzerKarty - 44
+  $t = $null
+  try { $t = Teksty-Kosztu $script:KosztDzis $script:Zuzycie }
+  catch { Zanotuj-Wywrotke "karta prawdziwego kosztu" $_ }
+  $gora = Poziomy
+  $tytul = "Ile tokenów naprawdę zużywasz - Twoje rozmowy i workerzy"
+  if ($t) { $tytul = $t.Tytul }
+  $gora.Controls.Add((Etykieta $tytul $script:CzGruba $script:KolTekst))
+  $script:KartaKoszt.Controls.Add($gora)
+  if (-not $t) {
+    $script:KartaKoszt.Controls.Add((Etykieta-Zawijana "Nie udało się złożyć tej karty - powód jest w dzienniku nadzorcy." $script:CzZwykla $script:KolUwaga $szer))
+    return
+  }
+  if ($t.Powod) {
+    # Jeszcze liczy - szare zdanie; nie udalo sie - zolte "nie wiem, bo ...". Nigdy zero.
+    $kolP = $script:KolUwaga
+    if (-not $script:KosztDzis) { $kolP = $script:KolSzary }
+    $p = Etykieta-Zawijana $t.Powod $script:CzZwykla $kolP $szer
+    $p.UseMnemonic = $false
+    $p.Margin = New-Object System.Windows.Forms.Padding(0, 6, 0, 0)
+    $script:KartaKoszt.Controls.Add($p)
+    return
+  }
+  # Dlaczego dlugosc rozmowy ma znaczenie - drobno, w linii tytulu, gdy sie miesci
+  # (karta ma byc niska); inaczej osobna linia pod kolumnami.
+  $stopka = Etykieta $t.Stopka $script:CzMala $script:KolSzary
+  $stopka.UseMnemonic = $false
+  $wLinii = (($gora.PreferredSize.Width + 16 + $stopka.PreferredSize.Width) -le $szer)
+  if ($wLinii) {
+    $stopka.Margin = New-Object System.Windows.Forms.Padding(16, 4, 0, 0)
+    $gora.Controls.Add($stopka)
+  }
+
+  $odstep = 26
+  $sz1 = 330
+  $reszta = $szer - $sz1 - 2 * $odstep
+  $sz2 = [int]($reszta * 0.52)
+  $sz3 = $reszta - $sz2
+  $wiersz = Poziomy
+  $wiersz.Margin = New-Object System.Windows.Forms.Padding(0, 5, 0, 0)
+
+  # 1. Tabelka: co | dzis | srednio z 7 dni. "Razem" pogrubione.
+  $k1 = Pionowy $sz1
+  $sk = @(118, 96, ($sz1 - 118 - 96))
+  $nr = 0
+  foreach ($r in $t.Tabela) {
+    $w = Poziomy
+    $w.Margin = New-Object System.Windows.Forms.Padding(0, 0, 0, 1)
+    for ($i = 0; $i -lt 3; $i++) {
+      $czc = $script:CzZwykla; $kol = $script:KolTekst
+      if ($nr -eq 0) { $czc = $script:CzMala; $kol = $script:KolSzary }
+      elseif ($i -eq 0) { $kol = $script:KolSzary }
+      elseif ($nr -eq (@($t.Tabela).Count - 1)) { $czc = $script:CzZwyklaGruba }
+      $w.Controls.Add((Etykieta-Stala "$($r[$i])" $czc $kol $sk[$i] ($i -gt 0)))
+    }
+    $k1.Controls.Add($w)
+    $nr++
+  }
+  if ($t.Udzial) {
+    $kolU = $script:KolSzary
+    if ($t.UdzialUwaga) { $kolU = $script:KolUwaga }
+    $u = Etykieta-Zawijana $t.Udzial $script:CzMala $kolU $sz1
+    $u.UseMnemonic = $false
+    $u.Margin = New-Object System.Windows.Forms.Padding(0, 4, 0, 0)
+    $k1.Controls.Add($u)
+  }
+
+  # 2. Najdrozsi workerzy dnia: tokeny | opis zadania (rola, projekt).
+  $k2 = Pionowy $sz2
+  $k2.Margin = New-Object System.Windows.Forms.Padding($odstep, 0, 0, 0)
+  $k2.Controls.Add((Etykieta-Stala $t.NaglowekWorkerow $script:CzMalaGruba $script:KolSzary $sz2))
+  foreach ($x in @($t.Workerzy)) {
+    $w = Poziomy
+    $w.Margin = New-Object System.Windows.Forms.Padding(0, 0, 0, 1)
+    $w.Controls.Add((Etykieta-Stala $x.Tokeny $script:CzZwykla $script:KolTekst 72 $true))
+    # Sam opis zadania - rola i projekt stoja w Szczegolach (w linii nie mieszcza sie razem).
+    $e = Etykieta-Stala $x.Opis $script:CzZwykla $script:KolTekst ($sz2 - 72 - 10)
+    $e.Margin = New-Object System.Windows.Forms.Padding(10, 0, 0, 0)
+    $w.Controls.Add($e)
+    $k2.Controls.Add($w)
+  }
+  if ($t.WorkerzyPusto) { $k2.Controls.Add((Etykieta-Zawijana $t.WorkerzyPusto $script:CzZwykla $script:KolSzary $sz2)) }
+
+  # 3. Najdluzsze rozmowy z ostatniej doby: ! | rozmiar | tytul (projekt, kiedy).
+  $k3 = Pionowy $sz3
+  $k3.Margin = New-Object System.Windows.Forms.Padding($odstep, 0, 0, 0)
+  $k3.Controls.Add((Etykieta-Stala $t.NaglowekRozmow $script:CzMalaGruba $script:KolSzary $sz3))
+  foreach ($x in @($t.Rozmowy)) {
+    $w = Poziomy
+    $w.Margin = New-Object System.Windows.Forms.Padding(0, 0, 0, 1)
+    $kol = $script:KolTekst; $znak = ""
+    if ($x.Dluga) { $kol = $script:KolUwaga; $znak = "!" }
+    $w.Controls.Add((Etykieta-Stala $znak $script:CzZwyklaGruba $script:KolUwaga 12))
+    $w.Controls.Add((Etykieta-Stala $x.Rozmiar $script:CzZwykla $kol 74 $true))
+    $e = Etykieta-Stala $x.Tytul $script:CzZwykla $script:KolTekst ($sz3 - 12 - 74 - 10)
+    $e.Margin = New-Object System.Windows.Forms.Padding(10, 0, 0, 0)
+    $w.Controls.Add($e)
+    $k3.Controls.Add($w)
+  }
+  if ($t.RozmowyPusto) { $k3.Controls.Add((Etykieta-Zawijana $t.RozmowyPusto $script:CzZwykla $script:KolSzary $sz3)) }
+
+  $wiersz.Controls.Add($k1)
+  $wiersz.Controls.Add($k2)
+  $wiersz.Controls.Add($k3)
+  $script:KartaKoszt.Controls.Add($wiersz)
+  if (-not $wLinii) {
+    $s2 = Etykieta-Zawijana $t.Stopka $script:CzMala $script:KolSzary $szer
+    $s2.UseMnemonic = $false
+    $s2.Margin = New-Object System.Windows.Forms.Padding(0, 4, 0, 0)
+    $script:KartaKoszt.Controls.Add($s2)
   }
 }
 
@@ -2421,6 +2673,7 @@ function Odmaluj-Okno {
     Odmaluj-Podtytul
     Odmaluj-Werdykt
     Odmaluj-Problemy
+    Odmaluj-Koszt
     Odmaluj-Start
     Odmaluj-Liczby
     Odmaluj-Statystyke
@@ -2463,7 +2716,7 @@ function Napelnij-Szczegoly {
   $script:DoOdmalowania["szczegoly"] = $false
   try {
     $karty = @()
-    foreach ($s in (Sekcje-Szczegolow $script:Dane $script:Wywrotki $script:Rozbicie $script:Start)) { $karty += (Karta-Sekcji $s) }
+    foreach ($s in (Sekcje-Szczegolow $script:Dane $script:Wywrotki $script:Rozbicie $script:Start $script:KosztDzis $script:Zuzycie)) { $karty += (Karta-Sekcji $s) }
     Pokaz-Karty-Szczegolow $karty
   } catch {
     Zanotuj-Wywrotke "zlozenie szczegolow" $_
@@ -3463,11 +3716,15 @@ $KAWALKI = [ordered]@{
   rozbicie = @{ Napis = "Liczę rozbicie rachunku pozycja po pozycji"; Kod = 'Rachunek-Rozbicie'; Limit = 150; Zwykle = 2; PowodToBlad = $true }
   warstwy  = @{ Napis = "Zbieram listę warstw pamięci"; Kod = 'Warstwy-Pamieci'; Limit = 150; Zwykle = 2; PowodToBlad = $true }
   skille   = @{ Napis = "Sprawdzam skille"; Kod = 'Stan-Skilli'; Limit = 120; Zwykle = 2; PowodToBlad = $true }
+  # P26: prawdziwy koszt dnia (Koszt-Dzis w stan-nadzorcy.ps1) - liczony w tym watku, bez
+  # osobnego procesu. 30.09.2026: 1,2 s dla ~130 MB transkryptow z ostatniej doby na cieplym
+  # dysku; zimny dysk jak w P17 (6-7 s dla 337 MB) to ~3 s - 60 s to ponad 10 razy zapasu.
+  koszt    = @{ Napis = "Liczę, ile tokenów zużyły dziś rozmowy i workerzy"; Kod = 'Koszt-Dzis'; Limit = 60; Zwykle = 2; PowodToBlad = $false }
 }
 # Czego potrzebuje kazda zakladka, zeby pokazac karty w komplecie.
 $WIDOK_KAWALKI = @{
-  przeglad  = @("dane", "start", "zuzycie")
-  szczegoly = @("dane", "start", "rozbicie")
+  przeglad  = @("dane", "start", "zuzycie", "koszt")
+  szczegoly = @("dane", "start", "rozbicie", "koszt", "zuzycie")
   warstwy   = @("warstwy")
   skille    = @("skille")
 }
@@ -3566,6 +3823,11 @@ function Po-Dozorze($k) {
   $script:DaneCzas = [datetime]::Now
   $script:DaneBlad = $null
   Po-Kroku "dane"
+  # P26: liczby "dzis" rosna w ciagu dnia - przy otwartym oknie odswiezaja sie razem
+  # z dozorem (co kwadrans), tak jak obiecuje podtytul okna.
+  try {
+    if ($script:Okno -and (-not $script:Okno.IsDisposed) -and $script:Okno.Visible -and (Nieswiezy-Kawalek "koszt")) { [void](Rusz-Krok "koszt") }
+  } catch { Zanotuj-Wywrotke "odswiezenie prawdziwego kosztu po dozorze" $_ }
 }
 
 function Wlacz-Zegar-Krokow {
@@ -3760,6 +4022,10 @@ function Zakoncz-Krok($k, [string]$stan, [string]$powod) {
           if ($porazka) { $script:DaneSkilli = [pscustomobject]@{ Dane = $null; Powod = $powod } }
           else { $script:DaneSkilli = $k.Wynik }
         }
+        "koszt" {
+          if ($porazka) { $script:KosztDzis = [pscustomobject]@{ Powod = "liczenie się nie udało: $powod" } }
+          else { $script:KosztDzis = $k.Wynik }
+        }
       }
     } catch { Zanotuj-Wywrotke "przyjecie wyniku kroku $id" $_ }
     if ($porazka) {
@@ -3803,6 +4069,7 @@ function Powod-Kawalka([string]$id) {
     }
     "warstwy" { if ($script:DaneWarstw -and $script:DaneWarstw.Powod) { return "$($script:DaneWarstw.Powod)" } }
     "skille" { if ($script:DaneSkilli -and $script:DaneSkilli.Powod) { return "$($script:DaneSkilli.Powod)" } }
+    "koszt" { if ($script:KosztDzis -and $script:KosztDzis.Powod) { return "$($script:KosztDzis.Powod)" } }
   }
   return ""
 }
@@ -3901,6 +4168,7 @@ function Przelicz-W-Tle([string]$kodDanych = "") {
   $k = Rusz-Krok "dane" $kodDanych
   [void](Rusz-Krok "start")
   [void](Rusz-Krok "zuzycie")
+  [void](Rusz-Krok "koszt")
   return $k
 }
 
@@ -4248,6 +4516,10 @@ function Pokaz-Okno {
 
   $script:KartaWerdykt = Nowa-Karta $script:SzerKarty
   $script:KartaStart = Nowa-Karta $script:SzerKarty
+  # P26: prawdziwy koszt - zaraz pod werdyktem (i ewentualnymi problemami): werdykt mowi,
+  # ile doklada sam MegaRuchacz, ta karta - ile naprawde idzie.
+  $script:KartaKoszt = Nowa-Karta $script:SzerKarty
+  $script:KartaKoszt.Padding = New-Object System.Windows.Forms.Padding(22, 12, 22, 10)
 
   $script:PanelLiczby = Poziomy
   $script:PanelLiczby.Margin = New-Object System.Windows.Forms.Padding(0)
@@ -4266,6 +4538,7 @@ function Pokaz-Okno {
 
   $script:Root.Controls.Add($script:KartaWerdykt)
   $script:Root.Controls.Add($script:PanelProblemy)
+  $script:Root.Controls.Add($script:KartaKoszt)
   $script:Root.Controls.Add($script:KartaStart)
   $script:Root.Controls.Add($script:PanelLiczby)
   $script:Root.Controls.Add($script:KartaStat)
@@ -4518,7 +4791,7 @@ function Pokaz-Okno {
     $script:LPodtytul = $null; $script:PanelProblemy = $null; $script:PanelLiczby = $null
     $script:KartaStat = $null; $script:PanelStan = $null
     $script:BPrzeglad = $null; $script:BSzczegoly = $null; $script:ListaSzczegolow = $null
-    $script:KartaStart = $null; $script:KartaWerdykt = $null; $script:PodgladInfo = $null
+    $script:KartaStart = $null; $script:KartaWerdykt = $null; $script:PodgladInfo = $null; $script:KartaKoszt = $null
     $script:Pasek = $null; $script:BAktualizuj = $null; $script:LAktualizuj = $null
     $script:BCykl = $null; $script:LCykl = $null
     $script:PanelZmian = $null; $script:LinkZmian = $null

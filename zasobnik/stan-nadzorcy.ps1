@@ -822,8 +822,13 @@ function Jak-Sesji($tokeny, $o) {
 # + cache_read_input_tokens + output_tokens - te same cztery pola, z ktorych
 # lore\lore\facts.py liczy koszt nauki (TOKEN_FIELDS), wiec obie liczby sa
 # policzone tak samo i procent jest uczciwy. Claude Code zapisuje jedna
-# odpowiedz w kilku liniach (po jednej na blok tresci) z tym samym usage -
-# liczymy kazde message.id raz. Czas z pola timestamp (UTC) -> dzien lokalny.
+# odpowiedz w kilku liniach (po jednej na blok tresci) - liczymy kazde
+# message.id raz. Wejscie i bufor sa w tych liniach takie same, ale output_tokens
+# w pierwszej linii bywa czesciowy (np. 8 zamiast 224), wiec z linii tego samego
+# id bierzemy NAJWIEKSZE wartosci (P26 - do 30.09.2026 brana byla pierwsza linia
+# i odpowiedzi modelu wychodzily 3,8 raza za nisko). Czas z pola timestamp
+# (UTC) -> dzien lokalny. Workerzy (podagenci) to pliki w ...\subagents\ -
+# od P26 ich tokeny liczymy tez osobno.
 # Ostatnie $DNI_ZUZYCIA PELNYCH dni (bez dzisiejszego, ktory jeszcze trwa),
 # suma dzielona przez liczbe dni - takze tych, w ktorych rozmow nie bylo.
 #
@@ -842,7 +847,11 @@ function Jak-Sesji($tokeny, $o) {
 # Zawieszone liczenie (slad "liczy_od" bez wyniku) po $MINUT_LICZENIA_ZUZYCIA
 # minutach tez jest powodem, a nie wiecznym "licze".
 $DNI_ZUZYCIA = 7
-$WERSJA_ZUZYCIA = "1"
+# Wersja 2 (P26, 30.09.2026): odpowiedzi modelu jako NAJWIEKSZA wartosc z linii tego
+# samego message.id (wersja 1 brala pierwsza, czesciowa linie i zanizala je 3,8 raza:
+# 1 909 596 zamiast 7 215 577 za 23-29.09) i podzial na rozmowy oraz workerow. Plik
+# podreczny w starszej wersji liczy sie od nowa.
+$WERSJA_ZUZYCIA = "2"
 # Liczenie trwa ok. 2 s (pomiar 28.09.2026); 10 minut to zapas na wolny dysk
 # i kilka razy wiecej transkryptow, a po nim wiadomo na pewno, ze proces zniknal.
 $MINUT_LICZENIA_ZUZYCIA = 10
@@ -858,17 +867,36 @@ using System.Collections.Generic;
 using System.Globalization;
 using System.IO;
 
-namespace MegaRuchacz {
-  public class ZuzycieDnia {
+namespace MegaRuchacz.Tokeny {
+  // Nowe nazwy (P26), a nie poprawione stare: proces, ktory wczytal juz stary licznik
+  // (MegaRuchacz.LicznikZuzycia), dostalby przy Add-Type blad "typ juz istnieje".
+  public class Dzien {
     public long Wejscie, Tworzenie, Odczyt, Wyjscie, Odpowiedzi;
+    // to samo, co wyzej, rozdzielone: glowne pliki rozmow i workerzy (pliki w ...\subagents\)
+    public long Rozmowy, Workerzy, OdpowiedziRozmow, OdpowiedziWorkerow;
   }
-  public class WynikZuzycia {
-    public Dictionary<string, ZuzycieDnia> Dni = new Dictionary<string, ZuzycieDnia>();
+  public class Plik {
+    public string Sciezka;
+    public bool Worker;
+    public long Tokeny, Wywolania;                   // odpowiedzi z liczonego okresu
+    public long Kontekst = -1;                       // ostatnie wywolanie: wejscie + zapis i odczyt bufora
+    public DateTime Ostatnio = DateTime.MinValue;    // czas tego wywolania (UTC)
+    public string Tytul = "";                        // custom-title albo ai-title (tylko rozmowy)
+    public string Cwd = "";                          // katalog, w ktorym szla rozmowa
+  }
+  public class Wynik {
+    public Dictionary<string, Dzien> Dni = new Dictionary<string, Dzien>();
+    public List<Plik> PlikiZOdpowiedziami = new List<Plik>();
     public int Pliki, Nieczytelne, Duble;
     public long Bajty, Linie;
     public List<string> Bledy = new List<string>();
   }
-  public static class LicznikZuzycia {
+  class Odpowiedz {
+    public string Dzien;
+    public int Plik;
+    public long We, Tw, Od, Wy;
+  }
+  public static class Licznik {
     static long Liczba(string l, string klucz, int od) {
       int i = l.IndexOf(klucz, od, StringComparison.Ordinal);
       if (i < 0) return -1;
@@ -877,13 +905,47 @@ namespace MegaRuchacz {
       while (i < l.Length && l[i] >= '0' && l[i] <= '9') { v = v * 10 + (l[i] - '0'); i++; jest = true; }
       return jest ? v : -1;
     }
+    // Tekst po kluczu ("aiTitle":"...") do najblizszego cudzyslowu bez ukosnika,
+    // z odkodowaniem \" \\ \/ \uXXXX; znaki konca linii jako spacja.
+    static string Tekst(string l, string klucz) {
+      int i = l.IndexOf(klucz, StringComparison.Ordinal);
+      if (i < 0) return null;
+      i += klucz.Length;
+      var sb = new System.Text.StringBuilder();
+      while (i < l.Length && sb.Length < 400) {
+        char c = l[i];
+        if (c == '"') break;
+        if (c == '\\' && i + 1 < l.Length) {
+          char n = l[i + 1];
+          if (n == 'u' && i + 5 < l.Length) {
+            int kod;
+            if (int.TryParse(l.Substring(i + 2, 4), NumberStyles.HexNumber, CultureInfo.InvariantCulture, out kod)) sb.Append((char)kod);
+            i += 6; continue;
+          }
+          if (n == 'n' || n == 'r' || n == 't') sb.Append(' '); else sb.Append(n);
+          i += 2; continue;
+        }
+        sb.Append(c); i++;
+      }
+      return sb.ToString();
+    }
     // Linia odpowiedzi modelu: "message":{ ... "role":"assistant" ... "usage":{ ...
     // W tekstach JSON cudzyslowy sa zapisane jako \" - wiec te wzorce trafiaja
     // tylko w prawdziwe klucze, nigdy w tresc rozmowy.
-    public static WynikZuzycia Policz(string[] pliki, DateTime odDnia, DateTime doDniaWylacznie) {
-      var w = new WynikZuzycia();
-      var widziane = new HashSet<string>(StringComparer.Ordinal);
-      foreach (var p in pliki) {
+    // zPlikami: dodatkowo dla kazdego pliku suma z okresu, rozmiar ostatniego
+    // wywolania, tytul rozmowy i katalog (prawdziwy koszt dnia, P26).
+    public static Wynik Policz(string[] pliki, DateTime odDnia, DateTime doDniaWylacznie, bool zPlikami) {
+      var w = new Wynik();
+      var odp = new Dictionary<string, Odpowiedz>(StringComparer.Ordinal);
+      var bezId = new List<Odpowiedz>();
+      var info = new Plik[pliki.Length];
+      for (int nr = 0; nr < pliki.Length; nr++) {
+        string p = pliki[nr];
+        var pl = new Plik();
+        pl.Sciezka = p;
+        pl.Worker = p.IndexOf("\\subagents\\", StringComparison.OrdinalIgnoreCase) >= 0;
+        info[nr] = pl;
+        string tytulAi = null, tytulWlasny = null;
         try {
           using (var s = new FileStream(p, FileMode.Open, FileAccess.Read, FileShare.ReadWrite | FileShare.Delete, 1 << 16))
           using (var r = new StreamReader(s)) {
@@ -893,44 +955,86 @@ namespace MegaRuchacz {
             while ((l = r.ReadLine()) != null) {
               w.Linie++;
               int u = l.IndexOf("\"usage\":{", StringComparison.Ordinal);
-              if (u < 0) continue;
+              if (u < 0) {
+                // Tytul rozmowy - krotkie linie typu ai-title / custom-title (wlasny ma pierwszenstwo).
+                if (zPlikami && !pl.Worker && l.Length < 4096) {
+                  if (l.IndexOf("\"type\":\"custom-title\"", StringComparison.Ordinal) >= 0) { string t = Tekst(l, "\"customTitle\":\""); if (!string.IsNullOrEmpty(t)) tytulWlasny = t; }
+                  else if (l.IndexOf("\"type\":\"ai-title\"", StringComparison.Ordinal) >= 0) { string t = Tekst(l, "\"aiTitle\":\""); if (!string.IsNullOrEmpty(t)) tytulAi = t; }
+                }
+                continue;
+              }
               int m = l.IndexOf("\"message\":{", StringComparison.Ordinal);
               if (m < 0 || m > u) continue;
               int rola = l.IndexOf("\"role\":\"assistant\"", m, StringComparison.Ordinal);
               if (rola < 0 || rola > u) continue;
-              int t = l.LastIndexOf("\"timestamp\":\"", StringComparison.Ordinal);
-              if (t < 0) { w.Nieczytelne++; continue; }
-              t += 13;
-              int k = l.IndexOf('"', t);
+              int t0 = l.LastIndexOf("\"timestamp\":\"", StringComparison.Ordinal);
+              if (t0 < 0) { w.Nieczytelne++; continue; }
+              t0 += 13;
+              int k = l.IndexOf('"', t0);
               DateTime czas;
-              if (k < 0 || !DateTime.TryParse(l.Substring(t, k - t), CultureInfo.InvariantCulture,
+              if (k < 0 || !DateTime.TryParse(l.Substring(t0, k - t0), CultureInfo.InvariantCulture,
                     DateTimeStyles.AdjustToUniversal | DateTimeStyles.AssumeUniversal, out czas)) { w.Nieczytelne++; continue; }
-              DateTime dzien = czas.ToLocalTime().Date;
-              if (dzien < odDnia || dzien >= doDniaWylacznie) continue;
-              int id = l.IndexOf("\"id\":\"", m, StringComparison.Ordinal);
-              if (id >= 0 && id < u) {
-                id += 6;
-                int ki = l.IndexOf('"', id);
-                if (ki > id && !widziane.Add(l.Substring(id, ki - id))) { w.Duble++; continue; }
-              }
               long we = Liczba(l, "\"input_tokens\":", u);
               long tw = Liczba(l, "\"cache_creation_input_tokens\":", u);
               long od = Liczba(l, "\"cache_read_input_tokens\":", u);
               long wy = Liczba(l, "\"output_tokens\":", u);
               if (we < 0 && wy < 0) { w.Nieczytelne++; continue; }
-              string klucz = dzien.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture);
-              ZuzycieDnia z;
-              if (!w.Dni.TryGetValue(klucz, out z)) { z = new ZuzycieDnia(); w.Dni[klucz] = z; }
-              z.Wejscie += Math.Max(0, we); z.Tworzenie += Math.Max(0, tw);
-              z.Odczyt += Math.Max(0, od); z.Wyjscie += Math.Max(0, wy); z.Odpowiedzi++;
+              if (zPlikami) {
+                // Rozmiar rozmowy w tej chwili = kontekst OSTATNIEGO wywolania (tyle czyta kazdy
+                // nastepny krok). Odpowiedzi "<synthetic>" (komunikaty samego Claude Code) maja zera.
+                int syn = l.IndexOf("\"model\":\"<synthetic>\"", m, StringComparison.Ordinal);
+                long kont = Math.Max(0, we) + Math.Max(0, tw) + Math.Max(0, od);
+                if ((syn < 0 || syn > u) && kont > 0 && czas >= pl.Ostatnio) { pl.Kontekst = kont; pl.Ostatnio = czas; }
+                if (pl.Cwd.Length == 0) { string c = Tekst(l, "\"cwd\":\""); if (!string.IsNullOrEmpty(c)) pl.Cwd = c; }
+              }
+              DateTime dzien = czas.ToLocalTime().Date;
+              if (dzien < odDnia || dzien >= doDniaWylacznie) continue;
+              string id = null;
+              int ii = l.IndexOf("\"id\":\"", m, StringComparison.Ordinal);
+              if (ii >= 0 && ii < u) {
+                ii += 6;
+                int ki = l.IndexOf('"', ii);
+                if (ki > ii) id = l.Substring(ii, ki - ii);
+              }
+              Odpowiedz o;
+              if (id != null && odp.TryGetValue(id, out o)) {
+                // Kolejna linia tej samej odpowiedzi: pierwsza ma output_tokens czesciowy,
+                // wiec zostaje najwieksza wartosc z wszystkich linii tego id (P26).
+                w.Duble++;
+                if (we > o.We) o.We = we;
+                if (tw > o.Tw) o.Tw = tw;
+                if (od > o.Od) o.Od = od;
+                if (wy > o.Wy) o.Wy = wy;
+                continue;
+              }
+              o = new Odpowiedz();
+              o.Dzien = dzien.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture);
+              o.Plik = nr;
+              o.We = Math.Max(0, we); o.Tw = Math.Max(0, tw); o.Od = Math.Max(0, od); o.Wy = Math.Max(0, wy);
+              if (id != null) odp[id] = o; else bezId.Add(o);
             }
           }
         } catch (Exception e) {
           if (w.Bledy.Count < 5) w.Bledy.Add(Path.GetFileName(p) + ": " + e.Message);
           else w.Bledy.Add("");
         }
+        pl.Tytul = tytulWlasny ?? tytulAi ?? "";
+      }
+      foreach (var o in odp.Values) Dodaj(w, info[o.Plik], o);
+      foreach (var o in bezId) Dodaj(w, info[o.Plik], o);
+      if (zPlikami) {
+        foreach (var pl in info) { if (pl.Wywolania > 0 || pl.Kontekst > 0) w.PlikiZOdpowiedziami.Add(pl); }
       }
       return w;
+    }
+    static void Dodaj(Wynik w, Plik pl, Odpowiedz o) {
+      Dzien z;
+      if (!w.Dni.TryGetValue(o.Dzien, out z)) { z = new Dzien(); w.Dni[o.Dzien] = z; }
+      long razem = o.We + o.Tw + o.Od + o.Wy;
+      z.Wejscie += o.We; z.Tworzenie += o.Tw; z.Odczyt += o.Od; z.Wyjscie += o.Wy; z.Odpowiedzi++;
+      if (pl.Worker) { z.Workerzy += razem; z.OdpowiedziWorkerow++; }
+      else { z.Rozmowy += razem; z.OdpowiedziRozmow++; }
+      pl.Tokeny += razem; pl.Wywolania++;
     }
   }
 }
@@ -946,6 +1050,15 @@ function Plik-Zuzycia {
     return (Join-Path ([System.IO.Path]::GetTempPath()) "megaruchacz-proba-zuzycie-$h.txt")
   }
   return (Join-Path $script:NadzDom ".claude\.megaruchacz-zuzycie.txt")
+}
+
+# Kompilacja licznika - raz na proces (typ zostaje w procesie do konca). Dwa watki
+# okna naraz go nie kompiluja (krok liczy sie najwyzej raz), ale gdyby jednak:
+# blad "typ juz istnieje" przy gotowym typie nie jest bledem.
+function Wczytaj-Licznik-Tokenow {
+  if ('MegaRuchacz.Tokeny.Licznik' -as [type]) { return }
+  try { Add-Type -TypeDefinition $KOD_LICZNIKA_ZUZYCIA -ErrorAction Stop }
+  catch { if (-not ('MegaRuchacz.Tokeny.Licznik' -as [type])) { throw } }
 }
 
 # CIEZKIE liczenie - wolane w osobnym procesie (Odpal-Liczenie-Zuzycia) albo
@@ -977,16 +1090,27 @@ function Policz-Zuzycie {
       if ($pliki.Count -eq 0) {
         $wynik["powod"] = "w ostatnich $DNI_ZUZYCIA dniach nie było na tym komputerze ani jednej rozmowy z Claude"
       } else {
-        if (-not ('MegaRuchacz.LicznikZuzycia' -as [type])) { Add-Type -TypeDefinition $KOD_LICZNIKA_ZUZYCIA -ErrorAction Stop }
-        $w = [MegaRuchacz.LicznikZuzycia]::Policz([string[]]$pliki, $od, $dzis)
+        Wczytaj-Licznik-Tokenow
+        $w = [MegaRuchacz.Tokeny.Licznik]::Policz([string[]]$pliki, $od, $dzis, $false)
         $we = [long]0; $tw = [long]0; $odc = [long]0; $wy = [long]0; $odp = [long]0
-        foreach ($d in $w.Dni.Values) { $we += $d.Wejscie; $tw += $d.Tworzenie; $odc += $d.Odczyt; $wy += $d.Wyjscie; $odp += $d.Odpowiedzi }
+        $roz = [long]0; $wor = [long]0; $odpR = [long]0; $odpW = [long]0
+        foreach ($d in $w.Dni.Values) {
+          $we += $d.Wejscie; $tw += $d.Tworzenie; $odc += $d.Odczyt; $wy += $d.Wyjscie; $odp += $d.Odpowiedzi
+          $roz += $d.Rozmowy; $wor += $d.Workerzy; $odpR += $d.OdpowiedziRozmow; $odpW += $d.OdpowiedziWorkerow
+        }
         $razem = $we + $tw + $odc + $wy
         $wynik["mb"] = [long][math]::Round($w.Bajty / 1MB)
         $wynik["odpowiedzi"] = $odp
         $wynik["dni_z_rozmowami"] = $w.Dni.Count
         $wynik["wejscie"] = $we; $wynik["tworzenie"] = $tw; $wynik["odczyt"] = $odc; $wynik["wyjscie"] = $wy
         $wynik["razem"] = $razem
+        # P26: te same tokeny rozdzielone - Twoje rozmowy (glowne okna) i workerzy.
+        $wynik["rozmowy"] = $roz; $wynik["workerzy"] = $wor
+        $wynik["odpowiedzi_rozmow"] = $odpR; $wynik["odpowiedzi_workerow"] = $odpW
+        if ($razem -gt 0) {
+          $wynik["srednia_rozmowy"] = [long][math]::Round($roz / [double]$DNI_ZUZYCIA)
+          $wynik["srednia_workerzy"] = [long][math]::Round($wor / [double]$DNI_ZUZYCIA)
+        }
         $wynik["duble"] = $w.Duble
         $wynik["nieczytelne"] = $w.Nieczytelne
         if ($w.Bledy.Count -gt 0) {
@@ -1053,6 +1177,8 @@ function Zuzycie-Dzienne([bool]$czekaj = $false) {
     Stan = "brak"; Powod = ""; Srednia = $null; SredniaBezBufora = $null; Razem = $null; Odczyt = $null
     Dni = $DNI_ZUZYCIA; DniZRozmowami = $null; Od = $null; Do = $null; Pliki = $null; Mb = $null
     Odpowiedzi = $null; Sekundy = ""; Wyliczono = $null; Plik = ""
+    # P26: podzial na Twoje rozmowy i workerow, odpowiedzi modelu (wyjscie)
+    Rozmowy = $null; Workerzy = $null; SredniaRozmowy = $null; SredniaWorkerow = $null; Wyjscie = $null
   }
   $plik = Plik-Zuzycia
   $z.Plik = $plik
@@ -1075,6 +1201,11 @@ function Zuzycie-Dzienne([bool]$czekaj = $false) {
     $z.Pliki = Liczba-Z-Klucza $k "pliki"
     $z.Mb = Liczba-Z-Klucza $k "mb"
     $z.Odpowiedzi = Liczba-Z-Klucza $k "odpowiedzi"
+    $z.Rozmowy = Liczba-Z-Klucza $k "rozmowy"
+    $z.Workerzy = Liczba-Z-Klucza $k "workerzy"
+    $z.SredniaRozmowy = Liczba-Z-Klucza $k "srednia_rozmowy"
+    $z.SredniaWorkerow = Liczba-Z-Klucza $k "srednia_workerzy"
+    $z.Wyjscie = Liczba-Z-Klucza $k "wyjscie"
     $z.Od = Data-Lub-Nic $k['od']
     $z.Do = Data-Lub-Nic $k['do']
     $z.Sekundy = "$($k['sekundy'])"
@@ -1191,6 +1322,209 @@ function Teksty-Nauki($t, $z) {
   } else {
     $x.Porownanie = (Z-Wielkiej (Bez-Porownania $z)) + "."
   }
+  return $x
+}
+
+# ---------------------------------- prawdziwy koszt: Twoje rozmowy i workerzy (P26)
+#
+# P22 (analiza 30.09.2026): workerzy to 78% wywolan modelu i 60% odczytu z bufora,
+# a rozmowa kierownika urosla do ~580 tys. tokenow - kazde jej wywolanie czyta ja
+# cala. Okno pokazywalo dotad tylko to, co doklada sam MegaRuchacz (kilka procent
+# otwarcia okna rozmowy), wiec najwieksze pozycje byly niewidoczne. Tu liczymy to,
+# co naprawde idzie: dzis Twoje rozmowy kontra workerzy, najdrozsi workerzy dnia
+# i najdluzsze rozmowy z ostatniej doby. Srednia z 7 dni (tez rozdzielona) daje
+# Zuzycie-Dzienne wyzej.
+#
+# SKAD LICZBY. Ten sam licznik co dzienne zuzycie (te same cztery pola usage, kazde
+# message.id raz, najwieksze wartosci z jego linii), tylko na plikach zmienionych
+# w ostatnich $GODZIN_KOSZTU h (30.09.2026: 36 plikow, ~130 MB). Worker = transkrypt
+# ...\<rozmowa>\subagents\agent-*.jsonl; opis zadania z agent-*.meta.json obok (pole
+# description - tak Claude Code zapisuje opis podany przy wywolaniu workera).
+# Rozmiar rozmowy = kontekst OSTATNIEGO wywolania modelu (wejscie + zapis i odczyt
+# bufora): tyle czyta kazdy nastepny krok.
+#
+# KIEDY. Krok "koszt" w nadzorca.ps1, w watku w tle: przy otwarciu okna, gdy wynik
+# jest starszy niz kwadrans, i po dozorze, gdy okno jest otwarte. Liczby "dzis"
+# rosna w ciagu dnia, wiec - inaczej niz srednia - nie sa swieze przez caly dzien.
+#
+# CISZA. Brak katalogu i wywrotka zostawiaja Powod (okno pisze "nie wiem, bo..."),
+# nieczytelny opis workera - "bez opisu" z powodem w Szczegolach. Dzien bez rozmow
+# to prawdziwe zero i okno mowi to zdaniem, nie cyfra.
+#
+# PROG DLUGIEJ ROZMOWY - ta sama liczba co PROG_ROZMOWY w narzedzia\przypomnienie.js
+# i $PROG_DLUGIEJ_ROZMOWY w narzedzia\straznik-zasad.ps1. Samo otwarcie okna rozmowy
+# to dzis ~194 tys. (P22: mediana startu 14-30.09), prog = start + ~100 tys. wlasnej
+# rozmowy. Do ponownej oceny po naprawie proxy, ktore dzis zawyza start (P22 pkt 1:
+# do 11.09 start mial ~63 tys.).
+$PROG_DLUGIEJ_ROZMOWY = 300000
+$GODZIN_KOSZTU = 24
+$NAJDROZSZYCH_WORKEROW = 5
+$NAJDLUZSZYCH_ROZMOW = 5
+
+# Nazwa projektu dla czlowieka: ostatni czlon katalogu, w ktorym szla rozmowa
+# ("C:\dev\claude-worker" -> "claude-worker"). Gdy go nie ma - katalog projektu
+# w transkryptach bez litery dysku, tak jak w Szczegolach otwarcia okna.
+function Projekt-Rozmowy([string]$cwd, [string]$sciezka) {
+  if ($cwd) {
+    $n = [System.IO.Path]::GetFileName($cwd.TrimEnd('\', '/'))
+    if ($n) { return $n }
+  }
+  $kat = Join-Path $script:NadzDom ".claude\projects"
+  $rel = "$sciezka"
+  if ($rel.StartsWith($kat, [System.StringComparison]::OrdinalIgnoreCase)) { $rel = $rel.Substring($kat.Length).TrimStart('\') }
+  return ((($rel -split '\\')[0]) -replace '^[A-Za-z]--', '')
+}
+
+function Opis-Workera($p) {
+  $x = [pscustomobject]@{
+    Opis = ""; Rola = ""; Uwaga = ""; Projekt = (Projekt-Rozmowy $p.Cwd $p.Sciezka)
+    Tokeny = $p.Tokeny; Wywolania = $p.Wywolania; Ostatnio = $null; Plik = $p.Sciezka
+  }
+  if ($p.Ostatnio -gt [datetime]::MinValue) { $x.Ostatnio = $p.Ostatnio.ToLocalTime() }
+  $meta = [System.IO.Path]::ChangeExtension($p.Sciezka, ".meta.json")
+  if (Test-Path -LiteralPath $meta) {
+    try {
+      $j = [System.IO.File]::ReadAllText($meta, [System.Text.Encoding]::UTF8) | ConvertFrom-Json
+      $x.Opis = "$($j.description)".Trim()
+      $x.Rola = "$($j.agentType)".Trim()
+    } catch { $x.Uwaga = "nie odczytałem opisu zadania: $(($_.Exception.Message -replace '[\r\n]+', ' ').Trim())" }
+  } else {
+    $x.Uwaga = "Claude Code nie zostawił opisu zadania (brak $([System.IO.Path]::GetFileName($meta)))"
+  }
+  return $x
+}
+
+function Opis-Rozmowy($p) {
+  return [pscustomobject]@{
+    Tytul = "$($p.Tytul)"; Projekt = (Projekt-Rozmowy $p.Cwd $p.Sciezka); Kontekst = $p.Kontekst
+    Ostatnio = $p.Ostatnio.ToLocalTime(); Dluga = ($p.Kontekst -ge $PROG_DLUGIEJ_ROZMOWY)
+    Tokeny = $p.Tokeny; Plik = $p.Sciezka
+  }
+}
+
+# Liczenie - w watku w tle okna albo wprost w wydruku -Raport. Zawsze oddaje obiekt:
+# z liczbami albo z Powodem.
+function Koszt-Dzis {
+  $sw = [System.Diagnostics.Stopwatch]::StartNew()
+  $teraz = [datetime]::Now
+  $k = [pscustomobject]@{
+    Powod = ""; Wyliczono = $teraz; Sekundy = ""; Pliki = 0; Mb = 0; Bledy = 0; Blad = ""
+    Rozmowy = $null; Workerzy = $null; OdpowiedziRozmow = $null; OdpowiedziWorkerow = $null
+    WorkerowDzis = 0; Najdrozsi = @(); Najdluzsze = @(); DlugichRozmow = 0
+    Prog = $PROG_DLUGIEJ_ROZMOWY; Godzin = $GODZIN_KOSZTU
+  }
+  try {
+    $katalog = Join-Path $script:NadzDom ".claude\projects"
+    if (-not (Test-Path -LiteralPath $katalog)) {
+      $k.Powod = "nie ma katalogu z Twoimi rozmowami z Claude Code ($katalog)"
+    } else {
+      $odCzasu = $teraz.AddHours(-$GODZIN_KOSZTU)
+      $pliki = @(Get-ChildItem -LiteralPath $katalog -Recurse -Filter *.jsonl -File -ErrorAction SilentlyContinue |
+                 Where-Object { $_.LastWriteTime -ge $odCzasu } | ForEach-Object { $_.FullName })
+      $k.Pliki = $pliki.Count
+      # Brak plikow z ostatniej doby = dzis naprawde nic (katalog przejrzany), nie "nie wiem".
+      $k.Rozmowy = [long]0; $k.Workerzy = [long]0; $k.OdpowiedziRozmow = [long]0; $k.OdpowiedziWorkerow = [long]0
+      if ($pliki.Count -gt 0) {
+        Wczytaj-Licznik-Tokenow
+        $dzis = $teraz.Date
+        $w = [MegaRuchacz.Tokeny.Licznik]::Policz([string[]]$pliki, $dzis, $dzis.AddDays(1), $true)
+        $k.Mb = [long][math]::Round($w.Bajty / 1MB)
+        if ($w.Bledy.Count -gt 0) {
+          $k.Bledy = $w.Bledy.Count
+          $k.Blad = (($w.Bledy | Where-Object { $_ } | Select-Object -First 1) -replace '[\r\n]+', ' ')
+        }
+        $klucz = $dzis.ToString('yyyy-MM-dd')
+        if ($w.Dni.ContainsKey($klucz)) {
+          $d = $w.Dni[$klucz]
+          $k.Rozmowy = $d.Rozmowy; $k.Workerzy = $d.Workerzy
+          $k.OdpowiedziRozmow = $d.OdpowiedziRozmow; $k.OdpowiedziWorkerow = $d.OdpowiedziWorkerow
+        }
+        $wor = @($w.PlikiZOdpowiedziami | Where-Object { $_.Worker -and ($_.Tokeny -gt 0) } | Sort-Object -Property Tokeny -Descending)
+        $k.WorkerowDzis = $wor.Count
+        $k.Najdrozsi = @($wor | Select-Object -First $NAJDROZSZYCH_WORKEROW | ForEach-Object { Opis-Workera $_ })
+        $granica = [datetime]::UtcNow.AddHours(-$GODZIN_KOSZTU)
+        $roz = @($w.PlikiZOdpowiedziami | Where-Object { (-not $_.Worker) -and ($_.Kontekst -gt 0) -and ($_.Ostatnio -ge $granica) } |
+                 Sort-Object -Property Kontekst -Descending)
+        $k.DlugichRozmow = @($roz | Where-Object { $_.Kontekst -ge $PROG_DLUGIEJ_ROZMOWY }).Count
+        $k.Najdluzsze = @($roz | Select-Object -First $NAJDLUZSZYCH_ROZMOW | ForEach-Object { Opis-Rozmowy $_ })
+        if ((($k.Rozmowy + $k.Workerzy) -le 0) -and ($w.Bledy.Count -gt 0)) {
+          $k.Powod = "nie dało się otworzyć $($w.Bledy.Count) z $($pliki.Count) plików rozmów, np. $($k.Blad)"
+        }
+      }
+    }
+  } catch {
+    Zanotuj-Wywrotke "prawdziwy koszt dnia" $_
+    $k.Powod = "liczenie się wywróciło: $(($_.Exception.Message -replace '[\r\n]+', ' ').Trim())"
+  }
+  $k.Sekundy = [math]::Round($sw.Elapsed.TotalSeconds, 1).ToString([System.Globalization.CultureInfo]::InvariantCulture)
+  Notuj "prawdziwy koszt dnia policzony w $($k.Sekundy) s: $(if ($k.Powod) { 'BEZ WYNIKU - ' + $k.Powod } else { "rozmowy $($k.Rozmowy), workerzy $($k.Workerzy), $($k.Pliki) plikow" })"
+  return $k
+}
+
+# "~680 tys." - rozmiar rozmowy; od miliona jak reszta okna ("~1,2 mln").
+function Tys-Tokenow($n) {
+  if ($null -eq $n) { return "?" }
+  $v = [double]$n
+  if ($v -ge 1e6) { return (Tokeny-Okolo $v) }
+  return "~$([long][math]::Round($v / 1000.0)) tys."
+}
+
+# Teksty karty (P26) - jedne dla okna i dla wydruku -Raport. $k = Koszt-Dzis,
+# $z = Zuzycie-Dzienne (srednia z 7 dni). Gdy czegos nie ma, tekst mowi dlaczego.
+function Teksty-Kosztu($k, $z) {
+  $x = [pscustomobject]@{
+    Tytul = "Ile tokenów naprawdę zużywasz - Twoje rozmowy i workerzy"
+    Powod = ""; Tabela = @(); Udzial = ""; UdzialUwaga = $false
+    NaglowekWorkerow = "Najdroższe zadania workerów dziś"; Workerzy = @(); WorkerzyPusto = ""
+    NaglowekRozmow = "Najdłuższe rozmowy z ostatniej doby"; Rozmowy = @(); RozmowyPusto = ""
+    Stopka = ""
+  }
+  if (-not $k) { $x.Powod = "Liczę, ile tokenów zużyły dziś rozmowy i workerzy - to potrwa kilka sekund..."; return $x }
+  if ($k.Powod) { $x.Powod = "Nie wiem, ile tokenów zużywasz dziś, bo $("$($k.Powod)".TrimEnd('.', ' '))."; return $x }
+  $dzisR = [double]$k.Rozmowy; $dzisW = [double]$k.Workerzy
+  $sr = "średnio z $($z.Dni) dni"
+  if (-not $z) { $sr = "średnio dziennie" }
+  $x.Tabela = @(,@("", "dziś do $($k.Wyliczono.ToString('HH:mm'))", $sr))
+  $jestSr = $z -and ($z.Stan -eq "jest") -and ($null -ne $z.SredniaRozmowy) -and ($null -ne $z.SredniaWorkerow)
+  $brakSr = "liczę..."
+  if ($z -and ($z.Stan -eq "brak")) { $brakSr = "nie wiem" }
+  $wiersz = {
+    param([string]$napis, $dzis, $srednio)
+    $d = "nic"
+    if ($dzis -gt 0) { $d = Tokeny-Okolo $dzis }
+    $s = $brakSr
+    if ($jestSr) { $s = Tokeny-Okolo $srednio }
+    return ,@($napis, $d, $s)
+  }
+  $x.Tabela += ,(& $wiersz "Twoje rozmowy" $dzisR $(if ($jestSr) { $z.SredniaRozmowy } else { $null }))
+  $x.Tabela += ,(& $wiersz "Workerzy" $dzisW $(if ($jestSr) { $z.SredniaWorkerow } else { $null }))
+  $x.Tabela += ,(& $wiersz "Razem" ($dzisR + $dzisW) $(if ($jestSr) { [double]$z.SredniaRozmowy + [double]$z.SredniaWorkerow } else { $null }))
+  if (($dzisR + $dzisW) -gt 0) {
+    $x.Udzial = "Workerzy to $(Procent-Udzialu $dzisW ($dzisR + $dzisW)) dzisiejszych tokenów"
+    if ($jestSr -and (([double]$z.SredniaRozmowy + [double]$z.SredniaWorkerow) -gt 0)) {
+      $x.Udzial += ", średnio $(Procent-Udzialu ([double]$z.SredniaWorkerow) ([double]$z.SredniaRozmowy + [double]$z.SredniaWorkerow))"
+    }
+    $x.Udzial += "."
+  } else {
+    $x.Udzial = "Dziś jeszcze nie było rozmów z Claude."
+  }
+  if ((-not $jestSr) -and $z -and ($z.Stan -eq "brak")) { $x.Udzial += " Średniej nie ma: $($z.Powod)."; $x.UdzialUwaga = $true }
+  foreach ($w in @($k.Najdrozsi)) {
+    $opis = $w.Opis
+    if (-not $opis) { $opis = "bez opisu zadania" }
+    $dop = @()
+    if ($w.Rola) { $dop += $w.Rola }
+    if ($w.Projekt) { $dop += $w.Projekt }
+    $x.Workerzy += [pscustomobject]@{ Tokeny = (Tokeny-Okolo $w.Tokeny); Opis = $opis; Dopisek = ($dop -join ", ") }
+  }
+  if (@($k.Najdrozsi).Count -eq 0) { $x.WorkerzyPusto = "Dziś jeszcze żaden worker nie pracował." }
+  foreach ($r in @($k.Najdluzsze)) {
+    $tyt = $r.Tytul
+    if (-not $tyt) { $tyt = "rozmowa bez tytułu" }
+    $x.Rozmowy += [pscustomobject]@{ Rozmiar = (Tys-Tokenow $r.Kontekst); Tytul = $tyt; Dopisek = "$($r.Projekt), $(Kiedy-Ludzko $r.Ostatnio)"; Dluga = [bool]$r.Dluga }
+  }
+  if (@($k.Najdluzsze).Count -eq 0) { $x.RozmowyPusto = "W ostatniej dobie nie było rozmów z Claude." }
+  $x.Stopka = "Każdy krok Claude'a czyta całą rozmowę od nowa. ! = rozmowa ponad $(Tys-Tokenow $k.Prog) tokenów: taniej będzie otworzyć nowe okno."
   return $x
 }
 
