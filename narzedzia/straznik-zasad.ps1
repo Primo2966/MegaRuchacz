@@ -1555,8 +1555,11 @@ function Pilnuj-Hookow-Globalnych {
 # Wola gita w osobnym procesie, zeby dalo sie nalozyc limit czasu - straznik
 # chodzi przy KAZDYM otwarciu okna i nie ma prawa czekac na gluche polaczenie.
 # Zwraca .ok (kod wyjscia 0 i zdazyl) oraz .tekst (wyjscie bez bialych znakow).
+# Od P36 takze .surowy (wyjscie co do znaku - listy z -z, w ktorych nic nie wolno
+# przycinac), .blad (stderr gita - z niego bierze sie powod odmowy) i .kod
+# (kod wyjscia; $null = git nie zdazyl albo nie ruszyl).
 function Wolaj-Gita([string]$argumenty, [int]$sekundy) {
-  $wynik = [ordered]@{ ok = $false; tekst = "" }
+  $wynik = [ordered]@{ ok = $false; tekst = ""; surowy = ""; blad = ""; kod = $null }
   $wy = [System.IO.Path]::GetTempFileName()
   $bl = [System.IO.Path]::GetTempFileName()
   try {
@@ -1568,27 +1571,327 @@ function Wolaj-Gita([string]$argumenty, [int]$sekundy) {
     # Sprawdzone 2026-09-16: bez tej linii ExitCode = $null, z nia = 0.
     $null = $p.Handle
     if (-not $p.WaitForExit($sekundy * 1000)) {
-      try { $p.Kill() } catch { }
+      $wynik.blad = "git nie zdazyl w $sekundy s"
+      try { $p.Kill() } catch { $wynik.blad += " i nie dal sie zatrzymac ($($_.Exception.Message))" }
       return $wynik
     }
     $p.WaitForExit()
+    $wynik.kod = $p.ExitCode
+    $e = [System.IO.File]::ReadAllText($bl)
+    if ($e) { $wynik.blad = $e.Trim() }
     if ($p.ExitCode -eq 0) {
       $wynik.ok = $true
       $t = [System.IO.File]::ReadAllText($wy)
-      if ($t) { $wynik.tekst = $t.Trim() }
+      if ($t) { $wynik.surowy = $t; $wynik.tekst = $t.Trim() }
     }
-  } catch { }
+  } catch { $wynik.blad = "nie udalo sie zawolac gita: $($_.Exception.Message)" }
   finally { Remove-Item $wy, $bl -Force -ErrorAction SilentlyContinue }
   return $wynik
 }
 
-# Przewija katalog zrodlowy narzedzia do nowszej wersji, zanim ktokolwiek
-# zacznie porownywac numery. To jest katalog roboczy uzytkownika, wiec pobranie
-# jest tchorzliwe z zalozenia: przy niezapisanych zmianach albo rozjechanej
-# historii NIE robi nic poza powiedzeniem o tym. Zadnego reset --hard, checkout
-# -f, clean ani autostash - cudza praca jest wazniejsza niz swiezosc narzedzia.
-# Brak gita, brak zdalnej i brak sieci to normalne sytuacje: cisza i jedziemy
-# dalej z tym, co lezy na dysku.
+# Pliki robocze narzedzia w jego WLASNYM repo. Pisze je praca, a nie autor narzedzia:
+# rejestr (hooki START/KONIEC i kierownik - kazda maszyna swoj), raporty workerow
+# i to, co wdroz.ps1 i straznik zakladaja w projekcie, gdy projektem jest samo repo
+# narzedzia. Do P36 kazdy z nich trzymal repo w stanie "niezapisane zmiany", a straznik
+# odmawial wtedy pobrania - na zawsze, bo rejestr dopisuje sie przy kazdym workerze.
+# Teraz przewiniecie odklada je do kopii i oddaje dokladnie takie, jakie byly, takze
+# gdy nowa wersja przestaje je sledzic (git skasowalby je wtedy z dysku).
+# Wzory dla -like, sciezki wzgledem korzenia repo, ukosnik "/".
+# Mapy (.megaruchacz/mapa.md) tu NIE ma z premedytacja: to wspolna, sledzona wiedza
+# o projekcie - jej lokalna zmiana jest czyjas praca i blokuje tak samo jak kod.
+$WZORY_PLIKOW_ROBOCZYCH = @(
+  ".megaruchacz/worklog.md",
+  ".megaruchacz/raporty/*",
+  ".megaruchacz/wersja.txt",
+  ".megaruchacz/zasady-kierownika.md",
+  ".megaruchacz/zasady-sesja.json",
+  ".megaruchacz/przypomnienie.json",
+  ".claude/megaruchacz-wersja.txt",
+  ".claude/megaruchacz-zasady.md",
+  ".claude/megaruchacz-sesja.json",
+  ".codex/*",
+  ".opencode/*"
+)
+# Ile nazw plikow miesci jedno zdanie o odmowie. Zdanie idzie do okna rozmowy i do
+# dziennika, a lista potrafi miec dziesiatki pozycji - reszta dostaje licznik, a komplet
+# lezy w pliku stanu (klucz aktualizacja.pliki), wiec nic nie znika bez slowa.
+$PLIKOW_W_ZDANIU = 8
+# Koncowka nazwy, pod ktora plik roboczy przeczekuje (w tym samym katalogu, wiec
+# przemianowanie jest niepodzielne) chwile miedzy zdjeciem z dysku a skopiowaniem.
+$KONCOWKA_ZDJETEGO = ".megaruchacz-zdjety"
+
+function Jest-Plikiem-Roboczym([string]$sciezka) {
+  foreach ($w in $WZORY_PLIKOW_ROBOCZYCH) { if ($sciezka -like $w) { return $true } }
+  return $false
+}
+
+# Wpisy z wyjscia gita z -z (NUL miedzy wpisami) - sciezki co do znaku, bez
+# cudzyslowow i kodow \ooo, ktorymi git zastepuje polskie litery w zwyklym wyjsciu.
+function Wpisy-Z-Gita([string]$surowy) {
+  if (-not $surowy) { return @() }
+  return @($surowy.Split([char]0) | Where-Object { $_ -ne "" })
+}
+
+function Sciezka-W-Zrodle([string]$wzgledna) {
+  return (Join-Path $Zrodlo ($wzgledna -replace '/', '\'))
+}
+
+function Sciezka-W-Kopii([string]$kat, [string]$wzgledna) {
+  return (Join-Path $kat ("pliki\" + ($wzgledna -replace '/', '\')))
+}
+
+# Skrot tresci pliku ("" = pliku nie ma). Czytamy, pozwalajac innym pisac: hook
+# potrafi akurat dopisywac linie do rejestru, a blokada wywrocilaby cale pobranie.
+function Skrot-Pliku([string]$sciezka) {
+  if (-not (Test-Path -LiteralPath $sciezka -PathType Leaf)) { return "" }
+  $md5 = [System.Security.Cryptography.MD5]::Create()
+  $s = [System.IO.File]::Open($sciezka, 'Open', 'Read', 'ReadWrite')
+  try { return [System.BitConverter]::ToString($md5.ComputeHash($s)).Replace("-","") }
+  finally { $s.Dispose(); $md5.Dispose() }
+}
+
+# Kopia bajt w bajt, potwierdzona skrotem - dopiero taka upowaznia do ruszenia
+# oryginalu. Rzuca, gdy sie nie zgadza: wtedy nikt niczego nie rusza.
+function Kopiuj-Na-Pewno([string]$skad, [string]$dokad) {
+  [void][System.IO.Directory]::CreateDirectory([System.IO.Path]::GetDirectoryName($dokad))
+  [System.IO.File]::Copy($skad, $dokad, $true)
+  if ((Skrot-Pliku $skad) -ne (Skrot-Pliku $dokad)) { throw "kopia $dokad nie zgadza sie z $skad" }
+}
+
+# Czy plik lezy dokladnie tak, jak zna go git (sledzony, bez zmian wobec HEAD).
+# Tylko taki wolno nadpisac kopia - jego tresc i tak zostaje w historii.
+function Czysty-W-Gicie($cyt, [string]$sciezka) {
+  $s = Wolaj-Gita "-C $cyt --literal-pathspecs ls-files -z -- `"$sciezka`"" $CZAS_GIT
+  if (-not $s.ok -or -not (Wpisy-Z-Gita $s.surowy)) { return $false }
+  $z = Wolaj-Gita "-C $cyt --literal-pathspecs diff --name-only -z HEAD -- `"$sciezka`"" $CZAS_GIT
+  return ($z.ok -and -not (Wpisy-Z-Gita $z.surowy))
+}
+
+function Lista-Do-Zdania($pliki) {
+  $l = @($pliki)
+  if ($l.Count -le $PLIKOW_W_ZDANIU) { return ($l -join ", ") }
+  return ((@($l | Select-Object -First $PLIKOW_W_ZDANIU) -join ", ") +
+          " i jeszcze $($l.Count - $PLIKOW_W_ZDANIU) (komplet: $plikStanu, klucz aktualizacja.pliki)")
+}
+
+# Zdanie o pobraniu, na ktore czlowiek ma zareagowac. Pod Claude Code idzie od razu na
+# ekran i zdejmuje taka sama prosbe odlozona wczesniej przez tryb -Tlo (np. po kliknieciu
+# w oknie nadzorcy) - inaczej przy tym samym otwarciu okna padlaby dwa razy. W -Tlo
+# czeka w pliku stanu na przebieg, ktory ma komu mowic (pod Codeksem: ladunek -KosztCodex).
+function Powiedz-Wazne([string]$zdanie) {
+  Mow $zdanie
+  if ($Tlo) { Odloz-Wiadomosc $zdanie; return }
+  try {
+    $stan = Czytaj-Klucze $plikStanu
+    $zdjete = $false
+    foreach ($k in @($stan.Keys)) {
+      if ($k -match '^mow\.\d+$' -and "$($stan[$k])" -eq $zdanie) { $stan.Remove($k); $zdjete = $true }
+    }
+    if ($zdjete) { Zapisz-Klucze $plikStanu $stan }
+  } catch { Zanotuj-Wywrotke "zdjecie odlozonej prosby o pobraniu" $_ }
+}
+
+# Wynik ostatniej prawdziwej proby pobrania - w pliku stanu straznika, zeby okno
+# nadzorcy (przycisk pobierania) moglo powiedziec DLACZEGO, zamiast zgadywac z dziennika.
+# Klucze aktualizacja.* zawsze z jednej proby: pliki i kopia z poprzedniej nie maja
+# prawa wisiec przy nowym wyniku.
+#   kiedy, zrodlo - kiedy i ktory katalog zrodlowy
+#   wynik  - pobrane | aktualne | zablokowane | rozjechane | nieudane | kopia
+#            | bez-sieci | bez-zdalnej | nie-repo | bez-gita
+#   powod  - to samo zdanie, ktore poszlo do czlowieka albo do dziennika
+#   pliki  - pelna lista plikow, przez ktore git odmowil (zablokowane, nieudane)
+#   kopia  - katalog z kopia plikow roboczych, ktorej nie dalo sie oddac
+function Zapisz-Wynik-Pobrania([string]$wynik, [string]$powod, $pliki = @(), [string]$kopia = "") {
+  try {
+    $stan = Czytaj-Klucze $plikStanu
+    foreach ($k in @($stan.Keys)) { if ($k -like "aktualizacja.*") { $stan.Remove($k) } }
+    $stan["aktualizacja.kiedy"]  = (Get-Date -Format 'yyyy-MM-dd HH:mm:ss')
+    $stan["aktualizacja.zrodlo"] = $Zrodlo
+    $stan["aktualizacja.wynik"]  = $wynik
+    $stan["aktualizacja.powod"]  = ($powod -replace '[\r\n]+', ' ')
+    if (@($pliki).Count -gt 0) { $stan["aktualizacja.pliki"] = (@($pliki) -join ", ") }
+    if ($kopia) { $stan["aktualizacja.kopia"] = $kopia }
+    Zapisz-Klucze $plikStanu $stan
+  } catch { Zanotuj-Wywrotke "zapis wyniku pobrania do pliku stanu" $_ }
+}
+
+# Co przewiniecie zrobi z plikami na dysku - z tych samych danych, ktore sprawdza
+# git merge --ff-only, zanim odmowi: ktore sciezki zmienia nowa wersja (HEAD..@{u})
+# i ktore maja u nas zmiany. Tu nic sie nie rozstrzyga - odmawia git; plan mowi, co
+# odlozyc do kopii i jak po ludzku nazwac to, przez co git odmowil.
+#   robocze   - pliki robocze na drodze nowej wersji: "wlasny" (tresc tej maszyny,
+#               ktorej w gicie nie ma - wraca zawsze) albo "kasowany" (czysty, ale
+#               nowa wersja go usuwa - wraca, gdy go zabraknie),
+#   zmienione - Twoje zmiany w plikach, ktore zmienia tez nowa wersja,
+#   obce      - pliki spoza gita tam, gdzie nowa wersja kladzie swoje,
+#   dodane    - zmiany przygotowane do zapisu (git add) w tych plikach.
+function Plan-Przewiniecia($cyt) {
+  $plan = [ordered]@{ ok = $false; powod = ""; robocze = @(); zmienione = @(); obce = @(); dodane = @() }
+  $przych = Wolaj-Gita "-C $cyt diff --name-status -z --no-renames HEAD @{u}" $CZAS_GIT
+  $lokal  = Wolaj-Gita "-C $cyt diff --name-only -z HEAD" $CZAS_GIT
+  $indeks = Wolaj-Gita "-C $cyt diff --name-only -z --cached" $CZAS_GIT
+  $sledz  = Wolaj-Gita "-C $cyt ls-files -z" $CZAS_GIT
+  foreach ($w in @($przych, $lokal, $indeks, $sledz)) {
+    if (-not $w.ok) { $plan.powod = "git nie powiedzial, co zmienia nowa wersja ($($w.blad))"; return $plan }
+  }
+  $zmienioneU = @{}; foreach ($s in (Wpisy-Z-Gita $lokal.surowy))  { $zmienioneU[$s] = $true }
+  $wIndeksie  = @{}; foreach ($s in (Wpisy-Z-Gita $indeks.surowy)) { $wIndeksie[$s] = $true }
+  $sledzone   = @{}; foreach ($s in (Wpisy-Z-Gita $sledz.surowy))  { $sledzone[$s] = $true }
+  $wpisy = @(Wpisy-Z-Gita $przych.surowy)
+  for ($i = 0; $i + 1 -lt $wpisy.Count; $i += 2) {
+    $stan = $wpisy[$i]
+    $p = $wpisy[$i + 1]
+    if ($wIndeksie.ContainsKey($p)) { $plan.dodane += $p; continue }
+    $pelna = Sciezka-W-Zrodle $p
+    if (-not (Test-Path -LiteralPath $pelna)) { continue }   # nie ma na dysku - nie ma czego stracic
+    $sledzony = $sledzone.ContainsKey($p)
+    $zmieniony = $zmienioneU.ContainsKey($p)
+    if ((Jest-Plikiem-Roboczym $p) -and (Test-Path -LiteralPath $pelna -PathType Leaf)) {
+      if ((-not $sledzony) -or $zmieniony) { $plan.robocze += [pscustomobject]@{ tryb = "wlasny"; sciezka = $p } }
+      elseif ($stan -eq "D") { $plan.robocze += [pscustomobject]@{ tryb = "kasowany"; sciezka = $p } }
+      continue
+    }
+    if (-not $sledzony) { $plan.obce += $p }
+    elseif ($zmieniony) { $plan.zmienione += $p }
+  }
+  $plan.ok = $true
+  return $plan
+}
+
+# Kopie plikow roboczych - poza repo (przewiniecie ich nie dosiegnie), osobno dla
+# kazdego katalogu zrodlowego (ten sam skrot, co w znaczniku pobrania), kazda proba
+# we wlasnym podkatalogu ze spisem: "wlasny|sciezka", "kasowany|sciezka", a przed
+# zdjeciem pliku z dysku dopisane "zdjety|sciezka". Ze spisu oddajemy pliki takze po
+# przebiegu, ktory padl w polowie (hook ubity po 15 s, wylaczony komputer).
+function Katalog-Kopii-Zrodla {
+  return (Join-Path $KatalogDomowy (".claude\.megaruchacz-kopia-zrodla\z" + (Skrot $Zrodlo.ToLower())))
+}
+
+function Odloz-Robocze($robocze) {
+  $kat = Join-Path (Katalog-Kopii-Zrodla) (Get-Date -Format "yyyyMMdd-HHmmss-fff")
+  try {
+    $spis = @("zrodlo|$Zrodlo")
+    foreach ($r in $robocze) {
+      Kopiuj-Na-Pewno (Sciezka-W-Zrodle $r.sciezka) (Sciezka-W-Kopii $kat $r.sciezka)
+      $spis += ($r.tryb + "|" + $r.sciezka)
+    }
+    # Spis na samym koncu: katalog bez spisu to kopia niedokonczona - oryginaly sa
+    # wtedy nietkniete, wiec Dokoncz-Przerwane moze ja po prostu usunac.
+    Zapisz-Tekst (Join-Path $kat "spis.txt") (($spis -join "`r`n") + "`r`n")
+  } catch {
+    if (Test-Path -LiteralPath $kat) { Remove-Item -LiteralPath $kat -Recurse -Force -ErrorAction SilentlyContinue }
+    throw
+  }
+  return $kat
+}
+
+function Czytaj-Spis([string]$kat) {
+  $spis = [ordered]@{ wpisy = @(); zdjete = @{} }
+  $raw = Czytaj-Tekst (Join-Path $kat "spis.txt")
+  foreach ($l in (("" + $raw) -split '\r?\n')) {
+    $cz = $l -split '\|', 2
+    if ($cz.Count -ne 2 -or -not $cz[1]) { continue }
+    if ($cz[0] -eq "wlasny" -or $cz[0] -eq "kasowany") { $spis.wpisy += [pscustomobject]@{ tryb = $cz[0]; sciezka = $cz[1] } }
+    elseif ($cz[0] -eq "zdjety") { $spis.zdjete[$cz[1]] = $true }
+  }
+  return $spis
+}
+
+# Zdejmuje z drogi wlasne pliki robocze, przez ktore git odmowil: skasowany plik
+# sledzony nie blokuje przewiniecia (git uznaje, ze nie ma czego stracic), a plik
+# spoza gita przestaje zawadzac. "zdjety" trafia do spisu PRZED ruszeniem pliku, a sam
+# plik najpierw zmienia nazwe (niepodzielnie) i dopiero potem idzie do kopii - linia,
+# ktora hook dopisalby w tej chwili, wyladuje w nowym pliku, a nie w nicosci.
+function Zdejmij-Robocze($kat, $robocze) {
+  $spis = Join-Path $kat "spis.txt"
+  foreach ($r in $robocze) {
+    if ($r.tryb -ne "wlasny") { continue }
+    $pelna = Sciezka-W-Zrodle $r.sciezka
+    $obok = $pelna + $KONCOWKA_ZDJETEGO
+    [System.IO.File]::AppendAllText($spis, ("zdjety|" + $r.sciezka + "`r`n"), (Bez-Bom))
+    [System.IO.File]::Move($pelna, $obok)
+    Kopiuj-Na-Pewno $obok (Sciezka-W-Kopii $kat $r.sciezka)
+    [System.IO.File]::Delete($obok)
+  }
+}
+
+# Oddaje pliki robocze z kopii - po przewinieciu, po odmowie i po przebiegu, ktory padl
+# w polowie; zawsze ta sama regula, zeby zadna droga nie mogla niczego zgubic:
+#   - pliku nie ma -> wraca z kopii (git go skasowal albo sami go zdjelismy),
+#   - lezy taki sam jak w kopii -> nic do roboty,
+#   - zdjelismy go, a teraz lezy wersja znana gitowi (przewiniecie wpisalo swoja) ->
+#     wraca tresc tej maszyny, a tamta zostaje w historii,
+#   - zdjelismy go, a lezy cos innego (np. hook zalozyl rejestr od nowa) -> NIE
+#     nadpisujemy, kopia zostaje na dysku i straznik mowi, gdzie jej szukac,
+#   - nie ruszalismy go, a jest inny niz w kopii -> to zywy plik; kopia jest zbedna.
+# Kopia znika dopiero, gdy wszystko lezy na miejscu. Zwraca to, czego nie oddal.
+function Oddaj-Robocze($cyt, [string]$kat) {
+  $spis = Czytaj-Spis $kat
+  $nieOddane = @()
+  foreach ($w in $spis.wpisy) {
+    $pelna = Sciezka-W-Zrodle $w.sciezka
+    $kopia = Sciezka-W-Kopii $kat $w.sciezka
+    $zdjety = $spis.zdjete.ContainsKey($w.sciezka)
+    try {
+      # Przebieg padl miedzy zmiana nazwy a skopiowaniem - najswiezsza tresc lezy obok.
+      $obok = $pelna + $KONCOWKA_ZDJETEGO
+      if ($zdjety -and (Test-Path -LiteralPath $obok -PathType Leaf)) {
+        Kopiuj-Na-Pewno $obok $kopia
+        [System.IO.File]::Delete($obok)
+      }
+      if (-not (Test-Path -LiteralPath $kopia -PathType Leaf)) { $nieOddane += "$($w.sciezka) (w kopii go nie ma)"; continue }
+      if (-not (Test-Path -LiteralPath $pelna)) { Kopiuj-Na-Pewno $kopia $pelna; continue }
+      if ((Skrot-Pliku $pelna) -eq (Skrot-Pliku $kopia)) { continue }
+      if ($zdjety -and $w.tryb -eq "wlasny") {
+        if (Czysty-W-Gicie $cyt $w.sciezka) { Kopiuj-Na-Pewno $kopia $pelna }
+        else { $nieOddane += $w.sciezka }
+      }
+    } catch { $nieOddane += "$($w.sciezka) ($($_.Exception.Message))" }
+  }
+  if ($nieOddane.Count -eq 0) {
+    try {
+      Remove-Item -LiteralPath $kat -Recurse -Force
+      # Puste katalogi nad kopia tez znikaja - po udanym pobraniu nie zostaje sladu.
+      $baza = Split-Path -Parent $kat
+      foreach ($k in @($baza, (Split-Path -Parent $baza))) {
+        if (-not @(Get-ChildItem -LiteralPath $k -Force)) { Remove-Item -LiteralPath $k -Force }
+      }
+    } catch { Zanotuj-Wywrotke "sprzatanie kopii plikow roboczych" $_ }
+  }
+  return $nieOddane
+}
+
+# Kopie po przebiegu, ktory padl w polowie. Katalog bez spisu to kopia niedokonczona
+# (oryginaly byly wtedy nietkniete) - do kosza. Ze spisem - oddajemy jak po przewinieciu.
+# Zwraca kopie, ktorych nie dalo sie oddac bez nadpisania innej tresci.
+function Dokoncz-Przerwane($cyt) {
+  $baza = Katalog-Kopii-Zrodla
+  if (-not (Test-Path -LiteralPath $baza)) { return @() }
+  $zostalo = @()
+  foreach ($kat in @(Get-ChildItem -LiteralPath $baza -Directory)) {
+    if (-not (Test-Path -LiteralPath (Join-Path $kat.FullName "spis.txt"))) {
+      Remove-Item -LiteralPath $kat.FullName -Recurse -Force
+      continue
+    }
+    Notuj "zrodlo: oddaje pliki robocze z kopii po przerwanym pobraniu ($($kat.FullName))"
+    $nie = @(Oddaj-Robocze $cyt $kat.FullName)
+    if ($nie.Count -gt 0) { $zostalo += [pscustomobject]@{ kat = $kat.FullName; pliki = $nie } }
+  }
+  return $zostalo
+}
+
+# Przewija katalog zrodlowy narzedzia do nowszej wersji, zanim ktokolwiek zacznie
+# porownywac numery. To jest katalog roboczy uzytkownika, wiec pobranie jest tchorzliwe
+# z zalozenia - ale od P36 samo "sa niezapisane zmiany" nie jest juz powodem odmowy:
+# repo narzedzia bylo w tym stanie zawsze, bo rejestr pracy dopisuja hooki. Odmawia
+# git - merge --ff-only nie nadpisze lokalnej zmiany ani pliku spoza gita, a z
+# --no-overwrite-ignore takze pliku ignorowanego (bez tego git nadpisuje go po cichu).
+# My nazywamy po ludzku, przez co odmowil, i chronimy pliki robocze narzedzia (kopia
+# przed przewinieciem, oddanie po nim). Rozjechana historia (lokalne commity) - odmowa
+# jak dotad. Zadnego reset, stash, clean ani checkout -f - cudza praca jest wazniejsza
+# niz swiezosc narzedzia. Brak gita, brak zdalnej i brak sieci to normalne sytuacje:
+# cisza i jedziemy dalej z tym, co lezy na dysku. Wynik kazdej prawdziwej proby lezy
+# w pliku stanu (klucze aktualizacja.*, patrz Zapisz-Wynik-Pobrania).
 function Odswiez-Zrodlo {
   # Do sieci zagladamy nie czesciej niz raz na $MINUT_MIEDZY_POBRANIAMI, osobno
   # dla kazdego katalogu zrodlowego - stad skrot sciezki w kluczu. W tle dlawika
@@ -1600,12 +1903,17 @@ function Odswiez-Zrodlo {
   if (-not $Tlo -and $stanP[$klucz] -and [datetime]::TryParse($stanP[$klucz], [ref]$kiedy)) {
     if (([datetime]::Now - $kiedy).TotalMinutes -lt $MINUT_MIEDZY_POBRANIAMI) { return }
   }
-  if (-not (Get-Command git -ErrorAction SilentlyContinue)) { Notuj "zrodlo: nie ma gita na tej maszynie - pomijam pobranie"; return }
+  if (-not (Get-Command git -ErrorAction SilentlyContinue)) {
+    Notuj "zrodlo: nie ma gita na tej maszynie - pomijam pobranie"
+    Zapisz-Wynik-Pobrania "bez-gita" "nie ma gita na tej maszynie - nie ma czym pobrac nowszej wersji"
+    return
+  }
 
   $cyt = '"' + $Zrodlo.TrimEnd('\') + '"'
   $repo = Wolaj-Gita "-C $cyt rev-parse --is-inside-work-tree" $CZAS_GIT
   if (-not $repo.ok -or $repo.tekst -ne "true") {
     Notuj "zrodlo: $Zrodlo to nie repozytorium git - nie ma skad pobierac"
+    Zapisz-Wynik-Pobrania "nie-repo" "$Zrodlo to nie repozytorium git - nie ma skad pobierac"
     return
   }
 
@@ -1614,10 +1922,39 @@ function Odswiez-Zrodlo {
   $stanP[$klucz] = (Get-Date -Format 'yyyy-MM-dd HH:mm:ss')
   Zapisz-Klucze $plikPobrania $stanP
 
-  $brudne = Wolaj-Gita "-C $cyt status --porcelain" $CZAS_GIT
-  if (-not $brudne.ok) { Notuj "zrodlo: git nie odpowiedzial na pytanie o niezapisane zmiany"; return }
-  if ($brudne.tekst) {
-    Mow "MegaRuchacz: w $Zrodlo sa niezapisane zmiany - nie pobieram nowszej wersji narzedzia, pracuje na tej, ktora jest."
+  # Jeden przebieg naraz: dwa okna otwarte jednoczesnie nie moga odkladac tych samych
+  # plikow ani scalac na wyscigi. Drugi odpuszcza - pierwszy i tak pobiera.
+  $m = New-Object System.Threading.Mutex($false, "Local\MegaRuchacz-zrodlo")
+  $mam = $false
+  try {
+    try { $mam = $m.WaitOne(2000) }
+    catch {
+      # Porzucona blokada (poprzedni przebieg padl, trzymajac ja) jest juz nasza -
+      # to, co po sobie zostawil, oddaje Dokoncz-Przerwane.
+      $wew = $_.Exception
+      while ($wew -and -not ($wew -is [System.Threading.AbandonedMutexException])) { $wew = $wew.InnerException }
+      if (-not $wew) { throw }
+      $mam = $true
+    }
+    if (-not $mam) { Notuj "zrodlo: inny przebieg straznika wlasnie pobiera nowsza wersje - tym razem odpuszczam"; return }
+    Przewin-Zrodlo $cyt
+  } finally {
+    if ($mam) { $m.ReleaseMutex() }
+    $m.Dispose()
+  }
+}
+
+function Przewin-Zrodlo($cyt) {
+  # Najpierw to, co zostawil przebieg, ktory padl w polowie: zanim cokolwiek
+  # pobierzemy, pliki robocze maja lezec tam, gdzie lezaly.
+  $wiszace = @(Dokoncz-Przerwane $cyt)
+  if ($wiszace.Count -gt 0) {
+    $opis = (@($wiszace | ForEach-Object { "$($_.kat) (" + ($_.pliki -join ", ") + ")" }) -join "; ")
+    $zdanie = "MegaRuchacz: UWAGA - kopia plikow roboczych z przerwanego pobrania nowszej wersji czeka w $opis. " +
+              "Na dysku lezy juz inna tresc tych plikow, wiec jej nie nadpisuje: porownaj i przenies recznie, a potem usun ten katalog. " +
+              "Do tego czasu nie pobieram nowszej wersji narzedzia."
+    Powiedz-Wazne $zdanie
+    Zapisz-Wynik-Pobrania "kopia" $zdanie @() (@($wiszace | ForEach-Object { $_.kat }) -join ", ")
     return
   }
 
@@ -1625,6 +1962,7 @@ function Odswiez-Zrodlo {
   $zdalna = Wolaj-Gita "-C $cyt rev-parse --abbrev-ref --symbolic-full-name @{u}" $CZAS_GIT
   if (-not $zdalna.ok -or -not $zdalna.tekst) {
     Notuj "zrodlo: galaz w $Zrodlo nie ma zdalnej - nie ma skad pobierac"
+    Zapisz-Wynik-Pobrania "bez-zdalnej" "galaz w $Zrodlo nie ma zdalnej - nie ma skad pobierac"
     return
   }
 
@@ -1636,37 +1974,131 @@ function Odswiez-Zrodlo {
   # okna nie moze na nas czekac. Gdy sie nie wyrobimy, wracamy po godzinie.
   $env:GIT_TERMINAL_PROMPT = "0"
   $pobrane = Wolaj-Gita "-C $cyt -c credential.interactive=never fetch --quiet" $CZAS_GIT_FETCH
-  if (-not $pobrane.ok) { Notuj "zrodlo: fetch nie wyszedl (brak sieci albo dostepu) - zostaje przy tym, co na dysku"; return }
+  if (-not $pobrane.ok) {
+    Notuj "zrodlo: fetch nie wyszedl (brak sieci albo dostepu) - zostaje przy tym, co na dysku"
+    $bladFetch = @(("" + $pobrane.blad) -split '\r?\n' | Where-Object { $_.Trim() } | Select-Object -First 1) -join ""
+    Zapisz-Wynik-Pobrania "bez-sieci" ("nie udalo sie zajrzec na serwer (brak sieci albo dostepu)" + $(if ($bladFetch) { ": $bladFetch" } else { "" }))
+    return
+  }
 
   $licznik = Wolaj-Gita "-C $cyt rev-list --left-right --count HEAD...@{u}" $CZAS_GIT
-  if (-not $licznik.ok) { Notuj "zrodlo: git nie policzyl roznicy wobec zdalnej"; return }
+  if (-not $licznik.ok) {
+    Notuj "zrodlo: git nie policzyl roznicy wobec zdalnej"
+    Zapisz-Wynik-Pobrania "nieudane" "git nie policzyl roznicy wobec zdalnej ($($licznik.blad))"
+    return
+  }
   $czesci = $licznik.tekst -split '\s+'
-  if ($czesci.Count -lt 2) { return }
+  if ($czesci.Count -lt 2) {
+    Zapisz-Wynik-Pobrania "nieudane" "git oddal nieczytelna odpowiedz o roznicy wobec zdalnej: $($licznik.tekst)"
+    return
+  }
   $nasze = [int]$czesci[0]   # commity lokalne, ktorych nie ma na zdalnej
   $zdalne = [int]$czesci[1]  # commity zdalne, ktorych nie mamy u siebie
-  if ($zdalne -le 0) { Notuj "zrodlo: bez zmian, zdalna nie ma nic nowego"; return }
+  if ($zdalne -le 0) {
+    Notuj "zrodlo: bez zmian, zdalna nie ma nic nowego"
+    Zapisz-Wynik-Pobrania "aktualne" "na serwerze nie ma nic nowszego - masz najnowsza wersje"
+    return
+  }
 
   if ($nasze -gt 0) {
-    Mow "MegaRuchacz: historia w $Zrodlo rozjechala sie ze zdalna ($nasze lokalnych, $zdalne zdalnych) - nie scalam sam, zrob to recznie."
+    $zdanie = "MegaRuchacz: historia w $Zrodlo rozjechala sie ze zdalna ($nasze lokalnych, $zdalne zdalnych) - nie scalam sam, zrob to recznie."
+    Powiedz-Wazne $zdanie
+    Zapisz-Wynik-Pobrania "rozjechane" $zdanie
     return
   }
 
-  # Tylko proste przewiniecie do przodu. Gdy git odmowi, zostajemy przy starym.
-  $scalone = Wolaj-Gita "-C $cyt merge --ff-only @{u}" $CZAS_GIT_FETCH
-  if (-not $scalone.ok) {
-    Mow "MegaRuchacz: nie udalo sie przewinac $Zrodlo do nowszej wersji - pracuje na tej, ktora jest."
+  $plan = Plan-Przewiniecia $cyt
+  if (-not $plan.ok) {
+    $zdanie = "MegaRuchacz: nie pobieram nowszej wersji narzedzia - $($plan.powod). Nic nie ruszylem; sprobuje przy nastepnym otwarciu okna."
+    Powiedz-Wazne $zdanie
+    Zapisz-Wynik-Pobrania "nieudane" $zdanie
     return
   }
 
-  # Cicha aktualizacja jest gorsza niz jej brak - zawsze jedna linia o tym,
-  # co sie wlasnie zmienilo pod reka uzytkownika.
-  $poWersja = Wersja-Narzedzia $plikZmian
-  if ($przedWersja -and $poWersja -and $przedWersja -ne $poWersja) {
-    Mow "MegaRuchacz: narzedzie podciagniete z gita - wersja ${przedWersja} -> ${poWersja} (co doszlo: $plikZmian)"
-  } else {
-    $slowo = if ($zdalne -eq 1) { "nowa zmiana" } else { "nowych zmian" }
-    Mow "MegaRuchacz: narzedzie podciagniete z gita - $zdalne $slowo, numer wersji bez zmian (co doszlo: $plikZmian)"
+  # Kopia plikow roboczych, ktore nowa wersja zmienia albo kasuje - PRZED pierwsza
+  # proba, bo udane przewiniecie kasuje z dysku plik, ktory przestaje byc sledzony.
+  $kat = ""
+  if ($plan.robocze.Count -gt 0) {
+    try { $kat = Odloz-Robocze $plan.robocze }
+    catch {
+      $zdanie = "MegaRuchacz: nie pobieram nowszej wersji narzedzia - nie udalo sie odlozyc plikow roboczych do kopii ($($_.Exception.Message)). Nic nie ruszylem."
+      Powiedz-Wazne $zdanie
+      Zapisz-Wynik-Pobrania "nieudane" $zdanie
+      return
+    }
   }
+
+  # Tylko proste przewiniecie do przodu - o tym, czy wolno, rozstrzyga git.
+  $scal = "-C $cyt merge --ff-only --no-overwrite-ignore @{u}"
+  $r = Wolaj-Gita $scal $CZAS_GIT_FETCH
+  $blokuja = @($plan.zmienione) + @($plan.obce) + @($plan.dodane)
+  $wlasne = @($plan.robocze | Where-Object { $_.tryb -eq "wlasny" })
+  $bladZdjecia = ""
+  if (-not $r.ok -and $blokuja.Count -eq 0 -and $wlasne.Count -gt 0) {
+    # Git odmowil wylacznie przez pliki robocze tej maszyny - kopia juz lezy, wiec
+    # zdejmujemy je z drogi i probujemy drugi raz. Wracaja w Oddaj-Robocze.
+    try {
+      Zdejmij-Robocze $kat $wlasne
+      $r = Wolaj-Gita $scal $CZAS_GIT_FETCH
+    } catch { $bladZdjecia = "nie udalo sie zdjac plikow roboczych z drogi: $($_.Exception.Message)" }
+  }
+  $nieOddane = @()
+  if ($kat) { $nieOddane = @(Oddaj-Robocze $cyt $kat) }
+  $kopia = ""
+  if ($nieOddane.Count -gt 0) {
+    $kopia = $kat
+    $zdanieKopii = "MegaRuchacz: UWAGA - nie oddalem z kopii plikow roboczych: " + ($nieOddane -join ", ") +
+                   ". Na dysku lezy juz inna tresc, wiec jej nie nadpisuje - kopia czeka w ${kat}: porownaj i przenies recznie, a potem usun ten katalog."
+    Powiedz-Wazne $zdanieKopii
+  }
+
+  if ($r.ok) {
+    if ($kat -and $nieOddane.Count -eq 0) {
+      Notuj ("zrodlo: pliki robocze tej maszyny odlozone na czas pobrania i oddane bez zmian: " + (@($plan.robocze | ForEach-Object { $_.sciezka }) -join ", "))
+    }
+    # Cicha aktualizacja jest gorsza niz jej brak - zawsze jedna linia o tym,
+    # co sie wlasnie zmienilo pod reka uzytkownika.
+    $poWersja = Wersja-Narzedzia $plikZmian
+    if ($przedWersja -and $poWersja -and $przedWersja -ne $poWersja) {
+      $zdanie = "MegaRuchacz: narzedzie podciagniete z gita - wersja ${przedWersja} -> ${poWersja} (co doszlo: $plikZmian)"
+    } else {
+      $slowo = if ($zdalne -eq 1) { "nowa zmiana" } else { "nowych zmian" }
+      $zdanie = "MegaRuchacz: narzedzie podciagniete z gita - $zdalne $slowo, numer wersji bez zmian (co doszlo: $plikZmian)"
+    }
+    Mow $zdanie
+    Zapisz-Wynik-Pobrania "pobrane" $zdanie @() $kopia
+    return
+  }
+
+  # Odmowa przez pliki git zglasza, zanim cokolwiek zapisze - wtedy "nic nie ruszylem"
+  # jest prawda. Przy innej odmowie (np. plik trzymany przez inny program) git mogl juz
+  # cos zapisac, wiec mowimy tylko to, za co reczymy sami: pliki robocze.
+  $naMiejscu = if ($nieOddane.Count -eq 0) { " Nic nie ruszylem." } else { "" }
+  $oRoboczych = if ($kat -and $nieOddane.Count -eq 0) { " Pliki robocze tej maszyny zostaly na miejscu." } else { "" }
+  if ($blokuja.Count -gt 0) {
+    $czesciZdania = @()
+    if ($plan.zmienione.Count -gt 0) { $czesciZdania += "zmiany w plikach, ktore zmienia tez nowa wersja: " + (Lista-Do-Zdania $plan.zmienione) }
+    if ($plan.obce.Count -gt 0)      { $czesciZdania += "pliki spoza gita tam, gdzie nowa wersja kladzie swoje: " + (Lista-Do-Zdania $plan.obce) }
+    if ($plan.dodane.Count -gt 0)    { $czesciZdania += "zmiany przygotowane do zapisu (git add) w plikach, ktore zmienia nowa wersja: " + (Lista-Do-Zdania $plan.dodane) }
+    $zdanie = "MegaRuchacz: nie pobieram nowszej wersji narzedzia - git odmowil, bo nadpisalby Twoja prace w ${Zrodlo}: " +
+              ($czesciZdania -join "; ") + ".$naMiejscu Zachowaj je recznie (commit i scalenie) albo przenies w bezpieczne " +
+              "miejsce - potem pobiore sam przy nastepnym otwarciu okna."
+    Powiedz-Wazne $zdanie
+    Zapisz-Wynik-Pobrania "zablokowane" $zdanie $blokuja $kopia
+    return
+  }
+
+  # Odmowa z innego powodu (zablokowany indeks, plik trzymany przez inny program,
+  # brak miejsca) albo git nie zdazyl. Powod slowami gita - lepsze to niz zgadywanie.
+  $powodGita = (@(("" + $r.blad) -split '\r?\n' | Where-Object { $_.Trim() -and ($_ -notmatch '^\s*(warning|hint):') } | Select-Object -First 1) -join "").Trim().TrimEnd('.')
+  if (-not $powodGita) { $powodGita = "bez slowa wyjasnienia (kod $($r.kod))" }
+  $powod = if ($bladZdjecia) { $bladZdjecia } else { "git: $powodGita" }
+  $plikiGita = @(("" + $r.blad) -split '\r?\n' | Where-Object { $_ -match '^\t' } | ForEach-Object { $_.Trim() })
+  $zdanie = "MegaRuchacz: nie udalo sie przewinac $Zrodlo do nowszej wersji - $powod"
+  if ($plikiGita.Count -gt 0) { $zdanie += " (pliki: " + (Lista-Do-Zdania $plikiGita) + ")" }
+  $zdanie += ". Pracuje na tej, ktora jest.$oRoboczych"
+  Powiedz-Wazne $zdanie
+  Zapisz-Wynik-Pobrania "nieudane" $zdanie $plikiGita $kopia
 }
 
 # --------------------------------------------------------- 1. zasady globalne

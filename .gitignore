@@ -32,3 +32,20 @@ Thumbs.db
 
 # Probki prawdziwych wiadomosci z proby na sucho wyboru materialu (lore.selection) - prywatne
 .megaruchacz/raporty/nauka-wybor.md
+
+# Pliki robocze MegaRuchacza w jego wlasnym repo (P36) - stan jednej maszyny, nie zrodlo.
+# Rejestr pracy dopisuja hooki START/KONIEC i kierownik, na kazdym komputerze osobno;
+# sledzony w gicie trzymal repo wiecznie "brudne" i straznik nie pobieral nowszej wersji.
+.megaruchacz/worklog.md
+# To, co wdroz.ps1 i straznik zakladaja w projekcie, gdy projektem jest samo repo
+# narzedzia - kopie z szablonow i pliki ze sciezkami tej jednej maszyny
+# (np. {{PROJEKT}} w .codex/hooks.json). Zrodlem sa szablony-*, nie te kopie.
+.codex/
+.opencode/
+.claude/megaruchacz-wersja.txt
+.claude/megaruchacz-zasady.md
+.claude/megaruchacz-sesja.json
+.megaruchacz/wersja.txt
+.megaruchacz/zasady-kierownika.md
+.megaruchacz/zasady-sesja.json
+.megaruchacz/przypomnienie.json
