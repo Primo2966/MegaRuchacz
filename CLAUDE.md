@@ -49,9 +49,8 @@ Każdy worker dostaje ten plik sam — kierownik nie wkleja tych zasad do zlece�
   klawiatura wyłączona, a bezpiecznik w kopii `stan-nadzorcy.ps1` trzyma cykl wiedzy na
   sucho (`Ruszaj-Cykl` i spółka). Pułapki: mapa, „TEST okna bez ekranu”. Po teście żadna
   kopia nie zostaje w procesach.
-- **Commit:** `git add` tylko własnych plików (nigdy `-A`), commit lokalny z linią
-  `Co-Authored-By`, którą podaje Claude Code (zasada „bez atrybucji” dotyczy tylko
-  projektu WMS). Zablokowany indeks (`index.lock`) — odczekaj kilka sekund i ponów.
+- **Commit:** `git add` tylko własnych plików (nigdy `-A`), commit lokalny **bez linii `Co-Authored-By`**
+  — tak jak w projekcie WMS (decyzja użytkownika 30.09). Zablokowany indeks (`index.lock`) — odczekaj kilka sekund i ponów.
 - **Push, `ZMIANY.md` i `.megaruchacz\mapa.md` robi kierownik** na koniec rundy — worker
   podaje w raporcie, co tam dopisać.
 - **Wspólne zasoby** — restart nadzorcy, pliki w `~\.claude`, zadania Harmonogramu,

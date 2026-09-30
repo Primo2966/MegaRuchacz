@@ -4,6 +4,50 @@ Każda zmiana wypychana na gita dostaje tu wpis. Numer rośnie wg zasady:
 pierwsza cyfra — przebudowa łamiąca zgodność, druga — nowa funkcja,
 trzecia — poprawka.
 
+## 0.23.0 — 2026-09-30
+
+- **Taniej na tokenach — bez drogich workerów.** Koniec z workerem „general-purpose” (ładował
+  ~153 tys. tokenów na start zamiast ~23 tys.); do zadań z wyglądem jest nowa rola `projektant`
+  (narzędzia implementera + skille). Zastępca, wbudowani pomocnicy (poza `claude-code-guide`,
+  który ma własny, tańszy model) i codzienne wyciąganie faktów z rozmów chodzą na Sonnecie.
+  Kierownik zostaje na modelu, który wybrałeś.
+- **Workerzy równolegle, wielu naraz — także bez kopii roboczych.** Każdy na swoich plikach;
+  dziennik zmian, mapę i wysyłkę na GitHuba robi kierownik na koniec rundy. Verifier tylko przy
+  ryzyku, zastępca na Twoją prośbę, wygląd najpierw uzgadniany w rozmowie. Stałe zasady pracy
+  w tym repo stoją w `CLAUDE.md` — workerzy dostają je sami, bez przepisywania w każdym zleceniu.
+- **Ostrzeżenie o długiej rozmowie.** Każdy krok Claude'a czyta całą rozmowę, więc długa kosztuje
+  przy każdym kroku. Od 300 tys. tokenów kierownik dostaje jedną linię „taniej będzie nowe okno”
+  (potem co +100 tys. i po przerwie ponad godzinę); strażnik mówi to samo przy wznowieniu rozmowy.
+  Powiadomienia „worker skończył” nie dostają już doklejek (dotąd co czwarta szła do nikogo).
+- **Okno nadzorcy: ile tokenów naprawdę zużywasz** — dziś i średnio z 7 dni, Twoje rozmowy
+  kontra workerzy, najdroższe zadania i najdłuższe rozmowy; pełne liczby w Szczegółach. Rachunek
+  dzienny zaniżał tekst pisany przez Claude'a 3,8 raza — poprawione. Wykres kosztu czytania rozmów
+  z 30 dni przeszedł do Szczegółów, więc Przegląd znów mieści się bez przewijania.
+- **Alarm „MegaRuchacz kosztuje dużo” liczy tokeny, nie procent** — drogo od ~15 000 tokenów przy
+  otwarciu okna rozmowy (dziś ~9 100). Procent zależał od tego, ile dokładają dodatki, i po zmianie
+  u administratora proxy dałby fałszywy czerwony alarm; dalej widać go w oknie.
+- **Aktualizacja nie staje już przez „niezapisane zmiany”.** Strażnik pobiera nowszą wersję mimo
+  raportów, rejestru i innych plików roboczych tej maszyny (odkłada je na bok i oddaje po
+  pobraniu). Odmawia tylko wtedy, gdy nadpisałby czyjąś pracę — i mówi, które pliki blokują.
+  Rejestr pracy (`worklog.md`) nie jest już w gicie: każdy komputer ma swój. Komputer, który przez
+  ten błąd stoi na starej wersji (dom od 28.09), nie pobierze poprawki sam — raz trzeba go
+  odblokować ręcznie, potem pobiera już sam.
+- **Codex tylko tam, gdzie go chcesz.** Instalator i strażnik nie zakładają ról i hooków Codeksa
+  bez pytania — tylko tam, gdzie MegaRuchacz już je założył, z flagą `-Codex` albo z linią
+  `codex: tak` w pliku wersji projektu; inaczej jedna linia „pominięte”. Literówka we fladze
+  instalatora kończy się błędem, zamiast po cichu przepaść.
+- **Rachunek nie pokazuje liczby policzonej starym kodem** — po zmianie w którymkolwiek jego pliku
+  okno mówi „przelicza się”. Rola `projektant` liczy się w pomiarze otwarcia okna i jest
+  w instalatorze wszędzie (także w `-Usun` i samosprawdzeniu).
+- **Porządek w kodzie, działanie bez zmian.** Rachunek (`narzedzia\koszt-pamieci.ps1`) podzielony
+  na 14 modułów w `narzedzia\koszt\`, okno nadzorcy na 22 w `zasobnik\nadzorca\` — workerzy czytają
+  jeden kawałek zamiast plików po 250 KB. Sprawdzone testami równoważności (212 przypadków
+  rachunku; wydruki i 47 zrzutów okna przed/po bez różnic). Brakujący albo uszkodzony plik =
+  odmowa z powodem, a nie liczenie z dziurą. Mapa projektu o połowę krótsza (historia rozpoznań
+  w `.megaruchacz\mapa-archiwum.md`).
+- Commity w repo bez linii `Co-Authored-By` — jak w projekcie WMS. Po aktualizacji potrzebny
+  restart nadzorcy (do restartu stare okno mówi przy koszcie „nie znam progu”).
+
 ## 0.22.4 — 2026-09-30
 
 - **Okno nadzorcy otwiera się spokojnie.** Przyczyna „dzikiego” otwierania rano (nagrana zrzutami
