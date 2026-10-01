@@ -1,7 +1,7 @@
 ﻿# zasobnik\nadzorca\stan-koszt.ps1 - czesc zasobnik\stan-nadzorcy.ps1 (patrz
 # BUDOWA w jego naglowku). Prawdziwy koszt dnia (P26): Twoje rozmowy kontra
-# workerzy, najdrozsi workerzy, najdluzsze rozmowy (Koszt-Dzis, Opis-Workera,
-# Opis-Rozmowy, Teksty-Kosztu), werdykt na gorze Przegladu (Werdykt-Kosztu,
+# workerzy, najdrozsi workerzy (Koszt-Dzis, Opis-Workera, Teksty-Kosztu),
+# werdykt na gorze Przegladu (Werdykt-Kosztu,
 # Zdanie-Wiadomosci) i odczyt rachunku z koszt-pamieci.ps1 -Dane (Liczba-Z-Klucza,
 # Tekst-Z-Klucza, Alarmy-Rachunku, Ocena-Nauki).
 # Skad wolane: krok "koszt" w w-tle.ps1, tryb -Raport w nadzorca.ps1, karty
@@ -14,17 +14,17 @@
 # a rozmowa kierownika urosla do ~580 tys. tokenow - kazde jej wywolanie czyta ja
 # cala. Okno pokazywalo dotad tylko to, co doklada sam MegaRuchacz (kilka procent
 # otwarcia okna rozmowy), wiec najwieksze pozycje byly niewidoczne. Tu liczymy to,
-# co naprawde idzie: dzis Twoje rozmowy kontra workerzy, najdrozsi workerzy dnia
-# i najdluzsze rozmowy z ostatniej doby. Srednia z 7 dni (tez rozdzielona) daje
-# Zuzycie-Dzienne wyzej.
+# co naprawde idzie: dzis Twoje rozmowy kontra workerzy i najdrozsi workerzy dnia.
+# Srednia z 7 dni (tez rozdzielona) daje Zuzycie-Dzienne wyzej.
+# Lista najdluzszych rozmow z "!" ponad progiem (tez P26) usunieta 2026-10-01 (P43)
+# decyzja uzytkownika - razem z ostrzezeniem o dlugiej rozmowie w przypomnieniu
+# i w strazniku: dlugosci rozmow nie liczymy i nie pokazujemy.
 #
 # SKAD LICZBY. Ten sam licznik co dzienne zuzycie (te same cztery pola usage, kazde
 # message.id raz, najwieksze wartosci z jego linii), tylko na plikach zmienionych
 # w ostatnich $GODZIN_KOSZTU h (30.09.2026: 36 plikow, ~130 MB). Worker = transkrypt
 # ...\<rozmowa>\subagents\agent-*.jsonl; opis zadania z agent-*.meta.json obok (pole
 # description - tak Claude Code zapisuje opis podany przy wywolaniu workera).
-# Rozmiar rozmowy = kontekst OSTATNIEGO wywolania modelu (wejscie + zapis i odczyt
-# bufora): tyle czyta kazdy nastepny krok.
 #
 # KIEDY. Krok "koszt" w nadzorca.ps1, w watku w tle: przy otwarciu okna, gdy wynik
 # jest starszy niz kwadrans, i po dozorze, gdy okno jest otwarte. Liczby "dzis"
@@ -33,16 +33,8 @@
 # CISZA. Brak katalogu i wywrotka zostawiaja Powod (okno pisze "nie wiem, bo..."),
 # nieczytelny opis workera - "bez opisu" z powodem w Szczegolach. Dzien bez rozmow
 # to prawdziwe zero i okno mowi to zdaniem, nie cyfra.
-#
-# PROG DLUGIEJ ROZMOWY - ta sama liczba co PROG_ROZMOWY w narzedzia\przypomnienie.js
-# i $PROG_DLUGIEJ_ROZMOWY w narzedzia\straznik-zasad.ps1. Samo otwarcie okna rozmowy
-# to dzis ~194 tys. (P22: mediana startu 14-30.09), prog = start + ~100 tys. wlasnej
-# rozmowy. Do ponownej oceny po naprawie proxy, ktore dzis zawyza start (P22 pkt 1:
-# do 11.09 start mial ~63 tys.).
-$PROG_DLUGIEJ_ROZMOWY = 300000
 $GODZIN_KOSZTU = 24
 $NAJDROZSZYCH_WORKEROW = 5
-$NAJDLUZSZYCH_ROZMOW = 5
 
 # Nazwa projektu dla czlowieka: ostatni czlon katalogu, w ktorym szla rozmowa
 # ("C:\dev\claude-worker" -> "claude-worker"). Gdy go nie ma - katalog projektu
@@ -77,14 +69,6 @@ function Opis-Workera($p) {
   return $x
 }
 
-function Opis-Rozmowy($p) {
-  return [pscustomobject]@{
-    Tytul = "$($p.Tytul)"; Projekt = (Projekt-Rozmowy $p.Cwd $p.Sciezka); Kontekst = $p.Kontekst
-    Ostatnio = $p.Ostatnio.ToLocalTime(); Dluga = ($p.Kontekst -ge $PROG_DLUGIEJ_ROZMOWY)
-    Tokeny = $p.Tokeny; Plik = $p.Sciezka
-  }
-}
-
 # Liczenie - w watku w tle okna albo wprost w wydruku -Raport. Zawsze oddaje obiekt:
 # z liczbami albo z Powodem.
 function Koszt-Dzis {
@@ -93,8 +77,7 @@ function Koszt-Dzis {
   $k = [pscustomobject]@{
     Powod = ""; Wyliczono = $teraz; Sekundy = ""; Pliki = 0; Mb = 0; Bledy = 0; Blad = ""
     Rozmowy = $null; Workerzy = $null; OdpowiedziRozmow = $null; OdpowiedziWorkerow = $null
-    WorkerowDzis = 0; Najdrozsi = @(); Najdluzsze = @(); DlugichRozmow = 0
-    Prog = $PROG_DLUGIEJ_ROZMOWY; Godzin = $GODZIN_KOSZTU
+    WorkerowDzis = 0; Najdrozsi = @(); Godzin = $GODZIN_KOSZTU
   }
   try {
     $katalog = Join-Path $script:NadzDom ".claude\projects"
@@ -125,11 +108,6 @@ function Koszt-Dzis {
         $wor = @($w.PlikiZOdpowiedziami | Where-Object { $_.Worker -and ($_.Tokeny -gt 0) } | Sort-Object -Property Tokeny -Descending)
         $k.WorkerowDzis = $wor.Count
         $k.Najdrozsi = @($wor | Select-Object -First $NAJDROZSZYCH_WORKEROW | ForEach-Object { Opis-Workera $_ })
-        $granica = [datetime]::UtcNow.AddHours(-$GODZIN_KOSZTU)
-        $roz = @($w.PlikiZOdpowiedziami | Where-Object { (-not $_.Worker) -and ($_.Kontekst -gt 0) -and ($_.Ostatnio -ge $granica) } |
-                 Sort-Object -Property Kontekst -Descending)
-        $k.DlugichRozmow = @($roz | Where-Object { $_.Kontekst -ge $PROG_DLUGIEJ_ROZMOWY }).Count
-        $k.Najdluzsze = @($roz | Select-Object -First $NAJDLUZSZYCH_ROZMOW | ForEach-Object { Opis-Rozmowy $_ })
         if ((($k.Rozmowy + $k.Workerzy) -le 0) -and ($w.Bledy.Count -gt 0)) {
           $k.Powod = "nie dało się otworzyć $($w.Bledy.Count) z $($pliki.Count) plików rozmów, np. $($k.Blad)"
         }
@@ -144,14 +122,6 @@ function Koszt-Dzis {
   return $k
 }
 
-# "~680 tys." - rozmiar rozmowy; od miliona jak reszta okna ("~1,2 mln").
-function Tys-Tokenow($n) {
-  if ($null -eq $n) { return "?" }
-  $v = [double]$n
-  if ($v -ge 1e6) { return (Tokeny-Okolo $v) }
-  return "~$([long][math]::Round($v / 1000.0)) tys."
-}
-
 # Teksty karty (P26) - jedne dla okna i dla wydruku -Raport. $k = Koszt-Dzis,
 # $z = Zuzycie-Dzienne (srednia z 7 dni). Gdy czegos nie ma, tekst mowi dlaczego.
 function Teksty-Kosztu($k, $z) {
@@ -159,8 +129,6 @@ function Teksty-Kosztu($k, $z) {
     Tytul = "Ile tokenów naprawdę zużywasz - Twoje rozmowy i workerzy"
     Powod = ""; Tabela = @(); Udzial = ""; UdzialUwaga = $false
     NaglowekWorkerow = "Najdroższe zadania workerów dziś"; Workerzy = @(); WorkerzyPusto = ""
-    NaglowekRozmow = "Najdłuższe rozmowy z ostatniej doby"; Rozmowy = @(); RozmowyPusto = ""
-    Stopka = ""
   }
   if (-not $k) { $x.Powod = "Liczę, ile tokenów zużyły dziś rozmowy i workerzy - to potrwa kilka sekund..."; return $x }
   if ($k.Powod) { $x.Powod = "Nie wiem, ile tokenów zużywasz dziś, bo $("$($k.Powod)".TrimEnd('.', ' '))."; return $x }
@@ -201,13 +169,6 @@ function Teksty-Kosztu($k, $z) {
     $x.Workerzy += [pscustomobject]@{ Tokeny = (Tokeny-Okolo $w.Tokeny); Opis = $opis; Dopisek = ($dop -join ", ") }
   }
   if (@($k.Najdrozsi).Count -eq 0) { $x.WorkerzyPusto = "Dziś jeszcze żaden worker nie pracował." }
-  foreach ($r in @($k.Najdluzsze)) {
-    $tyt = $r.Tytul
-    if (-not $tyt) { $tyt = "rozmowa bez tytułu" }
-    $x.Rozmowy += [pscustomobject]@{ Rozmiar = (Tys-Tokenow $r.Kontekst); Tytul = $tyt; Dopisek = "$($r.Projekt), $(Kiedy-Ludzko $r.Ostatnio)"; Dluga = [bool]$r.Dluga }
-  }
-  if (@($k.Najdluzsze).Count -eq 0) { $x.RozmowyPusto = "W ostatniej dobie nie było rozmów z Claude." }
-  $x.Stopka = "Każdy krok Claude'a czyta całą rozmowę od nowa. ! = rozmowa ponad $(Tys-Tokenow $k.Prog) tokenów: taniej będzie otworzyć nowe okno."
   return $x
 }
 

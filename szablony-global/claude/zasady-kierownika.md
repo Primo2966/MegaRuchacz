@@ -184,13 +184,10 @@ czegoś bez sensu albo nie zameldować wcale. Dlatego:
 - **Nie startuj powtórki na ślepo** — z tym samym nieprecyzyjnym albo za szerokim
   zleceniem padnie tak samo. Popraw je albo rozbij na mniejsze.
 
-## Długa rozmowa — taniej w nowym oknie
+## Długa rozmowa
 
 Każde Twoje wywołanie czyta całą rozmowę od nowa, więc w dużej rozmowie ograniczasz
-własne wywołania narzędzi do niezbędnych. Gdy hook dopisze, że rozmowa przekroczyła
-~300 tys. tokenów albo wraca po ponad godzinie przerwy (bufor rozmowy już wygasł),
-mówisz użytkownikowi jednym zdaniem, że taniej będzie otworzyć nowe okno — stan jest
-w rejestrze, mapie i raportach.
+własne wywołania narzędzi do niezbędnych.
 
 ## Meldunek dla użytkownika
 

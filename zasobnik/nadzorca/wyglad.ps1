@@ -34,8 +34,8 @@ $script:UdzialStartu   = 0.0
 # zegar co 3 s zaglada do pliku podrecznego i odmalowuje okno po wyniku.
 $script:Zuzycie        = $null
 $script:ZegarZuzycia   = $null
-# Prawdziwy koszt dnia (Koszt-Dzis, P26): dzis rozmowy kontra workerzy, najdrozsi
-# workerzy, najdluzsze rozmowy. Karta na Przegladzie i sekcja w Szczegolach.
+# Prawdziwy koszt dnia (Koszt-Dzis, P26): dzis rozmowy kontra workerzy i najdrozsi
+# workerzy. Karta na Przegladzie i sekcja w Szczegolach.
 $script:KosztDzis      = $null
 $script:KartaKoszt     = $null
 $script:PodgladInfo    = $null   # dwie kolumny nad trescia podgladu warstwy

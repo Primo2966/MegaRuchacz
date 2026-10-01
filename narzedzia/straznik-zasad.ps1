@@ -177,16 +177,6 @@ $DNI_KOSZT_CYKLU_STARY = 2
 # Codex czyta AGENTS.md do 32 KiB - dluzszy plik przycina, wiec koniec zasad
 # po prostu przepada. Za ten limit nie odpowiadamy, ale mamy o nim powiedziec.
 $LIMIT_AGENTS = 32768
-# P26: dluga rozmowa przy wznowieniu okna (source = resume). Kazdy krok modelu czyta cala
-# rozmowe, a powrot po przerwie zapisuje ja do bufora od nowa. Prog - ta sama liczba co
-# PROG_ROZMOWY w narzedzia\przypomnienie.js i w zasobnik\stan-nadzorcy.ps1: samo otwarcie
-# okna rozmowy to dzis ~194 tys. tokenow (P22), prog = start + ~100 tys. wlasnej rozmowy;
-# do ponownej oceny po naprawie proxy, ktore dzis zawyza start.
-$PROG_DLUGIEJ_ROZMOWY = 300000
-# Hook podaje JSON na wejsciu od razu i je zamyka (zmierzone: ~80 ms razem ze startem
-# odczytu). Limit chroni przed wolajacym, ktory wejscie przekierowal i nigdy nie zamknal -
-# wtedy start sesji traci najwyzej tyle, a nie wisi.
-$CZAS_WEJSCIA_MS = 500
 
 # W tle nikt nie czeka na otwarcie okna, wiec git dostaje wiecej czasu niz
 # w hooku, gdzie caly przebieg ma sie zmiescic w kilkunastu sekundach.
@@ -3122,119 +3112,6 @@ function Ruszaj-Cykl {
   Mow "MegaRuchacz: czytam rozmowy ${skad}${opisIle}. Potrwa kilka minut, koszt podam po zakonczeniu."
 }
 
-# ----------------------------------------------- dluga rozmowa przy wznowieniu (P26)
-# Claude Code podaje hookowi SessionStart JSON na wejsciu (source: startup / resume /
-# clear / compact, transcript_path, session_id) - sprawdzone 30.09.2026: powershell -File
-# czyta go z [Console]::OpenStandardInput(). Czytamy tylko wtedy, gdy wejscie jest
-# przekierowane (hook), i z limitem czasu. $null = nie ma czego czytac albo nie JSON.
-function Wejscie-Hooka {
-  try {
-    if (-not [Console]::IsInputRedirected) { return $null }
-    $strumien = [Console]::OpenStandardInput()
-    $pamiec = New-Object System.IO.MemoryStream
-    $zadanie = $strumien.CopyToAsync($pamiec)
-    if (-not $zadanie.Wait($CZAS_WEJSCIA_MS)) { return $null }
-    $tekst = [System.Text.Encoding]::UTF8.GetString($pamiec.ToArray()).TrimStart([char]0xFEFF)
-    if (-not $tekst.Trim()) { return $null }
-    return ($tekst | ConvertFrom-Json)
-  } catch {
-    Zanotuj-Wywrotke "odczyt wejscia hooka (dluga rozmowa)" $_
-    return $null
-  }
-}
-
-# Kontekst ostatniej odpowiedzi modelu w rozmowie = input + cache_creation + cache_read z jej
-# usage (tyle czyta kazdy nastepny krok). Ten sam sposob co w przypomnienie.js: sama koncowka
-# pliku od konca (256 KB, gdy trzeba 2 MB, potem 8 MB), odpowiedzi "<synthetic>" pomijane,
-# linia niewygladajaca na obiekt JSON liczy sie jako zepsuta. Wzorce "klucz": trafiaja tylko
-# w prawdziwe klucze - w tresci rozmowy cudzyslowy sa zapisane jako \". Blad odczytu leci wyzej.
-function Kontekst-Rozmowy([string]$sciezka) {
-  $plik = New-Object System.IO.FileStream($sciezka, [System.IO.FileMode]::Open, [System.IO.FileAccess]::Read, ([System.IO.FileShare]::ReadWrite -bor [System.IO.FileShare]::Delete))
-  try {
-    $rozmiar = $plik.Length
-    $zepsute = 0
-    $ile = 0
-    foreach ($n in @(262144, 2097152, 8388608)) {
-      $ile = [int][math]::Min([long]$n, $rozmiar)
-      $bufor = New-Object byte[] $ile
-      [void]$plik.Seek($rozmiar - $ile, [System.IO.SeekOrigin]::Begin)
-      $jest = 0
-      while ($jest -lt $ile) { $r = $plik.Read($bufor, $jest, $ile - $jest); if ($r -le 0) { break }; $jest += $r }
-      $linie = [System.Text.Encoding]::UTF8.GetString($bufor, 0, $jest) -split "`n"
-      $od = 0
-      if ($ile -lt $rozmiar) { $od = 1 }
-      $zepsute = 0
-      for ($i = $linie.Count - 1; $i -ge $od; $i--) {
-        $l = $linie[$i].TrimEnd("`r")
-        if (-not $l.Trim()) { continue }
-        $ostatnia = ($i -eq ($linie.Count - 1))
-        if ((-not $ostatnia) -and -not ($l.StartsWith("{") -and $l.TrimEnd().EndsWith("}"))) { $zepsute++; continue }
-        $u = $l.IndexOf('"usage":{', [System.StringComparison]::Ordinal)
-        if ($u -lt 0) { continue }
-        $m = $l.IndexOf('"message":{', [System.StringComparison]::Ordinal)
-        if (($m -lt 0) -or ($m -gt $u)) { continue }
-        $rola = $l.IndexOf('"role":"assistant"', $m, [System.StringComparison]::Ordinal)
-        if (($rola -lt 0) -or ($rola -gt $u)) { continue }
-        $syn = $l.IndexOf('"model":"<synthetic>"', $m, [System.StringComparison]::Ordinal)
-        if (($syn -ge 0) -and ($syn -lt $u)) { continue }
-        $k = [long]0
-        foreach ($pole in @('"input_tokens":', '"cache_creation_input_tokens":', '"cache_read_input_tokens":')) {
-          $t = (New-Object System.Text.RegularExpressions.Regex ([regex]::Escape($pole) + '(\d+)')).Match($l, $u)
-          if ($t.Success) { $k += [long]$t.Groups[1].Value }
-        }
-        if ($k -le 0) { continue }
-        $czas = $null
-        $ts = [regex]::Match($l, '"timestamp":"([^"]+)"', [System.Text.RegularExpressions.RegexOptions]::RightToLeft)
-        $d = [datetime]::MinValue
-        if ($ts.Success -and [datetime]::TryParse($ts.Groups[1].Value, [Globalization.CultureInfo]::InvariantCulture,
-              [Globalization.DateTimeStyles]::RoundtripKind, [ref]$d)) { $czas = $d.ToLocalTime() }
-        return [pscustomobject]@{ Kontekst = $k; Czas = $czas; Zepsute = $zepsute; Przeczytano = $ile; Rozmiar = $rozmiar }
-      }
-      if ($ile -ge $rozmiar) { break }
-    }
-    return [pscustomobject]@{ Kontekst = $null; Czas = $null; Zepsute = $zepsute; Przeczytano = $ile; Rozmiar = $rozmiar }
-  } finally { $plik.Dispose() }
-}
-
-# Jedna widoczna linia przy wznowieniu dlugiej rozmowy. Slad "bylem tu" z wynikiem zawsze
-# w pliku stanu (klucz dluga_rozmowa); blad odczytu - wywrotka, zameldowana przy nastepnym
-# otwarciu okna. Zwykle stany (to nie wznowienie, pliku jeszcze nie ma, brak odpowiedzi
-# modelu) nie sa awaria - tylko wpisem w stanie.
-function Zglos-Dluga-Rozmowe($wejscie) {
-  $wynik = ""
-  try {
-    if (-not $wejscie) {
-      if ([Console]::IsInputRedirected) { $wynik = "brak danych hooka na wejsciu" } else { $wynik = "uruchomienie bez hooka" }
-    } elseif ("$($wejscie.source)" -ne "resume") {
-      $wynik = "nie wznowienie ($($wejscie.source))"
-    } elseif (-not "$($wejscie.transcript_path)") {
-      $wynik = "wznowienie bez transcript_path"
-    } elseif (-not (Test-Path -LiteralPath "$($wejscie.transcript_path)" -PathType Leaf)) {
-      $wynik = "wznowienie, ale nie ma pliku rozmowy $($wejscie.transcript_path)"
-    } else {
-      $r = Kontekst-Rozmowy "$($wejscie.transcript_path)"
-      if ($null -eq $r.Kontekst) {
-        if ($r.Zepsute -gt 0) {
-          Zanotuj-Wywrotke "dluga rozmowa przy wznowieniu" "transkrypt uszkodzony: $($r.Zepsute) linii nie da sie odczytac ($($wejscie.transcript_path))"
-          $wynik = "transkrypt uszkodzony"
-        } else { $wynik = "wznowienie bez odpowiedzi modelu w koncowce rozmowy" }
-      } else {
-        $tys = [long][math]::Round($r.Kontekst / 1000.0)
-        $wynik = "wznowienie, ~$tys tys. tokenow"
-        if ($r.Kontekst -ge $PROG_DLUGIEJ_ROZMOWY) {
-          Write-Host "MegaRuchacz: Ta rozmowa ma ~$tys tys. tokenow - kazdy krok czyta ja cala; taniej bedzie otworzyc nowe okno."
-          $wynik += " - linia pokazana"
-        }
-      }
-    }
-  } catch {
-    Zanotuj-Wywrotke "dluga rozmowa przy wznowieniu" $_
-    $wynik = "wywrotka: $(($_.Exception.Message -replace '[\r\n]+', ' ').Trim())"
-  }
-  try { Dopisz-Klucze $plikStanu ([ordered]@{ "dluga_rozmowa" = ("{0} | {1}" -f (Get-Date -Format 'yyyy-MM-dd HH:mm:ss'), $wynik) }) }
-  catch { Zanotuj-Wywrotke "slad sprawdzenia dlugiej rozmowy" $_ }
-}
-
 # ------------------------------------------------------------------ przebieg
 # Cokolwiek by sie tu nie stalo, start sesji ma sie udac - stad kod 0 na koncu.
 try {
@@ -3432,11 +3309,6 @@ try {
   # Na samym koncu: cykl wiedzy przy pierwszej sesji dnia. Linia o tym, co sie
   # zaczelo, ma stac pod rachunkiem, bo to ciag dalszy tej samej sprawy.
   try { Ruszaj-Cykl }        catch { Zanotuj-Wywrotke "start cyklu wiedzy" $_ }
-  # Dluga wznowiona rozmowa (P26) - PO WSZYSTKIM, co uruchamia procesy (git, cykl). Wejscie
-  # hooka czytamy dopiero tutaj: gdyby wolajacy przekierowal je i nigdy nie zamknal,
-  # oczekujacy odczyt blokowalby na Windows start procesow potomnych (zmierzone 30.09.2026:
-  # przebieg 6,1 s zamiast 0,6 s); na koncu kosztuje najwyzej $CZAS_WEJSCIA_MS.
-  try { Zglos-Dluga-Rozmowe (Wejscie-Hooka) } catch { Zanotuj-Wywrotke "dluga rozmowa przy wznowieniu" $_ }
   Zapisz-Obecnosc (Nazwa-Trybu)
 } catch {
   # Ostatnia siatka. Przebieg i tak konczy sie kodem 0, bo start sesji jest

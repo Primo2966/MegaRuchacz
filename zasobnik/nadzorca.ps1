@@ -78,6 +78,10 @@
 #    i srednio z 7 dni Twoje rozmowy kontra workerzy, najdrozsi workerzy dnia,
 #    najdluzsze rozmowy z ostatniej doby (krok w tle "koszt", Koszt-Dzis); ta sama
 #    rzecz w pelni jako sekcja w Szczegolach.
+# 14. 01.10.2026 (P43): uzytkownik nie chce, zeby liczyc dlugosc jego rozmow -
+#    z karty i z Szczegolow zniknely najdluzsze rozmowy z "!" i prog dlugiej
+#    rozmowy (razem z ostrzezeniem w przypomnieniu i strazniku); karta ma dwie
+#    kolumny, a workerzy z rola i projektem w linii.
 #
 # PRZYCISKU [ODSWIEZ] NIE MA I NIE MA GO BYC. Istnial tylko dlatego, ze okno
 # nie odswiezalo sie samo - byl obejsciem braku, nie funkcja. Dzis okno liczy

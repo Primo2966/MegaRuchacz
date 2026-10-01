@@ -54,13 +54,14 @@ function Odmaluj-Werdykt {
 # --- karta "Ile tokenow naprawde zuzywasz" na Przegladzie (P26, 30.09.2026) ----
 # Werdykt wyzej mowi, ile doklada sam MegaRuchacz (kilka procent otwarcia okna).
 # P22 pokazal, ze prawdziwe pieniadze sa gdzie indziej: workerzy (60% tokenow
-# w 23-29.09) i dlugie rozmowy (kazdy krok czyta cala rozmowe). Ta karta mowi to
-# wprost, w trzech kolumnach obok siebie, zeby byla niska: dzis i srednia z 7 dni
-# (rozmowy kontra workerzy), najdrozsi workerzy dnia, najdluzsze rozmowy z ostatniej
-# doby - rozmowa ponad progiem z zoltym "!". Opis, ktory sie nie miesci, konczy sie
-# wielokropkiem (widac, ze to nie calosc; calosc w dymku po najechaniu myszka
-# i w Szczegolach). Teksty sklada Teksty-Kosztu (stan-nadzorcy.ps1) - te same co
-# w wydruku -Raport.
+# w 23-29.09). Ta karta mowi to wprost, w dwoch kolumnach obok siebie, zeby byla
+# niska: dzis i srednia z 7 dni (rozmowy kontra workerzy) oraz najdrozsi workerzy
+# dnia. Opis, ktory sie nie miesci, konczy sie wielokropkiem (widac, ze to nie
+# calosc; calosc w dymku po najechaniu myszka i w Szczegolach). Teksty sklada
+# Teksty-Kosztu (stan-nadzorcy.ps1) - te same co w wydruku -Raport.
+# Trzecia kolumna - najdluzsze rozmowy z "!" ponad progiem - i stopka o dlugosci
+# rozmowy usuniete 2026-10-01 (P43, decyzja uzytkownika); workerzy dostali jej
+# miejsce i rola z projektem mieszcza sie teraz w linii.
 
 # Etykieta o stalej szerokosci, w jednej linii, z wielokropkiem, gdy tekst sie nie
 # miesci - kolumny stoja rowno, a nic nie wyjezdza poza karte po cichu.
@@ -101,21 +102,11 @@ function Odmaluj-Koszt {
     $script:KartaKoszt.Controls.Add($p)
     return
   }
-  # Dlaczego dlugosc rozmowy ma znaczenie - drobno, w linii tytulu, gdy sie miesci
-  # (karta ma byc niska); inaczej osobna linia pod kolumnami.
-  $stopka = Etykieta $t.Stopka $script:CzMala $script:KolSzary
-  $stopka.UseMnemonic = $false
-  $wLinii = (($gora.PreferredSize.Width + 16 + $stopka.PreferredSize.Width) -le $szer)
-  if ($wLinii) {
-    $stopka.Margin = New-Object System.Windows.Forms.Padding(16, 4, 0, 0)
-    $gora.Controls.Add($stopka)
-  }
-
   $odstep = 26
   $sz1 = 330
-  $reszta = $szer - $sz1 - 2 * $odstep
-  $sz2 = [int]($reszta * 0.52)
-  $sz3 = $reszta - $sz2
+  $sz2 = $szer - $sz1 - $odstep
+  # Kolumna "rola, projekt" po prawej - szara, stalej szerokosci, zeby opisy staly rowno.
+  $szDop = 230
   $wiersz = Poziomy
   $wiersz.Margin = New-Object System.Windows.Forms.Padding(0, 5, 0, 0)
 
@@ -145,7 +136,7 @@ function Odmaluj-Koszt {
     $k1.Controls.Add($u)
   }
 
-  # 2. Najdrozsi workerzy dnia: tokeny | opis zadania (rola, projekt).
+  # 2. Najdrozsi workerzy dnia: tokeny | opis zadania | rola, projekt.
   $k2 = Pionowy $sz2
   $k2.Margin = New-Object System.Windows.Forms.Padding($odstep, 0, 0, 0)
   $k2.Controls.Add((Etykieta-Stala $t.NaglowekWorkerow $script:CzMalaGruba $script:KolSzary $sz2))
@@ -153,42 +144,19 @@ function Odmaluj-Koszt {
     $w = Poziomy
     $w.Margin = New-Object System.Windows.Forms.Padding(0, 0, 0, 1)
     $w.Controls.Add((Etykieta-Stala $x.Tokeny $script:CzZwykla $script:KolTekst 72 $true))
-    # Sam opis zadania - rola i projekt stoja w Szczegolach (w linii nie mieszcza sie razem).
-    $e = Etykieta-Stala $x.Opis $script:CzZwykla $script:KolTekst ($sz2 - 72 - 10)
+    $e = Etykieta-Stala $x.Opis $script:CzZwykla $script:KolTekst ($sz2 - 72 - 10 - 16 - $szDop)
     $e.Margin = New-Object System.Windows.Forms.Padding(10, 0, 0, 0)
     $w.Controls.Add($e)
+    $d = Etykieta-Stala $x.Dopisek $script:CzZwykla $script:KolSzary $szDop
+    $d.Margin = New-Object System.Windows.Forms.Padding(16, 0, 0, 0)
+    $w.Controls.Add($d)
     $k2.Controls.Add($w)
   }
   if ($t.WorkerzyPusto) { $k2.Controls.Add((Etykieta-Zawijana $t.WorkerzyPusto $script:CzZwykla $script:KolSzary $sz2)) }
 
-  # 3. Najdluzsze rozmowy z ostatniej doby: ! | rozmiar | tytul (projekt, kiedy).
-  $k3 = Pionowy $sz3
-  $k3.Margin = New-Object System.Windows.Forms.Padding($odstep, 0, 0, 0)
-  $k3.Controls.Add((Etykieta-Stala $t.NaglowekRozmow $script:CzMalaGruba $script:KolSzary $sz3))
-  foreach ($x in @($t.Rozmowy)) {
-    $w = Poziomy
-    $w.Margin = New-Object System.Windows.Forms.Padding(0, 0, 0, 1)
-    $kol = $script:KolTekst; $znak = ""
-    if ($x.Dluga) { $kol = $script:KolUwaga; $znak = "!" }
-    $w.Controls.Add((Etykieta-Stala $znak $script:CzZwyklaGruba $script:KolUwaga 12))
-    $w.Controls.Add((Etykieta-Stala $x.Rozmiar $script:CzZwykla $kol 74 $true))
-    $e = Etykieta-Stala $x.Tytul $script:CzZwykla $script:KolTekst ($sz3 - 12 - 74 - 10)
-    $e.Margin = New-Object System.Windows.Forms.Padding(10, 0, 0, 0)
-    $w.Controls.Add($e)
-    $k3.Controls.Add($w)
-  }
-  if ($t.RozmowyPusto) { $k3.Controls.Add((Etykieta-Zawijana $t.RozmowyPusto $script:CzZwykla $script:KolSzary $sz3)) }
-
   $wiersz.Controls.Add($k1)
   $wiersz.Controls.Add($k2)
-  $wiersz.Controls.Add($k3)
   $script:KartaKoszt.Controls.Add($wiersz)
-  if (-not $wLinii) {
-    $s2 = Etykieta-Zawijana $t.Stopka $script:CzMala $script:KolSzary $szer
-    $s2.UseMnemonic = $false
-    $s2.Margin = New-Object System.Windows.Forms.Padding(0, 4, 0, 0)
-    $script:KartaKoszt.Controls.Add($s2)
-  }
 }
 
 # --- karta "Otwarcie sesji" na Przegladzie ------------------------------------

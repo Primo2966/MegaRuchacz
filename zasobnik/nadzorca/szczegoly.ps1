@@ -141,8 +141,7 @@ function Dodaj-Rozbicie($s, $rozbicie, $o = $null) {
 # P26: prawdziwy koszt w calosci - to samo, co karta na Przegladzie, plus liczby
 # odpowiedzi, pelne opisy, projekty i to, jak to policzone.
 function Sekcja-Kosztu($koszt, $zuzycie) {
-  $s = Nowa-Sekcja "Ile tokenów naprawdę zużywasz - Twoje rozmowy i workerzy" ("Wszystkie tokeny z transkryptów Claude Code na tym komputerze, osobno Twoje rozmowy (okna) i workerzy. " +
-    "Każdy krok Claude'a czyta całą rozmowę od nowa, więc liczy się też jej długość.")
+  $s = Nowa-Sekcja "Ile tokenów naprawdę zużywasz - Twoje rozmowy i workerzy" "Wszystkie tokeny z transkryptów Claude Code na tym komputerze, osobno Twoje rozmowy (okna) i workerzy."
   if (-not $koszt) { Dodaj-Tekst $s "Jeszcze nie policzone - liczy się w tle przy otwarciu okna." "szary"; return $s }
   if ($koszt.Powod) { Dodaj-Wiersz $s "Dziś" "nie wiem, bo $($koszt.Powod)" "uwaga" }
   else {
@@ -185,20 +184,6 @@ function Sekcja-Kosztu($koszt, $zuzycie) {
   } elseif (-not $koszt.Powod) {
     Dodaj-Wiersz $s "Workerzy dziś" "żaden jeszcze nie pracował"
   }
-  if ((-not $koszt.Powod) -and (@($koszt.Najdluzsze).Count -gt 0)) {
-    Dodaj-Podtytul $s "Najdłuższe rozmowy z ostatnich $($koszt.Godzin) h (rozmiar = ile czyta każdy następny krok)"
-    $rs = @()
-    foreach ($r in @($koszt.Najdluzsze)) {
-      $tyt = $r.Tytul
-      if (-not $tyt) { $tyt = "rozmowa bez tytułu" }
-      $uw = ""
-      if ($r.Dluga) { $uw = "! ponad próg - taniej będzie nowe okno" }
-      $rs += ,@($tyt, "$($r.Projekt)", "$(Kiedy-Ludzko $r.Ostatnio)", (Liczba-Ludzka $r.Kontekst), $uw)
-    }
-    Dodaj-Tabele $s @(@{ N = "Rozmowa"; S = 0 }, @{ N = "Projekt"; S = 190 }, @{ N = "Ostatnio"; S = 110 }, @{ N = "Rozmiar"; S = 100; P = $true }, @{ N = "Uwaga"; S = 270 }) $rs
-  }
-  Dodaj-Wiersz $s "Próg długiej rozmowy" ("$(Liczba-Ludzka $koszt.Prog) tokenów: samo otwarcie okna rozmowy to dziś ~194 tys., do tego ~100 tys. rozmowy. " +
-    "Ten sam próg ma ostrzeżenie w rozmowie (przypomnienie) i przy wznowieniu okna (strażnik).") "szary"
   Dodaj-Wiersz $s "Jak to policzone" ("W każdej odpowiedzi modelu suma input_tokens, cache_creation_input_tokens, cache_read_input_tokens i output_tokens; " +
     "każda odpowiedź raz (message.id), z jej linii największe wartości. Worker = plik w katalogu subagents, opis zadania z pliku .meta.json obok.") "szary"
   if (-not $koszt.Powod) {

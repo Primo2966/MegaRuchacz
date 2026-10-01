@@ -231,7 +231,7 @@ function Zbuduj-Przod($d, $problemy, $czas, $start, $zuzycie = $null, $koszt = $
     $l += ""
   }
 
-  $l += "ILE TOKENÓW NAPRAWDĘ ZUŻYWASZ   (w oknie: karta pod werdyktem - trzy kolumny obok siebie)"
+  $l += "ILE TOKENÓW NAPRAWDĘ ZUŻYWASZ   (w oknie: karta pod werdyktem - dwie kolumny obok siebie)"
   $tk = $null
   try { $tk = Teksty-Kosztu $koszt $zuzycie } catch { Zanotuj-Wywrotke "prawdziwy koszt do wydruku" $_ }
   if (-not $tk) {
@@ -244,10 +244,6 @@ function Zbuduj-Przod($d, $problemy, $czas, $start, $zuzycie = $null, $koszt = $
     $l += "  | $($tk.NaglowekWorkerow)"
     foreach ($x in $tk.Workerzy) { $l += ("  |   {0,9}  {1}  ({2})" -f $x.Tokeny, $x.Opis, $x.Dopisek) }
     if ($tk.WorkerzyPusto) { $l += "  |   $($tk.WorkerzyPusto)" }
-    $l += "  | $($tk.NaglowekRozmow)"
-    foreach ($x in $tk.Rozmowy) { $l += ("  |   {0}{1,9}  {2}  ({3})" -f $(if ($x.Dluga) { "! " } else { "  " }), $x.Rozmiar, $x.Tytul, $x.Dopisek) }
-    if ($tk.RozmowyPusto) { $l += "  |   $($tk.RozmowyPusto)" }
-    $l += "  $($tk.Stopka)   (drobnym drukiem)"
   }
   $l += ""
 
