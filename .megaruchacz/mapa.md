@@ -335,8 +335,14 @@ inwentarz warstw z 25.09, budowa okna sprzed podzialu, pomiary P23/P30 w calosci
   (PowerShell traktuje „ ” jak cudzyslow). Czytane `Import-PowerShellDataFile`. `code-review` Matta
   ma `Folder = matt-code-review` (uzytkownik zmienil nazwe i odwolania w 4 skillach - te 5 wykrywa
   sie jako "zmienione").
+  Od P49 (0.25.0) zrodla `vibecode` (withkynam/vibecode-pro-max-kit, Sciezka `.claude/skills`, 33 `vc-*`)
+  i `obsidian` (kepano/obsidian-skills, 6 skilli) oraz listy `Wlasne` i `Inne` (Folder, Opis, Skad, Uwaga):
+  Wlasne = "Twoj wlasny" (tylko te wolno spakowac), Inne = znane zrodlo poza opieka (orchestration =
+  stablyai/orca przez `npx skills`, dowiazanie do `~.agentsskills` + `~.agents.skill-lock.json`;
+  synced = kopia skilli konta claude.ai, pisze ja Claude Code). Kazdy inny katalog spoza bazy = "zrodlo
+  nieznane". Rozpoznanie zrodel 42 skilli spoza bazy: `.megaruchacz/raporty/P49.md`.
 - `narzedzia/skille.ps1` - CALA logika (UTF-8 z BOM). `-Tryb stan|wykryj|instaluj|aktualizuj|cofnij|
-  codziennie|usun`, `-Skill`, `-ZeZrodla`, `-KatalogDomowy`, `-Katalog`, `-BezSieci`, `-Wymus`,
+  codziennie|usun|spakuj`, `-Skill`, `-ZeZrodla`, `-KatalogDomowy`, `-Katalog`, `-BezSieci`, `-Wymus`,
   `-Przerwy "5,15,30,60,120"`, `-Json` (stan dla okna, ASCII \uXXXX). Kody: 0 ok, 1 blad, 2 zle
   wywolanie, 3 zajete (zamek `Local\MegaRuchacz-Skille-<skrot domu>`). Siec: `Krok-Pobrania` (clone
   `--filter=blob:none --no-checkout` albo fetch) i `Krok-Rozpakowania` (sparse-checkout + `reset
@@ -350,6 +356,15 @@ inwentarz warstw z 25.09, budowa okna sprzed podzialu, pomiary P23/P30 w calosci
   `Aktualizuj-Skill` (przed kopia sprawdza, czy `SKILL.md` nowej wersji jest w kopii zrodla),
   `Instaluj-Skill`, `Cofnij-Skill`, `Zrob-Kopie`, `Wgraj-Wersje`, `Stan-Dla-Okna`. Git przez
   `System.Diagnostics.Process` z `CreateNoWindow`.
+  Paczka (P49): `-Tryb spakuj -Skill <folder>|*` [-Dokad] -> `Spakuj-Skille` (tylko lista Wlasne, bez sieci
+  i bez Wykryj): `Szukaj-Wrazliwych` (tablica `$WRAZLIWE` + `Czy-Niewinne`; plik binarny = znalezisko;
+  jedna linia = jedno znalezisko; fragment pokazywany tylko dla IP/maila/loginu) -> odmowa = BLAD z plikiem
+  i linia; inaczej ZIP (`ZipArchive`, wpisy `<folder>/...` + `JAK-ZAINSTALOWAC.txt` UTF-8 z BOM, zapis przez
+  `.tmp` i sprawdzenie wpisow/rozmiarow) na Pulpit (`GetFolderPath('Desktop')` tylko dla prawdziwego domu),
+  `$DomDesktop` albo `$DomDownloads`; sciezka w wydruku i w `operacja.txt` (`paczka:`). `Stan-Dla-Okna`:
+  `spozaBazy[]` z `rodzaj` wlasny/inne/nieznane, opis, skad, uwaga, `opisAutora` (z SKILL.md, `Opis-Z-SkillMd`),
+  sciezka, dowiazanie; liczniki `wlasne`, `nieznane`. PULAPKA: „ i ” w stringu "..." PowerShell bierze za
+  cudzyslow - pisac `„...`”.
 - Stan poza repo: `~\.claude\mr\skille\` - `stan.json` (per skill per cel), `znacznik.txt` (codzienny
   przebieg), `dziennik.log`, `operacja.txt` + `operacja.log` (dla okna), `kopie\<folder>\<stempel>\<cel>\`
   (limit 10 na skill), `repo\<id>\`, `tmp\`.
@@ -367,7 +382,11 @@ inwentarz warstw z 25.09, budowa okna sprzed podzialu, pomiary P23/P30 w calosci
 - Zakladka (`zasobnik/nadzorca/skille.ps1`): wiersze `TableLayoutPanel` w przewijanym panelu (opis
   zawiniety - ListView ucinal). Grupy zwijane: `Grupa-Zrodla` + `Liczby-Grupy` -> `Naglowek-Grupy`
   (pasek `$script:ZnacznikiGrup`: czerwony = problem, bursztyn = nowsza), klik -> `Przelacz-Grupe` ->
-  `Napelnij-Skille $false $true`; rozwiniete w `$script:GrupySkilli`, grupa spoza bazy `__spoza`.
+  `Napelnij-Skille $false $true`; rozwiniete w `$script:GrupySkilli`. Spoza bazy (P49, `Skille-Spoza`):
+  grupy `__wlasne`, `__inne`, `__nieznane`, wiersze przez `Wiersz-Skilla` z nazwa `__spoza:<folder>`
+  (`Znajdz-Skill` zwraca `@($s, $null)`, `$s.spoza`); przyciski `$script:BSkillSpakuj` / `BSkillSpakujWszystkie`
+  (okno.ps1, zmienne w wyglad.ps1) widac tylko przy "Twoj wlasny" - wtedy cztery zwykle sa ukryte.
+  Test okna P49: scratchpad 1ca517cc `p49	est-okno.ps1` + `scenariusz-p49.ps1` (wzor P43).
   `$script:BSkillUsun` ("Usun u mnie") w miejscu "Aktualizuj teraz". Dalej `Wiersz-Skilla`,
   `Pokaz-Info-Skilla`, `Podglad-Skilla`, `Wybierz-Skill`, `Rusz-Operacje-Skilli` +
   `Sprawdz-Operacje-Skilli` (zegar 2 s na `operacja.txt`).

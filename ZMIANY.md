@@ -4,6 +4,25 @@ Każda zmiana wypychana na gita dostaje tu wpis. Numer rośnie wg zasady:
 pierwsza cyfra — przebudowa łamiąca zgodność, druga — nowa funkcja,
 trzecia — poprawka.
 
+## 0.25.0 — 2026-10-01
+
+- **Skille „spoza bazy” rozpoznane — 38 z 42 jest teraz pod opieką i aktualizuje się samo.**
+  Źródła znalezione po wiadomości z 26.08 (linki do repozytoriów) i porównaniu treści plików:
+  33 skille `vc-*` pochodzą z withkynam/vibecode-pro-max-kit, 5 (defuddle, json-canvas,
+  obsidian-*) z kepano/obsidian-skills. Oba źródła są w bazie z opisami po polsku; vibecode — wszystkie
+  aktualne, obsidian — defuddle w starszej wersji (podmieni się przy codziennym sprawdzeniu, z kopią).
+- **Zakładka Skille dzieli resztę na trzy grupy:** „Twoje własne skille” (connecting-to-magazyn2,
+  sqp-slowa-kluczowe — powstały w Twoich rozmowach), „Z innych źródeł, poza opieką” (orchestration —
+  z aplikacji Orca, aktualizuje go narzędzie „skills”; synced — kopia skilli z konta claude.ai, którą
+  dogrywa sam Claude Code) i „Źródło nieznane” (to, czego nie da się przypisać — bez zgadywania).
+  Każdy skill da się kliknąć: do czego jest, skąd jest, gdzie leży.
+- **„Spakuj do przekazania”** przy Twoich własnych skillach: plik ZIP na Pulpicie (albo w Pobranych)
+  z wybranym skillem albo wszystkimi własnymi i instrukcją `JAK-ZAINSTALOWAC.txt` po polsku. Przed
+  spakowaniem sprawdzane są hasła, klucze, tokeny, adresy IP, loginy i maile — jeśli są, paczka nie
+  powstaje, a okno pokazuje plik i linię do poprawienia. Oba obecne własne skille zawierają adres IP
+  komputera Magazyn2 (connecting-to-magazyn2 także klucz SSH i login), więc dziś paczka zostanie
+  odmówiona, dopóki tych miejsc nie zastąpisz opisem.
+
 ## 0.24.1 — 2026-10-01
 
 - **Fakt przechodzi do wiedzy stałej także wtedy, gdy Claude go użyje — nie musisz się powtarzać.**

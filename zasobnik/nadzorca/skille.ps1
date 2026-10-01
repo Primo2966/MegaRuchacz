@@ -3,6 +3,8 @@
 # Naglowek-Grupy, Wiersz-Skilla, Przelacz-Grupe), prawa strona (Pokaz-Przeglad-Skilli,
 # Pokaz-Info-Skilla, Podglad-Skilla, Ustaw-Przyciski-Skilla) i operacje z przyciskow
 # (Rusz-Operacje-Skilli, Sprawdz-Operacje-Skilli - zegar na operacja.txt).
+# Skille spoza bazy (P49, Skille-Spoza): grupy "Twoje wlasne" (przyciski paczki),
+# "poza opieka" i "zrodlo nieznane" - wiersze z nazwa "__spoza:<folder>".
 # Dane daje Stan-Skilli (stan-nadzorcy.ps1 -> narzedzia\skille.ps1).
 # Skad wolane: w-tle.ps1 (Wyrenderuj-Widok -> Napelnij-Skille) i okno.ps1
 # (przyciski). Wczytuje go nadzorca.ps1 kropka po zamku jednej kopii - poza stala
@@ -32,6 +34,15 @@ function Wersja-Krotko([string]$commit, [string]$data) {
 # Stan skilla po ludzku: krotki napis na liste i kolor. Blad sprawdzenia wygrywa na
 # liscie (czerwony), ale szczegoly mowia tez, co wiadomo z ostatniego udanego razu.
 function Napis-Skilla($s) {
+  # Spoza bazy (P49): Twoj wlasny (niebieski), znane zrodlo poza opieka (szary),
+  # zrodlo nieznane (bursztyn - nie wiadomo, kto go napisal).
+  if ($s.spoza) {
+    switch ("$($s.rodzaj)") {
+      "wlasny" { return @("Twój własny", $script:KolMr) }
+      "inne"   { return @("poza opieką MegaRuchacza", $script:KolSzary) }
+    }
+    return @("źródło nieznane", $script:KolUwaga)
+  }
   $wstrzymany = @($s.cele | Where-Object { $_.wstrzymany }).Count -gt 0
   if ($s.blad) { return @("nie udało się sprawdzić", $script:KolPilne) }
   if ($s.dzisZaktualizowany -and $s.stan -eq "zgodny") { return @("nowa wersja pobrana dziś", $script:KolDobrze) }
@@ -251,10 +262,40 @@ function Przelacz-Grupe([string]$id) {
 
 function Znajdz-Skill([string]$nazwa) {
   if (-not $script:DaneSkilli -or -not $script:DaneSkilli.Dane) { return $null }
+  if ($nazwa.StartsWith("__spoza:")) {
+    foreach ($s in @(Skille-Spoza $script:DaneSkilli.Dane)) { if ($s.nazwa -eq $nazwa) { return @($s, $null) } }
+    return $null
+  }
   foreach ($z in @($script:DaneSkilli.Dane.zrodla)) {
     foreach ($s in @($z.skille)) { if ($s.nazwa -eq $nazwa) { return @($s, $z) } }
   }
   return $null
+}
+
+# Skille spoza bazy jako wiersze listy (P49): jeden na katalog, choc moze lezec w kilku
+# miejscach (np. orchestration u Claude Code i Codeksa). Nazwa z przedrostkiem __spoza:,
+# zeby nie zderzyla sie z nazwa skilla z bazy.
+function Skille-Spoza($d) {
+  $wynik = [ordered]@{}
+  foreach ($x in @($d.spozaBazy)) {
+    if ($null -eq $x) { continue }
+    $k = "$($x.folder)"
+    if (-not $wynik.Contains($k)) {
+      $rodzaj = "$($x.rodzaj)"; if (-not $rodzaj) { $rodzaj = "nieznane" }
+      $opis = "$($x.opis)"
+      if (-not $opis) { $opis = $(if ($x.opisAutora) { "Opis autora (po angielsku): $($x.opisAutora)" } else { "Brak opisu - w katalogu nie ma pliku SKILL.md z opisem." }) }
+      $wynik[$k] = [pscustomobject]@{
+        spoza = $true; nazwa = "__spoza:$k"; folder = $k; rodzaj = $rodzaj; opis = $opis; skad = "$($x.skad)"; uwaga = "$($x.uwaga)"
+        robocza = $false; cele = @(); miejsca = @(); dowiazanie = $false
+      }
+    }
+    $w = $wynik[$k]
+    $nazwaCelu = "$($x.cel)"
+    foreach ($c in @($d.cele)) { if ($c.id -eq $x.cel) { $nazwaCelu = "$($c.nazwa)" } }
+    $w.miejsca += "$nazwaCelu - $($x.sciezka)$(if ($x.dowiazanie) { ' (dowiązanie)' })"
+    if ($x.dowiazanie) { $w.dowiazanie = $true }
+  }
+  return @($wynik.Values)
 }
 
 function Zdanie-Skilli($d) {
@@ -264,6 +305,8 @@ function Zdanie-Skilli($d) {
   if ($l.usuniete -gt 0) { $t += " Autor usunął: $($l.usuniete)." }
   if ($l.dzisZaktualizowane -gt 0) { $t += " Dziś pobrano nowe wersje: $($l.dzisZaktualizowane)." }
   if ($l.bledy -gt 0) { $t += " Nie udało się sprawdzić: $($l.bledy)." }
+  if ($l.wlasne -gt 0) { $t += " Twoje własne: $($l.wlasne)." }
+  if ($l.nieznane -gt 0) { $t += " O nieznanym źródle: $($l.nieznane)." }
   $zn = $d.znacznik
   if ($zn -and $zn.dzien) {
     $t += " Codzienne sprawdzenie: $($zn.start)"
@@ -312,22 +355,28 @@ function Napelnij-Skille([bool]$tylkoLista = $false) {
         $wnetrze.Controls.Add($w)
       }
     }
-    $spoza = @($d.spozaBazy | ForEach-Object { "$($_.folder)" } | Select-Object -Unique)
-    if ($spoza.Count -gt 0) {
+    # Spoza bazy (P49): trzy grupy - Twoje wlasne (z przyciskiem paczki), znane zrodla
+    # poza opieka i zrodlo nieznane. Kazdy skill to klikalny wiersz jak w zrodlach.
+    $spoza = @(Skille-Spoza $d)
+    $grupySpoza = @(
+      @{ Id = "__wlasne"; Rodzaj = "wlasny"; Tytul = "Twoje własne skille"; Opis = "Powstały w Twoich rozmowach. MegaRuchacz ich nie zmienia - możesz je spakować i przekazać innym (kliknij skill)." }
+      @{ Id = "__inne"; Rodzaj = "inne"; Tytul = "Z innych źródeł, poza opieką MegaRuchacza"; Opis = "Wiadomo, skąd są, ale aktualizuje je inne narzędzie - MegaRuchacz ich nie rusza." }
+      @{ Id = "__nieznane"; Rodzaj = "nieznane"; Tytul = "Źródło nieznane"; Opis = "Nie pasują do żadnego znanego źródła ani do Twoich rozmów. MegaRuchacz ich nie sprawdza i nie rusza." }
+    )
+    foreach ($gs in $grupySpoza) {
+      $te = @($spoza | Where-Object { $_.rodzaj -eq $gs.Rodzaj })
+      if ($te.Count -eq 0) { continue }
       $g = [pscustomobject]@{
-        Id = "__spoza"; Tytul = "Zainstalowane, spoza bazy"; Opis = "Twoje własne i z innych źródeł. MegaRuchacz ich nie sprawdza i nie rusza."
-        Liczby = "$($spoza.Count) $(Odmiana $spoza.Count 'skill' 'skille' 'skilli')"; Napis = ""; KolorNapisu = $script:KolSzary
+        Id = $gs.Id; Tytul = $gs.Tytul; Opis = $gs.Opis
+        Liczby = "$($te.Count) $(Odmiana $te.Count 'skill' 'skille' 'skilli')"; Napis = ""; KolorNapisu = $script:KolSzary
         Znacznik = $null; Blad = ""; Uwaga = ""; Rozwijalny = $true
       }
       $wnetrze.Controls.Add((Naglowek-Grupy $g $szer))
-      if ($script:GrupySkilli["__spoza"]) {
-        $p = Pionowy $szer
-        $p.Padding = New-Object System.Windows.Forms.Padding(34, 8, 12, 12)
-        $p.BackColor = $script:TloKarty
-        $lsp = Etykieta-Zawijana ($spoza -join ", ") $script:CzMala $script:KolTekst ($szer - 50)
-        $lsp.UseMnemonic = $false
-        $p.Controls.Add($lsp)
-        $wnetrze.Controls.Add($p)
+      if (-not $script:GrupySkilli[$gs.Id]) { continue }
+      foreach ($s in $te) {
+        $w = Wiersz-Skilla $s $szer
+        $script:WierszeSkilli["$($s.nazwa)"] = $w
+        $wnetrze.Controls.Add($w)
       }
     }
     $wnetrze.ResumeLayout($true)
@@ -401,6 +450,17 @@ function Pokaz-Info-Skilla($para) {
     $t.Margin = New-Object System.Windows.Forms.Padding(0, 0, 0, 8)
     $info.Controls.Add($t)
     $e = 130
+    if ($s.spoza) {
+      $ns = Napis-Skilla $s
+      $info.Controls.Add((Wiersz-Dwukolumnowy "Do czego jest" "$($s.opis)" $script:KolTekst $szer $e))
+      $info.Controls.Add((Wiersz-Dwukolumnowy "Rodzaj" $ns[0] $ns[1] $szer $e))
+      $skad = $(if ($s.skad) { "$($s.skad)" } elseif ($s.rodzaj -eq "nieznane") { "Nie wiadomo - nie pasuje do żadnego źródła z bazy ani do Twoich rozmów, w których powstawały skille." } else { "" })
+      if ($skad) { $info.Controls.Add((Wiersz-Dwukolumnowy "Skąd jest" $skad $script:KolTekst $szer $e)) }
+      if ($s.uwaga) { $info.Controls.Add((Wiersz-Dwukolumnowy "Uwaga" "$($s.uwaga)" $script:KolUwaga $szer $e)) }
+      $info.Controls.Add((Wiersz-Dwukolumnowy "Gdzie leży" (@($s.miejsca) -join "`r`n") $script:KolSzary $szer $e))
+      Ustaw-Przyciski-Skilla $s
+      return
+    }
     $info.Controls.Add((Wiersz-Dwukolumnowy "Do czego jest" "$($s.opis)" $script:KolTekst $szer $e))
     $ns = Napis-Skilla $s
     $info.Controls.Add((Wiersz-Dwukolumnowy "Stan" (Zdanie-Stanu-Skilla $s) $ns[1] $szer $e))
@@ -426,6 +486,11 @@ function Ustaw-Przyciski-Skilla($s) {
   $script:BSkilleTeraz.Enabled = -not $pracuje
   $script:SkillePrzyciski.Visible = [bool]$s
   if (-not $s) { return }
+  # Spoza bazy (P49): zadnych operacji ze zrodla; Twoj wlasny ma dwa przyciski paczki.
+  $wlasny = [bool]$s.spoza -and ($s.rodzaj -eq "wlasny")
+  foreach ($b in @($script:BSkillSpakuj, $script:BSkillSpakujWszystkie)) { $b.Visible = $wlasny; $b.Enabled = $wlasny -and -not $pracuje }
+  foreach ($b in @($script:BSkillInstaluj, $script:BSkillAktualizuj, $script:BSkillUsun, $script:BSkillCofnij)) { $b.Visible = -not $s.spoza }
+  if ($s.spoza) { $script:SkillePrzyciski.Visible = $wlasny; return }
   $usun = ($s.stan -eq "usuniety")
   $inst = (($s.stan -eq "brak") -or (@($s.brakujeW).Count -gt 0)) -and -not $usun
   $akt = ($s.stan -eq "starszy") -or ($s.stan -eq "zmieniony")
@@ -445,6 +510,26 @@ function Ustaw-Przyciski-Skilla($s) {
 # a dla zmienionego recznie - czym rozni sie od najblizszej wersji autora.
 function Podglad-Skilla($s) {
   $l = New-Object System.Collections.Generic.List[string]
+  if ($s.spoza) {
+    switch ("$($s.rodzaj)") {
+      "wlasny" {
+        $l.Add("Ten skill powstał u Ciebie - nie ma go w żadnym zewnętrznym źródle, więc MegaRuchacz go nie aktualizuje i nie zmienia.")
+        $l.Add("")
+        $l.Add("Przekazanie innej osobie:")
+        $l.Add("- `„Spakuj do przekazania`” robi plik ZIP z tym skillem i instrukcją po polsku (JAK-ZAINSTALOWAC.txt). `„Spakuj wszystkie własne`” - jeden ZIP ze wszystkimi Twoimi skillami.")
+        $l.Add("- Paczka trafia na Pulpit (gdy go nie ma - do Pobranych). Ścieżkę zobaczysz tutaj po zakończeniu.")
+        $l.Add("- Przed spakowaniem sprawdzam, czy w skillu nie ma haseł, kluczy, tokenów, adresów IP, loginów ani maili. Jeśli są - NIE pakuję i pokazuję plik i linię, które trzeba poprawić.")
+      }
+      "inne" {
+        $l.Add("Wiadomo, skąd jest ten skill, ale aktualizuje go inne narzędzie - MegaRuchacz go nie sprawdza i nie rusza, żeby nie wejść mu w drogę.")
+      }
+      default {
+        $l.Add("Nie wiem, skąd jest ten skill: nie pasuje do żadnego źródła z bazy, a w Twoich rozmowach nie ma śladu, że tam powstał.")
+        $l.Add("MegaRuchacz go nie sprawdza i nie rusza. Jeśli znasz jego źródło, dopisz je do bazy (skille\katalog.psd1) - wtedy będzie się aktualizował sam.")
+      }
+    }
+    return ($l -join "`r`n")
+  }
   foreach ($c in @($s.cele)) {
     if ($c.najblizszy) { $l.Add("$($c.nazwa): czym Twoja wersja różni się od autora - $($c.najblizszy)"); $l.Add("") }
   }
@@ -524,7 +609,11 @@ function Rusz-Operacje-Skilli([string]$tryb, [string]$skill, [bool]$wymus, [stri
   $script:SkilleOperacjaOd = [datetime]::Now.AddSeconds(-1)
   $script:SkilleOperacjaOpis = $opis
   $script:SkillePodglad.Text = "$opis`r`n`r`nPracuję w tle - to potrwa od kilku sekund do kilku minut (pierwsze pobranie źródeł jest najdłuższe). Okno odświeży się samo."
-  Ustaw-Przyciski-Skilla $(if ($skill) { (Znajdz-Skill $skill)[0] } else { $null })
+  # paczka podaje folder (albo "*"), nie nazwe wiersza - przyciski ustawia wybrany wiersz
+  $para = $null
+  if ($skill) { $para = Znajdz-Skill $skill }
+  if (-not $para -and $script:SkillWybrany) { $para = Znajdz-Skill $script:SkillWybrany }
+  Ustaw-Przyciski-Skilla $(if ($para) { $para[0] } else { $null })
   if (-not $script:ZegarSkilli) {
     $script:ZegarSkilli = New-Object System.Windows.Forms.Timer
     $script:ZegarSkilli.Interval = 2000

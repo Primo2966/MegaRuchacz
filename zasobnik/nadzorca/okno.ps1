@@ -357,9 +357,12 @@ function Pokaz-Okno {
   $script:BSkillAktualizuj = New-Object System.Windows.Forms.Button
   $script:BSkillCofnij = New-Object System.Windows.Forms.Button
   $script:BSkillUsun = New-Object System.Windows.Forms.Button
+  # P49: paczka do przekazania - tylko przy skillu "Twoj wlasny" (wtedy cztery powyzsze sa ukryte).
+  $script:BSkillSpakuj = New-Object System.Windows.Forms.Button
+  $script:BSkillSpakujWszystkie = New-Object System.Windows.Forms.Button
   # "Usun u mnie" stoi w miejscu "Aktualizuj teraz" (widac zawsze jeden z nich) -
   # rzad przyciskow nie robi sie szerszy niz karta.
-  foreach ($para in @(@($script:BSkillInstaluj, "Zainstaluj", 140), @($script:BSkillAktualizuj, "Aktualizuj teraz", 130), @($script:BSkillUsun, "Usuń u mnie", 130), @($script:BSkillCofnij, "Cofnij ostatnią aktualizację", 200))) {
+  foreach ($para in @(@($script:BSkillInstaluj, "Zainstaluj", 140), @($script:BSkillAktualizuj, "Aktualizuj teraz", 130), @($script:BSkillUsun, "Usuń u mnie", 130), @($script:BSkillCofnij, "Cofnij ostatnią aktualizację", 200), @($script:BSkillSpakuj, "Spakuj do przekazania", 180), @($script:BSkillSpakujWszystkie, "Spakuj wszystkie własne", 190))) {
     $para[0].Text = $para[1]
     $para[0].Font = $script:CzZwykla
     $para[0].FlatStyle = [System.Windows.Forms.FlatStyle]::System
@@ -420,6 +423,7 @@ function Pokaz-Okno {
     $script:BSkille = $null; $script:WidokSkille = $null; $script:LSkille = $null; $script:BSkilleTeraz = $null
     $script:ListaSkilli = $null; $script:SkilleInfo = $null; $script:SkillePrzyciski = $null; $script:SkillePodglad = $null
     $script:BSkillInstaluj = $null; $script:BSkillAktualizuj = $null; $script:BSkillCofnij = $null; $script:BSkillUsun = $null
+    $script:BSkillSpakuj = $null; $script:BSkillSpakujWszystkie = $null
     $script:WierszeSkilli = @{}; $script:SkilleOperacjaOd = $null; $script:SkillePoOperacji = $null
     $script:GrupySkilli = @{}; $script:NaglowkiGrup = @{}; $script:ZnacznikiGrup = @{}
     $script:Widok = "przeglad"
@@ -499,6 +503,19 @@ function Pokaz-Okno {
       if ($odp -ne [System.Windows.Forms.DialogResult]::Yes) { Notuj "skille: usuniecie $n - uzytkownik nie potwierdzil"; return }
       Rusz-Operacje-Skilli "usun" $n $false "Usuwam $n"
     } catch { Zanotuj-Wywrotke "przycisk Usun u mnie (skille)" $_ }
+  })
+  # Paczka do przekazania (P49): nic nie zmienia u Ciebie, wiec bez pytania. Odmowe
+  # (dane wrazliwe w skillu) i sciezke gotowej paczki pokazuje wynik operacji po prawej.
+  $script:BSkillSpakuj.Add_Click({
+    try {
+      $para = Znajdz-Skill $script:SkillWybrany
+      if (-not $para -or -not $para[0].spoza -or $para[0].rodzaj -ne "wlasny") { return }
+      Rusz-Operacje-Skilli "spakuj" "$($para[0].folder)" $false "Pakuję $($para[0].folder) do przekazania"
+    } catch { Zanotuj-Wywrotke "przycisk Spakuj do przekazania (skille)" $_ }
+  })
+  $script:BSkillSpakujWszystkie.Add_Click({
+    try { Rusz-Operacje-Skilli "spakuj" "*" $false "Pakuję wszystkie Twoje własne skille do przekazania" }
+    catch { Zanotuj-Wywrotke "przycisk Spakuj wszystkie wlasne (skille)" $_ }
   })
 
   # Klikniecie warstwy pokazuje jej tresc po prawej. Wywrotka podgladu idzie

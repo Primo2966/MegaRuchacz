@@ -60,6 +60,12 @@
 #     -Tryb usun         -Skill <nazwa>: kasuje u uzytkownika skill, ktory AUTOR usunal
 #                        (z kopia zapasowa - "cofnij" go przywraca); innych nie kasuje
 #     -Tryb codziennie   raz na dobe (znacznik): wykryj + aktualizuj; -Wymus pomija znacznik
+#     -Tryb spakuj       -Skill <folder> albo -Skill "*" (wszystkie wlasne): ZIP z WLASNYM
+#                        skillem (lista Wlasne w bazie) + JAK-ZAINSTALOWAC.txt, do przekazania
+#                        komus innemu. Najpierw szuka danych wrazliwych (hasla, klucze, tokeny,
+#                        adresy IP, loginy, maile) - gdy cos znajdzie, NIE pakuje i wypisuje plik
+#                        i linie. Bez sieci, skilli nie zmienia. Paczka na Pulpit (albo do
+#                        Pobranych); -Dokad <katalog> podmienia miejsce (testy).
 #     -KatalogDomowy <k> podmiana katalogu domowego (testy na kopii)
 #     -Katalog <plik>    podmiana bazy (proba negatywna: zly adres zrodla)
 #     -BezSieci          bez pobierania - tylko to, co juz lezy w kopiach zrodel
@@ -72,12 +78,13 @@
 # 2 zle wywolanie, 3 inny przebieg wlasnie pracuje.
 
 param(
-  [ValidateSet("stan", "wykryj", "instaluj", "aktualizuj", "cofnij", "codziennie", "usun")]
+  [ValidateSet("stan", "wykryj", "instaluj", "aktualizuj", "cofnij", "codziennie", "usun", "spakuj")]
   [string]$Tryb = "stan",
   [string]$Skill = "",
   [string]$ZeZrodla = "",
   [string]$KatalogDomowy = $HOME,
   [string]$Katalog = "",
+  [string]$Dokad = "",
   [switch]$BezSieci,
   [string]$Przerwy = "5,15,30,60,120",
   [switch]$Wymus,
@@ -124,6 +131,9 @@ $SMIECI = @("desktop.ini", "Thumbs.db", ".DS_Store")
 
 $script:Wydruk = New-Object System.Collections.Generic.List[string]
 $script:Bledy  = 0
+$script:Paczka = ""
+$script:Wlasne = @()
+$script:Inne   = @()
 
 # ------------------------------------------------------------------ pomocnicze
 
@@ -381,6 +391,17 @@ function Wczytaj-Katalog {
     $zrodla += [pscustomobject]@{
       Id = "$($z.Id)"; Nazwa = "$($z.Nazwa)"; Adres = "$($z.Adres)"; Galaz = $galaz
       Sciezka = "$($z.Sciezka)"; Opis = "$($z.Opis)"; Rodzaj = $rodzaj; Uwaga = "$($z.Uwaga)"; Skille = $sk
+    }
+  }
+  # P49: skille spoza zrodel, o ktorych wiadomo, skad sa (Wlasne = uzytkownika, Inne =
+  # znane zrodlo poza opieka). Reszta spoza bazy to "zrodlo nieznane".
+  $script:Wlasne = @(); $script:Inne = @()
+  foreach ($para in @(@("Wlasne", "wlasny"), @("Inne", "inne"))) {
+    foreach ($w in @($k[$para[0]])) {
+      if ($null -eq $w) { continue }
+      if (-not $w.Folder) { throw "wpis w liście $($para[0]) bazy bez Folder" }
+      $o = [pscustomobject]@{ Folder = "$($w.Folder)"; Opis = "$($w.Opis)"; Skad = "$($w.Skad)"; Uwaga = "$($w.Uwaga)"; Rodzaj = $para[1] }
+      if ($para[0] -eq "Wlasne") { $script:Wlasne += $o } else { $script:Inne += $o }
     }
   }
   return ,$zrodla
@@ -1222,6 +1243,212 @@ function Usun-Skill($stan, $sk, $cele) {
   return $zrobione
 }
 
+# ------------------------------------------------- paczka do przekazania (P49)
+
+# Opis z naglowka SKILL.md (pole description, takze wieloliniowe ">-"). Pusty, gdy
+# pliku nie ma albo nie ma w nim opisu - okno mowi wtedy wprost "brak opisu".
+function Opis-Z-SkillMd([string]$plik) {
+  if (-not (Test-Path -LiteralPath $plik -PathType Leaf)) { return "" }
+  $linie = @()
+  try { $linie = [System.IO.File]::ReadAllLines($plik, [System.Text.Encoding]::UTF8) }
+  catch { return "(nie udało się odczytać SKILL.md: $($_.Exception.Message))" }
+  if ($linie.Count -lt 2 -or $linie[0].Trim() -ne "---") { return "" }
+  for ($i = 1; $i -lt $linie.Count; $i++) {
+    if ($linie[$i].Trim() -eq "---") { break }
+    $m = [regex]::Match($linie[$i], '^description:\s*(.*)$')
+    if (-not $m.Success) { continue }
+    $w = $m.Groups[1].Value.Trim()
+    if ($w -match '^[>|][-+]?$' -or $w -eq "") {
+      $czesci = @()
+      for ($j = $i + 1; $j -lt $linie.Count -and $linie[$j] -match '^\s+\S'; $j++) { $czesci += $linie[$j].Trim() }
+      $w = $czesci -join " "
+    }
+    $w = $w.Trim().Trim('"').Trim("'")
+    if ($w.Length -gt 300) { $w = $w.Substring(0, 297) + "..." }
+    return $w
+  }
+  return ""
+}
+
+# Dane, ktorych nie wolno wyniesc z firmy w paczce dla kogos innego. Kazdy wzorzec ma
+# nazwe po ludzku. Lepiej odmowic za duzo niz za malo: odmowa kosztuje jedna poprawke
+# w skillu, wyciek hasla albo adresu komputera w biurze - nie do cofniecia.
+$WRAZLIWE = @(
+  @{ Co = "klucz prywatny";                       Wzor = '-----BEGIN [A-Z ]*PRIVATE KEY-----' }
+  @{ Co = "klucz SSH";                            Wzor = '(?:ssh-(?:rsa|ed25519|dss)|ecdsa-sha2-\S+)\s+AAAA[0-9A-Za-z+/]{20,}' }
+  @{ Co = "klucz albo token usługi";              Wzor = 'AKIA[0-9A-Z]{16}|sk-(?:ant-|proj-)?[A-Za-z0-9_-]{20,}|gh[pousr]_[A-Za-z0-9]{30,}|github_pat_[A-Za-z0-9_]{20,}|xox[abprs]-[A-Za-z0-9-]{10,}|AIza[0-9A-Za-z_-]{35}|Atz[a-z]\|[A-Za-z0-9_-]{20,}|amzn1\.application-oa2-client\.[0-9a-f]{32}|eyJ[A-Za-z0-9_-]{10,}\.eyJ[A-Za-z0-9_-]{10,}' }
+  @{ Co = "adres z loginem i hasłem";             Wzor = '[A-Za-z][A-Za-z0-9+.-]*://[^\s/:@]+:[^\s/@]+@' }
+  @{ Co = "hasło, klucz albo token wpisany wprost"; Wzor = '(?i)(?:password|passwd|pwd|hasło|haslo|secret|sekret|token|api[_-]?key|apikey|client[_-]?secret|access[_-]?key|private[_-]?key)\w*["'']?\s*[:=]\s*["'']?(?<w>[^\s"''<>,;]{6,})' }
+  @{ Co = "adres IP";                             Wzor = '(?<![\d.])(?<w>(?:(?:25[0-5]|2[0-4]\d|1?\d?\d)\.){3}(?:25[0-5]|2[0-4]\d|1?\d?\d))(?![\d.])' }
+  @{ Co = "adres e-mail";                         Wzor = '(?<w>[A-Za-z0-9._%+-]+@[A-Za-z0-9-]+(?:\.[A-Za-z0-9-]+)*\.[A-Za-z]{2,})' }
+  @{ Co = "login SSH";                            Wzor = '(?i)\bssh\s+(?:-\S+\s+)*(?<w>[\w.-]+@[\w.-]+)' }
+  @{ Co = "login Windows w ścieżce";              Wzor = '(?i)\b[A-Z]:[\\/]+Users[\\/]+(?<w>[^\\/\s''"`<>%$*]+)' }
+)
+
+# Wartosci, ktore pasuja do wzorca, a nic nie zdradzaja: zmienna zamiast wartosci,
+# miejsce do wpisania, localhost, przykladowe domeny, publiczny adres gita.
+function Czy-Niewinne([string]$co, [string]$w) {
+  if (-not $w) { return $false }
+  switch -Wildcard ($co) {
+    "hasło*" { return ($w -match '^[\[\$\(\{%<]' -or $w -match '^(x+|\*+|\.+)$' -or $w -match '\.\.\.') }
+    "adres IP" { return (@("127.0.0.1", "0.0.0.0", "255.255.255.255") -contains $w) }
+    "adres e-mail" { return ($w -match '^git@' -or $w -match '@(?:[\w-]+\.)*example\.(?:com|org|net)$' -or $w -match '@(?:users\.)?noreply\.github\.com$') }
+    "login Windows*" { return (@("Public", "Default", "All Users", "nazwa", "user", "username", "uzytkownik", "użytkownik") -contains $w) }
+  }
+  return $false
+}
+
+# Lista znalezisk w katalogu skilla: plik (wzgledny), linia, co, poczatek wartosci.
+# Plik binarny jest znaleziskiem sam w sobie - nie umiemy zajrzec do srodka, wiec
+# nie wolno go przepuscic po cichu.
+function Szukaj-Wrazliwych([string]$kat) {
+  $wynik = @()
+  $baza = (Resolve-Path -LiteralPath $kat).ProviderPath.TrimEnd('\')
+  foreach ($f in @(Get-ChildItem -LiteralPath $baza -Recurse -File -Force)) {
+    if ($SMIECI -contains $f.Name) { continue }
+    $rel = $f.FullName.Substring($baza.Length + 1)
+    $b = [System.IO.File]::ReadAllBytes($f.FullName)
+    $binarny = $false
+    for ($i = 0; $i -lt [math]::Min($b.Length, 8000); $i++) { if ($b[$i] -eq 0) { $binarny = $true; break } }
+    if ($binarny) { $wynik += [pscustomobject]@{ Plik = $rel; Linia = 0; Co = "plik binarny - nie da się sprawdzić, co jest w środku"; Fragment = "" }; continue }
+    $linie = [System.Text.Encoding]::UTF8.GetString($b) -split "`n"
+    for ($n = 0; $n -lt $linie.Count; $n++) {
+      $l = $linie[$n]
+      foreach ($wz in $WRAZLIWE) {
+        foreach ($m in [regex]::Matches($l, $wz.Wzor)) {
+          $w = $(if ($m.Groups["w"].Success) { $m.Groups["w"].Value } else { $m.Value })
+          if (Czy-Niewinne $wz.Co $w) { continue }
+          # poczatek wartosci tylko dla adresow i loginow - hasla ani klucza nie pokazujemy
+          # nawet w kawalku (wydruk trafia do dziennika operacji)
+          $frag = ""
+          if ($wz.Co -match '^(adres IP|adres e-mail|login)') { $frag = $w.Trim(); if ($frag.Length -gt 6) { $frag = $frag.Substring(0, 6) + "…" } }
+          # jedna linia = jedno znalezisko (klucz "sk-..." pasuje tez do "api_key = ...")
+          $juz = @($wynik | Where-Object { $_.Plik -eq $rel -and $_.Linia -eq ($n + 1) })
+          if ($juz.Count -eq 0) { $wynik += [pscustomobject]@{ Plik = $rel; Linia = $n + 1; Co = $wz.Co; Fragment = $frag } }
+          break
+        }
+      }
+    }
+  }
+  return ,$wynik
+}
+
+# 1 plik, 2-4 pliki, 5 plikow (12-14 plikow, 22-24 pliki).
+function Odmien([int]$n, [string]$jeden, [string]$kilka, [string]$wiele) {
+  if ($n -eq 1) { return $jeden }
+  if (($n % 10) -ge 2 -and ($n % 10) -le 4 -and (($n % 100) -lt 12 -or ($n % 100) -gt 14)) { return $kilka }
+  return $wiele
+}
+
+function Miejsce-Paczki {
+  if ($Dokad) { return $Dokad }
+  $kand = @()
+  if ($Dom -eq $HOME.TrimEnd('\')) { $kand += [Environment]::GetFolderPath('Desktop') }
+  $kand += (Join-Path $Dom "Desktop"); $kand += (Join-Path $Dom "Downloads")
+  foreach ($k in $kand) { if ($k -and (Test-Path -LiteralPath $k -PathType Container)) { return $k } }
+  return ""
+}
+
+function Instrukcja-Paczki($wlasne) {
+  $l = @()
+  $l += "JAK ZAINSTALOWAĆ $(if (@($wlasne).Count -gt 1) { 'TE SKILLE' } else { 'TEN SKILL' }) W CLAUDE CODE"
+  $l += ""
+  $l += "W paczce:"
+  foreach ($w in $wlasne) { $l += "  - folder $($w.Folder) - $($w.Opis)" }
+  $l += ""
+  $l += "1. Rozpakuj paczkę (prawy przycisk myszy na pliku ZIP -> Wyodrębnij wszystkie)."
+  $l += "2. Skopiuj $(if (@($wlasne).Count -gt 1) { 'każdy folder' } else { 'folder ' + $wlasne[0].Folder }) w całości (nie sam plik SKILL.md) do:"
+  $l += "      C:\Users\<nazwa>\.claude\skills\"
+  $l += "   gdzie <nazwa> to Twoja nazwa użytkownika w Windows. Gdy folderu skills nie ma, utwórz go."
+  $l += "   Najszybciej: wpisz w pasku adresu Eksploratora plików  %USERPROFILE%\.claude\skills  i naciśnij Enter."
+  $l += "3. Otwórz nowe okno Claude Code. Skill włączy się sam, gdy rozmowa dotyczy jego tematu."
+  $l += ""
+  $l += "Skill powstał u nadawcy - może opisywać jego komputery i projekty. Przed spakowaniem"
+  $l += "sprawdzono, że nie ma w nim haseł, kluczy, tokenów, adresów IP, loginów ani maili."
+  $l += ""
+  $l += "Spakowano $(Get-Date -Format 'yyyy-MM-dd HH:mm') w MegaRuchaczu."
+  return (($l -join "`r`n") + "`r`n")
+}
+
+# Pakuje wlasne skille do ZIP-a. $ktory = nazwa folderu albo "*" (wszystkie wlasne).
+# Zwraca sciezke paczki albo "" (powod juz wypisany jako BŁĄD).
+function Spakuj-Skille([string]$ktory) {
+  $katSkilli = Join-Path $Dom ".claude\skills"
+  $wybrane = @()
+  if ($ktory -eq "*") {
+    $wybrane = @($script:Wlasne | Where-Object { Test-Path -LiteralPath (Join-Path $katSkilli $_.Folder) -PathType Container })
+    if ($wybrane.Count -eq 0) { Blad "" "nie masz na tym komputerze żadnego skilla oznaczonego jako Twój własny - nie ma czego pakować"; return "" }
+  } else {
+    $w = @($script:Wlasne | Where-Object { $_.Folder -eq $ktory }) | Select-Object -First 1
+    if (-not $w) { Blad $ktory "'$ktory' nie jest na liście Twoich własnych skilli - pakuję tylko własne (cudzych skilli nie rozdajemy, autorzy mają swoje źródła)"; return "" }
+    if (-not (Test-Path -LiteralPath (Join-Path $katSkilli $w.Folder) -PathType Container)) { Blad $ktory "nie ma katalogu $(Join-Path $katSkilli $w.Folder)"; return "" }
+    $wybrane = @($w)
+  }
+  Pisz "Sprawdzam, czy w skillach nie ma danych wrażliwych: $(($wybrane | ForEach-Object { $_.Folder }) -join ', ')..."
+  $znalezione = @()
+  foreach ($w in $wybrane) {
+    foreach ($z in (Szukaj-Wrazliwych (Join-Path $katSkilli $w.Folder))) { $znalezione += [pscustomobject]@{ Skill = $w.Folder; Plik = $z.Plik; Linia = $z.Linia; Co = $z.Co; Fragment = $z.Fragment } }
+  }
+  if ($znalezione.Count -gt 0) {
+    Blad $ktory "NIE PAKUJĘ - w skillu są dane, których nie wolno przekazywać dalej ($($znalezione.Count) $(Odmien $znalezione.Count 'miejsce' 'miejsca' 'miejsc')). Pierwsze: $($znalezione[0].Skill)\$($znalezione[0].Plik), linia $($znalezione[0].Linia) - $($znalezione[0].Co)"
+    foreach ($z in $znalezione) {
+      Pisz ("  - {0}\{1}, linia {2}: {3}{4}" -f $z.Skill, $z.Plik, $z.Linia, $z.Co, $(if ($z.Fragment) { " (zaczyna się od: $($z.Fragment))" } else { "" }))
+    }
+    Pisz ""
+    Pisz "Co zrobić: usuń te dane ze skilla albo zastąp je opisem (np. `„adres komputera w biurze`”), potem spakuj jeszcze raz. Paczka nie powstała."
+    Dziennik "paczka" $ktory "odmowa: $($znalezione.Count) miejsc z danymi wrazliwymi"
+    return ""
+  }
+  $miejsce = Miejsce-Paczki
+  if (-not $miejsce) { Blad $ktory "nie znalazłem ani Pulpitu, ani folderu Pobrane w $Dom - nie mam gdzie zapisać paczki"; return "" }
+  if (-not (Test-Path -LiteralPath $miejsce -PathType Container)) { New-Item -ItemType Directory -Force -Path $miejsce | Out-Null }
+  $rdzen = $(if ($ktory -eq "*") { "moje-skille" } else { "skill-$ktory" }) + "-" + (Get-Date -Format 'yyyy-MM-dd')
+  $plik = Join-Path $miejsce "$rdzen.zip"
+  $i = 2
+  while (Test-Path -LiteralPath $plik) { $plik = Join-Path $miejsce "$rdzen-$i.zip"; $i++ }
+  Add-Type -AssemblyName System.IO.Compression, System.IO.Compression.FileSystem
+  $oczekiwane = @{}
+  $tmp = "$plik.tmp"
+  try {
+    $fs = [System.IO.File]::Open($tmp, [System.IO.FileMode]::CreateNew)
+    try {
+      $zip = New-Object System.IO.Compression.ZipArchive($fs, [System.IO.Compression.ZipArchiveMode]::Create)
+      try {
+        foreach ($w in $wybrane) {
+          $baza = (Resolve-Path -LiteralPath (Join-Path $katSkilli $w.Folder)).ProviderPath.TrimEnd('\')
+          foreach ($f in @(Get-ChildItem -LiteralPath $baza -Recurse -File -Force)) {
+            if ($SMIECI -contains $f.Name) { continue }
+            $nazwa = "$($w.Folder)/" + $f.FullName.Substring($baza.Length + 1).Replace('\', '/')
+            [void][System.IO.Compression.ZipFileExtensions]::CreateEntryFromFile($zip, $f.FullName, $nazwa, [System.IO.Compression.CompressionLevel]::Optimal)
+            $oczekiwane[$nazwa] = $f.Length
+          }
+        }
+        $instr = (New-Object System.Text.UTF8Encoding($true)).GetPreamble() + [System.Text.Encoding]::UTF8.GetBytes((Instrukcja-Paczki $wybrane))
+        $e = $zip.CreateEntry("JAK-ZAINSTALOWAC.txt")
+        $s = $e.Open(); try { $s.Write($instr, 0, $instr.Length) } finally { $s.Dispose() }
+        $oczekiwane["JAK-ZAINSTALOWAC.txt"] = $instr.Length
+      } finally { $zip.Dispose() }
+    } finally { $fs.Dispose() }
+    # Sprawdzenie gotowej paczki: te same wpisy i te same rozmiary co pliki skilla.
+    $czyt = [System.IO.Compression.ZipFile]::OpenRead($tmp)
+    try {
+      $w = @{}; foreach ($e in $czyt.Entries) { $w[$e.FullName] = $e.Length }
+      $zle = @($oczekiwane.Keys | Where-Object { -not $w.ContainsKey($_) -or $w[$_] -ne $oczekiwane[$_] })
+      if ($zle.Count -gt 0 -or $w.Count -ne $oczekiwane.Count) { throw "paczka po zapisie nie zgadza się z plikami skilla ($($zle.Count) różnic, wpisów $($w.Count) zamiast $($oczekiwane.Count))" }
+    } finally { $czyt.Dispose() }
+    [System.IO.File]::Move($tmp, $plik)
+  } catch {
+    if (Test-Path -LiteralPath $tmp) { Remove-Item -LiteralPath $tmp -Force }
+    Blad $ktory "nie udało się zapisać paczki $plik - $($_.Exception.Message)"
+    return ""
+  }
+  Pisz "Paczka gotowa: $plik"
+  Pisz "W środku: $(($wybrane | ForEach-Object { $_.Folder }) -join ', ') ($($oczekiwane.Count - 1) $(Odmien ($oczekiwane.Count - 1) 'plik' 'pliki' 'plików')) i JAK-ZAINSTALOWAC.txt z instrukcją po polsku."
+  Pisz "Sprawdzone przed spakowaniem: brak haseł, kluczy, tokenów, adresów IP, loginów i maili."
+  Dziennik "paczka" $ktory "zapisana: $plik"
+  return $plik
+}
+
 # ------------------------------------------------------------- stan dla okna
 
 function Stan-Dla-Okna($stan, $zrodla, $cele) {
@@ -1297,13 +1524,27 @@ function Stan-Dla-Okna($stan, $zrodla, $cele) {
       blad = "$($zs.blad)"; bladOd = "$($zs.bladOd)"; skille = $lista
     }
   }
+  # Spoza bazy (P49): rodzaj "wlasny" / "inne" z list w bazie, kazdy inny = "nieznane".
+  # Opis autora z SKILL.md tylko dla nieznanych - zeby bylo wiadomo, co to w ogole jest.
   $spoza = @()
+  $licz["wlasne"] = 0; $licz["nieznane"] = 0
   foreach ($c in $cele) {
     if (-not $c.Jest -or -not (Test-Path -LiteralPath $c.Katalog)) { continue }
     foreach ($d in @(Get-ChildItem -LiteralPath $c.Katalog -Directory -Force | Where-Object { -not $_.Name.StartsWith('.') })) {
-      if (-not $znane.ContainsKey($d.Name)) { $spoza += [pscustomobject]@{ folder = $d.Name; cel = $c.Id } }
+      if ($znane.ContainsKey($d.Name)) { continue }
+      $w = @($script:Wlasne + $script:Inne | Where-Object { $_.Folder -eq $d.Name }) | Select-Object -First 1
+      $rodzaj = "nieznane"; $opis = ""; $skad = ""; $uwaga = ""; $opisAutora = ""
+      if ($w) { $rodzaj = $w.Rodzaj; $opis = $w.Opis; $skad = $w.Skad; $uwaga = $w.Uwaga }
+      else { $opisAutora = Opis-Z-SkillMd (Join-Path $d.FullName "SKILL.md") }
+      $dowiazanie = [bool]($d.Attributes -band [System.IO.FileAttributes]::ReparsePoint)
+      $spoza += [pscustomobject]@{
+        folder = $d.Name; cel = $c.Id; rodzaj = $rodzaj; opis = $opis; skad = $skad; uwaga = $uwaga
+        opisAutora = $opisAutora; sciezka = $d.FullName; dowiazanie = $dowiazanie
+      }
     }
   }
+  $licz["wlasne"] = @($spoza | Where-Object { $_.rodzaj -eq "wlasny" } | ForEach-Object { $_.folder } | Select-Object -Unique).Count
+  $licz["nieznane"] = @($spoza | Where-Object { $_.rodzaj -eq "nieznane" } | ForEach-Object { $_.folder } | Select-Object -Unique).Count
   return [pscustomobject]@{
     wygenerowano = (Teraz); dom = $Dom; katalog = $Katalog; stanPlik = $PlikStanu; dziennik = $PlikDzien; kopie = $KatKopii
     przejeto = "$($stan.przejeto)"; sprawdzono = "$($stan.sprawdzono)"
@@ -1351,7 +1592,14 @@ if ($Tryb -eq "stan") {
           Write-Output ("  {0,-32} {1,-10} {2}{3}" -f $s.folder, $s.stan, $gdzie, $(if ($s.blad) { "  [BŁĄD: " + $s.blad + "]" } else { "" }))
         }
       }
-      if (@($o.spozaBazy).Count) { Write-Output ""; Write-Output ("Spoza bazy: " + ((@($o.spozaBazy) | ForEach-Object { "$($_.folder) ($($_.cel))" }) -join ", ")) }
+      if (@($o.spozaBazy).Count) {
+        Write-Output ""
+        $nazwyRodz = @{ wlasny = "Twoje własne"; inne = "Z innych źródeł, poza opieką"; nieznane = "Źródło nieznane" }
+        foreach ($r in @("wlasny", "inne", "nieznane")) {
+          $te = @($o.spozaBazy | Where-Object { $_.rodzaj -eq $r })
+          if ($te.Count) { Write-Output ("Spoza bazy - $($nazwyRodz[$r]): " + (($te | ForEach-Object { "$($_.folder) ($($_.cel))" }) -join ", ")) }
+        }
+      }
     }
     exit 0
   } catch {
@@ -1361,21 +1609,22 @@ if ($Tryb -eq "stan") {
   }
 }
 
-if ((@("instaluj", "cofnij", "usun") -contains $Tryb) -and -not $Skill -and -not ($Tryb -eq "instaluj" -and $ZeZrodla)) {
-  Write-Output "BŁĄD: tryb $Tryb wymaga -Skill <nazwa>$(if ($Tryb -eq 'instaluj') { ' albo -ZeZrodla <id>' })"
+if ((@("instaluj", "cofnij", "usun", "spakuj") -contains $Tryb) -and -not $Skill -and -not ($Tryb -eq "instaluj" -and $ZeZrodla)) {
+  Write-Output "BŁĄD: tryb $Tryb wymaga -Skill <nazwa>$(if ($Tryb -eq 'instaluj') { ' albo -ZeZrodla <id>' })$(if ($Tryb -eq 'spakuj') { ' albo -Skill * (wszystkie własne)' })"
   exit 2
 }
 
 # Wybor skilli, ktorych dotyczy polecenie (po nazwie z bazy albo po nazwie katalogu).
+# Paczka (spakuj) dotyczy skilli WLASNYCH, ktorych w zrodlach nie ma - wybiera je sama.
 $wybrane = @()
-foreach ($z in $zrodla) {
+foreach ($z in $(if ($Tryb -eq "spakuj") { @() } else { $zrodla })) {
   foreach ($sk in $z.Skille) {
     if ($Skill -and ($sk.Nazwa -ne $Skill) -and ($sk.Folder -ne $Skill)) { continue }
     if ($ZeZrodla -and ($z.Id -ne $ZeZrodla)) { continue }
     $wybrane += $sk
   }
 }
-if (($Skill -or $ZeZrodla) -and $wybrane.Count -eq 0) {
+if (($Skill -or $ZeZrodla) -and $wybrane.Count -eq 0 -and $Tryb -ne "spakuj") {
   Write-Output "BŁĄD: nie ma w bazie skilla '$Skill'$(if ($ZeZrodla) { " w źródle '$ZeZrodla'" })"
   exit 2
 }
@@ -1416,7 +1665,8 @@ try {
   $pierwszy = (-not $stan.przejeto)
   $ctx = @{}
   # Usuniecie nie potrzebuje zrodel: to, ze autor skill usunal, wiadomo ze stanu.
-  if ($Tryb -ne "usun") {
+  # Paczka tez nie: pakuje to, co lezy na dysku.
+  if (@("usun", "spakuj") -notcontains $Tryb) {
     Pisz "Sprawdzam źródła skilli$(if ($BezSieci) { ' (bez sieci)' })..."
     $ctx = Wykryj $stan $zrodla $cele (-not $BezSieci)
     Zapisz-Stan $stan
@@ -1438,6 +1688,7 @@ try {
     "usun" {
       foreach ($sk in $wybrane) { $zmian += Usun-Skill $stan $sk $cele; Zapisz-Stan $stan }
     }
+    "spakuj" { $script:Paczka = Spakuj-Skille $Skill }
     "codziennie" {
       if ($pierwszy) {
         Pisz "Pierwszy przebieg na tym komputerze: tylko spisuję, co jest. Nowsze wersje pobiorę od następnego codziennego sprawdzenia."
@@ -1449,10 +1700,12 @@ try {
   }
   Zapisz-Stan $stan
 
+  if ($Tryb -ne "spakuj") {
   $o = Stan-Dla-Okna $stan $zrodla $cele
   $l = $o.liczniki
   Pisz ""
   Pisz "Skilli w bazie: $($l.wBazie) - aktualne: $($l.zgodne), starsze wersje: $($l.starsze), zmienione ręcznie: $($l.zmienione), niezainstalowane: $($l.brak), usunięte przez autora: $($l.usuniete), z błędem: $($l.bledy). Zmienionych teraz: $zmian."
+  }
   if ($script:Bledy -gt 0) { $kod = 1 }
   $wynik = $(if ($script:Bledy -gt 0) { "blad" } else { "ok" })
   $powod = ""
@@ -1460,7 +1713,7 @@ try {
   if ($Tryb -eq "codziennie") {
     Zapisz-Klucze $PlikZnacz ([ordered]@{ dzien = $dzis; start = $start; koniec = (Teraz); wynik = $wynik; powod = $powod; zaktualizowano = $zmian; pierwszy = $pierwszy; pid = $PID })
   }
-  Zapisz-Klucze $PlikOper ([ordered]@{ tryb = $Tryb; skill = $Skill; zrodlo = $ZeZrodla; start = $start; koniec = (Teraz); wynik = $wynik; powod = $powod; zmian = $zmian; pid = $PID })
+  Zapisz-Klucze $PlikOper ([ordered]@{ tryb = $Tryb; skill = $Skill; zrodlo = $ZeZrodla; start = $start; koniec = (Teraz); wynik = $wynik; powod = $powod; zmian = $zmian; paczka = "$script:Paczka"; pid = $PID })
   Dziennik "przebieg" "" "$opisOperacji - wynik $wynik, zmian $zmian$(if ($powod) { ', ' + $powod })"
 } catch {
   $kod = 1

@@ -147,5 +147,79 @@
         @{ Nazwa = 'writing-for-agents';            Sciezka = 'skills/productivity/writing-for-agents';           Opis = 'Zasady pisania dokumentów dla agentów: skille, AGENTS.md, CLAUDE.md.' }
       )
     }
+    @{
+      Id      = 'vibecode'
+      Nazwa   = 'Vibecode Pro Max Kit (withkynam)'
+      Adres   = 'https://github.com/withkynam/vibecode-pro-max-kit'
+      Galaz   = 'main'
+      Sciezka = '.claude/skills'
+      Opis    = 'Zestaw do pracy „najpierw plan, potem kod” w etapach z bramkami; część skilli zakłada, że cały zestaw jest wgrany do projektu (katalog process/).'
+      Skille  = @(
+        @{ Nazwa = 'vc-agent-browser';          Opis = 'Sterowanie przeglądarką przez agenta (narzędzie agent-browser): klikanie, zrzuty, nagrania, testy stron.' }
+        @{ Nazwa = 'vc-agent-strategy-compare'; Opis = 'Porównuje cztery sposoby podziału pracy między agentów i poleca najlepszy, z kosztem.' }
+        @{ Nazwa = 'vc-audit-context';          Opis = 'Sprawdza, czy opisy projektu i skille są tam, gdzie agenci ich szukają, i czy się nie rozjechały.' }
+        @{ Nazwa = 'vc-audit-plans';            Opis = 'Przegląda pliki planów: co nieaktualne, co skończone, co do archiwum.' }
+        @{ Nazwa = 'vc-audit-vc';               Opis = 'Sprawdza, czy sam zestaw jest spójny: agenci, skille, README i pliki zasad.' }
+        @{ Nazwa = 'vc-autopilot';              Opis = 'Tryb „autopilota”: zapisuje cel pracy w stałym formacie, żeby agent mógł prowadzić ją do końca i wznowić.' }
+        @{ Nazwa = 'vc-autoresearch';           Opis = 'Pętla: szukaj braków, popraw, powtórz - aż agenci nie znajdą już nic albo cel zostanie osiągnięty.' }
+        @{ Nazwa = 'vc-context-discovery';      Opis = 'Na start zadania zbiera i wczytuje opisy projektu potrzebne do tej pracy.' }
+        @{ Nazwa = 'vc-debug';                  Opis = 'Szukanie błędów metodycznie: najpierw przyczyna, potem poprawka.' }
+        @{ Nazwa = 'vc-docs-seeker';            Opis = 'Szuka aktualnej dokumentacji bibliotek i narzędzi (m.in. przez context7).' }
+        @{ Nazwa = 'vc-feasibility-test';       Opis = 'Krótka próba, czy niesprawdzony pomysł techniczny w ogóle zadziała - z werdyktem tak / nie / nie wiadomo.' }
+        @{ Nazwa = 'vc-frontend-design';        Opis = 'Dopracowany wygląd stron i aplikacji, także na wzór zrzutu ekranu albo filmu.' }
+        @{ Nazwa = 'vc-generate-closeout';      Opis = 'Podsumowanie po skończonym etapie: czy gotowe do archiwum, co się rozjechało, co dalej.' }
+        @{ Nazwa = 'vc-generate-context';       Opis = 'Pisze albo odświeża główny opis projektu dla agentów.' }
+        @{ Nazwa = 'vc-generate-phase-program'; Opis = 'Rozpisuje dużą pracę na etapy: plan główny, cele i szkice planów każdego etapu.' }
+        @{ Nazwa = 'vc-generate-plan';          Opis = 'Zamienia pomysł albo wymagania w zapisany plan wykonania.' }
+        @{ Nazwa = 'vc-generate-spec';          Opis = 'Spisuje wymagania (specyfikację) do Twojej akceptacji, zanim powstanie plan.' }
+        @{ Nazwa = 'vc-intent-clarify';         Opis = 'Gdy prośba jest niejasna, zadaje pytania z gotowymi odpowiedziami do wyboru.' }
+        @{ Nazwa = 'vc-plan-discovery';         Opis = 'Szuka istniejących planów związanych z bieżącym zadaniem.' }
+        @{ Nazwa = 'vc-predict';                Opis = 'Pięciu „ekspertów” spiera się o planowaną zmianę i wyłapuje ryzyka, zanim powstanie kod.' }
+        @{ Nazwa = 'vc-problem-solving';        Opis = 'Sposoby na utknięcie: upraszczanie, odwracanie założeń, szukanie wzorców.' }
+        @{ Nazwa = 'vc-publish';                Opis = 'Dla autora zestawu: wysyła poprawki zestawu do jego repozytorium.' }
+        @{ Nazwa = 'vc-review-situation';       Opis = 'Tylko odczyt: podsumowuje stan repozytorium i planów do przekazania pracy.' }
+        @{ Nazwa = 'vc-risk-evidence-pack';     Opis = 'Przy ryzykownej pracy zbiera komplet dowodów, zanim zmiana pójdzie dalej.' }
+        @{ Nazwa = 'vc-scenario';               Opis = 'Wymyśla przypadki brzegowe i scenariusze testów, zanim powstanie kod.' }
+        @{ Nazwa = 'vc-scout';                  Opis = 'Szybkie przeszukanie kodu: gdzie co leży i czego dotyczy zadanie.' }
+        @{ Nazwa = 'vc-security';               Opis = 'Przegląd bezpieczeństwa kodu z oceną wagi luk i opcjonalną poprawką.' }
+        @{ Nazwa = 'vc-sequential-thinking';    Opis = 'Rozwiązywanie trudnego problemu krok po kroku, z poprawianiem wcześniejszych kroków.' }
+        @{ Nazwa = 'vc-setup';                  Opis = 'Jednorazowe wgranie i ustawienie całego zestawu w projekcie, z pytaniami po drodze.' }
+        @{ Nazwa = 'vc-test-coverage-plan';     Opis = 'Plan testów dla zmiany: co sprawdza automat, co człowiek, czego nie da się sprawdzić.' }
+        @{ Nazwa = 'vc-update';                 Opis = 'Pobiera do projektu nowszą wersję zestawu - najpierw pokazuje, co się zmieni.' }
+        @{ Nazwa = 'vc-validate-findings';      Opis = 'Sprawdzenie planu przez kilku agentów naraz, z werdyktem: zielone, warunkowo, stop.' }
+        @{ Nazwa = 'vc-web-testing';            Opis = 'Testy stron i aplikacji: działanie, wydajność, dostępność, różne przeglądarki.' }
+      )
+    }
+    @{
+      Id      = 'obsidian'
+      Nazwa   = 'Obsidian Skills (Steph Ango, kepano)'
+      Adres   = 'https://github.com/kepano/obsidian-skills'
+      Galaz   = 'main'
+      Sciezka = 'skills'
+      Opis    = 'Skille do notatnika Obsidian i do czytania stron internetowych bez zbędnych ozdobników.'
+      Skille  = @(
+        @{ Nazwa = 'defuddle';          Opis = 'Czyta stronę internetową jako czysty tekst, bez menu i reklam - taniej niż zwykłe pobranie strony.' }
+        @{ Nazwa = 'json-canvas';       Opis = 'Tworzy i zmienia tablice Obsidiana (.canvas): mapy myśli, schematy, połączenia.' }
+        @{ Nazwa = 'knap';              Opis = 'Składa notatki z szablonu i danych (np. z tabeli CSV) narzędziem Knap.' }
+        @{ Nazwa = 'obsidian-bases';    Opis = 'Tworzy w Obsidianie widoki notatek jak w bazie danych: tabele, karty, filtry.' }
+        @{ Nazwa = 'obsidian-cli';      Opis = 'Obsługa notatek Obsidiana z wiersza poleceń: czytanie, tworzenie, szukanie, zadania.' }
+        @{ Nazwa = 'obsidian-markdown'; Opis = 'Pisanie notatek w odmianie Markdown Obsidiana: odnośniki, osadzenia, ramki, właściwości.' }
+      )
+    }
+  )
+  # Skille, ktorych NIE ma w zadnym zrodle powyzej, a wiadomo, skad sa (P49, rozpoznanie
+  # 2026-10-01: transkrypty i porownanie tresci z repozytoriami). Zakladka pokazuje je jako:
+  #   Wlasne - "Twoj wlasny": powstaly u uzytkownika (dowod w Skad). Tylko te mozna
+  #            spakowac do przekazania (narzedzia\skille.ps1 -Tryb spakuj).
+  #   Inne   - znane zrodlo, ale poza opieka MegaRuchacza (Uwaga mowi dlaczego).
+  # Kazdy inny katalog spoza bazy zakladka oznacza "zrodlo nieznane" - bez zgadywania.
+  # Pola: Folder (nazwa katalogu u uzytkownika), Opis (po polsku, dla laika), Skad, Uwaga.
+  Wlasne = @(
+    @{ Folder = 'connecting-to-magazyn2'; Opis = 'Jak łączyć się z komputerem Magazyn2 w biurze (SSH), co na nim działa i gdzie szukać dzienników.'; Skad = 'Napisany w Twojej rozmowie 19.08.2026 (projekt projekt-g).' }
+    @{ Folder = 'sqp-slowa-kluczowe';       Opis = 'Jak czytać raporty Amazon SQP i decydować, które słowa kluczowe wpisać do tytułu oferty.'; Skad = 'Napisany na Twoje zlecenie 16.09.2026 (projekt projekt-d).' }
+  )
+  Inne = @(
+    @{ Folder = 'orchestration'; Opis = 'Koordynacja wielu agentów w aplikacji Orca: wiadomości, zadania, czekanie na wyniki.'; Skad = 'Repozytorium stablyai/orca (aplikacja Orca), wgrany 09.09.2026 narzędziem „skills” (npx skills).'; Uwaga = 'Aktualizuje go narzędzie „skills” albo Orca, nie MegaRuchacz - to dowiązanie do katalogu ~\.agents\skills, wspólnego z Codeksem.' }
+    @{ Folder = 'synced';        Opis = 'Skille z Twojego konta claude.ai (np. pdf, xlsx), w podkatalogu.'; Skad = 'Kopia z konta claude.ai, którą dogrywa i odświeża sam Claude Code.'; Uwaga = 'Nie ruszać ręcznie - Claude Code nadpisuje ten katalog przy każdej synchronizacji.' }
   )
 }
