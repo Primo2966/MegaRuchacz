@@ -860,6 +860,155 @@ def test_harvest_and_verification_together_promote_only_after_a_second_conversat
     assert f"- {fact}" in durable() and fact not in current()
 
 
+# ---------------------------------------------------------------- which durable facts Claude used
+
+AUTO_FACT = "Numeracja kadzidełek różni się od numeracji olejków."
+PINNED_FACT = "Nie jest programistą."
+SLEEPING_FACT = "Użytkownik ma konto Tailscale Primo2966."
+
+USE_RULES = PIPELINE_RULES.replace(f"- {PINNED_FACT}\n", f"- {PINNED_FACT}\n- {AUTO_FACT}\n")
+
+
+def automaton_wrote(text: str) -> None:
+    """The trail line that makes a durable entry the automaton's — a promotion."""
+    facts.KNOWLEDGE_DIR.mkdir(parents=True, exist_ok=True)
+    with open(facts.KNOWLEDGE_DIR / facts.SOURCES_NAME, "a", encoding="utf-8", newline="\n") as f:
+        f.write(f"- 2026-09-17 | awansowany | stala: O użytkowniku -> CLAUDE.md"
+                f" | z 2 rozmów; zmiana A-260917-1 | {text}\n")
+
+
+def asleep(text: str, day: str = "2026-10-01") -> None:
+    facts.KNOWLEDGE_DIR.mkdir(parents=True, exist_ok=True)
+    (facts.KNOWLEDGE_DIR / facts.DORMANT_NAME).write_text(
+        f"# Uśpione fakty\n\n- {day} | O użytkowniku | U-261001-1 | {text}\n", encoding="utf-8")
+
+
+def use_answer(*numbers, fact: str = "Użytkownik pracuje na Windowsie."):
+    """The model's envelope with the "uzyte" field — and the material it was given, for a look."""
+    seen = []
+
+    def ask(material):
+        seen.append(material)
+        answer = {"fakty": [{"tresc": fact, "warstwa": "stala", "podsekcja": "uzytkownik"}]}
+        if numbers != (None,):
+            answer["uzyte"] = list(numbers)
+        return json.dumps({"type": "result", "structured_output": answer})
+    return ask, seen
+
+
+@pytest.fixture
+def known_rules(waiting_room):
+    facts.RULES_PATH.write_text(USE_RULES, encoding="utf-8")
+    automaton_wrote(AUTO_FACT)
+    add(waiting_room, ago(1), "user", "cokolwiek")
+    facts.write_marker(ago(2))
+    return waiting_room
+
+
+def test_the_model_is_asked_only_about_the_automatons_facts_and_the_dormant_ones(known_rules):
+    asleep(SLEEPING_FACT)
+
+    watched = facts.watched_facts()
+
+    # a pinned entry never falls asleep — asking about it would be paid for and change nothing
+    assert watched.facts == [AUTO_FACT, SLEEPING_FACT] and watched.left_out == 0
+    assert watched.block().endswith(f"1. {AUTO_FACT}\n2. {SLEEPING_FACT}")
+
+
+def test_a_fact_the_agent_used_leaves_a_used_line_in_the_trail(known_rules):
+    ask, seen = use_answer(1)
+
+    r = facts.run(ask=ask, conn=known_rules.conn)
+
+    assert seen[0].endswith(f"1. {AUTO_FACT}")  # the list rides after the material
+    assert "=== FAKTY Z WIEDZY AGENTA ===" in seen[0]
+    assert r["used"] == [AUTO_FACT] and not r["used_missing"]
+    [line] = [x for x in trail(facts.KNOWLEDGE_DIR).splitlines() if f"| {facts.USED} |" in x]
+    assert line.endswith(f"| {AUTO_FACT}") and f"{facts.SESSIONS_FIELD} test-session" in line
+    # and lore.verify reads it back as the day of the last use
+    from lore import verify
+    t = verify.read_trail(facts.KNOWLEDGE_DIR / facts.SOURCES_NAME)
+    assert t.last_used(verify.fact_key(AUTO_FACT)) == datetime.now().strftime("%Y-%m-%d")
+    assert t.evidence(verify.fact_key(AUTO_FACT)) == []  # a use is not a sighting: no promotion on it
+
+
+def test_a_number_outside_the_list_marks_nothing(known_rules):
+    ask, _ = use_answer(0, 7, True)
+
+    r = facts.run(ask=ask, conn=known_rules.conn)
+
+    assert r["used"] == [] and f"| {facts.USED} |" not in trail(facts.KNOWLEDGE_DIR)
+
+
+def test_an_answer_without_the_used_field_is_said_out_loud(known_rules, capsys):
+    ask, _ = use_answer(None)
+
+    r = facts.run(ask=ask, conn=known_rules.conn)
+    facts._report(r)
+
+    assert r["used_missing"] and r["used"] == []
+    assert f"| {facts.USED} |" not in trail(facts.KNOWLEDGE_DIR)
+    out = capsys.readouterr()
+    assert "no \"uzyte\" field" in out.out + out.err
+
+
+def test_nothing_to_ask_about_costs_nothing(waiting_room):
+    facts.RULES_PATH.write_text(PIPELINE_RULES, encoding="utf-8")  # pinned entries only
+    add(waiting_room, ago(1), "user", "cokolwiek")
+    facts.write_marker(ago(2))
+    ask, seen = use_answer(1)
+
+    r = facts.run(ask=ask, conn=waiting_room.conn)
+
+    assert "FAKTY Z WIEDZY AGENTA" not in seen[0] and r["watched"] == 0 and not r["used_missing"]
+
+
+def test_the_list_never_grows_past_its_cap_and_says_what_it_left_out(known_rules, monkeypatch):
+    monkeypatch.setattr(facts, "MAX_WATCHED_CHARS", len(AUTO_FACT) + 6)
+    asleep(SLEEPING_FACT)
+
+    watched = facts.watched_facts()
+
+    assert watched.facts == [AUTO_FACT] and watched.left_out == 1
+
+
+def many_asleep(count: int = 200) -> None:
+    """A long uspione.md: entries of ~110 characters, the average of the durable layer."""
+    facts.KNOWLEDGE_DIR.mkdir(parents=True, exist_ok=True)
+    lines = [f"- 2026-10-01 | O firmie | U-261001-{n} | Fakt numer {n:03d} o średniej długości wpisu"
+             f" warstwy stałej, około stu dziesięciu znaków jak w pomiarze." for n in range(count)]
+    (facts.KNOWLEDGE_DIR / facts.DORMANT_NAME).write_text("\n".join(lines) + "\n", encoding="utf-8")
+
+
+def test_the_use_check_stays_within_three_thousand_tokens(known_rules):
+    """The user's limit for what the change adds to the daily call (2026-10-01), counted the way the
+    cost is counted (CHARS_PER_TOKEN) — however many facts there are to ask about."""
+    many_asleep()
+
+    watched = facts.watched_facts()
+
+    assert watched.left_out > 0  # the cap did bite, and the run knows how many it left out
+    assert len(watched.block()) / facts.CHARS_PER_TOKEN <= 3000
+
+
+def test_probe_the_token_test_notices_a_list_without_a_cap(known_rules, monkeypatch):
+    monkeypatch.setattr(facts, "MAX_WATCHED_CHARS", 10**9)  # the cap switched off
+    many_asleep()
+
+    watched = facts.watched_facts()
+
+    assert watched.left_out == 0 and len(watched.block()) / facts.CHARS_PER_TOKEN > 3000
+
+
+def test_probe_the_use_test_notices_a_list_the_model_never_gets(known_rules, monkeypatch):
+    monkeypatch.setattr(facts.Watched, "block", lambda self: "")  # the list never sent
+    ask, seen = use_answer(1)
+
+    facts.run(ask=ask, conn=known_rules.conn)
+
+    assert "FAKTY Z WIEDZY AGENTA" not in seen[0]
+
+
 def test_the_marker_moves_only_after_a_real_run(waiting_room):
     add(waiting_room, ago(1), "user", "cokolwiek")
     facts.write_marker(ago(2))

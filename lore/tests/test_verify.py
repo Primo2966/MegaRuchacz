@@ -1444,19 +1444,19 @@ def promote(sandbox, fact: str = TWO_MACHINES, label: str = "stala/uzytkownik") 
 
 def sleep_scenario(sandbox) -> dict:
     promote(sandbox)
-    assert verify.run(day=later(PROMOTED_ON, 90))["slept"] == []  # 90 days — still in force
-    return verify.run(day=later(PROMOTED_ON, 91))
+    assert verify.run(day=later(PROMOTED_ON, 180))["slept"] == []  # 180 days — still in force
+    return verify.run(day=later(PROMOTED_ON, 181))
 
 
-def test_an_automatons_fact_unconfirmed_for_90_days_falls_asleep(sandbox):
+def test_an_automatons_fact_unconfirmed_for_180_days_falls_asleep(sandbox):
     r = sleep_scenario(sandbox)
 
-    assert verify.SLEEP_DAYS == 90  # the number the test is sized for
+    assert verify.SLEEP_DAYS == 180  # the number the test is sized for
     assert r["slept"] == [TWO_MACHINES]
     assert TWO_MACHINES not in rules_text(sandbox)
     # not lost: it moved to the reference layer, with the day, its subsection and the change id
     line = [x for x in dormant(sandbox).splitlines() if TWO_MACHINES in x]
-    assert len(line) == 1 and line[0].startswith(f"- {later(PROMOTED_ON, 91)} | O użytkowniku | U-")
+    assert len(line) == 1 and line[0].startswith(f"- {later(PROMOTED_ON, 181)} | O użytkowniku | U-")
     assert f"{TWO_MACHINES} — uśpione" in history(sandbox) and "| uśpiony |" in trail(sandbox)
     s = state(sandbox)
     assert s["uspione"] == "1" and s["meldunek_1"].startswith("U-")
@@ -1466,7 +1466,7 @@ def test_probe_the_sleep_test_notices_when_nothing_falls_asleep(sandbox, monkeyp
     monkeypatch.setattr(verify, "SLEEP_DAYS", 10_000)  # the refresh switched off
     promote(sandbox)
 
-    r = verify.run(day=later(PROMOTED_ON, 91))
+    r = verify.run(day=later(PROMOTED_ON, 181))
 
     assert r["slept"] == [] and TWO_MACHINES in subsection(sandbox, "### O użytkowniku")
 
@@ -1501,12 +1501,12 @@ def test_an_entry_written_straight_into_the_durable_layer_in_the_old_week_is_the
     trail_lines(sandbox, f"- 2026-09-20 | wpisany | stala/uzytkownik -> CLAUDE.md"
                          f" | wyłowiony 2026-09-20 | {TWO_MACHINES}")
 
-    assert verify.run(day=later("2026-09-20", 91))["slept"] == [TWO_MACHINES]
+    assert verify.run(day=later("2026-09-20", 181))["slept"] == [TWO_MACHINES]
 
 
 def wake_scenario(sandbox) -> dict:
     sleep_scenario(sandbox)
-    day = later(PROMOTED_ON, 100)
+    day = later(PROMOTED_ON, 190)
     # known to the harvest (it reads uspione.md) — so it leaves a sighting, not a new candidate
     heard(TWO_MACHINES, "stala/uzytkownik", "rozmowa-c", day=day, again=True)
     return verify.run(day=day)
@@ -1519,8 +1519,8 @@ def test_a_dormant_fact_heard_again_wakes_up(sandbox):
     assert f"- {TWO_MACHINES}" in subsection(sandbox, "### O użytkowniku")
     assert TWO_MACHINES not in dormant(sandbox)
     assert state(sandbox)["meldunek_1"].startswith("O-")
-    # heard again — the 90 days start over
-    assert verify.run(day=later(PROMOTED_ON, 101))["slept"] == []
+    # heard again — the 180 days start over
+    assert verify.run(day=later(PROMOTED_ON, 191))["slept"] == []
 
 
 def test_probe_the_wake_test_notices_a_fact_that_never_wakes(sandbox, monkeypatch):
@@ -1534,10 +1534,155 @@ def test_probe_the_wake_test_notices_a_fact_that_never_wakes(sandbox, monkeypatc
 def test_a_dormant_fact_nobody_mentions_stays_asleep(sandbox):
     sleep_scenario(sandbox)
 
-    r = verify.run(day=later(PROMOTED_ON, 200))
+    r = verify.run(day=later(PROMOTED_ON, 400))
 
     assert r["woken"] == [] and TWO_MACHINES in dormant(sandbox)
     assert TWO_MACHINES not in rules_text(sandbox)
+
+
+# ---------------------------------------------------------------- the last USE keeps a fact awake
+#
+# The user's decision (2026-10-01): a fact told once and applied for years must not fall asleep
+# because he never repeated it. The harvest writes a USED line for every durable fact the agent
+# applied (lore.facts.note_used); here only that line is written, no user mention at all.
+
+def used(text: str, day: str) -> None:
+    facts.note_used([text], f"rozmowy {day}..{day}", day, ["rozmowa-u"])
+
+
+def use_scenario(sandbox) -> tuple[dict, dict]:
+    promote(sandbox)
+    used(TWO_MACHINES, later(PROMOTED_ON, 100))  # applied by the agent, never mentioned by the user
+    return verify.run(day=later(PROMOTED_ON, 181)), verify.run(day=later(PROMOTED_ON, 280))
+
+
+def test_a_fact_the_agent_uses_does_not_fall_asleep_without_a_mention(sandbox):
+    at_181, at_280 = use_scenario(sandbox)
+
+    assert at_181["slept"] == [] and at_280["slept"] == []  # 180 days from the USE, not the promotion
+    assert f"- {TWO_MACHINES}" in subsection(sandbox, "### O użytkowniku")
+    assert f"| {facts.USED} | stala/projekty |" in trail(sandbox)
+    # and it does fall asleep 180 days after its last use — the use is a date, not a pin
+    r = verify.run(day=later(PROMOTED_ON, 281))
+    assert r["slept"] == [TWO_MACHINES]
+    assert f"ostatnio użyte albo wspomniane {later(PROMOTED_ON, 100)}" in history(sandbox)
+
+
+def test_probe_the_use_test_notices_when_a_use_does_not_count(sandbox, monkeypatch):
+    monkeypatch.setattr(verify.Trail, "last_used", lambda self, key: None)  # the safeguard off
+
+    at_181, _ = use_scenario(sandbox)
+
+    assert at_181["slept"] == [TWO_MACHINES]
+
+
+def test_the_later_of_use_and_mention_decides(sandbox):
+    promote(sandbox)
+    used(TWO_MACHINES, later(PROMOTED_ON, 30))
+    heard(TWO_MACHINES, "stala/uzytkownik", "rozmowa-c", day=later(PROMOTED_ON, 60), again=True)
+
+    assert verify.run(day=later(PROMOTED_ON, 240))["slept"] == []  # 180 from the mention on day 60
+    assert verify.run(day=later(PROMOTED_ON, 241))["slept"] == [TWO_MACHINES]
+
+
+def test_the_use_of_another_fact_does_not_keep_this_one_awake(sandbox):
+    promote(sandbox)
+    used("Użytkownik sprzedaje kadzidełka backflow.", later(PROMOTED_ON, 100))
+
+    assert verify.run(day=later(PROMOTED_ON, 181))["slept"] == [TWO_MACHINES]
+
+
+def wake_by_use_scenario(sandbox) -> dict:
+    sleep_scenario(sandbox)
+    day = later(PROMOTED_ON, 190)
+    used(TWO_MACHINES, day)  # the agent applied it while it slept — no mention by the user
+    return verify.run(day=day)
+
+
+def test_a_dormant_fact_the_agent_uses_wakes_up(sandbox):
+    r = wake_by_use_scenario(sandbox)
+
+    assert r["woken"] == [TWO_MACHINES]
+    assert f"- {TWO_MACHINES}" in subsection(sandbox, "### O użytkowniku")
+    assert TWO_MACHINES not in dormant(sandbox)
+    assert "znowu użyte albo wspomniane" in history(sandbox)
+
+
+def test_probe_the_wake_by_use_test_notices_a_use_that_wakes_nothing(sandbox, monkeypatch):
+    monkeypatch.setattr(verify.Trail, "last_used", lambda self, key: None)
+
+    r = wake_by_use_scenario(sandbox)
+
+    assert r["woken"] == [] and TWO_MACHINES in dormant(sandbox)
+
+
+def test_a_use_from_before_the_sleep_wakes_nothing(sandbox):
+    promote(sandbox)
+    used(TWO_MACHINES, later(PROMOTED_ON, 1))
+    assert verify.run(day=later(PROMOTED_ON, 182))["slept"] == [TWO_MACHINES]
+
+    r = verify.run(day=later(PROMOTED_ON, 190))
+
+    assert r["woken"] == [] and TWO_MACHINES in dormant(sandbox)
+
+
+# ---------------------------------------------------------------- the yearly archive of the dormant
+
+SLEPT_ON = later(PROMOTED_ON, 181)  # the day sleep_scenario puts the fact to sleep — 2027
+
+
+def archive_path(sandbox, year: str = SLEPT_ON[:4]) -> Path:
+    return sandbox / "wiedza" / verify.ARCHIVE_NAME.format(year=year)
+
+
+def test_a_fact_asleep_for_over_two_years_moves_to_the_archive_of_its_year(sandbox):
+    sleep_scenario(sandbox)
+    [line] = [x for x in dormant(sandbox).splitlines() if TWO_MACHINES in x]
+
+    assert verify.run(day=later(SLEPT_ON, 730))["archived"] == []  # two years — still in uspione.md
+    r = verify.run(day=later(SLEPT_ON, 731))
+
+    assert r["archived"] == [TWO_MACHINES]
+    assert TWO_MACHINES not in dormant(sandbox)
+    archive = archive_path(sandbox).read_text(encoding="utf-8")
+    assert archive.startswith(f"# Archiwum uśpionych faktów — {SLEPT_ON[:4]}")
+    assert archive.splitlines()[-1] == line  # nothing lost: the very same line, byte for byte
+    assert f"| {verify.ARCHIVED} | O użytkowniku -> wiedza/{archive_path(sandbox).name}" in trail(sandbox)
+    assert state(sandbox)["zarchiwizowane"] == "1"
+    # a file of the machinery: no pointer in the rules, as for uspione.md
+    assert archive_path(sandbox).name not in rules_text(sandbox)
+    assert facts.is_technical(archive_path(sandbox).name)
+
+
+def test_probe_the_archive_test_notices_when_nothing_is_archived(sandbox, monkeypatch):
+    monkeypatch.setattr(verify, "ARCHIVE_DAYS", 100_000)  # the archive switched off
+    sleep_scenario(sandbox)
+
+    r = verify.run(day=later(SLEPT_ON, 731))
+
+    assert r["archived"] == [] and TWO_MACHINES in dormant(sandbox)
+    assert not archive_path(sandbox).exists()
+
+
+def test_an_archive_that_cannot_be_written_loses_nothing(sandbox):
+    sleep_scenario(sandbox)
+    archive_path(sandbox).mkdir(parents=True)  # a directory in the way: the write fails
+
+    r = verify.run(day=later(SLEPT_ON, 731))
+
+    assert r["archived"] == [] and r["archive_failed"] == 1
+    assert TWO_MACHINES in dormant(sandbox)  # left where it was
+
+
+def test_a_long_asleep_fact_used_again_wakes_instead_of_going_to_the_archive(sandbox):
+    sleep_scenario(sandbox)
+    day = later(SLEPT_ON, 800)
+    used(TWO_MACHINES, day)
+
+    r = verify.run(day=day)
+
+    assert r["woken"] == [TWO_MACHINES] and r["archived"] == []
+    assert not archive_path(sandbox).exists()
 
 
 # ---------------------------------------------------------------- the newer version wins
@@ -1642,7 +1787,7 @@ def test_undo_puts_a_sleep_back_byte_for_byte(sandbox):
     codex_file(sandbox)
     promote(sandbox)
     before = [raw(p) for p in knowledge_files(sandbox)]
-    day = later(PROMOTED_ON, 91)
+    day = later(PROMOTED_ON, 181)
     r = verify.run(day=day)
     assert r["slept"] == [TWO_MACHINES] and [raw(p) for p in knowledge_files(sandbox)] != before
 
@@ -1660,9 +1805,9 @@ def test_probe_the_undo_test_notices_an_undo_that_does_nothing(sandbox, monkeypa
     monkeypatch.setattr(verify, "_undo_one", lambda rec, out: "dokladnie")
     promote(sandbox)
     before = raw(sandbox / "CLAUDE.md")
-    r = verify.run(day=later(PROMOTED_ON, 91))
+    r = verify.run(day=later(PROMOTED_ON, 181))
 
-    verify.undo(r["changes"][0], day=later(PROMOTED_ON, 91))
+    verify.undo(r["changes"][0], day=later(PROMOTED_ON, 181))
 
     assert raw(sandbox / "CLAUDE.md") != before
 

@@ -27,10 +27,12 @@ the new version waits in the current layer with a note of what it contradicts. T
 deleted: it goes to wiedza/historia-zmian.md.
 
 The durable layer refreshes itself as well — otherwise nothing ever leaves it and, at the ceiling,
-it blocks everything new. An entry the automaton put there and nobody confirmed for SLEEP_DAYS
-falls asleep: it moves to wiedza/uspione.md (the reference layer, not sent with the sessions) and
-wakes up, back into the durable layer, the first time it is heard again. Pinned entries never fall
-asleep — their whole point is that they work without being mentioned.
+it blocks everything new. An entry the automaton put there that for SLEEP_DAYS was neither USED by
+the agent (the daily harvest says which ones it applied — lore.facts.USAGE_NOTE) nor mentioned in a
+conversation falls asleep: it moves to wiedza/uspione.md (the reference layer, not sent with the
+sessions) and wakes up, back into the durable layer, the first time it is used or heard again.
+A fact asleep for over ARCHIVE_DAYS moves on to wiedza/uspione-archiwum-RRRR.md — never deleted.
+Pinned entries never fall asleep — their whole point is that they work without being mentioned.
 
 Every such change (replacement, falling asleep, waking up, promotion) gets a short id and a copy of
 every file it touched, and `--cofnij <id|RRRR-MM-DD>` takes it back — see undo(). What changed
@@ -68,8 +70,8 @@ from pathlib import Path
 
 from .db import CLAUDE_HOME, log
 from .facts import (DORMANT_NAME, PENDING_NOTE, SESSIONS_FIELD, SIGHTED, SIGHTED_AGAIN,
-                    SOURCES_HEADER, SOURCES_NAME, TECHNICAL_FILES, describe_file, dormant_entry,
-                    file_name, name_from_text, normalize, pointers_in)
+                    SOURCES_HEADER, SOURCES_NAME, USED, describe_file, dormant_entry,
+                    file_name, is_technical, name_from_text, normalize, pointers_in)
 
 KNOWLEDGE_DIR = CLAUDE_HOME / "wiedza"
 CANDIDATES_PATH = KNOWLEDGE_DIR / "kandydaci.md"
@@ -126,12 +128,20 @@ MIN_CONVERSATIONS = 2
 # sixty facts, +68%, in one run. At three a day the growth is small enough to be read in the
 # summary of each run, and still quick enough that a fact heard twice waits days, not weeks.
 MAX_PROMOTIONS = 3
-# How long an entry the automaton put into the durable layer stays there without being heard again.
-# 90 days is the user's decision (2026-09-24): a fact about his work comes up at least once a
-# quarter, and one that did not is paying its place in every session for nothing. It is not lost —
-# it moves to wiedza/uspione.md and comes back the first time it is heard. Pinned entries (see
-# Trail.is_auto) never fall asleep, whatever this number says.
-SLEEP_DAYS = 90
+# How long an entry the automaton put into the durable layer stays there without being USED by the
+# agent or heard again — counted from the later of the two. The user's decision (2026-10-01): what
+# counts is the last use, not him repeating himself ("fakt o numeracji zapachów podam raz, a będę go
+# przez lata używać"), and 180 days instead of the 90 of 2026-09-24, when only a mention counted.
+# A fact that went half a year without being applied once is paying its place in every session for
+# nothing. It is not lost — it moves to wiedza/uspione.md and comes back the first time it is used
+# or heard. Pinned entries (see Trail.is_auto) never fall asleep, whatever this number says.
+SLEEP_DAYS = 180
+# A fact asleep for longer than this (two years — the user's decision, 2026-10-01) leaves
+# uspione.md for the yearly archive wiedza/uspione-archiwum-RRRR.md, RRRR being the year it fell
+# asleep. Nothing is deleted: the archive is the same line moved, so uspione.md (and the list the
+# harvest checks for use, lore.facts.watched_facts) does not grow without end.
+ARCHIVE_DAYS = 730
+ARCHIVE_NAME = "uspione-archiwum-{year}.md"
 # The summary of a run shows the day's changes one line each, at most this many; the head line gives
 # the totals and says where the rest is, so what did not fit is announced, not cut off quietly.
 REPORT_LINES = 5
@@ -841,6 +851,7 @@ def _drop_current(body: list[str], keys: set) -> tuple[list[str], list[str]]:
 WRITTEN, PROMOTED, EXPIRED = "wpisany", "awansowany", "wygasł"  # the events this module writes
 # ...and the ones of the refreshing durable layer and of "the newer version wins"
 SLEPT, WOKEN = "uśpiony", "obudzony"
+ARCHIVED = "zarchiwizowany"  # moved on from uspione.md to its yearly archive (archive_dormant)
 REPLACED, REPLACED_BY = "zastąpiony", "wpisany w miejsce"  # the loser and the winner of a clash
 UNDONE = "cofnięty"
 _OLD_SESSIONS = re.compile(r"\(sesje:\s*([^)]*)\)")
@@ -867,6 +878,7 @@ class Trail:
     # a clash — and the ones written straight there in the week that was allowed (2026-09-17..24)
     auto_durable: set = field(default_factory=set)
     confirmed: dict = field(default_factory=dict)  # key -> the latest day it was put in or kept
+    used: dict = field(default_factory=dict)  # key -> the latest day the agent applied it (USED)
     undone: dict = field(default_factory=dict)  # key -> the latest day a change of it was undone
 
     def evidence(self, key) -> list[Sighting]:
@@ -881,12 +893,16 @@ class Trail:
         return entry.key in (self.written if entry.current else self.auto_durable)
 
     def last_confirmed(self, key) -> str | None:
-        """The last day the fact was heard in a conversation — or put into the durable layer, or
-        kept there by an undone sleep, whichever is later."""
+        """The last day the fact was used by the agent or heard in a conversation — or put into the
+        durable layer, or kept there by an undone sleep, whichever is later."""
         days = [s.day for s in self.evidence(key)]
-        if key in self.confirmed:
-            days.append(self.confirmed[key])
+        for found in (self.confirmed.get(key), self.last_used(key)):
+            if found:
+                days.append(found)
         return max(days) if days else None
+
+    def last_used(self, key) -> str | None:
+        return self.used.get(key)
 
     def blocked(self, key) -> bool:
         """A change the user took back is not redone by the next run on the same evidence: it waits
@@ -912,10 +928,11 @@ def _old_sessions(source: str) -> frozenset[str] | None:
     return frozenset(s.strip() for s in m.group(1).split(",") if s.strip()) or None
 
 
-def read_trail() -> Trail:
-    """The trail parsed; a line it cannot read is skipped — no evidence is the safe side here."""
+def read_trail(path: Path | None = None) -> Trail:
+    """The trail parsed; a line it cannot read is skipped — no evidence is the safe side here.
+    `path` — for lore.facts, which keeps its own idea of where the knowledge lives."""
     out = Trail()
-    raw = _read(KNOWLEDGE_DIR / SOURCES_NAME)
+    raw = _read(path or KNOWLEDGE_DIR / SOURCES_NAME)
     for line in (raw or "").splitlines():
         if not line.startswith("- "):
             continue
@@ -923,6 +940,11 @@ def read_trail() -> Trail:
         if len(parts) < 5:
             continue
         day, event, detail = parts[0].strip(), parts[1].strip(), parts[2].strip()
+        if event == USED:  # the same shape as a sighting, but it is not one: no promotion on it
+            whole = len(parts) == 6 and parts[4].startswith(SESSIONS_FIELD)
+            key = fact_key(parts[5] if whole else " | ".join(parts[4:]))
+            out.used[key] = max(day, out.used.get(key, day))
+            continue
         if event in (SIGHTED, SIGHTED_AGAIN):
             if len(parts) == 6 and parts[4].startswith(SESSIONS_FIELD):
                 sessions, text = _sessions(parts[4]), parts[5]
@@ -1174,9 +1196,11 @@ def _entry_key(entry: list[str]) -> tuple:
 
 DORMANT_HEADER = """# Uśpione fakty
 
-Wpisy, które automat kiedyś dopisał do trwałej wiedzy, a potem przez {days} dni nikt ich nie
-potwierdził w rozmowie. Tu nie kosztują nic — ten plik nie jest doklejany do rozmów. Fakt, który
-padnie znowu, wraca do trwałej wiedzy sam. Wpisy przypięte (napisane ręcznie) nigdy tu nie trafiają.
+Wpisy, które automat kiedyś dopisał do trwałej wiedzy, a potem przez {days} dni agent ich nie użył
+i nikt nie wspomniał w rozmowie. Tu nie kosztują nic — ten plik nie jest doklejany do rozmów. Fakt,
+który agent znowu użyje albo który padnie w rozmowie, wraca do trwałej wiedzy sam. Po 2 latach snu
+wpis przechodzi do uspione-archiwum-RRRR.md (rok uśpienia). Wpisy przypięte (napisane ręcznie)
+nigdy tu nie trafiają.
 
 Jedna linia na fakt: `data uśpienia | podsekcja | identyfikator zmiany | treść`.
 Cofnięcie uśpienia: `python -m lore.verify --cofnij <identyfikator>`.
@@ -1201,6 +1225,50 @@ class Dormant:
 
 def read_dormant(lines: list[str]) -> list[Dormant]:
     return [Dormant(*parsed) for parsed in map(dormant_entry, lines) if parsed]
+
+
+ARCHIVE_HEADER = """# Archiwum uśpionych faktów — {year}
+
+Fakty uśpione w roku {year}, które przespały w wiedza/uspione.md ponad {years} lata. Przeniesione
+tu w całości, nic nie zostało skasowane. Ten plik nie jest doklejany do rozmów. Fakt stąd, który
+padnie w rozmowie, wraca zwykłą drogą — przez warstwę bieżącą.
+
+"""
+
+
+def archive_dormant(lines: list[str], today: str, keep: set | frozenset = frozenset()
+                    ) -> tuple[list[str], dict[str, list[str]]]:
+    """uspione.md without the lines asleep for over ARCHIVE_DAYS, and those lines by the name of
+    their archive (the year they fell asleep). `keep` — the keys waking up in this run: a fact used
+    or heard again stays to wake up, however long it slept."""
+    left, moved = [], {}
+    for line in lines:
+        d = dormant_entry(line)
+        age = _age(d[0], today) if d else None
+        if age is not None and age > ARCHIVE_DAYS and fact_key(d[3]) not in keep:
+            moved.setdefault(ARCHIVE_NAME.format(year=d[0][:4]), []).append(line)
+        else:
+            left.append(line)
+    return left, moved
+
+
+def write_archives(moved: dict[str, list[str]], newline: str) -> list[str]:
+    """Appends the lines to their archives; returns the lines that could NOT be written — those
+    must stay in uspione.md (the caller puts them back), so a failure loses nothing."""
+    failed = []
+    for name, lines in moved.items():
+        path = KNOWLEDGE_DIR / name
+        try:
+            first_time = not path.exists()
+            with open(path, "a", encoding="utf-8", newline="") as f:
+                head = ARCHIVE_HEADER.format(year=name[-7:-3], years=ARCHIVE_DAYS // 365)
+                text = (head if first_time else "") + "".join(line + "\n" for line in lines)
+                f.write(text.replace("\n", newline))
+        except OSError as e:
+            log(f"ALARM: {len(lines)} dormant facts could not be moved to {name}: {e}"
+                f" — they stay in {DORMANT_NAME}")
+            failed += lines
+    return failed
 
 
 # ---------------------------------------------------------------- the files of one run
@@ -1492,7 +1560,7 @@ def knowledge_files() -> list[Path]:
     except OSError:
         return []
     return [p for p in found if p.is_file() and not p.name.startswith(".")
-            and p.name not in TECHNICAL_FILES]
+            and not is_technical(p.name)]
 
 
 def ensure_pointers(ws: "Workspace", writable: list[Path], room: int | None
@@ -1949,6 +2017,8 @@ def _state(r: dict, day: str) -> dict[str, str]:
         "zastapione": str(len(r["replaced"])),
         "uspione": str(len(r["slept"])),
         "obudzone": str(len(r["woken"])),
+        # asleep for over ARCHIVE_DAYS, moved on to wiedza/uspione-archiwum-RRRR.md (nothing deleted)
+        "zarchiwizowane": str(len(r["archived"])),
         # a newer version of a pinned entry, heard in one conversation so far — it waits in the
         # current layer, not in a queue for the user
         "czeka_na_druga_rozmowe": str(r["pending"]),
@@ -2070,7 +2140,7 @@ def run(dry_run: bool = False, exists=None, day: str | None = None) -> dict:
            "expired": [], "own_old": [], "references": [], "stable_chars": 0, "compared": 0,
            "replaced": [], "slept": [], "woken": [], "pending": 0, "changes": [],
            "report": [], "powod": "", "new_files": [], "pointers_added": [], "unpointed": [],
-           "unnamed": [], "no_room": []}
+           "unnamed": [], "no_room": [], "archived": [], "archive_failed": 0}
     files = instruction_files()
     out["files"] = [str(path) for path in files]
     ws = Workspace()
@@ -2119,7 +2189,7 @@ def run(dry_run: bool = False, exists=None, day: str | None = None) -> dict:
             write_state(out, today)
         return out
 
-    # 1. what nobody confirmed for SLEEP_DAYS leaves the durable layer — the automaton's entries only
+    # 1. what nobody used nor mentioned for SLEEP_DAYS leaves the durable layer — the automaton's only
     slept = []
     for e in standing:
         last = trail.last_confirmed(e.key) if e.auto and not e.current else None
@@ -2157,10 +2227,15 @@ def run(dry_run: bool = False, exists=None, day: str | None = None) -> dict:
     # 3. the dormant facts heard again, and the promotions — one limit, one ceiling
     wakes = []
     for d in read_dormant(ws.lines[dormant_path]):
+        # heard again OR used again by the agent since it fell asleep. A change the user took back
+        # (Trail.blocked) waits for HIS word — the agent's use alone does not overrule an undo.
         sightings = trail.evidence(d.key)
-        if any(s.day >= d.slept for s in sightings) and not trail.blocked(d.key):
+        used = trail.last_used(d.key)
+        if (any(s.day >= d.slept for s in sightings) or (used and used >= d.slept)) \
+                and not trail.blocked(d.key):
+            days = [s.day for s in sightings] + ([used] if used else [])
             wakes.append(Promotion(d.text, f"### {d.heading}", conversations(sightings),
-                                   min(s.day for s in sightings), dormant=d))
+                                   min(days), dormant=d))
     waiting = ({e.key for e in standing if e.current and e.against}
                | {fact_key(c.shown) for c in reviewed.pending})
     gone = {e.key for r in replacements for e in [r.target, *r.extra]}
@@ -2185,11 +2260,17 @@ def run(dry_run: bool = False, exists=None, day: str | None = None) -> dict:
                 out["added"][str(path)] = result.added
     entered = list(out["entered"])
 
+    # the yearly archive: what slept for over ARCHIVE_DAYS leaves uspione.md — before the changes,
+    # so that their copies (undo) already show uspione.md without it; the ones waking up stay
+    ws.lines[dormant_path], archived = archive_dormant(ws.lines[dormant_path], today,
+                                                       {w.key for w in wakes})
+    out["archived"] = [dormant_entry(line)[3] for lines in archived.values() for line in lines]
+
     # the changes with an id, one after another on top of it
     changes = Changes(ws, today, sum(1 for r in journal if "id" in r and r.get("dzien") == today))
     for e, last in slept:
         c = Change("U", e.text, heading=e.heading or DEFAULT_SUBSECTION,
-                   note=f"ostatnio potwierdzone {last}")
+                   note=f"ostatnio użyte albo wspomniane {last}")
         if changes.commit(c, sleep_ops(ws, writable, e, dormant_path, today)):
             out["slept"].append(e.text)
     for r in replacements:
@@ -2202,7 +2283,7 @@ def run(dry_run: bool = False, exists=None, day: str | None = None) -> dict:
     for p in chosen.chosen:
         if p.dormant is not None:
             c = Change("O", p.text, heading=p.heading,
-                       note=f"uśpione {p.dormant.slept}, padło znowu w rozmowie")
+                       note=f"uśpione {p.dormant.slept}, znowu użyte albo wspomniane w rozmowie")
             ops = [{"op": "zbudz", "plik": str(dormant_path), "linia": p.dormant.line}]
             if changes.commit(c, ops + durable_ops(ws, writable, p.text, p.heading)):
                 out["woken"].append(p.text)
@@ -2257,8 +2338,21 @@ def run(dry_run: bool = False, exists=None, day: str | None = None) -> dict:
         out["report"] = report_lines(journal, today)
         write_state(out, today)
         raise RuntimeError(out["note"]) from e
+    # the archives before uspione.md: a line is taken out of it only once it stands in its archive
+    failed = write_archives(archived, ws.newline[dormant_path])
+    if failed:
+        ws.lines[dormant_path] += failed
+        out["archived"] = [t for t in out["archived"]
+                           if not any(t == dormant_entry(line)[3] for line in failed)]
+        out["archive_failed"] = len(failed)
     if ws.lines[dormant_path] != original[dormant_path]:
         _write(dormant_path, ws.lines[dormant_path], ws.newline[dormant_path])
+    for name, lines in archived.items():
+        for line in lines:
+            if line not in failed:
+                d = dormant_entry(line)
+                _note(f"- {today} | {ARCHIVED} | {d[1]} -> wiedza/{name} | uśpiony {d[0]},"
+                      f" ponad {ARCHIVE_DAYS} dni snu | {d[3]}\n", d[3])
     save_changes(changes.done, today)
     for c, name, new in noted:
         note_reference(c, name, new, today)
@@ -2366,6 +2460,10 @@ def _report(r: dict) -> None:
         log(f"UWAGA: no sensible file name - left in the current layer: {fact[:80]}")
     for fact in r["no_room"]:
         log(f"UWAGA: no room for the pointer - no file made, left in the current layer: {fact[:80]}")
+    for fact in r["archived"]:
+        log(f"  _ {fact}  (śpi ponad {ARCHIVE_DAYS} dni - przeniesiony do rocznego archiwum)")
+    if r["archive_failed"]:
+        log(f"ALARM: {r['archive_failed']} dormant facts could not be archived - left in {DORMANT_NAME}")
     for backup in r["backups"]:
         log(f"copy taken before the change: {backup}")
     for line in r["report"]:  # the day's changes, each with the id that takes it back

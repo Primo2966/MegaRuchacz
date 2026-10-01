@@ -59,6 +59,7 @@ SOURCES_NAME = "zrodla.md"  # where every fact came from — written here and by
 # The events of the trail lore.verify reads back — one name each, so the two modules cannot drift.
 SIGHTED = "wyłowiony"  # the first time a fact came out of the conversations
 SIGHTED_AGAIN = "wyłowiony ponownie"  # the same fact once more — the evidence for promotion
+USED = "użyty"  # Claude applied a durable fact of the automaton — what keeps it awake (see USAGE_NOTE)
 # The field holding EVERY conversation of the batch. The readable source next to it names only
 # the first MAX_NAMED_SESSIONS; "i 2 innych" cannot tell whether two sightings share a conversation.
 SESSIONS_FIELD = "sesje:"
@@ -144,6 +145,16 @@ GENERIC_STEMS = frozenset({"do-nazwania", "bez-nazwy", "plik", "pliki", "nowy", 
 # (lore.verify.ensure_pointers; narzedzia\straznik-zasad.ps1 keeps the same list).
 TECHNICAL_FILES = frozenset({"kandydaci.md", "zrodla.md", "historia-zmian.md", "uspione.md",
                              "README.md"})
+# ...and the yearly archives of the dormant facts (lore.verify.archive_dormant): one file per year,
+# so a name, not a list — see is_technical().
+ARCHIVE_PATTERN = re.compile(r"^uspione-archiwum-\d{4}\.md$")
+
+
+def is_technical(name: str) -> bool:
+    """A file of the machinery: no pointer, never the target of a listing."""
+    return name in TECHNICAL_FILES or bool(ARCHIVE_PATTERN.match(name))
+
+
 GROUP_HEADINGS = {"stala": "## Trwałe", "biezaca": "## Bieżące",
                   "referencyjna": "## Do osobnych plików"}
 
@@ -184,7 +195,10 @@ FACTS_SCHEMA = json.dumps({
             "required": ["tresc", "warstwa", "plik", "odsylacz"],
             "additionalProperties": False,
         },
-    ]}}},
+    ]}},
+        # "uzyte" — the numbers of the listed durable facts the agent applied (see USAGE_NOTE).
+        # Not required: the archive dig (lore.mining) shares this schema and sends no list.
+        "uzyte": {"type": "array", "items": {"type": "integer"}}},
     "required": ["fakty"],
     "additionalProperties": False,
 }, ensure_ascii=False)
@@ -269,7 +283,9 @@ Jedna linia na zdarzenie: `data | zdarzenie | szczegóły | treść faktu`. „w
 rozmów fakt pochodzi („sesje:” — komplet identyfikatorów), „wyłowiony ponownie” — że padł znowu,
 „wpisany” — kiedy trafił do warstwy bieżącej, „awansowany” — kiedy przeszedł do stałej, bo padł
 w co najmniej dwóch różnych rozmowach, „wygasł” — kiedy zniknął z bieżącej po 14 dniach,
-„uśpiony” / „obudzony” — kiedy wyszedł ze stałej po 90 dniach bez wzmianki i kiedy do niej wrócił,
+„użyty” — że agent zastosował fakt automatu ze stałej (to też trzyma go w niej, jak wzmianka),
+„uśpiony” / „obudzony” — kiedy wyszedł ze stałej po 180 dniach bez użycia i bez wzmianki i kiedy do
+niej wrócił, „zarchiwizowany” — kiedy po 2 latach snu przeszedł do uspione-archiwum-RRRR.md,
 „zastąpiony” / „wpisany w miejsce” — która wersja przegrała, a która wygrała sprzeczność,
 „cofnięty” — zmiana cofnięta na polecenie.
 
@@ -729,7 +745,7 @@ def knowledge_files() -> list[Path]:
     except OSError:
         return []
     return [p for p in found if p.is_file() and not p.name.startswith(".")
-            and p.name not in TECHNICAL_FILES]
+            and not is_technical(p.name)]
 
 
 def reference_section(lines: list[str]) -> tuple[int, int] | None:
@@ -795,6 +811,102 @@ def with_known_files(instruction: str) -> str:
         return instruction + NO_FILES_NOTE
     return instruction + KNOWN_FILES_NOTE + "\n".join(
         f"- {name} — {what or 'bez opisu'}" for name, what in files.items())
+
+
+# ---------------------------------------------------------------- which durable facts Claude used
+
+# The user's decision (2026-10-01): what keeps a fact of the automaton in the durable layer is its
+# LAST USE, not the user saying it again — "fakt o numeracji zapachów podam raz, a będę go przez
+# lata używać; chcę się jak najmniej powtarzać". The harvest reads the conversations anyway, so the
+# same call gets the list of those facts and says which of them the agent applied; every such fact
+# leaves a USED line in the trail, and lore.verify counts it exactly like a sighting when it decides
+# what falls asleep and what wakes up. Only the automaton's facts are listed: a pinned entry never
+# falls asleep, so asking about it would be paid for and change nothing. The dormant ones are listed
+# as well — used again, one wakes up.
+#
+# The list rides at the end of the MATERIAL (stdin), not of the instruction: it is there only when
+# there is something to list, and the instruction in argv stays the same every day.
+USAGE_NOTE = """
+
+=== FAKTY Z WIEDZY AGENTA ===
+Poniżej ponumerowana lista faktów, które agent ma w swojej wiedzy. W polu "uzyte" podaj numery tych,
+które agent w powyższym materiale WYKORZYSTAŁ — zastosował w odpowiedzi albo w działaniu (widać to
+w liniach "model:" albo w tym, na co odpowiada użytkownik) — albo które użytkownik sam przywołał.
+Sam wspólny temat to nie użycie. Tych faktów NIE wypisuj w "fakty". Gdy żaden — "uzyte": [].
+"""
+# A cost limit like MAX_INPUT_CHARS: the list never grows past this. 7 500 characters is ~2 500
+# tokens at CHARS_PER_TOKEN, which with USAGE_NOTE keeps the addition under the ~3 000 tokens the
+# user allowed (2026-10-01). The whole durable layer has an 8 000 character ceiling and the
+# automaton's facts are only a part of it, so in practice the cut is the dormant facts' — and when it
+# happens, the run says how many were left out (Watched.left_out) instead of dropping them quietly.
+MAX_WATCHED_CHARS = 7_500
+
+
+@dataclass
+class Watched:
+    """The facts whose use the model is asked about, the ones closest to falling asleep first."""
+    facts: list[str] = field(default_factory=list)
+    left_out: int = 0  # did not fit under MAX_WATCHED_CHARS — not asked about in this run
+
+    def block(self) -> str:
+        """What goes after the material; '' when there is nothing to ask about."""
+        if not self.facts:
+            return ""
+        return USAGE_NOTE + "\n".join(f"{i}. {text}" for i, text in enumerate(self.facts, 1))
+
+
+def watched_facts() -> Watched:
+    """The automaton's facts of the durable layer (the longest unconfirmed first — they need the
+    check most) and then the dormant ones (the most recently put to sleep first)."""
+    from . import verify  # here: verify imports this module, so it is complete only at call time
+
+    trail = verify.read_trail(KNOWLEDGE_DIR / SOURCES_NAME)
+    durable, seen = [], set()
+    for path in instruction_paths():  # the same files lore.verify writes (INSTRUCTION_PATHS)
+        for e in verify.entries(_lines(path)):
+            if not e.current and e.key not in seen and trail.is_auto(e):
+                seen.add(e.key)
+                durable.append((trail.last_confirmed(e.key) or "", e.text))
+    dormant = [entry for entry in map(dormant_entry, _lines(KNOWLEDGE_DIR / DORMANT_NAME)) if entry]
+    dormant.sort(key=lambda d: d[0], reverse=True)
+    texts = [text for _, text in sorted(durable)]
+    texts += [d[3] for d in dormant if verify.fact_key(d[3]) not in seen]
+    out, left = Watched(), MAX_WATCHED_CHARS
+    for text in texts:
+        cost = len(text) + 6  # "NN. " and the newline
+        if cost > left:
+            out.left_out += 1
+            continue
+        left -= cost
+        out.facts.append(text)
+    return out
+
+
+def parse_used(output: str, watched: list[str]) -> list[str] | None:
+    """The facts the model marked as used; None when the answer has no "uzyte" at all — which is
+    not "nothing was used" and is reported as such (see run)."""
+    try:
+        envelope = json.loads(output)
+        answer = envelope.get("structured_output") or json.loads(envelope.get("result") or "")
+        numbers = answer["uzyte"]
+    except (AttributeError, KeyError, TypeError, ValueError):
+        return None
+    if not isinstance(numbers, list):
+        return None
+    out = []
+    for n in numbers:
+        if isinstance(n, int) and not isinstance(n, bool) and 1 <= n <= len(watched) \
+                and watched[n - 1] not in out:
+            out.append(watched[n - 1])
+    return out
+
+
+def note_used(texts: list[str], source: str, day: str, sessions: list[str] | tuple = ()) -> None:
+    """One USED line per fact, in the same shape as a sighting — lore.verify reads it back."""
+    if not texts:
+        return
+    note_sources([Fact(text, "stala") for text in texts], source or "rozmowy ?", day, sessions,
+                 event=USED)
 
 
 # ---------------------------------------------------------------- what the day cost
@@ -1411,7 +1523,7 @@ def _knowledge_keys(key_of) -> set:
     paths = [*instruction_paths(), *sorted(KNOWLEDGE_DIR.glob("*.md"))]
     keys = set()
     for path in paths:
-        if path.parent == KNOWLEDGE_DIR and path.name in _NOT_KNOWLEDGE:
+        if path.parent == KNOWLEDGE_DIR and is_technical(path.name):  # _NOT_KNOWLEDGE + archives
             continue
         for line in _lines(path):
             text = PENDING_NOTE.sub("", _BULLET.sub("", line).strip())
@@ -1489,7 +1601,8 @@ def valid_file_name(name: str) -> bool:
     if not re.fullmatch(FILE_PATTERN, name or ""):
         return False
     stem = name[:-3]
-    if stem in GENERIC_STEMS or name.lower() in {t.lower() for t in TECHNICAL_FILES}:
+    if stem in GENERIC_STEMS or name.lower() in {t.lower() for t in TECHNICAL_FILES} \
+            or is_technical(name.lower()):
         return False
     return len(stem) <= MAX_STEM_CHARS and re.search(r"[a-z]{3}", stem) is not None
 
@@ -1672,7 +1785,8 @@ def _empty_run() -> dict:
     """
     return {"chunks": 0, "chars": 0, "pending": 0, "runs_left": 0, "in_range": 0, "reviewed": 0,
             "candidates": 0, "reasons": {}, "duplicates": 0, "late": 0, "missing": 0,
-            "before_zero": 0, "from": "", "to": "", "facts": [], "added": []}
+            "before_zero": 0, "from": "", "to": "", "facts": [], "added": [],
+            "watched": 0, "watched_left_out": 0, "used": [], "used_missing": False}
 
 
 def run(dry_run: bool = False, ask=ask_harvest, conn: sqlite3.Connection | None = None) -> dict:
@@ -1713,6 +1827,8 @@ def run(dry_run: bool = False, ask=ask_harvest, conn: sqlite3.Connection | None 
             record_learning(material, found=0)
             _move_marker(material, marker, zero)  # reviewed is read: it does not wait for anything
         return out
+    watched = _watched()
+    out["watched"], out["watched_left_out"] = len(watched.facts), watched.left_out
     if dry_run:
         out["status"] = "dry-run"
         cli = available_model_cli()
@@ -1720,8 +1836,14 @@ def run(dry_run: bool = False, ask=ask_harvest, conn: sqlite3.Connection | None 
         out["model_cli"] = cli.name if cli else ""
         return out
     sent_before = _PASS.sent
-    out["facts"] = parse_facts(ask(material.joined()))
+    answer = ask(material.joined() + watched.block())
+    out["facts"] = parse_facts(answer)
     out["added"] = append_facts(out["facts"], source=material.source(), sessions=material.sessions)
+    if watched.facts:
+        used = parse_used(answer, watched.facts)
+        out["used"], out["used_missing"] = used or [], used is None
+        note_used(out["used"], material.source(), datetime.now().strftime("%Y-%m-%d"),
+                  material.sessions)
     record_learning(material, found=len(out["facts"]), sent=_PASS.sent - sent_before)
     record_cost(found=len(out["facts"]), read=read)  # the call was counted inside ask_model
     # and the same numbers once more, as one line of the history. Only the passes that got this
@@ -1730,6 +1852,18 @@ def run(dry_run: bool = False, ask=ask_harvest, conn: sqlite3.Connection | None 
     record_pass()
     _move_marker(material, marker, zero)  # exactly as far as we got, so the next run picks up here
     return out
+
+
+def _watched() -> Watched:
+    """watched_facts(), never at the cost of the harvest: a list that cannot be read is said out
+    loud and the facts are still harvested — without it no use is recorded today, and the run
+    says so (see _report)."""
+    try:
+        return watched_facts()
+    except Exception as e:  # noqa: BLE001 — the harvest itself must go on
+        log(f"UWAGA: the list of durable facts to check for use could not be built: {e!r}"
+            f" — no use of a durable fact is recorded in this run")
+        return Watched()
 
 
 def _move_marker(material: Material, marker: Marker, zero: str) -> None:
@@ -1784,7 +1918,9 @@ def _report(r: dict) -> None:
         f" (messages from {r['from']} to {r['to']})")
     _controls(r)
     if r["status"] == "dry-run":
-        log(f"dry run — nothing written; model tool: {r['model_cli'] or 'NONE in PATH'}")
+        log(f"dry run — nothing written; model tool: {r['model_cli'] or 'NONE in PATH'};"
+            f" durable facts it would check for use: {r['watched']}"
+            f" (left out by the cap: {r['watched_left_out']})")
     else:
         log(f"facts from the model: {len(r['facts'])}, new in {CANDIDATES_PATH}: {len(r['added'])}")
         again = {normalize(f.text) for f in r["facts"]} - {normalize(f.text) for f in r["added"]}
@@ -1793,6 +1929,7 @@ def _report(r: dict) -> None:
             log(f"heard again (only a sighting in {SOURCES_NAME}): {len(again)}")
         for fact in r["added"]:
             log(f"  + ({fact.label()}) {fact.text}")
+        _report_use(r)
         for fact in r["added"]:
             if fact.layer == "referencyjna" and not fact.file:
                 log(f"UWAGA: zestawienie bez sensownej nazwy pliku (model jej nie podal, z tresci"
@@ -1801,6 +1938,21 @@ def _report(r: dict) -> None:
     if r["pending"]:
         log(f"backlog: {r['pending']} chosen messages waiting, about {r['runs_left']} more run(s)"
             f" — catch up with:  -Nadrabiaj {r['runs_left']}")
+
+
+def _report_use(r: dict) -> None:
+    """What the use check found — and, louder, when it could not be done in full."""
+    if r["watched"]:
+        log(f"durable facts of the automaton checked for use: {r['watched']},"
+            f" used: {len(r['used'])}")
+        for text in r["used"]:
+            log(f"  * {text}")
+    if r["used_missing"]:
+        log(f"UWAGA: the answer had no \"uzyte\" field — the use of {r['watched']} durable facts"
+            f" was not recorded in this run (they are not marked unused either)")
+    if r["watched_left_out"]:
+        log(f"UWAGA: {r['watched_left_out']} facts did not fit under the {MAX_WATCHED_CHARS}"
+            f" character cap of the use check — their use is not recorded in this run")
 
 
 def _options(argv: list[str]) -> tuple[bool, int]:
