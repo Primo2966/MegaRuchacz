@@ -52,7 +52,7 @@ inwentarz warstw z 25.09, budowa okna sprzed podzialu, pomiary P23/P30 w calosci
   i `~\.codex\AGENTS.md`), `Pilnuj-Kierownika`, `Pilnuj-Kopii-Opencode`, `Pilnuj-Wersji` ->
   `Nanies-Poprawki` -> `Nanies-Poprawki-Codex`, `Napraw-Hooki` / `Napraw-Hooki-Codex` (tylko
   BRAKUJACE hooki), `Pilnuj-Hookow-Globalnych`, `Projekt-Bez-Hookow`, `Pilnuj-Sufitu-Zawsze`,
-  `Zglos-Koszt` / `Wypisz-Koszt-Codex` (+ `Odcisk-Rachunku`), `Zglos-Dluga-Rozmowe`,
+  `Zglos-Koszt` / `Wypisz-Koszt-Codex` (+ `Odcisk-Rachunku`),
   `Zglos-Odsylacze`, `Powiedz-Wazne`.
 - Wersje wdrozen per projekt: najwyzszy `## X.Y.Z` w `ZMIANY.md` zrodla kontra `modul.<nazwa>.wersja`
   w `<projekt>\.claude\megaruchacz-wersja.txt` (klucze `zrodlo:` - BEZWZGLEDNA sciezka repo,
@@ -72,9 +72,8 @@ inwentarz warstw z 25.09, budowa okna sprzed podzialu, pomiary P23/P30 w calosci
 - `Odcisk-Rachunku` = SHA256 z "nazwa=SHA256" pliku `koszt-pamieci.ps1` i wszystkich
   `narzedzia\koszt\*.ps1` (kolejnosc porzadkowa; bez `koszt\` - sam plik). Zmiana w module
   uniewaznia zapamietana linie w `~\.claude\.megaruchacz-koszt*.txt` (P33).
-- Dluga rozmowa (P26): JSON hooka ze stdin (`Wejscie-Hooka` NA KONCU przebiegu - przy niezamknietym
-  wejsciu odczyt blokowal procesy potomne, git), `Kontekst-Rozmowy`, `Zglos-Dluga-Rozmowe` (tylko
-  `source = resume`, `$PROG_DLUGIEJ_ROZMOWY` 300 000), klucz `dluga_rozmowa` w stanie.
+- Straznik NIE czyta stdin (od P43; alarm dlugiej rozmowy usuniety). Stary klucz `dluga_rozmowa`
+  w `.megaruchacz-straznik.txt` zostaje, nikt go nie czyta.
 
 ### Kto odswieza kopie narzedzia (`Odswiez-Zrodlo`)
 
@@ -157,14 +156,11 @@ inwentarz warstw z 25.09, budowa okna sprzed podzialu, pomiary P23/P30 w calosci
 - Kazda wiadomosc: UserPromptSubmit -> `narzedzia/przypomnienie.js` z ladunkiem
   `~\.claude\mr\orchestrator-reminder.json` (725 znakow; projektowa kopia w `.claude\` martwa
   w trybie globalnym). Wejscie czytane NAJPIERW: powiadomienie (`<task-notification>` albo
-  `[SYSTEM NOTIFICATION...]` na poczatku promptu) -> pusty stdout, slad `powiadomienia` (od P26).
-  Inaczej dokleja: linie o dlugiej rozmowie (na poczatku; `PROG_ROZMOWY` 300 000, `KROK_ROZMOWY`
-  100 000, `MINUT_BUFORA` 60, koncowka transkryptu `KONCOWKI` 256 KB / 2 MB / 8 MB; stan
-  `~\.claude\wiedza\.rozmowa-stan.json`, w testach `MR_ROZMOWA_STAN`), linie cyklu
+  `[SYSTEM NOTIFICATION...]` na poczatku promptu) -> pusty stdout, slad w
+  `~\.claude\wiedza\.powiadomienia-stan.json` (`MR_POWIADOMIENIA_STAN`, klucz `powiadomienia`).
+  Transkryptu hook nie czyta (od P43). Inaczej dokleja: linie cyklu
   z `~\.claude\wiedza\.cykl-postep`, 1-2 fragmenty "Z ARCHIWUM" (`lore\lore\recall.py`, FTS5; stan
   `.archiwum-stan.json`), alarm awarii Lore; sufit doklejki 1500 znakow.
-- Prog dlugiej rozmowy stoi w TRZECH miejscach: `przypomnienie.js` (`PROG_ROZMOWY`),
-  `straznik-zasad.ps1` i `zasobnik/nadzorca/stan-koszt.ps1` (`$PROG_DLUGIEJ_ROZMOWY`) - zmieniac razem.
 - Rejestr: `~\.claude\megaruchacz-mr-log.js` (SubagentStart/Stop, globalny) dopisuje START/KONIEC do
   `.megaruchacz\worklog.md` i rejestr okien `<rodzic-repo>\.mr-okna\<ID>.json`; `.claude\mr-log.js`
   repo to szablon wdrozen per projekt.
@@ -179,7 +175,7 @@ inwentarz warstw z 25.09, budowa okna sprzed podzialu, pomiary P23/P30 w calosci
   faktow; `MODEL_ARGS` z `--model sonnet` od P25 - tez przekop archiwum `mining.py`),
   `selection.py` (ktore wiadomosci ida do modelu), `verify.py` (weryfikacja, wpis do "Co wiem",
   odsylacze), `migrate.py` (przeliczenie wektorow), `masking.py` (sekrety). Testy: `uv --directory
-  lore run pytest` (30.09: 373).
+  lore run pytest` (01.10: 410).
 - Cykl wiedzy: `narzedzia/cykl-dzienny.ps1` rusza przy pierwszej sesji dnia (straznik, osobny proces)
   i z okna (`Ruszaj-Cykl`) - bez zadania w Harmonogramie (`LoreCykl`, `LoreCyklPonow`, `LoreWiedza` to
   nazwy tylko do zdejmowania) -> `wyciagnij-fakty.ps1` + `aktualizuj-wiedze.ps1`; stan
@@ -189,7 +185,28 @@ inwentarz warstw z 25.09, budowa okna sprzed podzialu, pomiary P23/P30 w calosci
   wymaga `plik`, `with_known_files()`) albo z tresci (`name_from_text`); bez nazwy -> "Biezace"
   + UWAGA. Plik i odsylacz razem: `verify.py` `place_references` (wycofanie `undo_references`);
   kompletnosc: `ensure_pointers` w cyklu + `Zglos-Odsylacze` w strazniku. Bez odsylacza:
-  `facts.TECHNICAL_FILES` (kandydaci, zrodla, historia-zmian, uspione, README) i pliki z kropka.
+  `facts.TECHNICAL_FILES` (kandydaci, zrodla, historia-zmian, uspione, README), `uspione-archiwum-RRRR.md`
+  (`facts.is_technical`, `ARCHIVE_PATTERN`) i pliki z kropka. PULAPKA: `straznik-zasad.ps1`
+  (`Zglos-Odsylacze`, `$techniczne`) nie zna jeszcze wzorca `uspione-archiwum-\d{4}\.md` - dopisac,
+  zanim pierwszy plik archiwum powstanie (najwczesniej ~2028).
+- Stala warstwa wiedzy - usypianie (P39): fakt AUTOMATU zasypia po `SLEEP_DAYS = 180` dniach od
+  pozniejszej z dat: ostatnie UZYCIE przez agenta albo wzmianka uzytkownika (`verify.Trail.last_confirmed`
+  / `last_used`). Uzycie zaznacza dzienny przebieg modelu (`facts.watched_facts` -> lista na koncu
+  materialu, pole `uzyte` w schemacie, slad "uzyty" w `wiedza/zrodla.md`); sufit listy
+  `MAX_WATCHED_CHARS = 7 500` zn. (~2,6 tys. tokenow). Uzycie lub wzmianka budzi uspiony fakt (cofniecie
+  przez uzytkownika czeka na JEGO slowo). Uspione > `ARCHIVE_DAYS = 730` ->
+  `wiedza/uspione-archiwum-<rok uspienia>.md`, linia 1:1, blad zapisu zostawia ja w `uspione.md`.
+  Przypiete (bez zdarzenia automatu w sladzie) nie zasypiaja nigdy. Pulapki: model widzi tylko wybrane
+  wiadomosci uzytkownika + 200 zn. odpowiedzi agenta; Codex bez `--json-schema` nie zwraca `uzyte`
+  (glosne "no uzyte field").
+- Uzycie faktu bez modelu (P44): `lore/lore/usage.py`, wolane z `facts.main()` (`_use_by_keyword`) przed
+  przebiegiem modelu (0 tokenow). Dla faktow AUTOMATU ze stalej (nie uspionych) dobiera slowa-dane
+  wlasne faktu (regula w komentarzu modulu: liczby 5+ cyfr, kody, identyfikatory, e-mail, cytaty; slowo
+  nie moze stac nigdzie indziej w plikach instrukcji; slabe tylko w parze) i szuka ich w pelnych
+  odpowiedziach agenta i wejsciach narzedzi w transkryptach (`index.find_files`). Czyta strumieniowo od
+  pozycji per plik (`wiedza/.ostatnie-uzycie-pozycje.json`) i znacznika `wiedza/.ostatnie-uzycie`;
+  trafienie = linia "uzyty" w `zrodla.md` ze zrodlem "transkrypty, bez modelu, slowa: ...". Edycje
+  `CLAUDE.md`/`AGENTS.md`/`wiedza\` to nie uzycie. Pomiar 2026-10-01: 160 MB / 24 h w 0,7 s.
 
 ## Rachunek za pamiec (`narzedzia/koszt-pamieci.ps1` + `narzedzia/koszt/`)
 
@@ -275,7 +292,9 @@ inwentarz warstw z 25.09, budowa okna sprzed podzialu, pomiary P23/P30 w calosci
   `udzial.start`, `udzial.prog_tokeny` jednego `-Dane`; "nie wiadomo" = brak progu albo
   `udzial.start` <= 0), karta "Ile tokenow naprawde zuzywasz" (`Odmaluj-Koszt`; licznik C#
   `MegaRuchacz.Tokeny.Licznik` - MAX z linii tego samego `message.id`, rozmowy / workerzy,
-  `$WERSJA_ZUZYCIA` = "2" w `~\.claude\.megaruchacz-zuzycie.txt`), otwarcie okna rozmowy, problemy,
+  `$WERSJA_ZUZYCIA` = "2" w `~\.claude\.megaruchacz-zuzycie.txt`; od P43 dwie kolumny: tabelka
+  dzis/srednio 330 px + najdrozsze zadania workerow z kolumna rola/projekt `$szDop` 230 px; bez listy
+  rozmow, progu i stopki "!"), otwarcie okna rozmowy, problemy,
   nauka, stan, przyciski. Wykres "Koszt czytania rozmow - ostatnie 30 dni" od P35 w Szczegolach
   (`Dodaj-Wykres` -> `Karta-Sekcji` -> `Panel-Wykresu`). Tresc Przegladu 1055 z 1121 px (okno
   1256x1352 na 2560x1440) - z karta problemu sie przewija.
@@ -297,7 +316,9 @@ inwentarz warstw z 25.09, budowa okna sprzed podzialu, pomiary P23/P30 w calosci
   nie ma paska zadan, okno wychodzi wyzsze (1400 zamiast 1352), obszar podac z prawdziwego pulpitu.
   Zrzut "ustalony": `Refresh()` + dwa identyczne zrzuty. `zasobnik/test-p7.ps1 -BezOkna` bezpieczny;
   czesc z oknem NIE ukrywa okna i nie czeka na dane Warstw - tylko na ukrytym pulpicie. Nagrywanie
-  otwarcia (P21): `SendMessageTimeout` NIE wykrywa blokady watku okna.
+  otwarcia (P21): `SendMessageTimeout` NIE wykrywa blokady watku okna. Test okna P43: scratchpad sesji
+  1ca517cc, `p43\test-okno.ps1` + `scenariusz.ps1` (wzor P35, ukryty pulpit, `-Kod` = zlozona kopia
+  `zasobnik`); hook i straznik PRZED/PO: `p43\test-hook.js`, `p43\test-straznik.js`.
 
 ## Polecane skille (od 0.22.0)
 

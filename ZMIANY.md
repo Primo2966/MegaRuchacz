@@ -4,6 +4,28 @@ Każda zmiana wypychana na gita dostaje tu wpis. Numer rośnie wg zasady:
 pierwsza cyfra — przebudowa łamiąca zgodność, druga — nowa funkcja,
 trzecia — poprawka.
 
+## 0.24.0 — 2026-10-01
+
+- **README „po ludzku” i schemat pamięci.** Na górze README stoi prosty opis całości: workerzy,
+  pamięć, codzienna nauka i gdzie trafia wiedza, droga faktu, aplikacja w zasobniku, aktualizacje,
+  koszt, dwa komputery. Do tego jednostronicowy schemat drogi faktu `docs/schemat-pamieci.html` —
+  pobierasz i otwierasz w przeglądarce. Poprawione stare, sprzeczne zapisy dalej w README (90 dni,
+  „1% kosztu”).
+- **Fakt w wiedzy stałej trzyma się dzięki temu, że Claude go używa.** Fakt dopisany przez automat
+  zasypia dopiero po 180 dniach bez użycia i bez wzmianki (było: 90 dni bez wzmianki — trzeba było
+  go powtarzać). Użycie budzi uśpiony fakt. Śpiące ponad 2 lata przechodzą do rocznego archiwum
+  `wiedza\uspione-archiwum-RRRR.md` — nic nie jest kasowane. Wpisy ręczne dalej nie zasypiają nigdy.
+- **Użycie faktu sprawdzane za darmo.** Codzienny przebieg szuka w pełnych odpowiedziach i działaniach
+  Claude'a charakterystycznych słów faktu (numery spraw, kody, nazwy plików, cytaty — tylko takie,
+  które wskazują ten jeden fakt). 0 tokenów, dzień rozmów czyta się poniżej sekundy. Zwykłe słowa się
+  nie liczą: lepiej przeoczyć niż trzymać przy życiu martwy fakt. Dodatkowo model przy codziennym
+  czytaniu rozmów zaznacza, których faktów użyto (najwyżej ~2,6 tys. tokenów dziennie, dziś 0).
+- **Bez alarmu długiej rozmowy** (Twoja decyzja: linia przychodziła dopiero po wysłaniu wiadomości,
+  kiedy koszt już poszedł). Znikła linia „taniej będzie nowe okno” w rozmowie i przy wznowieniu okna
+  oraz lista najdłuższych rozmów z „!” w oknie nadzorcy. Karta „Ile tokenów naprawdę zużywasz” ma
+  dwie kolumny — przy najdroższych zadaniach workerów widać też rolę i projekt. Na drugim komputerze
+  po aktualizacji: restart nadzorcy i `instaluj-globalnie.ps1`.
+
 ## 0.23.1 — 2026-09-30
 
 - **Okno nadzorcy znów liczy w tle — koniec z fałszywym alarmem antywirusa.** Po aktualizacji

@@ -54,22 +54,31 @@ ostatniego razu i sam dopisuje z nich wiedzę. Nikt Cię o nic nie pyta. Gdzie c
 
 ### Droga faktu
 
+Całość na jednym obrazku: [schemat pamięci](docs/schemat-pamieci.html) — to strona
+HTML, więc pobierz plik i otwórz go w przeglądarce (GitHub pokazuje tylko jej kod).
+
 ```mermaid
 flowchart LR
     A["Wspominasz coś w rozmowie"] --> B["Bieżące<br/>(z datą)"]
     B -- "padło w 2 różnych rozmowach" --> C["Część stała"]
     B -- "14 dni bez awansu" --> X["Wypada<br/>(ślad zostaje)"]
     C -- "180 dni bez użycia" --> D["Uśpione"]
-    D -- "Claude znowu tego użył" --> C
+    D -- "Claude znowu tego użył<br/>albo o nim wspomniałeś" --> C
     D -- "ponad 2 lata uśpione" --> E["Archiwum roku"]
 ```
 
 - Każdy nowy krótki fakt trafia najpierw do **„Bieżące”**.
 - Gdy fakt padnie w **dwóch różnych rozmowach**, przechodzi do **części stałej**.
 - Fakt bez awansu przez **14 dni** wypada z „Bieżące”. Ślad, skąd przyszedł, zostaje.
-- Fakt w części stałej żyje, dopóki Claude go **używa**. Po **180 dniach bez użycia**
-  zasypia (idzie do pliku uśpionych) i wraca, gdy znów się przyda.
-- Uśpiony dłużej niż **2 lata** idzie do archiwum swojego roku.
+- Fakt w części stałej żyje, dopóki Claude go **używa** (albo Ty o nim wspominasz).
+  Po **180 dniach bez użycia i bez wzmianki** zasypia (idzie do pliku uśpionych)
+  i wraca, gdy znów się przyda.
+- Użycie sprawdzane jest codziennie na dwa sposoby: **za darmo**, bez modelu — po
+  charakterystycznych słowach faktu (numer sprawy, kod, nazwa pliku) w odpowiedziach
+  Claude'a; i przy codziennym czytaniu rozmów przez model. Zwykłe słowa się nie liczą —
+  lepiej przeoczyć niż trzymać przy życiu martwy fakt.
+- Uśpiony dłużej niż **2 lata** idzie do archiwum swojego roku
+  (`wiedza\uspione-archiwum-RRRR.md`). Nic nie jest kasowane.
 - **Sprzeczność:** wygrywa nowsze. Stara wersja nie ginie — trafia do historii zmian.
 - **Wpisy dopisane ręcznie** (przez Ciebie albo na Twoją prośbę) nigdy nie zasypiają.
 - Każda zmiana w części stałej ma numer. Mówisz Claude'owi „cofnij <numer>” i wraca
@@ -105,10 +114,7 @@ Ikona przy zegarze. Działa także wtedy, gdy Claude jest zamknięty.
 
 MegaRuchacz to ok. **5%** tego, co Claude wczytuje przy otwarciu okna rozmowy
 (ok. 9 tys. tokenów z ok. 190 tys.). Alarm odzywa się dopiero, gdy ta część urośnie
-ponad 15 tys. tokenów. Osobna sprawa to długa rozmowa: każda odpowiedź czyta całą
-rozmowę od nowa, więc gdy przekroczy **ok. 300 tys. tokenów** (albo wracasz po
-ponad godzinie przerwy), kierownik powie, że taniej będzie otworzyć **nowe okno**.
-Nic nie przepada — stan pracy leży w rejestrze, mapie i raportach.
+ponad 15 tys. tokenów.
 
 ### Dwa komputery
 
@@ -489,7 +495,7 @@ To znany dług, nie przeoczenie.
 | Gdzie | Co tam jest | Kto wpisuje | Kiedy trafia do AI | Wygasa? |
 |---|---|---|---|---|
 | **Bieżąca** — podsekcja `### Bieżące` pliku instrukcji | świeże fakty, każdy z datą | **automat**, raz dziennie — każdy nowy fakt ląduje najpierw tutaj; możesz dopisać i Ty | na starcie każdej sesji | **tak, po 14 dniach**: wpis automatu znika sam, Twój zostaje, a agent pyta, czy nadal obowiązuje |
-| **Stała** — reszta sekcji `## Co wiem` | kim jesteś, czym zajmuje się firma, jak pracujesz | **Ty** (albo agent na Twoją prośbę) — takie wpisy są **przypięte**; **automat** przenosi tu fakt z bieżącej, gdy padł w **dwóch różnych rozmowach** (najwyżej 3 za jednym razem) | na starcie każdej sesji | przypięte **nigdy**; wpis automatu niepotwierdzony przez **90 dni** zasypia do `wiedza\uspione.md` i wraca przy następnej wzmiance |
+| **Stała** — reszta sekcji `## Co wiem` | kim jesteś, czym zajmuje się firma, jak pracujesz | **Ty** (albo agent na Twoją prośbę) — takie wpisy są **przypięte**; **automat** przenosi tu fakt z bieżącej, gdy padł w **dwóch różnych rozmowach** (najwyżej 3 za jednym razem) | na starcie każdej sesji | przypięte **nigdy**; wpis automatu, którego agent nie użył i o którym nikt nie wspomniał przez **180 dni**, zasypia do `wiedza\uspione.md` i wraca przy następnym użyciu albo wzmiance; uśpiony ponad **2 lata** idzie do `wiedza\uspione-archiwum-RRRR.md` |
 | **Referencyjna** — pliki w `~\.claude\wiedza\` | tabele, listy numerów, cenniki, uśpione fakty, historia zmian | Ty i automat (długie zestawienia; w pliku instrukcji zostaje jedna linia-odsyłacz) | **tylko gdy rozmowa tego dotyczy** — agent sam otwiera plik | nie |
 | **Archiwum** — baza `lore.db` | każda rozmowa słowo w słowo, z myśleniem na głos i pomysłami porzuconymi | automat, co 10 minut | przy każdej Twojej wiadomości automat dokleja 1–2 pasujące fragmenty; poza tym gdy agent sam szuka | nie |
 
@@ -509,8 +515,10 @@ w znaczeniu".
    pisane do agenta** (Twoje i zlecenia, które agent daje podagentom; odpowiedzi
    agenta i wyniki narzędzi pomija), **tylko od ostatniego czytania** i nigdy sprzed
    pierwszego przebiegu na tej maszynie („dzień zerowy"). Wyłowione fakty wpisuje do
-   bieżącej. Potem, już bez modelu, porządki: awanse do stałej, sprzeczności,
-   usypianie, wygasanie. **To jedyne miejsce, w którym płacisz za wywołanie modelu.**
+   bieżącej i zaznacza, których faktów ze stałej agent użył. Osobno, za darmo,
+   przegląda pełne odpowiedzi agenta w poszukiwaniu charakterystycznych słów faktów
+   (numery spraw, kody, nazwy plików). Potem, już bez modelu, porządki: awanse do
+   stałej, sprzeczności, usypianie, archiwum uśpionych, wygasanie. **To jedyne miejsce, w którym płacisz za wywołanie modelu.**
    Brak sieci albo limitu? Nauka się odkłada i próbuje znowu (najwyżej 5 razy
    dziennie); nic nie przepada, materiał czeka.
 3. **Otwierasz sesję.** Narzędzie wczytuje plik instrukcji: stałą i bieżącą.
@@ -556,9 +564,9 @@ a automat mówi, że zatrzymał go sufit.
 
 Haczyk, o którym łatwo zapomnieć: **doklejony tekst zostaje w rozmowie do końca**
 i model czyta go przy każdym swoim kroku (~10 kroków na jedną Twoją wiadomość) —
-tyle że z bufora, za ułamek zwykłej ceny. Jednorazowy pomiar autora (2026-09-24,
-jego własne transkrypty): cała pamięć to **ok. 1% tego, co model czyta w sesji**.
-To pomiar jednej maszyny, nie stała.
+tyle że z bufora, za ułamek zwykłej ceny. Pomiar autora (2026-09-30): MegaRuchacz to
+**ok. 5% tego, co Claude wczytuje przy otwarciu okna rozmowy** (ok. 9 tys. tokenów
+z ok. 190 tys.). To pomiar jednej maszyny, nie stała.
 
 Tokeny liczymy jako znaki / 3 — szacunek, nie tokenizer. Na żywo: nadzorca, jedna
 linia przy starcie sesji, a w całości
@@ -598,7 +606,8 @@ z `--status` albo w nadzorcy. Szczegóły w `lore/README.md`.
 
 **Pliki automatu** w `~\.claude\wiedza\`: `kandydaci.md` (przechowalnia wyłowionych
 faktów), `zrodla.md` (z której rozmowy przyszedł każdy fakt — to dowód „dwóch
-rozmów"), `historia-zmian.md`, `uspione.md`, `kopie\`, `.dzien-zero`. Automat
+rozmów"), `historia-zmian.md`, `uspione.md`, `uspione-archiwum-RRRR.md`, `kopie\`,
+`.dzien-zero`, `.ostatnie-uzycie` (dokąd sięgnęło darmowe sprawdzanie użycia). Automat
 sprawdza, czy ścieżki podane w faktach istnieją — także w faktach, które już stoją
 w pliku instrukcji. Wiedza zostaje **na Twoim dysku**, poza repozytorium: kto
 zainstaluje narzędzie, dostaje pusty mechanizm, nie cudzą wiedzę.

@@ -1,0 +1,227 @@
+<title>Pamięć MegaRuchacza — droga jednego faktu</title>
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:opsz,wght@12..96,600;12..96,700&family=Figtree:wght@400;500;600;700&family=JetBrains+Mono:wght@400&display=swap">
+<style>
+/* Układ: jeden diagram drogi faktu (środek = główna droga, prawo = odgałęzienia, lewo = powrót z uśpienia).
+   Kolor etykiety = kiedy Claude to czyta: fiolet = otwarcie okna, niebieski = na żądanie, szary = nigdy.
+   Tych trzech kolorów nie używa nic innego; bursztyn zostaje wyłącznie dla „do sprawdzenia”. */
+:root {
+  --bg: #f6f6f3; --surface: #ffffff; --ink: #1d2226; --muted: #5b646b; --line: #d6d9d3;
+  --open: #7a3fb0; --open-soft: #f2eafa;
+  --ask: #3d5f8f; --ask-soft: #e9eef6;
+  --off: #6f767b; --off-soft: #ecece8;
+  --up: #1f7a66; --up-soft: #e6f3ef;
+  --drop: #a8412e; --drop-soft: #f8e9e5;
+  --check: #8a5a00; --check-soft: #fff4d6;
+  --f-display: "Bricolage Grotesque", "Segoe UI", system-ui, sans-serif;
+  --f-body: "Figtree", "Segoe UI", system-ui, sans-serif;
+  --f-mono: "JetBrains Mono", Consolas, monospace;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --bg: #15181b; --surface: #1d2125; --ink: #e8eaec; --muted: #9aa3aa; --line: #343a3f;
+    --open: #c39cf0; --open-soft: #2a1f36; --ask: #8fb0e0; --ask-soft: #1b2433;
+    --off: #9aa0a5; --off-soft: #25292c; --up: #4fc2a6; --up-soft: #17291f;
+    --drop: #f08a73; --drop-soft: #2e1c18; --check: #f0c35a; --check-soft: #2d2512; color-scheme: dark;
+  }
+}
+:root[data-theme="dark"] {
+  --bg: #15181b; --surface: #1d2125; --ink: #e8eaec; --muted: #9aa3aa; --line: #343a3f;
+  --open: #c39cf0; --open-soft: #2a1f36; --ask: #8fb0e0; --ask-soft: #1b2433;
+  --off: #9aa0a5; --off-soft: #25292c; --up: #4fc2a6; --up-soft: #17291f;
+  --drop: #f08a73; --drop-soft: #2e1c18; --check: #f0c35a; --check-soft: #2d2512; color-scheme: dark;
+}
+* { box-sizing: border-box; }
+html, body { overflow-x: hidden; }
+body { margin: 0; background: var(--bg); color: var(--ink); font-family: var(--f-body); font-size: 15px; line-height: 1.45; }
+.wrap { max-width: 1080px; margin: 0 auto; padding: 26px 16px 48px; display: grid; gap: 26px; }
+h1, h2 { font-family: var(--f-display); margin: 0; line-height: 1.15; text-wrap: balance; }
+h1 { font-size: clamp(25px, 4vw, 36px); }
+h2 { font-size: 19px; }
+p { margin: 0; }
+code { font-family: var(--f-mono); font-size: 12px; overflow-wrap: anywhere; }
+ul { margin: 0; padding-left: 18px; display: grid; gap: 4px; }
+
+.lead { background: var(--up-soft); border-left: 4px solid var(--up); border-radius: 10px; padding: 12px 14px; font-size: 15.5px; }
+.lead b { color: var(--up); }
+
+/* legenda */
+.legend { display: flex; flex-wrap: wrap; gap: 8px 14px; align-items: center; font-size: 13px; color: var(--muted); }
+.tag { font-size: 11.5px; font-weight: 700; border-radius: 6px; padding: 2px 7px; white-space: nowrap; display: inline-block; }
+.tag.open { background: var(--open-soft); color: var(--open); }
+.tag.ask { background: var(--ask-soft); color: var(--ask); }
+.tag.off { background: var(--off-soft); color: var(--off); }
+.tag.check { background: var(--check-soft); color: var(--check); }
+
+/* diagram */
+.dia { display: grid; grid-template-columns: 1fr; gap: 0; }
+.node { background: var(--surface); border: 1.5px solid var(--line); border-radius: 12px; padding: 11px 14px; display: grid; gap: 5px; position: relative; }
+.node h3 { margin: 0; font-family: var(--f-display); font-size: 17px; display: flex; flex-wrap: wrap; gap: 6px 10px; align-items: center; }
+.node .where { font-size: 12.5px; color: var(--muted); }
+.node ul { font-size: 13.5px; }
+.node.open { border-color: var(--open); }
+.node.ask { border-color: var(--ask); }
+.node.off { border-style: dashed; border-color: var(--off); }
+.node.check { border-style: dashed; border-color: var(--check); }
+.node.key { box-shadow: 0 0 0 4px var(--open-soft); }
+
+.edge { display: grid; justify-items: start; padding: 4px 0 4px 26px; position: relative; min-height: 46px; align-content: center; }
+.edge::before { content: ""; position: absolute; left: 13px; top: 0; bottom: 8px; border-left: 2.5px solid var(--up); }
+.edge::after { content: ""; position: absolute; left: 7px; bottom: 0; border: 7px solid transparent; border-top: 9px solid var(--up); border-bottom: 0; }
+.edge span { font-size: 13px; font-weight: 600; color: var(--up); background: var(--up-soft); border-radius: 8px; padding: 4px 9px; }
+.edge.down::before { border-left-color: var(--off); }
+.edge.down::after { border-top-color: var(--off); }
+.edge.down span { color: var(--ink); background: var(--off-soft); }
+.edge.chk::before { border-left: 2.5px dashed var(--check); }
+.edge.chk::after { border-top-color: var(--check); }
+.edge.chk span { color: var(--check); background: var(--check-soft); }
+
+.br { border-left: 4px solid var(--line); background: var(--surface); border-radius: 0 10px 10px 0; padding: 8px 12px; font-size: 13.5px; margin: 8px 0 0 18px; }
+.br .if, .br .where, .br .ln { display: block; margin-top: 2px; }
+.br .if { margin: 0 0 2px; }
+.br b { font-size: 13.5px; }
+.br .if { font-size: 12px; font-weight: 700; text-transform: uppercase; letter-spacing: .04em; }
+.br.drop { border-color: var(--drop); } .br.drop .if { color: var(--drop); }
+.br.side { border-color: var(--ask); } .br.side .if { color: var(--ask); }
+.br.pin { border-color: var(--ink); } .br.pin .if { color: var(--ink); }
+.br.swap { border-color: var(--up); } .br.swap .if { color: var(--up); }
+.br .where { font-size: 12px; color: var(--muted); }
+.mob-gap { height: 0; }
+
+.loop { display: none; }
+.back { margin-top: 2px; font-size: 13px; font-weight: 600; color: var(--up); }
+
+@media (min-width: 820px) {
+  .dia { grid-template-columns: 74px minmax(0, 1.05fr) minmax(0, 1fr); column-gap: 0; }
+  .dia > * { grid-row: var(--r); }
+  .node, .edge { grid-column: 2; }
+  .brs { grid-column: 3; grid-row: var(--r); align-self: center; display: grid; gap: 8px; padding: 10px 0 10px 30px; position: relative; }
+  .brs::before { content: ""; position: absolute; left: 0; top: 50%; width: 30px; border-top: 2px dotted var(--muted); }
+  .br { margin: 0; }
+  .loop { display: block; grid-column: 1; grid-row: var(--r); position: relative; margin: 26px 0 26px 22px; border: 2.5px solid var(--up); border-right: 0; border-radius: 14px 0 0 14px; }
+  .loop::after { content: ""; position: absolute; right: -2px; top: -8px; border: 7px solid transparent; border-right: 0; border-left: 10px solid var(--up); }
+  .loop span { position: absolute; left: -10px; top: 50%; transform: translateY(-50%) rotate(180deg); writing-mode: vertical-rl; white-space: nowrap; font-size: 12.5px; font-weight: 700; color: var(--up); background: var(--bg); padding: 6px 0; }
+  .back { display: none; }
+}
+
+.box2 { display: grid; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); gap: 12px; }
+.card { background: var(--surface); border: 1px solid var(--line); border-radius: 12px; padding: 12px 14px; display: grid; gap: 8px; align-content: start; }
+.card h2 { font-size: 16px; }
+.card li { font-size: 13.5px; }
+.card.check { border: 1.5px dashed var(--check); background: var(--check-soft); }
+.card.check h2 { color: var(--check); }
+
+footer { font-size: 12px; color: var(--muted); border-top: 1px solid var(--line); padding-top: 12px; }
+</style>
+
+<div class="wrap">
+<h1>Droga jednego faktu przez pamięć</h1>
+
+<p class="lead"><b>Dobrze rozumiesz:</b> fakt wspomniany raz trafia do „Bieżące” w CLAUDE.md, a gdy padnie w 2 różnych rozmowach — przechodzi do części stałej „Co wiem”. Poniżej reszta drogi: co dalej się z nim dzieje i kiedy wypada.</p>
+
+<div class="legend">Kiedy Claude to czyta:
+  <span class="tag open">przy otwarciu okna rozmowy</span>
+  <span class="tag ask">na żądanie (gdy temat tego wymaga)</span>
+  <span class="tag off">nigdy (tylko automat)</span>
+  <span class="tag check">do sprawdzenia</span>
+</div>
+
+<div class="dia">
+  <!-- 1 -->
+  <div class="node ask" style="--r:1">
+    <h3>Twoja rozmowa <span class="tag ask">na żądanie</span></h3>
+    <p class="where">baza wszystkich rozmów <code>~\.claude\lore.db</code></p>
+  </div>
+
+  <!-- 2 -->
+  <div class="edge" style="--r:2"><span>codzienne czytanie rozmów, rano (automat)</span></div>
+  <div class="brs" style="--r:2">
+    <div class="br drop"><span class="if">jeśli da się sprawdzić i to nieprawda</span><b>odrzucony</b> (np. podana ścieżka nie istnieje)<span class="where">zostaje oznaczony w <code>wiedza\kandydaci.md</code> · <span class="tag off">nigdy</span></span></div>
+  </div>
+
+  <!-- 3 -->
+  <div class="node open key" style="--r:3">
+    <h3>„Bieżące” <span class="tag open">otwarcie okna</span></h3>
+    <p class="where"><code>~\.claude\CLAUDE.md</code> (i <code>~\.codex\AGENTS.md</code>, jeśli jest)</p>
+    <ul><li>fakt z datą: <code>- [2026-10-01] treść</code> — data = dzień, w którym automat wyłowił fakt z rozmowy; od niej liczy się 14 dni</li><li>skąd się wziął — zapis w <code>wiedza\zrodla.md</code></li></ul>
+  </div>
+  <div class="brs" style="--r:3">
+    <div class="br drop"><span class="if">14 dni bez awansu</span><b>wypada z CLAUDE.md</b><span class="where">pełna treść zostaje w <code>wiedza\zrodla.md</code> · <span class="tag off">nigdy</span></span></div>
+    <div class="br pin"><span class="if">dopisany ręcznie</span><b>nie wypada sam</b> — po 14 dniach automat tylko go zgłasza, decyzja Twoja</div>
+  </div>
+
+  <!-- 4 -->
+  <div class="edge" style="--r:4"><span>padł w 2 różnych rozmowach · najwyżej 3 awanse na przebieg · tylko gdy zmieści się w limicie 8 000 znaków</span></div>
+  <div class="brs" style="--r:4">
+    <div class="br side"><span class="if">lista albo tabela kilku powiązanych informacji</span><span class="ln">np. tabela dopłat do cen FBA dla FR i UK</span><b>→ osobny plik z nazwą w wiedza\, a w „Co wiem” jedna linijka z odnośnikiem</b><span class="ln">tak samo, gdy „Co wiem” zbliża się do limitu 8 000 znaków</span><span class="where"><code>~\.claude\wiedza\&lt;nazwa&gt;.md</code> · <span class="tag ask">na żądanie</span></span></div>
+  </div>
+
+  <!-- 5 -->
+  <div class="node open key" style="--r:5">
+    <h3>Część stała „Co wiem” <span class="tag open">otwarcie okna</span></h3>
+    <p class="where"><code>~\.claude\CLAUDE.md</code> (i <code>AGENTS.md</code> Codeksa) · limit 8 000 znaków</p>
+    <ul><li><b>potwierdzenie</b> = ostatnie <b>użycie</b> tej wiedzy przez Claude <b>albo</b> Twoja ponowna wzmianka — liczy się późniejsza data</li><li>użycie wykrywa poranny automat na dwa sposoby: model czyta wybrane fragmenty rozmów, a darmowe sprawdzanie szuka w odpowiedziach Claude'a charakterystycznych słów faktu (numery spraw, kody, nazwy plików)</li><li>daty tu nie widać — patrz „Co znaczą daty” niżej</li></ul>
+  </div>
+  <div class="brs" style="--r:5">
+    <div class="br swap"><span class="if">sprzeczność</span><b>nowsza wersja wygrywa</b>; stara idzie do historii, da się cofnąć<span class="where"><code>wiedza\historia-zmian.md</code> · <span class="tag off">nigdy</span></span></div>
+    <div class="br pin"><span class="if">dopisany ręcznie = przypięty</span><b>nie zasypia</b>; nowsza wersja podmieni go dopiero, gdy padnie w 2 różnych rozmowach</div>
+  </div>
+
+  <!-- powrót z uśpienia -->
+  <div class="loop" style="--r:5 / 8" aria-hidden="true"><span>użyty albo wspomniany → wraca</span></div>
+
+  <!-- 6 -->
+  <div class="edge down" style="--r:6"><span>180 dni bez użycia i bez wzmianki</span></div>
+
+  <!-- 7 -->
+  <div class="node off" style="--r:7">
+    <h3>Uśpione <span class="tag off">nigdy</span></h3>
+    <p class="where"><code>~\.claude\wiedza\uspione.md</code> · nic nie kosztuje, nie jest doklejane do rozmów</p>
+    <p class="where">budzi go model albo Twoja wzmianka — samo charakterystyczne słowo uśpionego faktu nie budzi</p>
+    <p class="back">↑ użyty albo wspomniany → wraca do części stałej</p>
+  </div>
+
+  <!-- 8 -->
+  <div class="edge down" style="--r:8"><span>ponad 2 lata uśpienia</span></div>
+
+  <!-- 9 -->
+  <div class="node off" style="--r:9">
+    <h3>Archiwum uśpionych <span class="tag off">nigdy</span></h3>
+    <p class="where"><code>~\.claude\wiedza\uspione-archiwum-RRRR.md</code> (RRRR = rok uśpienia) · nic nie jest kasowane</p>
+  </div>
+</div>
+
+<div class="box2">
+  <div class="card">
+    <h2>Liczby z kodu</h2>
+    <ul>
+      <li>14 dni życia w „Bieżące” — <code>CURRENT_DAYS</code></li>
+      <li>2 różne rozmowy do awansu — <code>MIN_CONVERSATIONS</code></li>
+      <li>3 awanse na jeden przebieg, reszta czeka na jutro — <code>MAX_PROMOTIONS</code></li>
+      <li>8 000 znaków części stałej; awans ponad limit nie wchodzi — <code>STABLE_LIMIT</code></li>
+      <li>180 dni bez użycia i wzmianki do uśpienia — <code>SLEEP_DAYS</code></li>
+      <li>730 dni (2 lata) snu do archiwum — <code>ARCHIVE_DAYS</code></li>
+      <li>każda zmiana automatu ma numer i da się ją cofnąć: „Cofnij &lt;numer&gt;”</li>
+    </ul>
+  </div>
+  <div class="card">
+    <h2>Co znaczą daty</h2>
+    <ul>
+      <li><b>„Bieżące”</b> — data w nawiasie to dzień, w którym automat wyłowił fakt z rozmowy. Po 14 dniach od niej fakt bez awansu wypada.</li>
+      <li><b>Część stała</b> — <b>w CLAUDE.md daty nie ma</b>. Ostatnie użycie albo wzmiankę widać w <code>wiedza\zrodla.md</code>: linie z datą na początku i słowem „użyty” albo „wyłowiony ponownie”. Od najpóźniejszej takiej daty liczy się 180 dni.</li>
+      <li><b>Uśpione</b> — w <code>wiedza\uspione.md</code> każda linia zaczyna się datą uśpienia; od niej liczą się 2 lata do archiwum.</li>
+    </ul>
+  </div>
+  <div class="card check">
+    <h2>Do sprawdzenia</h2>
+    <ul>
+      <li>Usypianie, budzenie po użyciu i archiwum są w kodzie i przechodzą testy — ale dziś w części stałej nie ma ani jednego faktu automatu, więc na prawdziwych danych jeszcze nic nie zadziałało.</li>
+      <li>Model widzi tylko wybrane fragmenty rozmów, a słowa da się dobrać tylko części faktów — użycie mimochodem może przejść niezauważone.</li>
+      <li>Na domowym komputerze (Codex) model nie zaznacza użycia; zostaje samo sprawdzanie słów.</li>
+    </ul>
+  </div>
+</div>
+
+<footer>Sprawdzone w kodzie <code>lore\lore\verify.py</code>, <code>facts.py</code> i <code>usage.py</code> oraz testami (257 zaliczonych), 01.10.2026. <code>~</code> = C:\Users\<uzytkownik>.</footer>
+</div>
