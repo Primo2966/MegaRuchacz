@@ -2,6 +2,125 @@
 
 # MegaRuchacz
 
+## Jak działa MegaRuchacz — po ludzku
+
+### Co to jest
+
+MegaRuchacz ma dwie części:
+
+- **Workerzy** — Claude nie robi wszystkiego sam. Jest **kierownikiem**: bierze
+  Twoje zadanie, dzieli je na kawałki i rozdaje pomocnikom (workerom), którzy pracują
+  naraz. Ty w tym czasie piszesz następne zadanie.
+- **Pamięć (Lore)** — zapis wszystkich Twoich rozmów z Claude'em plus krótka
+  wiedza o Tobie i firmie. Dzięki temu nie tłumaczysz tego samego w każdym oknie.
+
+### Jak idzie zadanie
+
+1. Piszesz zadanie.
+2. Kierownik dzieli je na części, które mogą iść osobno.
+3. Każdą część dostaje inny worker — wielu pracuje naraz.
+4. Kierownik zapisuje, kto co robi (rejestr) i co gdzie leży w projekcie (mapa),
+   żeby workerzy sobie nie przeszkadzali i nie zaczynali od zera.
+5. Dostajesz krótki meldunek: co zrobione, co jeszcze trwa.
+
+**Kto na jakim modelu:**
+
+- rozmowa z Tobą i pisanie kodu — **główny model**, ten, który wybrałeś;
+- szukanie, sprawdzanie i codzienne czytanie rozmów — **tańszy model**.
+
+### Pamięć — co Claude czyta i kiedy
+
+| Kiedy | Co | Gdzie leży |
+|---|---|---|
+| przy otwarciu okna rozmowy | „Co wiem”: część stała (kim jesteś, firma, jak pracujesz) i „Bieżące” (świeże fakty z datą) | plik instrukcji Claude'a: `~\.claude\CLAUDE.md` |
+| przy każdej Twojej wiadomości | krótkie przypomnienie zasad i, jeśli coś pasuje, 1–2 fragmenty starych rozmów | archiwum rozmów: `lore.db` w `~\.claude` albo `~\.lore` |
+| tylko gdy potrzeba | pliki z tabelami i listami oraz przeszukiwanie archiwum | `~\.claude\wiedza\` i to samo archiwum |
+
+Wszystko leży na Twoim komputerze. Fragment z archiwum to **trop, nie dowód** —
+Claude sprawdza go, zanim na nim coś zbuduje.
+
+### Raz dziennie MegaRuchacz sam dopisuje wiedzę
+
+**Raz dziennie, rano** (uruchamia to aplikacja w zasobniku; gdy jej nie ma —
+pierwsze okno rozmowy dnia) MegaRuchacz czyta Twoje wypowiedzi z rozmów od
+ostatniego razu i sam dopisuje z nich wiedzę. Nikt Cię o nic nie pyta. Gdzie co trafia:
+
+- **pojedynczy krótki fakt** → „Bieżące” w `CLAUDE.md`, z datą;
+- **lista albo tabela kilku powiązanych informacji** (np. tabela dopłat do cen FBA
+  dla FR i UK) → osobny plik z nazwą w folderze `wiedza`, a w `CLAUDE.md` jedna
+  linijka z odnośnikiem. Tak samo, gdy „Co wiem” zbliża się do limitu 8 000 znaków;
+- **fakt, którego nie da się potwierdzić** (np. podaje ścieżkę, której nie ma na
+  dysku) → czeka w poczekalni `wiedza\kandydaci.md` i do `CLAUDE.md` nie trafia.
+
+### Droga faktu
+
+```mermaid
+flowchart LR
+    A["Wspominasz coś w rozmowie"] --> B["Bieżące<br/>(z datą)"]
+    B -- "padło w 2 różnych rozmowach" --> C["Część stała"]
+    B -- "14 dni bez awansu" --> X["Wypada<br/>(ślad zostaje)"]
+    C -- "180 dni bez użycia" --> D["Uśpione"]
+    D -- "Claude znowu tego użył" --> C
+    D -- "ponad 2 lata uśpione" --> E["Archiwum roku"]
+```
+
+- Każdy nowy krótki fakt trafia najpierw do **„Bieżące”**.
+- Gdy fakt padnie w **dwóch różnych rozmowach**, przechodzi do **części stałej**.
+- Fakt bez awansu przez **14 dni** wypada z „Bieżące”. Ślad, skąd przyszedł, zostaje.
+- Fakt w części stałej żyje, dopóki Claude go **używa**. Po **180 dniach bez użycia**
+  zasypia (idzie do pliku uśpionych) i wraca, gdy znów się przyda.
+- Uśpiony dłużej niż **2 lata** idzie do archiwum swojego roku.
+- **Sprzeczność:** wygrywa nowsze. Stara wersja nie ginie — trafia do historii zmian.
+- **Wpisy dopisane ręcznie** (przez Ciebie albo na Twoją prośbę) nigdy nie zasypiają.
+- Każda zmiana w części stałej ma numer. Mówisz Claude'owi „cofnij <numer>” i wraca
+  stan sprzed zmiany.
+
+### Aplikacja w zasobniku
+
+Ikona przy zegarze. Działa także wtedy, gdy Claude jest zamknięty.
+
+- **Przegląd** — jedno zdanie, czy MegaRuchacz kosztuje mało czy dużo, ile tokenów
+  zużywasz Ty, a ile workerzy, problemy do załatwienia, stan nauki i wersja.
+- **Szczegóły** — pełne liczby i wykres kosztu czytania rozmów z ostatnich 30 dni.
+- **Warstwy pamięci** — co Claude dostaje, kiedy, jak długo to żyje i ile waży;
+  można podejrzeć treść.
+- **Skille** — polecane skille z kilku zestawów, przy każdym krótki opis po polsku
+  i stan u Ciebie (masz / nie masz / starsza wersja / zmieniony ręcznie).
+
+### Pilnowanie i aktualizacje
+
+- **Strażnik przy otwarciu okna rozmowy** sprawdza, czy zasady są na miejscu. Jeśli
+  ktoś je skasował — wpisuje z powrotem i mówi o tym jedną linią.
+- **Sama aktualizacja z GitHuba** — strażnik pobiera nowszą wersję narzędzia (pod
+  Claude Code najwyżej raz na godzinę). Działa też w domu. Nigdy nie nadpisuje Twojej
+  pracy: gdy coś by zniszczył, odmawia i mówi czemu. Nowa wersja działa od
+  **następnego** okna rozmowy.
+- **Codzienne czytanie rozmów** — rano, opisane wyżej. To jedyne miejsce, gdzie
+  pamięć płaci za model.
+- **Codzienne sprawdzanie skilli** — raz dziennie aplikacja patrzy, czy autorzy
+  wydali nowe wersje, i podmienia je z kopią starej. Skilli zmienionych ręcznie nie
+  rusza bez pytania.
+
+### Koszt
+
+MegaRuchacz to ok. **5%** tego, co Claude wczytuje przy otwarciu okna rozmowy
+(ok. 9 tys. tokenów z ok. 190 tys.). Alarm odzywa się dopiero, gdy ta część urośnie
+ponad 15 tys. tokenów. Osobna sprawa to długa rozmowa: każda odpowiedź czyta całą
+rozmowę od nowa, więc gdy przekroczy **ok. 300 tys. tokenów** (albo wracasz po
+ponad godzinie przerwy), kierownik powie, że taniej będzie otworzyć **nowe okno**.
+Nic nie przepada — stan pracy leży w rejestrze, mapie i raportach.
+
+### Dwa komputery
+
+- **Biuro** — Claude Code. Pełny tryb: workerzy w tle, klawiatura wraca od razu.
+- **Dom** — Codex. Workerzy też działają, ale Codex czeka, aż skończą wszyscy, więc
+  klawiaturę dostajesz po całej rundzie.
+
+Tak samo na obu: zasady kierownika, rejestr i mapa w projekcie, pamięć rozmów
+z wyszukiwaniem, sama aktualizacja z GitHuba i aplikacja w zasobniku.
+
+---
+
 Tryb pracy, w którym agent AI przestaje być wykonawcą, a staje się **kierownikiem**:
 przyjmuje od Ciebie zadanie po zadaniu, rozdaje je workerom pracującym równolegle
 — pod Claude Code w izolowanych kopiach repozytorium — i melduje efekt prostym
