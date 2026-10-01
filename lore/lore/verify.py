@@ -11,8 +11,9 @@ one run pushed what every session starts with from ~2 941 to ~4 946 tokens (+68%
 at once, and memory rewritten by a model over and over first improves and then degrades, at times
 below having no memory at all (arXiv 2605.12978). The current layer ages out after 14 days, so
 a wrong fact disappears by itself. A fact is PROMOTED to the durable layer only once it has been
-heard in at least two different conversations (the trail in wiedza/zrodla.md says which), and
-only a few per run — see MAX_PROMOTIONS.
+confirmed in at least two different conversations (the trail in wiedza/zrodla.md says which) —
+heard again from the user, or USED by the agent on another day, in a conversation it did not come
+out of (Trail.confirmations) — and only a few per run — see MAX_PROMOTIONS.
 
 One thing stops a fact on the way in, and says so out loud: a claim that can be checked and does
 NOT hold (a path that is not there) — rejected, stays flagged in the waiting room.
@@ -70,7 +71,7 @@ from pathlib import Path
 
 from .db import CLAUDE_HOME, log
 from .facts import (DORMANT_NAME, PENDING_NOTE, SESSIONS_FIELD, SIGHTED, SIGHTED_AGAIN,
-                    SOURCES_HEADER, SOURCES_NAME, USED, describe_file, dormant_entry,
+                    SOURCES_HEADER, SOURCES_NAME, USED, USED_WEAK, describe_file, dormant_entry,
                     file_name, is_technical, name_from_text, normalize, pointers_in)
 
 KNOWLEDGE_DIR = CLAUDE_HOME / "wiedza"
@@ -120,6 +121,11 @@ CURRENT_DAYS = 14
 # durable layer. Two, because one is exactly the case that went wrong — a single conversation's
 # passing remark became a rule for every session that followed.
 MIN_CONVERSATIONS = 2
+# Since 2026-10-01 (the user's decision: "nie chcę się powtarzać") the agent USING a current fact
+# counts as one of those conversations too — but only a use on ANOTHER day than the harvest and in
+# a conversation that shares nothing with the ones the fact came out of: in its own conversation
+# the agent only echoes what it was just told, which is that conversation's word once more, and
+# the same day is still the same piece of work. See Trail.confirmations for which uses count.
 # At most this many promotions per run; the most repeated go first, the rest wait in the current
 # layer for the next run (and the run says so). Why 3: an entry of the durable layer is ~110
 # characters on average (measured on the real file 2026-09-24: 49 entries, 5 410 characters), so
@@ -868,6 +874,16 @@ class Sighting:
 
 
 @dataclass
+class Use:
+    """One USED line of the trail — the agent applied the fact (the model said so, or its words)."""
+    day: str
+    sessions: frozenset[str] | None  # the conversations it was used in; None = not known
+    # may it confirm a current fact on the way to the durable layer? The model's mark and a strong
+    # word may; a pair of weak words only keeps a durable fact awake — see lore.usage.USED_WEAK
+    confirms: bool
+
+
+@dataclass
 class Trail:
     """What wiedza/zrodla.md knows, read back for the decisions: promote, let expire, put to sleep,
     wake up — and which entries are the automaton's at all."""
@@ -879,11 +895,31 @@ class Trail:
     auto_durable: set = field(default_factory=set)
     confirmed: dict = field(default_factory=dict)  # key -> the latest day it was put in or kept
     used: dict = field(default_factory=dict)  # key -> the latest day the agent applied it (USED)
+    uses: dict = field(default_factory=dict)  # key -> [Use], every USED line, oldest first
     undone: dict = field(default_factory=dict)  # key -> the latest day a change of it was undone
 
     def evidence(self, key) -> list[Sighting]:
         """The sightings behind an entry — for a reference pointer, those of its listing."""
         return self.sightings.get(self.pointers.get(key, key), [])
+
+    def confirmations(self, key) -> int:
+        """In how many different conversations a fact was CONFIRMED — what a promotion needs.
+
+        The sightings (the user said it) as always, plus the uses (the agent applied it) that pass
+        two tests: a later DAY than the first sighting, and a known set of conversations. Uses and
+        sightings are then counted together by conversations(), which takes a group only when it
+        shares nothing with the groups already taken — so a use inside the conversation the fact
+        came out of adds nothing, however often the agent repeats the fact there. A use whose
+        conversations are not known is no evidence (the safe side, like a sighting without them).
+        Without a sighting there is nothing to confirm: a use never makes a fact out of nothing.
+        """
+        sightings = self.evidence(key)
+        if not sightings:
+            return 0
+        first = min(s.day for s in sightings)
+        uses = [u for k in {key, self.pointers.get(key, key)} for u in self.uses.get(k, [])
+                if u.confirms and u.sessions and u.day > first]
+        return conversations(sightings + uses)
 
     def is_auto(self, entry: "Entry") -> bool:
         """Did the automaton write this entry? What it did not write is PINNED: the rules from before
@@ -891,6 +927,18 @@ class Trail:
         an entry with no event behind it counts as the user's, which is the safe side: a pinned
         entry never falls asleep and is replaced only on the word of two conversations."""
         return entry.key in (self.written if entry.current else self.auto_durable)
+
+    def use_matters(self, entry: "Entry") -> bool:
+        """Is the use of this entry worth looking for? A durable fact of the automaton — the use
+        keeps it awake; a current one of the automaton that may still be promoted — the use
+        confirms it. Not a pinned entry (never falls asleep, never promoted) and not a current one
+        the model called "biezaca" (never promoted, whatever confirms it)."""
+        if not self.is_auto(entry):
+            return False
+        if not entry.current:
+            return True
+        found = self.evidence(entry.key)
+        return bool(found) and not found[-1].label.startswith("biezaca")
 
     def last_confirmed(self, key) -> str | None:
         """The last day the fact was used by the agent or heard in a conversation — or put into the
@@ -940,10 +988,12 @@ def read_trail(path: Path | None = None) -> Trail:
         if len(parts) < 5:
             continue
         day, event, detail = parts[0].strip(), parts[1].strip(), parts[2].strip()
-        if event == USED:  # the same shape as a sighting, but it is not one: no promotion on it
+        if event == USED:  # the same shape as a sighting, but not one — see Trail.confirmations
             whole = len(parts) == 6 and parts[4].startswith(SESSIONS_FIELD)
             key = fact_key(parts[5] if whole else " | ".join(parts[4:]))
             out.used[key] = max(day, out.used.get(key, day))
+            out.uses.setdefault(key, []).append(
+                Use(day, _sessions(parts[4]) if whole else None, USED_WEAK not in parts[3]))
             continue
         if event in (SIGHTED, SIGHTED_AGAIN):
             if len(parts) == 6 and parts[4].startswith(SESSIONS_FIELD):
@@ -1048,7 +1098,7 @@ def choose_promotions(current: list[str], trail: Trail, durable: set,
             continue
         seen.add(key)
         sightings = trail.evidence(key)
-        heard = conversations(sightings)
+        heard = trail.confirmations(key)  # heard again or used on another day, elsewhere
         if heard < MIN_CONVERSATIONS or sightings[-1].label.startswith("biezaca"):
             continue
         if trail.blocked(key):
@@ -2432,7 +2482,8 @@ def _report(r: dict) -> None:
     for fact in r["approved"]:
         log(f"  + {fact}")
     for fact in r["promoted"]:
-        log(f"  ^ {fact}  (awans: padł w co najmniej {MIN_CONVERSATIONS} różnych rozmowach)")
+        log(f"  ^ {fact}  (awans: potwierdzony w co najmniej {MIN_CONVERSATIONS} różnych rozmowach"
+            f" — wzmianka albo użycie w innym dniu)")
     for fact in r["deferred"]:
         log(f"  ^? {fact}  (zasłużył na awans, czeka: limit {MAX_PROMOTIONS} na przebieg)")
     for fact in r["expired"]:

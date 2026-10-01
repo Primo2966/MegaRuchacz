@@ -207,6 +207,13 @@ inwentarz warstw z 25.09, budowa okna sprzed podzialu, pomiary P23/P30 w calosci
   pozycji per plik (`wiedza/.ostatnie-uzycie-pozycje.json`) i znacznika `wiedza/.ostatnie-uzycie`;
   trafienie = linia "uzyty" w `zrodla.md` ze zrodlem "transkrypty, bez modelu, slowa: ...". Edycje
   `CLAUDE.md`/`AGENTS.md`/`wiedza\` to nie uzycie. Pomiar 2026-10-01: 160 MB / 24 h w 0,7 s.
+- Awans przez UZYCIE (0.24.1): `verify.Trail.confirmations` liczy do `MIN_CONVERSATIONS` wzmianki ORAZ
+  linie "uzyty" z dnia POZNIEJSZEGO niz pierwsze wylowienie i ze znanym zbiorem sesji; zliczane razem
+  przez `conversations()` (rozlaczne zbiory), wiec uzycie w rozmowie zrodlowej nic nie dodaje; bez
+  wylowienia 0. Linia ze zrodlem `facts.USED_WEAK` ("tylko slabe slowa", sama para slabych slow) trzyma
+  fakt w stalej, ale nie awansuje (regula 5 w `usage.py`). Model i `usage.py` patrza teraz takze na
+  biezace fakty automatu, ktore moga awansowac (`Trail.use_matters`: nie etykieta "biezaca", nie
+  przypiete). `usage.session_of` nazywa rozmowe jak indeks (Codex: uuid z `rollout-...-<uuid>`).
 
 ## Rachunek za pamiec (`narzedzia/koszt-pamieci.ps1` + `narzedzia/koszt/`)
 

@@ -4,6 +4,16 @@ Każda zmiana wypychana na gita dostaje tu wpis. Numer rośnie wg zasady:
 pierwsza cyfra — przebudowa łamiąca zgodność, druga — nowa funkcja,
 trzecia — poprawka.
 
+## 0.24.1 — 2026-10-01
+
+- **Fakt przechodzi do wiedzy stałej także wtedy, gdy Claude go użyje — nie musisz się powtarzać.**
+  Dotąd fakt z „Bieżące” awansował tylko, gdy padł w dwóch różnych rozmowach. Teraz wystarczy też,
+  że Claude go użyje w innym dniu i w innej rozmowie niż ta, w której fakt padł (powtarzanie w tej
+  samej rozmowie albo tego samego dnia nic nie potwierdza). Ostrożnie przy darmowym sprawdzaniu
+  słów: do awansu liczy się tylko mocne słowo faktu (np. numer sprawy, kod, cytat) — dwa słabe
+  słowa utrzymają fakt w stałej, ale go nie awansują. Limit 3 awansów na przebieg zostaje.
+  Na obu komputerach po aktualizacji: `instaluj-globalnie.ps1` (nowe zdanie w zasadach).
+
 ## 0.24.0 — 2026-10-01
 
 - **README „po ludzku” i schemat pamięci.** Na górze README stoi prosty opis całości: workerzy,

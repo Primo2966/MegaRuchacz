@@ -18,9 +18,14 @@ stopped (a byte offset per file, .ostatnie-uzycie-pozycje.json), files untouched
 pass (.ostatnie-uzycie) are not opened at all, and a file seen for the first time is streamed line
 by line, its older records skipped by their stamp. Nothing is held in memory but one line.
 
-The pinned facts are not checked (they never fall asleep), and neither are the dormant ones: waking
-a fact up on a keyword is the one mistake that puts it back in front of every session, and the
-model's check (which lists the dormant facts) is the safer judge there.
+The automaton's CURRENT facts that may still be promoted are checked as well (since 2026-10-01): a
+use on another day, in another conversation than the one the fact came out of, counts as the second
+conversation a promotion needs (lore.verify.Trail.confirmations) — the user does not want to repeat
+himself. Only a strong word may confirm that way; see the rule below, point 5.
+
+The pinned facts are not checked (they never fall asleep, they are never promoted), and neither are
+the dormant ones: waking a fact up on a keyword is the one mistake that puts it back in front of
+every session, and the model's check (which lists the dormant facts) is the safer judge there.
 """
 
 from __future__ import annotations
@@ -66,6 +71,19 @@ SOURCE_LABEL = "transkrypty, bez modelu"  # how such a line of the trail says wh
 #    fact in the same record of the transcript.
 # A fact left with no strong word and fewer than two weak ones has no signature: only the model's
 # check marks its use (and the pass says how many such facts there are).
+# 5. Promotion (a CURRENT fact moving to the durable layer on a use, 2026-10-01). A promoted fact
+#    stands in front of every session for at least half a year, so the bar is higher here than for
+#    keeping a durable fact awake. A use found by a STRONG word may stand in for the second
+#    conversation by itself: such a word is data that stands nowhere else in the instruction files
+#    and does not come up by chance (a case number, an ASIN, an e-mail, a quoted phrase) — the agent
+#    writing it on another day, in a conversation the fact did not come from, took it from the fact.
+#    And it is never the only evidence: the fact had to come out of the user's own words first,
+#    the model's label must call it durable, at most MAX_PROMOTIONS go per run, under the ceiling,
+#    every promotion can be undone, and a durable fact nobody uses falls asleep after SLEEP_DAYS.
+#    A PAIR OF WEAK WORDS may NOT promote: two of them meet whenever the agent works near the
+#    subject (Magazyn2 and start.bat turn up in every session about the robot) — that is being
+#    close to the topic, not relying on the fact. Such a use is written with facts.USED_WEAK in its
+#    source: it keeps a durable fact awake, and lore.verify does not count it for a promotion.
 
 MIN_CHARS = 4
 MIN_DIGITS = 5  # below this a number is a price, a quantity or a card's tail — see the rule, 2.
@@ -196,7 +214,8 @@ class Watch:
 
 
 def watched() -> tuple[list[Watch], list[str]]:
-    """(facts with a signature, facts without one) — the automaton's facts of the durable layer."""
+    """(facts with a signature, facts without one) — the automaton's facts of the durable layer
+    and its current ones that may still be promoted (verify.Trail.use_matters)."""
     from . import verify  # verify imports facts; at call time both are complete
 
     trail = verify.read_trail(facts.KNOWLEDGE_DIR / facts.SOURCES_NAME)
@@ -205,7 +224,7 @@ def watched() -> tuple[list[Watch], list[str]]:
         lines = facts._lines(path)
         everything.extend(lines)
         for e in verify.entries(lines):
-            if e.current or not trail.is_auto(e):
+            if not trail.use_matters(e):  # durable of the automaton, or current and promotable
                 continue
             if e.key not in own:
                 texts.append(e.text)
@@ -292,6 +311,16 @@ class Found:
     session: str
     words: list[str]
     sessions: list[str] = field(default_factory=list)
+    # the same, kept apart for the records with a strong word (True) and with weak words only
+    # (False): one USED line each, so that a weak hit never lends its day or conversation to a
+    # line that may promote — see the rule, point 5
+    by_strength: dict = field(default_factory=dict)
+
+    def add(self, ts: str, session: str, words: list[str]) -> None:
+        if ts >= self.ts:
+            self.ts, self.session, self.words = ts, session, words
+        if session not in self.sessions:
+            self.sessions.append(session)
 
 
 @dataclass
@@ -306,7 +335,7 @@ class Scan:
 def _read_file(path: Path, start: int, since: str | None, watches: list[Watch], scan: Scan) -> int:
     """Streams one file from `start`; returns the offset of the end of its last complete line.
     `since` filters by stamp — only for a file read from the beginning (no offset saved yet)."""
-    session_default = path.stem
+    session_default = session_of(path)
     with open(path, "rb") as f:
         f.seek(start)
         pos = start
@@ -336,14 +365,28 @@ def _read_file(path: Path, start: int, since: str | None, watches: list[Watch], 
                 if not words:
                     continue
                 session = rec.get("sessionId") or session_default
-                old = scan.found.get(w.text)
-                if old is None or ts >= old.ts:
-                    sessions = old.sessions if old else []
-                    scan.found[w.text] = Found(ts, session, [s.word for s in words], sessions)
-                    old = scan.found[w.text]
-                if session not in old.sessions:
-                    old.sessions.append(session)
+                names = [s.word for s in words]
+                found = scan.found.setdefault(w.text, Found(ts, session, names))
+                found.add(ts, session, names)
+                strong = any(s.strong for s in words)
+                found.by_strength.setdefault(strong, Found(ts, session, names)).add(ts, session, names)
     return pos
+
+
+_UUID = re.compile(r"[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$", re.IGNORECASE)
+
+
+def session_of(path: Path) -> str:
+    """The conversation a transcript belongs to, named the way the harvest names it — the trail
+    compares the two, and a use may not confirm a fact inside the conversation it came out of.
+    lore.index takes it from the place of the file (a subagent: its parent's directory) and, for
+    Codex, from session_meta, whose id is the uuid at the end of 'rollout-...-<uuid>'."""
+    try:
+        session = index.describe_file(path)[1]
+    except ValueError:
+        session = path.stem
+    m = _UUID.search(session)
+    return m.group(0) if m and session.startswith("rollout-") else session
 
 
 def marker_path() -> Path:
@@ -414,12 +457,15 @@ def _local_day(ts: str) -> str:
 
 
 def note(found: dict) -> None:
-    """One USED line per fact, the same as the model's — with the words it was found by."""
+    """USED lines in the shape of the model's, with the words the fact was found by — one for the
+    records with a strong word, one for those with weak words only (marked facts.USED_WEAK: it
+    keeps a fact awake, but lore.verify does not promote on it — the rule above, point 5)."""
     for text, hit in found.items():
-        words = ", ".join(w.replace("|", "/") for w in hit.words)
-        source = f"{SOURCE_LABEL}, słowa: {words}"
-        facts.note_sources([facts.Fact(text, "stala")], source, _local_day(hit.ts), hit.sessions,
-                           event=facts.USED)
+        for strong, part in sorted((hit.by_strength or {True: hit}).items(), reverse=True):
+            words = ", ".join(w.replace("|", "/") for w in part.words)
+            label = SOURCE_LABEL if strong else f"{SOURCE_LABEL}, {facts.USED_WEAK}"
+            facts.note_sources([facts.Fact(text, "stala")], f"{label}, słowa: {words}",
+                               _local_day(part.ts), part.sessions, event=facts.USED)
 
 
 def run(dry_run: bool = False, since: str | None = None,

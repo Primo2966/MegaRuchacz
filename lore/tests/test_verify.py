@@ -1898,3 +1898,125 @@ def test_a_report_too_long_says_so_at_its_head(sandbox, monkeypatch):
     s = state(sandbox)
     assert s["meldunek"].startswith("UWAGA: 2 zmian, pokazuje 1")
     assert "meldunek_1" in s and "meldunek_2" not in s
+
+
+
+# ---------------------------------------------------------------- a USE confirms a current fact
+#
+# The user's decision (2026-10-01): a fact moves to the durable layer when it was heard in two
+# different conversations OR when the agent USED it on another day, in a conversation it did not
+# come out of — he does not want to repeat himself. A use inside the fact's own conversation, or on
+# the day of the harvest, is the agent echoing what it was just told: no promotion on it.
+
+def used_in(text: str, day: str, *sessions: str, source: str = "") -> None:
+    """A USED line as the harvest's model (or, with `source`, lore.usage) writes it."""
+    facts.note_sources([facts.Fact(text, "stala")], source or f"rozmowy {day}..{day}", day,
+                       list(sessions), event=facts.USED)
+
+
+def heard_once_and_written(sandbox) -> None:
+    """Heard once, on 2026-09-16, in rozmowa-a — and put into the current layer."""
+    heard(TWO_MACHINES, "stala/uzytkownik", "rozmowa-a")
+    waiting_room(sandbox, entry(TWO_MACHINES, "stala/uzytkownik"))
+    assert verify.run(day="2026-09-16")["promoted"] == []
+
+
+def test_a_fact_the_agent_used_on_another_day_in_another_conversation_is_promoted(sandbox):
+    heard_once_and_written(sandbox)
+    used_in(TWO_MACHINES, "2026-09-17", "rozmowa-b")  # the user never said it again
+
+    r = verify.run(day="2026-09-18")
+
+    assert r["promoted"] == [TWO_MACHINES]
+    assert f"- {TWO_MACHINES}" in subsection(sandbox, "### O użytkowniku")
+    assert TWO_MACHINES not in subsection(sandbox, "### Bieżące")
+
+
+def test_a_use_found_by_a_strong_word_promotes_like_the_models_mark(sandbox):
+    heard_once_and_written(sandbox)
+    used_in(TWO_MACHINES, "2026-09-17", "rozmowa-b", source="transkrypty, bez modelu, słowa: X1234567")
+
+    assert verify.run(day="2026-09-18")["promoted"] == [TWO_MACHINES]
+
+
+def test_a_use_in_the_facts_own_conversation_does_not_promote(sandbox):
+    heard_once_and_written(sandbox)
+    used_in(TWO_MACHINES, "2026-09-17", "rozmowa-a")  # the next day, but the same conversation
+    used_in(TWO_MACHINES, "2026-09-18", "rozmowa-a", "rozmowa-c")  # a batch that includes it
+
+    r = verify.run(day="2026-09-19")
+
+    assert r["promoted"] == []
+    assert TWO_MACHINES in subsection(sandbox, "### Bieżące")
+
+
+def test_a_use_on_the_day_of_the_harvest_does_not_promote(sandbox):
+    heard_once_and_written(sandbox)
+    used_in(TWO_MACHINES, "2026-09-16", "rozmowa-b")  # another conversation, the same day
+
+    assert verify.run(day="2026-09-17")["promoted"] == []
+
+
+def test_a_use_by_weak_words_only_does_not_promote(sandbox):
+    heard_once_and_written(sandbox)
+    used_in(TWO_MACHINES, "2026-09-17", "rozmowa-b",
+            source=f"transkrypty, bez modelu, {facts.USED_WEAK}, słowa: Magazyn2, start.bat")
+
+    assert verify.run(day="2026-09-18")["promoted"] == []
+
+
+def test_a_use_without_known_conversations_does_not_promote(sandbox):
+    heard_once_and_written(sandbox)
+    used_in(TWO_MACHINES, "2026-09-17")  # sessions '-'
+
+    assert verify.run(day="2026-09-18")["promoted"] == []
+
+
+def test_a_use_alone_never_makes_a_promotion_out_of_nothing(sandbox):
+    """No sighting at all (an entry the user wrote by hand into the current layer): nothing to confirm."""
+    current_entries(sandbox, f"[2026-09-16] {TWO_MACHINES}")
+    used_in(TWO_MACHINES, "2026-09-17", "rozmowa-b")
+    used_in(TWO_MACHINES, "2026-09-18", "rozmowa-c")
+
+    assert verify.run(day="2026-09-19")["promoted"] == []
+
+
+def test_two_mentions_by_the_user_still_promote_without_any_use(sandbox):
+    heard_once_and_written(sandbox)
+    heard(TWO_MACHINES, "stala/uzytkownik", "rozmowa-b", day="2026-09-16", again=True)  # same day
+
+    assert verify.run(day="2026-09-17")["promoted"] == [TWO_MACHINES]
+
+
+def test_a_use_does_not_promote_a_fact_the_model_called_current(sandbox):
+    heard("Dziś paczki wychodzą po 15:00.", "biezaca", "rozmowa-a")
+    waiting_room(sandbox, entry("Dziś paczki wychodzą po 15:00.", "biezaca"))
+    verify.run(day="2026-09-16")
+    used_in("Dziś paczki wychodzą po 15:00.", "2026-09-17", "rozmowa-b")
+
+    assert verify.run(day="2026-09-18")["promoted"] == []
+
+
+def test_probe_without_the_day_and_conversation_test_the_agents_echo_would_promote(
+        sandbox, monkeypatch):
+    """The probe of the two tests above: with every use counted, the echo inside the fact's own
+    conversation and the use on the harvest day WOULD promote — so those tests do test the rule."""
+    def every_use(self, key):
+        found = self.evidence(key)
+        return verify.conversations(found) + len(self.uses.get(key, [])) if found else 0
+    monkeypatch.setattr(verify.Trail, "confirmations", every_use)
+    heard_once_and_written(sandbox)
+    used_in(TWO_MACHINES, "2026-09-16", "rozmowa-a")
+
+    assert verify.run(day="2026-09-17")["promoted"] == [TWO_MACHINES]
+
+
+def test_probe_without_counting_uses_the_used_fact_would_wait(sandbox, monkeypatch):
+    """The other half: with only the sightings counted, the use of the first test does nothing —
+    so that test proves the use is what promoted the fact."""
+    monkeypatch.setattr(verify.Trail, "confirmations",
+                        lambda self, key: verify.conversations(self.evidence(key)))
+    heard_once_and_written(sandbox)
+    used_in(TWO_MACHINES, "2026-09-17", "rozmowa-b")
+
+    assert verify.run(day="2026-09-18")["promoted"] == []

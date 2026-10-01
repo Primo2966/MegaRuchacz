@@ -60,7 +60,7 @@ HTML, więc pobierz plik i otwórz go w przeglądarce (GitHub pokazuje tylko jej
 ```mermaid
 flowchart LR
     A["Wspominasz coś w rozmowie"] --> B["Bieżące<br/>(z datą)"]
-    B -- "padło w 2 różnych rozmowach" --> C["Część stała"]
+    B -- "padło w 2 różnych rozmowach<br/>albo Claude użył go w innym dniu" --> C["Część stała"]
     B -- "14 dni bez awansu" --> X["Wypada<br/>(ślad zostaje)"]
     C -- "180 dni bez użycia" --> D["Uśpione"]
     D -- "Claude znowu tego użył<br/>albo o nim wspomniałeś" --> C
@@ -68,7 +68,12 @@ flowchart LR
 ```
 
 - Każdy nowy krótki fakt trafia najpierw do **„Bieżące”**.
-- Gdy fakt padnie w **dwóch różnych rozmowach**, przechodzi do **części stałej**.
+- Fakt przechodzi do **części stałej**, gdy padnie w **dwóch różnych rozmowach** albo
+  gdy Claude go **użyje w innym dniu** — nie musisz go powtarzać. Liczy się tylko
+  użycie w innej rozmowie niż ta, w której fakt padł (Claude powtarzający to, co
+  przed chwilą usłyszał, nic nie potwierdza), a przy darmowym sprawdzaniu tylko
+  mocne słowo faktu, np. numer sprawy; dwa słabe słowa (np. nazwa komputera i pliku)
+  utrzymają fakt w stałej, ale do awansu nie wystarczą.
 - Fakt bez awansu przez **14 dni** wypada z „Bieżące”. Ślad, skąd przyszedł, zostaje.
 - Fakt w części stałej żyje, dopóki Claude go **używa** (albo Ty o nim wspominasz).
   Po **180 dniach bez użycia i bez wzmianki** zasypia (idzie do pliku uśpionych)
@@ -495,7 +500,7 @@ To znany dług, nie przeoczenie.
 | Gdzie | Co tam jest | Kto wpisuje | Kiedy trafia do AI | Wygasa? |
 |---|---|---|---|---|
 | **Bieżąca** — podsekcja `### Bieżące` pliku instrukcji | świeże fakty, każdy z datą | **automat**, raz dziennie — każdy nowy fakt ląduje najpierw tutaj; możesz dopisać i Ty | na starcie każdej sesji | **tak, po 14 dniach**: wpis automatu znika sam, Twój zostaje, a agent pyta, czy nadal obowiązuje |
-| **Stała** — reszta sekcji `## Co wiem` | kim jesteś, czym zajmuje się firma, jak pracujesz | **Ty** (albo agent na Twoją prośbę) — takie wpisy są **przypięte**; **automat** przenosi tu fakt z bieżącej, gdy padł w **dwóch różnych rozmowach** (najwyżej 3 za jednym razem) | na starcie każdej sesji | przypięte **nigdy**; wpis automatu, którego agent nie użył i o którym nikt nie wspomniał przez **180 dni**, zasypia do `wiedza\uspione.md` i wraca przy następnym użyciu albo wzmiance; uśpiony ponad **2 lata** idzie do `wiedza\uspione-archiwum-RRRR.md` |
+| **Stała** — reszta sekcji `## Co wiem` | kim jesteś, czym zajmuje się firma, jak pracujesz | **Ty** (albo agent na Twoją prośbę) — takie wpisy są **przypięte**; **automat** przenosi tu fakt z bieżącej, gdy padł w **dwóch różnych rozmowach** albo agent go **użył w innym dniu** i innej rozmowie (najwyżej 3 za jednym razem) | na starcie każdej sesji | przypięte **nigdy**; wpis automatu, którego agent nie użył i o którym nikt nie wspomniał przez **180 dni**, zasypia do `wiedza\uspione.md` i wraca przy następnym użyciu albo wzmiance; uśpiony ponad **2 lata** idzie do `wiedza\uspione-archiwum-RRRR.md` |
 | **Referencyjna** — pliki w `~\.claude\wiedza\` | tabele, listy numerów, cenniki, uśpione fakty, historia zmian | Ty i automat (długie zestawienia; w pliku instrukcji zostaje jedna linia-odsyłacz) | **tylko gdy rozmowa tego dotyczy** — agent sam otwiera plik | nie |
 | **Archiwum** — baza `lore.db` | każda rozmowa słowo w słowo, z myśleniem na głos i pomysłami porzuconymi | automat, co 10 minut | przy każdej Twojej wiadomości automat dokleja 1–2 pasujące fragmenty; poza tym gdy agent sam szuka | nie |
 
@@ -515,7 +520,7 @@ w znaczeniu".
    pisane do agenta** (Twoje i zlecenia, które agent daje podagentom; odpowiedzi
    agenta i wyniki narzędzi pomija), **tylko od ostatniego czytania** i nigdy sprzed
    pierwszego przebiegu na tej maszynie („dzień zerowy"). Wyłowione fakty wpisuje do
-   bieżącej i zaznacza, których faktów ze stałej agent użył. Osobno, za darmo,
+   bieżącej i zaznacza, których faktów (ze stałej i z bieżącej) agent użył. Osobno, za darmo,
    przegląda pełne odpowiedzi agenta w poszukiwaniu charakterystycznych słów faktów
    (numery spraw, kody, nazwy plików). Potem, już bez modelu, porządki: awanse do
    stałej, sprzeczności, usypianie, archiwum uśpionych, wygasanie. **To jedyne miejsce, w którym płacisz za wywołanie modelu.**
@@ -605,8 +610,8 @@ miesza dwóch modeli: `uv --directory <MegaRuchacz>\lore run python -m lore.migr
 z `--status` albo w nadzorcy. Szczegóły w `lore/README.md`.
 
 **Pliki automatu** w `~\.claude\wiedza\`: `kandydaci.md` (przechowalnia wyłowionych
-faktów), `zrodla.md` (z której rozmowy przyszedł każdy fakt — to dowód „dwóch
-rozmów"), `historia-zmian.md`, `uspione.md`, `uspione-archiwum-RRRR.md`, `kopie\`,
+faktów), `zrodla.md` (z której rozmowy przyszedł każdy fakt i kiedy agent go użył —
+to dowód „dwóch rozmów"), `historia-zmian.md`, `uspione.md`, `uspione-archiwum-RRRR.md`, `kopie\`,
 `.dzien-zero`, `.ostatnie-uzycie` (dokąd sięgnęło darmowe sprawdzanie użycia). Automat
 sprawdza, czy ścieżki podane w faktach istnieją — także w faktach, które już stoją
 w pliku instrukcji. Wiedza zostaje **na Twoim dysku**, poza repozytorium: kto

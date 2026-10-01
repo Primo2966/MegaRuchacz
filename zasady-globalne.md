@@ -49,7 +49,8 @@ bez pytania. Warstwy:
 1. **BIEŻĄCA** — podsekcja „Bieżące", format `- [RRRR-MM-DD] treść`. Tu trafia
    każdy nowy fakt.
 2. **STAŁA** — reszta „Co wiem". Fakt z bieżącej awansuje sam, gdy padnie w dwóch
-   różnych rozmowach. Wpisy dodane ręcznie są przypięte — nigdy nie zasypiają.
+   różnych rozmowach albo gdy Claude go użyje w innym dniu (i w innej rozmowie).
+   Wpisy dodane ręcznie są przypięte — nigdy nie zasypiają.
 3. **REFERENCYJNA** — pliki w `wiedza/`, w stałej jedna linia odsyłacza. Czytaj
    je tylko, gdy rozmowa ich dotyczy.
 

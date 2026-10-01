@@ -17,7 +17,8 @@ A fact the model hands back AGAIN (already waiting, already written down) is not
 but its sighting still goes to the trail, with the full list of conversations of the batch. That
 repetition is the evidence lore.verify needs before it lets a fact into the durable layer: a fact
 heard in two different conversations has earned it, a fact heard once only lives in the current
-layer until it ages out.
+layer until it ages out — unless the agent USES it on another day, in another conversation, which
+counts as the second one (USED, lore.verify.Trail.confirmations).
 
 Run: uv --directory C:\\dev\\claude-worker\\lore run python -m lore.facts [--proba] [--nadrabiaj N]
 """
@@ -59,7 +60,10 @@ SOURCES_NAME = "zrodla.md"  # where every fact came from — written here and by
 # The events of the trail lore.verify reads back — one name each, so the two modules cannot drift.
 SIGHTED = "wyłowiony"  # the first time a fact came out of the conversations
 SIGHTED_AGAIN = "wyłowiony ponownie"  # the same fact once more — the evidence for promotion
-USED = "użyty"  # Claude applied a durable fact of the automaton — what keeps it awake (see USAGE_NOTE)
+USED = "użyty"  # Claude applied a fact of the automaton — keeps it awake, may promote it (USAGE_NOTE)
+# in the source of a USED line found by a pair of weak words only (lore.usage): such a use keeps a
+# durable fact awake, but does not confirm a current one for promotion — see lore.usage, rule 5
+USED_WEAK = "tylko słabe słowa"
 # The field holding EVERY conversation of the batch. The readable source next to it names only
 # the first MAX_NAMED_SESSIONS; "i 2 innych" cannot tell whether two sightings share a conversation.
 SESSIONS_FIELD = "sesje:"
@@ -264,7 +268,7 @@ CANDIDATES_HEADER = """# Kandydaci do trwałej wiedzy
 
 Propozycje wyłowione automatycznie z rozmów. Sprawdza je `lore.verify` — sam, bez pytania — i wpisuje
 do warstwy bieżącej (wygasa po 14 dniach). Do stałej fakt przechodzi dopiero wtedy, gdy padł w co
-najmniej dwóch różnych rozmowach. Tu zostaje tylko to, czego automat nie ma prawa rozstrzygnąć:
+najmniej dwóch różnych rozmowach albo agent go użył w innym dniu i innej rozmowie. Tu zostaje tylko to, czego automat nie ma prawa rozstrzygnąć:
 
 - `[!]` odrzucone — podana ścieżka nie istnieje,
 - `[x]` odhaczone ręcznie — automat tego nie rusza.
@@ -282,8 +286,10 @@ SOURCES_HEADER = """# Skąd się wzięły fakty
 Jedna linia na zdarzenie: `data | zdarzenie | szczegóły | treść faktu`. „wyłowiony” mówi, z których
 rozmów fakt pochodzi („sesje:” — komplet identyfikatorów), „wyłowiony ponownie” — że padł znowu,
 „wpisany” — kiedy trafił do warstwy bieżącej, „awansowany” — kiedy przeszedł do stałej, bo padł
-w co najmniej dwóch różnych rozmowach, „wygasł” — kiedy zniknął z bieżącej po 14 dniach,
-„użyty” — że agent zastosował fakt automatu ze stałej (to też trzyma go w niej, jak wzmianka),
+w co najmniej dwóch różnych rozmowach (albo został użyty w innym dniu i innej rozmowie), „wygasł” — kiedy zniknął z bieżącej po 14 dniach,
+„użyty” — że agent zastosował fakt automatu (w stałej trzyma go to w niej, jak wzmianka; fakt
+z bieżącej użyty w innym dniu i w innej rozmowie niż ta, z której go wyłowiono, liczy się jak
+druga rozmowa — chyba że trafiono go „tylko słabe słowa”),
 „uśpiony” / „obudzony” — kiedy wyszedł ze stałej po 180 dniach bez użycia i bez wzmianki i kiedy do
 niej wrócił, „zarchiwizowany” — kiedy po 2 latach snu przeszedł do uspione-archiwum-RRRR.md,
 „zastąpiony” / „wpisany w miejsce” — która wersja przegrała, a która wygrała sprzeczność,
@@ -822,7 +828,9 @@ def with_known_files(instruction: str) -> str:
 # leaves a USED line in the trail, and lore.verify counts it exactly like a sighting when it decides
 # what falls asleep and what wakes up. Only the automaton's facts are listed: a pinned entry never
 # falls asleep, so asking about it would be paid for and change nothing. The dormant ones are listed
-# as well — used again, one wakes up.
+# as well — used again, one wakes up. And since 2026-10-01 the current ones that may still be
+# promoted: used on another day, in another conversation, a current fact counts as heard twice
+# ("nie chcę się powtarzać" — lore.verify.Trail.confirmations).
 #
 # The list rides at the end of the MATERIAL (stdin), not of the instruction: it is there only when
 # there is something to list, and the instruction in argv stays the same every day.
@@ -857,19 +865,23 @@ class Watched:
 
 def watched_facts() -> Watched:
     """The automaton's facts of the durable layer (the longest unconfirmed first — they need the
-    check most) and then the dormant ones (the most recently put to sleep first)."""
+    check most), then its current ones that may still be promoted (the oldest first — the closest
+    to ageing out), then the dormant ones (the most recently put to sleep first)."""
     from . import verify  # here: verify imports this module, so it is complete only at call time
 
     trail = verify.read_trail(KNOWLEDGE_DIR / SOURCES_NAME)
-    durable, seen = [], set()
+    durable, current, seen = [], [], set()
     for path in instruction_paths():  # the same files lore.verify writes (INSTRUCTION_PATHS)
         for e in verify.entries(_lines(path)):
-            if not e.current and e.key not in seen and trail.is_auto(e):
+            if e.key not in seen and trail.use_matters(e):
                 seen.add(e.key)
-                durable.append((trail.last_confirmed(e.key) or "", e.text))
+                if e.current:
+                    current.append((e.day, e.text))
+                else:
+                    durable.append((trail.last_confirmed(e.key) or "", e.text))
     dormant = [entry for entry in map(dormant_entry, _lines(KNOWLEDGE_DIR / DORMANT_NAME)) if entry]
     dormant.sort(key=lambda d: d[0], reverse=True)
-    texts = [text for _, text in sorted(durable)]
+    texts = [text for _, text in sorted(durable)] + [text for _, text in sorted(current)]
     texts += [d[3] for d in dormant if verify.fact_key(d[3]) not in seen]
     out, left = Watched(), MAX_WATCHED_CHARS
     for text in texts:

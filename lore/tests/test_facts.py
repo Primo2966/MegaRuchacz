@@ -1525,3 +1525,26 @@ def test_a_run_leaves_a_line_of_history_and_the_old_tally_untouched(one_chunk):
     assert saved["fakty"] == str(len(MIXED))
     assert len(rows) == 1
     assert (rows[0]["fakty"], rows[0]["wiadomosci"]) == (str(len(MIXED)), "1")
+
+
+CURRENT_AUTO = "Użytkownik wysyła paczki z magazynu w Sobótce."
+CURRENT_SHORT = "Dziś kurier przyjeżdża po 15."
+
+
+def test_the_model_is_asked_about_the_current_facts_that_may_be_promoted(known_rules):
+    """Since 2026-10-01 a current fact used on another day, elsewhere, counts as heard twice — so the
+    model is asked about it; not about one it called short-lived (never promoted) nor a pinned one."""
+    facts.RULES_PATH.write_text(USE_RULES.replace(
+        "### Bieżące\n\n_(pusto)_\n",
+        f"### Bieżące\n\n- [2026-09-20] {CURRENT_AUTO}\n- [2026-09-20] {CURRENT_SHORT}\n"
+        "- [2026-09-20] Wpis ręczny w bieżącej.\n"), encoding="utf-8")
+    facts.note_sources([facts.Fact(CURRENT_AUTO, "stala", "firma")], "rozmowy", "2026-09-20", ["a"])
+    facts.note_sources([facts.Fact(CURRENT_SHORT, "biezaca")], "rozmowy", "2026-09-20", ["a"])
+    with open(facts.KNOWLEDGE_DIR / facts.SOURCES_NAME, "a", encoding="utf-8", newline="\n") as f:
+        for text in (CURRENT_AUTO, CURRENT_SHORT):
+            f.write(f"- 2026-09-20 | wpisany | biezaca -> CLAUDE.md | wpisany sam | {text}\n")
+    asleep(SLEEPING_FACT)
+
+    watched = facts.watched_facts()
+
+    assert watched.facts == [AUTO_FACT, CURRENT_AUTO, SLEEPING_FACT]

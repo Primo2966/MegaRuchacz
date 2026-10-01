@@ -118,7 +118,7 @@ footer { font-size: 12px; color: var(--muted); border-top: 1px solid var(--line)
 <div class="wrap">
 <h1>Droga jednego faktu przez pamięć</h1>
 
-<p class="lead"><b>Dobrze rozumiesz:</b> fakt wspomniany raz trafia do „Bieżące” w CLAUDE.md, a gdy padnie w 2 różnych rozmowach — przechodzi do części stałej „Co wiem”. Poniżej reszta drogi: co dalej się z nim dzieje i kiedy wypada.</p>
+<p class="lead"><b>Dobrze rozumiesz:</b> fakt wspomniany raz trafia do „Bieżące” w CLAUDE.md, a gdy padnie w 2 różnych rozmowach albo gdy Claude go użyje w innym dniu — przechodzi do części stałej „Co wiem”. Nie musisz go powtarzać. Poniżej reszta drogi: co dalej się z nim dzieje i kiedy wypada.</p>
 
 <div class="legend">Kiedy Claude to czyta:
   <span class="tag open">przy otwarciu okna rozmowy</span>
@@ -152,7 +152,7 @@ footer { font-size: 12px; color: var(--muted); border-top: 1px solid var(--line)
   </div>
 
   <!-- 4 -->
-  <div class="edge" style="--r:4"><span>padł w 2 różnych rozmowach · najwyżej 3 awanse na przebieg · tylko gdy zmieści się w limicie 8 000 znaków</span></div>
+  <div class="edge" style="--r:4"><span>padł w 2 różnych rozmowach albo Claude go użył w innym dniu (w innej rozmowie niż ta, w której padł) · najwyżej 3 awanse na przebieg · tylko gdy zmieści się w limicie 8 000 znaków</span></div>
   <div class="brs" style="--r:4">
     <div class="br side"><span class="if">lista albo tabela kilku powiązanych informacji</span><span class="ln">np. tabela dopłat do cen FBA dla FR i UK</span><b>→ osobny plik z nazwą w wiedza\, a w „Co wiem” jedna linijka z odnośnikiem</b><span class="ln">tak samo, gdy „Co wiem” zbliża się do limitu 8 000 znaków</span><span class="where"><code>~\.claude\wiedza\&lt;nazwa&gt;.md</code> · <span class="tag ask">na żądanie</span></span></div>
   </div>
@@ -197,7 +197,7 @@ footer { font-size: 12px; color: var(--muted); border-top: 1px solid var(--line)
     <h2>Liczby z kodu</h2>
     <ul>
       <li>14 dni życia w „Bieżące” — <code>CURRENT_DAYS</code></li>
-      <li>2 różne rozmowy do awansu — <code>MIN_CONVERSATIONS</code></li>
+      <li>2 różne rozmowy do awansu — <code>MIN_CONVERSATIONS</code>; jedną z nich może być użycie przez Claude w innym dniu i innej rozmowie (przy darmowym sprawdzaniu tylko mocnym słowem, np. numerem sprawy)</li>
       <li>3 awanse na jeden przebieg, reszta czeka na jutro — <code>MAX_PROMOTIONS</code></li>
       <li>8 000 znaków części stałej; awans ponad limit nie wchodzi — <code>STABLE_LIMIT</code></li>
       <li>180 dni bez użycia i wzmianki do uśpienia — <code>SLEEP_DAYS</code></li>
