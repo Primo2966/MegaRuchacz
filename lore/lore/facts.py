@@ -1964,9 +1964,22 @@ def _options(argv: list[str]) -> tuple[bool, int]:
     return dry_run, max(1, runs)
 
 
+def _use_by_keyword(dry_run: bool) -> None:
+    """lore.usage — the use of durable facts found in the transcripts by their own words, 0 tokens.
+    Never at the cost of the harvest; a failure is said, and its marker stays where it was, so the
+    next pass reads the same transcripts again."""
+    from . import usage  # usage imports this module
+    try:
+        usage.report(usage.run(dry_run=dry_run))
+    except Exception as e:  # noqa: BLE001 — the harvest itself must go on
+        log(f"UWAGA: the use check by keyword failed: {e!r} — no use found in the transcripts is"
+            f" recorded in this pass; the next one reads the same transcripts again")
+
+
 def main(argv: list[str] | None = None) -> int:
     argv = sys.argv[1:] if argv is None else argv
     dry_run, runs = _options(argv)
+    _use_by_keyword(dry_run)  # first: it needs no model, so a machine without one still gets it
     try:
         results = catch_up(runs=runs, dry_run=dry_run)
     except ModelMissing as e:
