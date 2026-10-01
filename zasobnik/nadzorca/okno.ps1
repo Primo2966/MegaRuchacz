@@ -320,7 +320,8 @@ function Pokaz-Okno {
   $kartaListaS.BackColor = $script:TloKarty
   $kartaListaS.Padding = New-Object System.Windows.Forms.Padding(1)
   $kartaListaS.Add_Paint({ param($nadawca, $e) Obrysuj $nadawca $e })
-  $script:ListaSkilli = New-Object System.Windows.Forms.Panel
+  # panel bez migania (wyglad.ps1, P50): podwojne buforowanie calej listy
+  $script:ListaSkilli = New-Object MegaRuchacz.ListaBezMigania
   $script:ListaSkilli.Dock = [System.Windows.Forms.DockStyle]::Fill
   $script:ListaSkilli.AutoScroll = $true
   $script:ListaSkilli.BackColor = $script:TloKarty
@@ -425,7 +426,7 @@ function Pokaz-Okno {
     $script:BSkillInstaluj = $null; $script:BSkillAktualizuj = $null; $script:BSkillCofnij = $null; $script:BSkillUsun = $null
     $script:BSkillSpakuj = $null; $script:BSkillSpakujWszystkie = $null
     $script:WierszeSkilli = @{}; $script:SkilleOperacjaOd = $null; $script:SkillePoOperacji = $null
-    $script:GrupySkilli = @{}; $script:NaglowkiGrup = @{}; $script:ZnacznikiGrup = @{}
+    $script:GrupySkilli = @{}; $script:NaglowkiGrup = @{}; $script:ZnacznikiGrup = @{}; $script:GrupyListy = @{}; $script:GrupaWiersza = @{}
     $script:Widok = "przeglad"
     $script:SzczegolyZajete = $false
   })

@@ -326,6 +326,13 @@ inwentarz warstw z 25.09, budowa okna sprzed podzialu, pomiary P23/P30 w calosci
   otwarcia (P21): `SendMessageTimeout` NIE wykrywa blokady watku okna. Test okna P43: scratchpad sesji
   1ca517cc, `p43\test-okno.ps1` + `scenariusz.ps1` (wzor P35, ukryty pulpit, `-Kod` = zlozona kopia
   `zasobnik`); hook i straznik PRZED/PO: `p43\test-hook.js`, `p43\test-straznik.js`.
+- POMIAR MIGANIA (P50): scratchpad 1ca517cc `miga\test-okno.ps1 -NaEkranie` + `scenariusz-miga.ps1`
+  + `Miga.cs` + `pokaz.js`. Okno poza ekranem na PRAWDZIWYM pulpicie (na ukrytym nie ma DWM),
+  hak WH_CALLWNDPROCRET liczy rysowanie SYNCHRONICZNE w trakcie zmiany (WM_ERASEBKGND/WM_PAINT
+  wyslane, z `IsWindowVisible`) - to ono trafia na ekran przed koncem przebudowy; filtr komunikatow
+  liczy WM_PAINT z kolejki. PULAPKA: klatek okna poza ekranem nie da sie wiarygodnie nagrac z innego
+  watku - BitBlt daje stara/biala powierzchnie, PrintWindow czeka na watek okna i sam wywoluje
+  malowanie (zawyza liczniki); `MIGA_ZRZUTY=0` dla czystych liczb.
 
 ## Polecane skille (od 0.22.0)
 
@@ -381,12 +388,19 @@ inwentarz warstw z 25.09, budowa okna sprzed podzialu, pomiary P23/P30 w calosci
   karta na Przegladzie). Bez zadania w Harmonogramie.
 - Zakladka (`zasobnik/nadzorca/skille.ps1`): wiersze `TableLayoutPanel` w przewijanym panelu (opis
   zawiniety - ListView ucinal). Grupy zwijane: `Grupa-Zrodla` + `Liczby-Grupy` -> `Naglowek-Grupy`
-  (pasek `$script:ZnacznikiGrup`: czerwony = problem, bursztyn = nowsza), klik -> `Przelacz-Grupe` ->
-  `Napelnij-Skille $false $true`; rozwiniete w `$script:GrupySkilli`. Spoza bazy (P49, `Skille-Spoza`):
+  (pasek `$script:ZnacznikiGrup`: czerwony = problem, bursztyn = nowsza), klik -> `Przelacz-Grupe`;
+  rozwiniete w `$script:GrupySkilli`. Od P50 (0.25.1) klik NIE przebudowuje listy: `Naglowek-Grupy`
+  rejestruje grupe w `$script:GrupyListy` (Naglowek, Strzalka, Zrodlo/Skille, Wiersze, Zbudowane),
+  `Wiersze-Grupy` buduje wiersze przy pierwszym rozwinieciu (wstawia za naglowkiem), potem tylko
+  `Visible`; `$script:GrupaWiersza` (nazwa -> grupa) - `Wybierz-Skill` nie przewija do ukrytego.
+  Panel listy to `MegaRuchacz.ListaBezMigania` (WS_EX_COMPOSITED, `wyglad.ps1`); zmiany ukladu
+  w `Wstrzymaj-Rysowanie`/`Wznow-Rysowanie` (WM_SETREDRAW) na KARCIE listy (`$lista.Parent`) -
+  PULAPKA: wstrzymana sama lista jest dla Windows niewidoczna i karta zamalowuje ja na bialo,
+  gdy pojawia sie/znika pasek przewijania. Pelna przebudowa tylko w `Napelnij-Skille` (nowe dane). Spoza bazy (P49, `Skille-Spoza`):
   grupy `__wlasne`, `__inne`, `__nieznane`, wiersze przez `Wiersz-Skilla` z nazwa `__spoza:<folder>`
   (`Znajdz-Skill` zwraca `@($s, $null)`, `$s.spoza`); przyciski `$script:BSkillSpakuj` / `BSkillSpakujWszystkie`
   (okno.ps1, zmienne w wyglad.ps1) widac tylko przy "Twoj wlasny" - wtedy cztery zwykle sa ukryte.
-  Test okna P49: scratchpad 1ca517cc `p49	est-okno.ps1` + `scenariusz-p49.ps1` (wzor P43).
+  Test okna P49: scratchpad 1ca517cc `p49\test-okno.ps1` + `scenariusz-p49.ps1` (wzor P43).
   `$script:BSkillUsun` ("Usun u mnie") w miejscu "Aktualizuj teraz". Dalej `Wiersz-Skilla`,
   `Pokaz-Info-Skilla`, `Podglad-Skilla`, `Wybierz-Skill`, `Rusz-Operacje-Skilli` +
   `Sprawdz-Operacje-Skilli` (zegar 2 s na `operacja.txt`).

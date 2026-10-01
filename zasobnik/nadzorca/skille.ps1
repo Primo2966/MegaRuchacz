@@ -197,10 +197,7 @@ function Naglowek-Grupy($g, [int]$szer) {
   if ($g.Rozwijalny) { $t.Cursor = [System.Windows.Forms.Cursors]::Hand }
   $t.ColumnStyles.Add((New-Object System.Windows.Forms.ColumnStyle([System.Windows.Forms.SizeType]::Percent, 100))) | Out-Null
   $t.ColumnStyles.Add((New-Object System.Windows.Forms.ColumnStyle([System.Windows.Forms.SizeType]::AutoSize))) | Out-Null
-  # strzalka: rozwinieta w dol, zwinieta w prawo (znaki z Unicode, zeby nie zalezaly od kodowania pliku)
-  $strz = ""
-  if ($g.Rozwijalny) { $strz = $(if ($rozw) { [string][char]0x25BC } else { [string][char]0x25B6 }) + "  " }
-  $ln = Etykieta-Zawijana ($strz + $g.Tytul) $script:CzGruba $script:KolTekst ($szer - 190)
+  $ln = Etykieta-Zawijana (Tytul-Naglowka $g.Tytul $g.Rozwijalny $rozw) $script:CzGruba $script:KolTekst ($szer - 190)
   $ln.UseMnemonic = $false
   $ls = Etykieta $g.Napis $script:CzMalaGruba $g.KolorNapisu
   $ls.UseMnemonic = $false
@@ -237,7 +234,36 @@ function Naglowek-Grupy($g, [int]$szer) {
     } catch { if (-not $script:RamkaZawiodla) { $script:RamkaZawiodla = $true; Zanotuj-Wywrotke "pasek grupy skilli" $_ } }
   })
   $script:NaglowkiGrup[$g.Id] = $t
+  # Rejestr grupy (P50): Przelacz-Grupe chowa/pokazuje jej wiersze zamiast budowac liste od nowa.
+  $script:GrupyListy[$g.Id] = [pscustomobject]@{
+    Naglowek = $t; Strzalka = $ln; Tytul = $g.Tytul; Rozwijalny = $g.Rozwijalny; Szer = $szer
+    Zrodlo = $null; Skille = @(); Wiersze = (New-Object System.Collections.Generic.List[object]); Zbudowane = $false
+  }
   return $t
+}
+
+# strzalka: rozwinieta w dol, zwinieta w prawo (znaki z Unicode, zeby nie zalezaly od kodowania pliku)
+function Tytul-Naglowka([string]$tytul, [bool]$rozwijalny, [bool]$rozw) {
+  if (-not $rozwijalny) { return $tytul }
+  return $(if ($rozw) { [string][char]0x25BC } else { [string][char]0x25B6 }) + "  " + $tytul
+}
+
+# Wiersze grupy (wiersz sprawdzenia zrodla i skille) - budowane przy pierwszym rozwinieciu
+# i zapamietane w $gr.Wiersze; kolejne klikniecia tylko je chowaja i pokazuja.
+function Wiersze-Grupy($gr) {
+  $wynik = New-Object System.Collections.Generic.List[object]
+  $sk = $gr.Skille
+  if ($gr.Zrodlo) { $wynik.Add((Wiersz-Sprawdzenia $gr.Zrodlo $gr.Szer)); $sk = @($gr.Zrodlo.skille) }
+  foreach ($s in @($sk)) {
+    $w = Wiersz-Skilla $s $gr.Szer
+    $script:WierszeSkilli["$($s.nazwa)"] = $w
+    $script:GrupaWiersza["$($s.nazwa)"] = "$($gr.Naglowek.Tag)"
+    if ("$($s.nazwa)" -eq $script:SkillWybrany) { $w.BackColor = $script:TloPrzel }
+    $wynik.Add($w)
+  }
+  foreach ($w in $wynik) { $gr.Wiersze.Add($w) }
+  $gr.Zbudowane = $true
+  return ,$wynik
 }
 
 # Wiersz pod naglowkiem rozwinietej grupy: kiedy sprawdzone i jaka jest najnowsza wersja.
@@ -252,12 +278,45 @@ function Wiersz-Sprawdzenia($z, [int]$szer) {
   return $p
 }
 
+# P50 - "dziwnie miga": wczesniej kazde klikniecie budowalo CALA liste od nowa (45-333
+# kontrolek zwalnianych i tworzonych, 0,7-4 s, lista znikala kawalkami). Teraz: wiersze
+# grupy powstaja raz, potem tylko Visible; rysowanie wstrzymane do konca zmiany,
+# przewijanie zostaje tam, gdzie bylo.
 function Przelacz-Grupe([string]$id) {
   if (-not $id) { return }
-  $script:GrupySkilli[$id] = -not [bool]$script:GrupySkilli[$id]
-  Napelnij-Skille $true
-  $n = $script:NaglowkiGrup[$id]
-  if ($n -and -not $n.IsDisposed) { $script:ListaSkilli.ScrollControlIntoView($n) }
+  $lista = $script:ListaSkilli
+  $gr = $script:GrupyListy[$id]
+  $rozw = -not [bool]$script:GrupySkilli[$id]
+  $script:GrupySkilli[$id] = $rozw
+  if (-not $gr -or $gr.Naglowek.IsDisposed -or -not $lista -or $lista.IsDisposed) {
+    # rejestru nie ma (nie powinno sie zdarzyc) - stara droga, przebudowa listy
+    Notuj "rozwiniecie grupy skilli '$id' bez rejestru grupy - przebudowa calej listy"
+    Napelnij-Skille $true
+    $n = $script:NaglowkiGrup[$id]
+    if ($n -and -not $n.IsDisposed) { $script:ListaSkilli.ScrollControlIntoView($n) }
+    return
+  }
+  $wnetrze = $lista.Controls[0]
+  $poz = $lista.AutoScrollPosition
+  $wstrzymane = Wstrzymaj-Rysowanie $lista.Parent
+  $lista.SuspendLayout()
+  $wnetrze.SuspendLayout()
+  try {
+    if ($rozw -and -not $gr.Zbudowane) {
+      $i = $wnetrze.Controls.GetChildIndex($gr.Naglowek)
+      foreach ($w in (Wiersze-Grupy $gr)) { $wnetrze.Controls.Add($w); $i++; $wnetrze.Controls.SetChildIndex($w, $i) }
+    } else {
+      foreach ($w in $gr.Wiersze) { if (-not $w.IsDisposed) { $w.Visible = $rozw } }
+    }
+    $gr.Strzalka.Text = Tytul-Naglowka $gr.Tytul $true $rozw
+  } finally {
+    $wnetrze.ResumeLayout($true)
+    $lista.ResumeLayout($true)
+    # AutoScrollPosition czyta sie ujemnie, a ustawia dodatnio
+    $lista.AutoScrollPosition = New-Object System.Drawing.Point((-$poz.X), (-$poz.Y))
+    if ($wstrzymane) { Wznow-Rysowanie $lista.Parent }
+  }
+  $lista.ScrollControlIntoView($gr.Naglowek)
 }
 
 function Znajdz-Skill([string]$nazwa) {
@@ -324,12 +383,21 @@ function Napelnij-Skille([bool]$tylkoLista = $false) {
   if (-not $tylkoLista) { $script:DoOdmalowania["skille"] = $false }
   $ds = $script:DaneSkilli
   $lista = $script:ListaSkilli
+  $wnetrze = $lista.Controls[0]
+  # P50: rysowanie wstrzymane, a uklad wnetrza zawieszony JUZ przed czyszczeniem - wczesniej
+  # zwalnianie wierszy liczylo uklad 98-166 razy i wymazywalo tlo na oczach uzytkownika.
+  # Wstrzymana jest KARTA wokol listy, nie sama lista: lista ze wstrzymanym rysowaniem jest dla
+  # Windows niewidoczna, wiec gdy pojawia sie albo znika pasek przewijania, karta zamalowywala
+  # cala liste na bialo (zmierzone - jedno wymazanie karty przy kazdym takim kliknieciu).
+  $wstrzymane = Wstrzymaj-Rysowanie $lista.Parent
   $lista.SuspendLayout()
+  $wnetrze.SuspendLayout()
   try {
     $script:WierszeSkilli = @{}
+    $script:GrupaWiersza = @{}
     $script:NaglowkiGrup = @{}
     $script:ZnacznikiGrup = @{}
-    $wnetrze = $lista.Controls[0]
+    $script:GrupyListy = @{}
     Wyczysc-Panel $wnetrze
     if ($ds.Powod -or -not $ds.Dane) {
       $script:LSkille.ForeColor = $script:KolPilne
@@ -342,18 +410,13 @@ function Napelnij-Skille([bool]$tylkoLista = $false) {
     }
     $d = $ds.Dane
     # wiersze dokladane jeden po drugim - uklad liczony raz, na koncu (rozwiniecie grupy ~2x szybciej)
-    $wnetrze.SuspendLayout()
     $szer = [math]::Max(300, $lista.ClientSize.Width - [System.Windows.Forms.SystemInformation]::VerticalScrollBarWidth - 2)
     foreach ($z in @($d.zrodla)) {
       $g = Grupa-Zrodla $z
       $wnetrze.Controls.Add((Naglowek-Grupy $g $szer))
+      $script:GrupyListy[$g.Id].Zrodlo = $z
       if (-not ($g.Rozwijalny -and $script:GrupySkilli[$g.Id])) { continue }
-      $wnetrze.Controls.Add((Wiersz-Sprawdzenia $z $szer))
-      foreach ($s in @($z.skille)) {
-        $w = Wiersz-Skilla $s $szer
-        $script:WierszeSkilli["$($s.nazwa)"] = $w
-        $wnetrze.Controls.Add($w)
-      }
+      foreach ($w in (Wiersze-Grupy $script:GrupyListy[$g.Id])) { $wnetrze.Controls.Add($w) }
     }
     # Spoza bazy (P49): trzy grupy - Twoje wlasne (z przyciskiem paczki), znane zrodla
     # poza opieka i zrodlo nieznane. Kazdy skill to klikalny wiersz jak w zrodlach.
@@ -372,14 +435,10 @@ function Napelnij-Skille([bool]$tylkoLista = $false) {
         Znacznik = $null; Blad = ""; Uwaga = ""; Rozwijalny = $true
       }
       $wnetrze.Controls.Add((Naglowek-Grupy $g $szer))
+      $script:GrupyListy[$gs.Id].Skille = $te
       if (-not $script:GrupySkilli[$gs.Id]) { continue }
-      foreach ($s in $te) {
-        $w = Wiersz-Skilla $s $szer
-        $script:WierszeSkilli["$($s.nazwa)"] = $w
-        $wnetrze.Controls.Add($w)
-      }
+      foreach ($w in (Wiersze-Grupy $script:GrupyListy[$gs.Id])) { $wnetrze.Controls.Add($w) }
     }
-    $wnetrze.ResumeLayout($true)
     if ($tylkoLista) {
       # sam wybrany wiersz podswietlony (jesli jego grupa jest rozwinieta), prawa strona bez zmian
       $w = $script:WierszeSkilli[$script:SkillWybrany]
@@ -392,7 +451,9 @@ function Napelnij-Skille([bool]$tylkoLista = $false) {
     if ($script:SkillWybrany -and (Znajdz-Skill $script:SkillWybrany)) { Wybierz-Skill $script:SkillWybrany }
     else { $script:SkillWybrany = ""; Pokaz-Info-Skilla $null; Pokaz-Przeglad-Skilli }
   } finally {
+    $wnetrze.ResumeLayout($true)
     $lista.ResumeLayout($true)
+    if ($wstrzymane) { Wznow-Rysowanie $lista.Parent }
     # etykieta sama dopasowuje wysokosc (AutoSize z MaximumSize)
   }
 }
@@ -591,7 +652,8 @@ function Wybierz-Skill([string]$nazwa) {
   }
   $script:SkillWybrany = $nazwa
   $wiersz = $script:WierszeSkilli[$nazwa]
-  if ($wiersz -and -not $wiersz.IsDisposed) { $script:ListaSkilli.ScrollControlIntoView($wiersz) }
+  # wiersz zwinietej grupy zostaje (ukryty, P50) - przewijamy tylko do wiersza rozwinietej
+  if ($wiersz -and -not $wiersz.IsDisposed -and $script:GrupySkilli[$script:GrupaWiersza[$nazwa]]) { $script:ListaSkilli.ScrollControlIntoView($wiersz) }
   Pokaz-Info-Skilla $para
   $script:SkillePodglad.Text = Podglad-Skilla $para[0]
   $script:SkillePodglad.SelectionStart = 0

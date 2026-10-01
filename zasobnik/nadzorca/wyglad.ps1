@@ -65,6 +65,8 @@ $script:BSkillSpakujWszystkie = $null
 $script:GrupySkilli    = @{}     # rozwiniete grupy (id zrodla -> $true), do zamkniecia okna
 $script:NaglowkiGrup   = @{}     # id -> naglowek grupy (przewijanie do niego po kliknieciu)
 $script:ZnacznikiGrup  = @{}     # id -> kolor paska z lewej naglowka albo $null
+$script:GrupyListy     = @{}     # id -> naglowek, strzalka i wiersze grupy (P50: chowane, nie budowane od nowa)
+$script:GrupaWiersza   = @{}     # nazwa skilla -> id grupy jego wiersza
 $script:SkillePodglad  = $null   # co sie zmienilo / wynik operacji
 $script:DaneSkilli     = $null   # odpowiedz Stan-Skilli
 $script:SkillWybrany   = ""
@@ -210,6 +212,48 @@ function Wymus-Pokazanie($formularz) {
     [MegaRuchacz.Pulpit]::ShowWindow($formularz.Handle, $SW_POKAZ) | Out-Null
     [MegaRuchacz.Pulpit]::SetForegroundWindow($formularz.Handle) | Out-Null
   } catch { Zanotuj-Wywrotke "wymuszenie pokazania okna" $_ }
+}
+
+# PRZECIW MIGANIU LISTY (P50). Zmierzone 01.10.2026 na kopii okna: rozwiniecie grupy
+# skilli wysylalo 43-66 SYNCHRONICZNYCH wymazan tla (WM_ERASEBKGND) w trakcie
+# przebudowy - kazda nowa kontrolka pokazujac sie czyscila swoj prostokat od razu,
+# a tekst dorysowywal sie dopiero po 0,7-4 s. Na ekranie: lista znika kawalkami.
+# - ListaBezMigania: panel z WS_EX_COMPOSITED - caly panel z dziecmi malowany
+#   w jednym buforze i pokazywany naraz (bez dorysowywania wiersz po wierszu);
+#   w CreateParams, wiec przezywa odtworzenie uchwytu (np. pojawienie sie paska).
+# - Wstrzymaj-Rysowanie / Wznow-Rysowanie: WM_SETREDRAW wokol zmian ukladu - nic
+#   nie trafia na ekran, dopoki zmiana sie nie skonczy; potem jedno odmalowanie.
+Add-Type -ReferencedAssemblies System.Windows.Forms, System.Drawing -TypeDefinition @'
+using System;
+using System.Runtime.InteropServices;
+namespace MegaRuchacz {
+  public class ListaBezMigania : System.Windows.Forms.Panel {
+    protected override System.Windows.Forms.CreateParams CreateParams {
+      get { System.Windows.Forms.CreateParams cp = base.CreateParams; cp.ExStyle |= 0x02000000; return cp; }
+    }
+  }
+  public static class Rysowanie {
+    [DllImport("user32.dll")] public static extern IntPtr SendMessage(IntPtr uchwyt, int komunikat, IntPtr w, IntPtr l);
+    [DllImport("user32.dll")] public static extern bool RedrawWindow(IntPtr uchwyt, IntPtr prostokat, IntPtr region, uint flagi);
+  }
+}
+'@
+
+# Zwraca $true, gdy rysowanie wstrzymano - tylko wtedy wolno je wznowic.
+function Wstrzymaj-Rysowanie($kontrolka) {
+  if (-not $kontrolka -or $kontrolka.IsDisposed -or -not $kontrolka.IsHandleCreated) { return $false }
+  [void][MegaRuchacz.Rysowanie]::SendMessage($kontrolka.Handle, 0x000B, [IntPtr]::Zero, [IntPtr]::Zero)   # WM_SETREDRAW off
+  return $true
+}
+
+function Wznow-Rysowanie($kontrolka) {
+  if (-not $kontrolka -or $kontrolka.IsDisposed -or -not $kontrolka.IsHandleCreated) { return }
+  [void][MegaRuchacz.Rysowanie]::SendMessage($kontrolka.Handle, 0x000B, [IntPtr]1, [IntPtr]::Zero)
+  # RDW_ERASE | RDW_FRAME | RDW_INVALIDATE | RDW_ALLCHILDREN - pasek przewijania (ramka) tez
+  if (-not [MegaRuchacz.Rysowanie]::RedrawWindow($kontrolka.Handle, [IntPtr]::Zero, [IntPtr]::Zero, 0x0485)) {
+    $kontrolka.Invalidate($true)
+    Notuj "RedrawWindow odmowil - lista odmalowana przez Invalidate"
+  }
 }
 
 # Znacznik dla nadzorca.ps1: ten plik wczytal sie do konca.

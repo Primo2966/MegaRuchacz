@@ -4,6 +4,16 @@ Każda zmiana wypychana na gita dostaje tu wpis. Numer rośnie wg zasady:
 pierwsza cyfra — przebudowa łamiąca zgodność, druga — nowa funkcja,
 trzecia — poprawka.
 
+## 0.25.1 — 2026-10-01
+
+- **Zakładka Skille już nie miga przy rozwijaniu grup.** Każde kliknięcie grupy budowało dotąd całą
+  listę od nowa (do 333 elementów), a w trakcie lista znikała kawałkami: zmierzone 43–66 wymazań tła
+  widocznych na ekranie, zanim tekst się dorysował, i 0,7–3,9 s, w których okno nie reagowało.
+  Teraz grupa buduje się raz, a kolejne kliknięcia tylko ją chowają i pokazują; ekran zmienia się
+  jednym ruchem, gdy wszystko jest gotowe (0 wymazań w trakcie, jedno odmalowanie listy naraz).
+  Zwijanie i ponowne rozwijanie trwa 35–105 ms, pierwsze rozwinięcie dużej grupy ok. 0,3–0,5 s.
+  Przewinięcie listy zostaje tam, gdzie było; wygląd bez zmian.
+
 ## 0.25.0 — 2026-10-01
 
 - **Skille „spoza bazy” rozpoznane — 38 z 42 jest teraz pod opieką i aktualizuje się samo.**
