@@ -7,5 +7,5 @@
 
 ## 2026-10-02 - dom po przepisaniu historii na GitHubie (P67)
 
-- [ ] Dom (D:\OrcaSpace\MegaRuchacz): historia na GitHubie zostala przepisana (usuniete prywatne dane). Straznik w domu zobaczy 'historie rozjechana' i nie pobierze nowej wersji. Naprawa przez SSH: kopia calego .megaruchacz\ (przed 02.10 raporty byly sledzone - reset by je skasowal), potem git fetch i git reset --hard origin/main, przywrocenie plikow z kopii, restart nadzorcy. Szczegoly: raport P67 na komputerze biurowym.
+- [ ] Dom (D:\OrcaSpace\MegaRuchacz): historia na GitHubie zostala przepisana (usuniete prywatne dane). Straznik w domu zobaczy 'historie rozjechana' i nie pobierze nowej wersji. Naprawa przez SSH: kopia calego .megaruchacz\ (przed 02.10 raporty byly sledzone - reset by je skasowal), potem git fetch i git reset --hard origin/main, przywrocenie plikow z kopii, restart nadzorcy. Szczegoly: raport P67 na komputerze biurowym. Historia przepisana drugi raz 02.10 (P70: autorzy zapisow bez prywatnego adresu i nazwiska) - ten sam reset wystarczy. Przy dopasowaniu ustawic tez w repo domu `git -C D:\OrcaSpace\MegaRuchacz config user.email 144699174+Primo2966@users.noreply.github.com` i `config user.name Primo2966` (repo-lokalny adres ma pierwszenstwo przed globalnym - inaczej kolejne zapisy znow wypuszcza prywatny adres).
 
