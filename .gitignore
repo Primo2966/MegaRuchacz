@@ -52,3 +52,6 @@ Thumbs.db
 
 # Zrzuty produkcyjnych baz (np. kopia przed P53) - dane firmy, nigdy na gita
 .megaruchacz/kopie-bazy/
+
+# Raporty workerow - prywatne dane uzytkownika, nie na GitHuba (decyzja 02.10)
+.megaruchacz/raporty/
