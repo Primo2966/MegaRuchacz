@@ -49,3 +49,6 @@ Thumbs.db
 .megaruchacz/zasady-kierownika.md
 .megaruchacz/zasady-sesja.json
 .megaruchacz/przypomnienie.json
+
+# Zrzuty produkcyjnych baz (np. kopia przed P53) - dane firmy, nigdy na gita
+.megaruchacz/kopie-bazy/
