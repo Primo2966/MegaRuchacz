@@ -37,7 +37,7 @@ from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
-from . import facts, index
+from . import facts, index, safeio
 from .db import log
 
 MARKER_NAME = ".ostatnie-uzycie"  # the moment the last pass started — "byłem tu" for this pass
@@ -493,8 +493,8 @@ def run(dry_run: bool = False, since: str | None = None,
     note(out["used"])
     facts.KNOWLEDGE_DIR.mkdir(parents=True, exist_ok=True)
     if offsets is not None:
-        offsets_path().write_text(json.dumps(offsets, ensure_ascii=False), encoding="utf-8")
-    marker_path().write_text(started + "\n", encoding="utf-8")
+        safeio.write_text(offsets_path(), json.dumps(offsets, ensure_ascii=False), newline=None)
+    safeio.write_text(marker_path(), started + "\n", newline=None)
     return out
 
 

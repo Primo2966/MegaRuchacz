@@ -69,6 +69,9 @@ $script:Porcje    = 0       # ile porcji materialu poszlo do modelu w TYM przebi
 $script:KosztStart = @{ tokeny = 0; fakty = 0; wywolania = 0 }  # licznik kosztu sprzed pracy
 $script:ZnacznikPrzed = $null  # dokad siegal odczyt, zanim cykl przesunal znacznik
 
+# Zapis odporny na zanik pradu i rozpoznawanie wyzerowanych plikow (awaria 2026-10-02).
+. (Join-Path $PSScriptRoot "zapis-trwaly.ps1")
+
 # ---------------------------------------------------------------- wypisywanie
 
 function Naglowek($tekst) {
@@ -115,10 +118,10 @@ function Ustaw-Sciezki {
 
 function Bez-Bom { return (New-Object System.Text.UTF8Encoding($false)) }
 
+# Plik tymczasowy + zapis przez bufor dysku + podmiana (narzedzia\zapis-trwaly.ps1) - .cykl-postep
+# zapisany zwyklym WriteAllText byl 2026-10-02 jednym z wyzerowanych plikow.
 function Zapisz-Tekst($sciezka, $tekst) {
-  $katalog = Split-Path -Parent $sciezka
-  if ($katalog -and -not (Test-Path $katalog)) { New-Item -ItemType Directory -Force -Path $katalog | Out-Null }
-  [System.IO.File]::WriteAllText($sciezka, $tekst, (Bez-Bom))
+  Zapisz-Trwale $sciezka $tekst (Bez-Bom)
 }
 
 # Pliki stanu trzymaja proste "klucz: wartosc" - tak samo jak reszta narzedzia,
@@ -258,6 +261,7 @@ function Zapisz-Podsumowanie($status, $powod, $nadrobione, $zaleglosc) {
     "nie nadaza"  { "UWAGA: cykl NIE NADAZA - nadrobione przebiegi: $nadrobione, $czeka, a do konca doby zdazy najwyzej $zdaze$kierunek" }
     "odlozony"    { "cykl odlozony ($powod) - $czeka$kierunek" }
     "wyczerpane"  { "cykl odpuszczony po $MaxProb probach ($powod) - $czeka$kierunek" }
+    "wyzerowane"  { "$powod" }
     default       { "cykl zakonczony stanem '$status' - $czeka$kierunek" }
   }
   $podsumowanie = [ordered]@{
@@ -366,6 +370,10 @@ function Znajdz-Przeszkode($narzedzia) {
 # odlozenie (material czeka), reszta to zwykly blad - obie wracaja przy nastepnym otwarciu okna.
 function Rozpoznaj-Powod($tekst, $kod) {
   if ($tekst) {
+    # lore odmowil pracy na wyzerowanych plikach (kod 3, lore\lore\safeio.py) - jego zdanie
+    # mowi juz wszystko: ktory plik, gdzie zdrowa kopia i jak przywrocic
+    $m = [regex]::Match($tekst, 'ALARM: wyzerowane pliki pamieci[^\r\n]*')
+    if ($m.Success) { return $m.Value }
     # lore wola do wylawiania konkretne polecenie; gdy go tu nie ma, komunikat ma
     # mowic wprost, KTOREGO narzedzia brakuje, a nie "wylawianie nie powiodlo sie"
     if ($tekst -match '(?i)no .?(claude|codex).? in PATH|install Claude Code') {
@@ -655,6 +663,43 @@ function Sprawdz-Wiedze {
   return $LASTEXITCODE
 }
 
+# Rotacja kopii "wczoraj"/"przedwczoraj" (narzedzia\kopie-dzienne.ps1) - raz na dobe, przed cyklem,
+# bo to cykl zapisuje pliki pamieci. Kod 2 = ktorys plik pamieci ma bajty 0x00: wtedy dzien
+# zamykamy stanem "wyzerowane" (to nie jest "odlozony" - powtorka niczego nie naprawi, a dozor
+# i straznik nie maja go ruszac w kolko) i konczymy, zanim cokolwiek dotknie plikow.
+# Rotacja, ktora sie wywrocila z innego powodu, cyklu nie zatrzymuje - mowi o tym i idzie dalej.
+function Pilnuj-Kopii-Dziennych($stan) {
+  $skrypt = Join-Path $PSScriptRoot "kopie-dzienne.ps1"
+  if (-not (Test-Path $skrypt)) { Ostrzezenie "nie ma $skrypt - kopii dziennych nie robie"; return }
+  $global:LASTEXITCODE = 0
+  $wy = @()
+  try {
+    if ($Proba) { $wy = @(& $skrypt -Rotuj -Proba -KatalogDomowy $KatalogDomowy -Zrodlo $Zrodlo 2>&1) }
+    else        { $wy = @(& $skrypt -Rotuj -KatalogDomowy $KatalogDomowy -Zrodlo $Zrodlo 2>&1) }
+    $kod = $LASTEXITCODE
+  } catch {
+    $wy = @("$($_.Exception.Message)")
+    $kod = 1
+  }
+  $tekst = ($wy | ForEach-Object { "$_" }) -join " "
+  if ($kod -eq 2) {
+    $alarm = [regex]::Match($tekst, 'ALARM: wyzerowane pliki pamieci.*?(?= kopie dzienne:|$)').Value
+    if (-not $alarm) { $alarm = $tekst }
+    Blad $alarm
+    Blad "cykl NIE rusza - nic nie zostalo przeczytane ani zapisane"
+    if (-not $Proba) {
+      $stan["status"] = "wyzerowane"
+      $stan["powod"]  = $alarm
+      $stan["czas"]   = (Get-Date -Format "yyyy-MM-dd HH:mm")
+      Zapisz-Stan $stan
+    }
+    Zapisz-Podsumowanie "wyzerowane" $alarm 0 0
+    exit 1
+  }
+  if ($kod -ne 0) { Ostrzezenie "kopie dzienne sie nie udaly (kod $kod): $tekst - cykl idzie dalej"; return }
+  foreach ($l in $wy) { Krok "$l" }
+}
+
 function Uruchom-Cykl {
   $dzis = (Get-Date -Format "yyyy-MM-dd")
   $stan = Czytaj-Klucze $script:PlikStanu
@@ -680,6 +725,10 @@ function Uruchom-Cykl {
     Krok "na dzis koniec prob ($proby z $MaxProb) - cykl wroci jutro, material czeka nietkniety"
     exit 0
   }
+
+  # Kopie dzienne i kontrola zer - PRZED jakakolwiek praca. Z wyzerowanych plikow cykl
+  # nie czyta, nie pisze do nich i nie robi z nich kopii (awaria 2026-10-02).
+  Pilnuj-Kopii-Dziennych $stan
 
   # licznik podnosimy PRZED praca: przebieg, ktory sie wywroci, ma sie policzyc
   $proby++

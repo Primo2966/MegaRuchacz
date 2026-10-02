@@ -63,12 +63,12 @@ from __future__ import annotations
 import hashlib
 import json
 import re
-import shutil
 import sys
 from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
 
+from . import safeio
 from .db import CLAUDE_HOME, log
 from .facts import (DORMANT_NAME, PENDING_NOTE, SESSIONS_FIELD, SIGHTED, SIGHTED_AGAIN,
                     SOURCES_HEADER, SOURCES_NAME, USED, USED_WEAK, describe_file, dormant_entry,
@@ -779,7 +779,7 @@ def backup_file(path: Path, day: str | None = None) -> Path:
     day = day or datetime.now().strftime("%Y-%m-%d-%H%M%S")
     BACKUP_DIR.mkdir(parents=True, exist_ok=True)
     target = BACKUP_DIR / f"{path.stem}-{day}.md"
-    shutil.copy2(path, target)
+    safeio.copy_file(path, target)  # on the disk before the change, and never a copy of zeros
     return target
 
 
@@ -1309,11 +1309,9 @@ def write_archives(moved: dict[str, list[str]], newline: str) -> list[str]:
     for name, lines in moved.items():
         path = KNOWLEDGE_DIR / name
         try:
-            first_time = not path.exists()
-            with open(path, "a", encoding="utf-8", newline="") as f:
-                head = ARCHIVE_HEADER.format(year=name[-7:-3], years=ARCHIVE_DAYS // 365)
-                text = (head if first_time else "") + "".join(line + "\n" for line in lines)
-                f.write(text.replace("\n", newline))
+            head = ARCHIVE_HEADER.format(year=name[-7:-3], years=ARCHIVE_DAYS // 365)
+            safeio.append_text(path, "".join(line + "\n" for line in lines).replace("\n", newline),
+                               header=head.replace("\n", newline), newline="")
         except OSError as e:
             log(f"ALARM: {len(lines)} dormant facts could not be moved to {name}: {e}"
                 f" — they stay in {DORMANT_NAME}")
@@ -1658,11 +1656,7 @@ def write_reference(name: str, text: str, day: str | None = None) -> tuple[Path 
         if key in {normalize(_entry_text(line)) for line in existing.splitlines()}:
             return None, existing
         backup_file(target, day)
-    KNOWLEDGE_DIR.mkdir(parents=True, exist_ok=True)
-    with open(target, "a", encoding="utf-8", newline="\n") as f:
-        if existing is None:
-            f.write(REFERENCE_HEADER.format(name=target.stem))
-        f.write(f"\n- {text}\n")
+    safeio.append_text(target, f"\n- {text}\n", header=REFERENCE_HEADER.format(name=target.stem))
     return target, existing
 
 
@@ -1715,8 +1709,7 @@ def undo_references(written: list[tuple[Path, str | None]]) -> list[str]:
             if before is None:
                 target.unlink()
             else:
-                with open(target, "w", encoding="utf-8", newline="") as f:
-                    f.write(before)
+                safeio.write_text(target, before, newline="")
         except OSError as e:
             left.append(f"{target}: {e}")
             log(f"ALARM: {target} could not be taken back after the failed write: {e}")
@@ -1735,12 +1728,7 @@ def undo_references(written: list[tuple[Path, str | None]]) -> list[str]:
 
 def _note(line: str, what: str) -> None:
     try:
-        KNOWLEDGE_DIR.mkdir(parents=True, exist_ok=True)
-        first_time = not (KNOWLEDGE_DIR / SOURCES_NAME).exists()
-        with open(KNOWLEDGE_DIR / SOURCES_NAME, "a", encoding="utf-8", newline="\n") as f:
-            if first_time:
-                f.write(SOURCES_HEADER)
-            f.write(line)
+        safeio.append_text(KNOWLEDGE_DIR / SOURCES_NAME, line, header=SOURCES_HEADER)
     except OSError as e:  # the trail is a record of the job, never a reason to lose the job
         log(f"the trail of '{what[:40]}' was not written to {SOURCES_NAME}: {e}")
 
@@ -1835,13 +1823,7 @@ def _append(name: str, header: str, lines: list[str]) -> None:
     if not lines:
         return
     try:
-        KNOWLEDGE_DIR.mkdir(parents=True, exist_ok=True)
-        path = KNOWLEDGE_DIR / name
-        first_time = not path.exists()
-        with open(path, "a", encoding="utf-8", newline="\n") as f:
-            if first_time and header:
-                f.write(header)
-            f.write("".join(line + "\n" for line in lines))
+        safeio.append_text(KNOWLEDGE_DIR / name, "".join(line + "\n" for line in lines), header=header)
     except OSError as e:
         log(f"{len(lines)} line(s) were not written to {name}: {e}")
 
@@ -1880,9 +1862,7 @@ def save_changes(changes: list[Change], day: str) -> None:
                 continue  # the file was not there — undoing means removing it again
             copy = BACKUP_DIR / "zmiany" / f"{c.id}-{Path(path).name}"
             try:
-                copy.parent.mkdir(parents=True, exist_ok=True)
-                with open(copy, "w", encoding="utf-8", newline="") as f:
-                    f.write(text)
+                safeio.write_text(copy, text, newline="")
                 rec["pliki"][path]["kopia"] = str(copy)
             except OSError as e:
                 log(f"no copy of {path} before {c.id}: {e} — it can be undone by content only")
@@ -1990,8 +1970,7 @@ def _restore(path: Path, snap: dict) -> None:
     copy = _read_exact(Path(snap["kopia"])) if snap.get("kopia") else None
     if copy is None:
         raise OSError(f"no copy from before the change ({snap.get('kopia') or 'never taken'})")
-    with open(path, "w", encoding="utf-8", newline="") as f:
-        f.write(copy)
+    safeio.write_text(path, copy, newline="")
 
 
 def _op_text(op: dict) -> str:
@@ -2010,9 +1989,7 @@ def _undo_by_content(rec: dict, path: Path, out: dict) -> None:
         if text is None:
             path.unlink(missing_ok=True)
         else:
-            path.parent.mkdir(parents=True, exist_ok=True)
-            with open(path, "w", encoding="utf-8", newline="") as f:
-                f.write(text)
+            safeio.write_text(path, text, newline="")
         out["by_content"].append(f"{rec['id']}: {path.name}")
     except OSError as e:
         out["problems"].append(f"{rec['id']}: {path.name}: {e}")
@@ -2027,7 +2004,7 @@ def refresh_report(day: str) -> None:
     kept = [line for line in raw.splitlines() if not line.startswith(REPORT_KEY)]
     lines = kept + _report_state(report_lines(read_journal(), day))
     try:
-        path.write_text("\n".join(lines) + "\n", encoding="utf-8", newline="\n")
+        safeio.write_text(path, "\n".join(lines) + "\n")
     except OSError as e:
         log(f"the summary was not refreshed after the undo: {e}")
 
@@ -2166,8 +2143,7 @@ def write_state(r: dict, day: str) -> None:
         KNOWLEDGE_DIR.mkdir(parents=True, exist_ok=True)
         lines = [f"{key}: {value}" for key, value in _state(r, day).items()]
         lines += _report_state(r["report"])
-        (KNOWLEDGE_DIR / STATE_NAME).write_text("\n".join(lines) + "\n",
-                                                encoding="utf-8", newline="\n")
+        safeio.write_text(KNOWLEDGE_DIR / STATE_NAME, "\n".join(lines) + "\n")
     except OSError as e:
         log(f"the summary of this run was not written to {STATE_NAME}: {e}")
 
@@ -2182,6 +2158,9 @@ def run(dry_run: bool = False, exists=None, day: str | None = None) -> dict:
     Everything happens in memory first: the part without an id (settle_file), then each change with
     an id on top of it, recorded with the state before and after — and only then is anything written.
     """
+    # Nothing is settled on files a power cut left full of zeros (lore.safeio): the run stops
+    # before it reads them, with the name of the file and of its last healthy copy.
+    safeio.guard(safeio.memory_files(KNOWLEDGE_DIR, INSTRUCTION_PATHS))
     exists = exists or path_exists
     today = day or datetime.now().strftime("%Y-%m-%d")
     out = {"status": "dry-run" if dry_run else "ok", "approved": [], "suspicious": [],
@@ -2459,9 +2438,7 @@ def _merge(into: list, items: list, key=lambda item: item) -> None:
 
 
 def _write(path: Path, lines: list[str], newline: str) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    with open(path, "w", encoding="utf-8", newline="") as f:
-        f.write(newline.join(lines) + (newline if lines else ""))
+    safeio.write_text(path, newline.join(lines) + (newline if lines else ""), newline="")
 
 
 def _report(r: dict) -> None:
@@ -2549,6 +2526,10 @@ def _undo_command(target: str) -> int:
     return 0 if r["status"] == "ok" else 2
 
 
+# The same exit code as lore.facts for a run refused because of zeroed memory files.
+EXIT_ZEROED = 3
+
+
 def main(argv: list[str] | None = None) -> int:
     argv = sys.argv[1:] if argv is None else argv
     dry_run = bool({"--proba", "--dry-run"} & set(argv))
@@ -2565,6 +2546,9 @@ def main(argv: list[str] | None = None) -> int:
                     return 1
                 return _undo_command(value[0])
         r = run(dry_run=dry_run)
+    except safeio.ZeroedMemory as e:
+        log(str(e))
+        return EXIT_ZEROED
     except Exception as e:  # a scheduled task must end with a readable line, not a traceback
         log(f"verifying the facts failed: {e!r}")
         return 1

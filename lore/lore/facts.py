@@ -39,7 +39,7 @@ from datetime import datetime, timedelta, timezone
 
 from pathlib import Path
 
-from . import selection
+from . import safeio, selection
 from .db import CLAUDE_HOME, DB_PATH, connect, log, ts_to_local
 
 KNOWLEDGE_DIR = CLAUDE_HOME / "wiedza"
@@ -395,11 +395,11 @@ def write_marker(marker: "Marker | str") -> None:
     """The marker moves only after a run that really asked the model — a failed run has to catch up."""
     marker = marker if isinstance(marker, Marker) else Marker(marker)
     KNOWLEDGE_DIR.mkdir(parents=True, exist_ok=True)
-    MARKER_PATH.write_text(marker.stamp + "\n", encoding="utf-8")
+    safeio.write_text(MARKER_PATH, marker.stamp + "\n", newline=None)
     if marker.chunk_id is None:
         MARKER_ID_PATH.unlink(missing_ok=True)  # an id left from before would point somewhere else
     else:
-        MARKER_ID_PATH.write_text(f"{marker.chunk_id}\n", encoding="utf-8")
+        safeio.write_text(MARKER_ID_PATH, f"{marker.chunk_id}\n", newline=None)
 
 
 def day_zero() -> str:
@@ -423,7 +423,7 @@ def day_zero() -> str:
     start = iso_utc(datetime.now(timezone.utc))
     try:
         KNOWLEDGE_DIR.mkdir(parents=True, exist_ok=True)
-        DAY_ZERO_PATH.write_text(start + "\n", encoding="utf-8")
+        safeio.write_text(DAY_ZERO_PATH, start + "\n", newline=None)
         log(f"day zero set to {start} — chunks indexed before it are never harvested")
     except OSError as e:  # the floor still holds for this run; it is simply decided again next time
         log(f"day zero could not be written to {DAY_ZERO_PATH.name}: {e}")
@@ -1091,7 +1091,7 @@ def _write_cost(entry: dict[str, str], previous: dict[str, str]) -> None:
     lines = [f"{key}: {entry[key]}" for key in ("data", *COST_KEYS)]
     if previous.get("data"):  # skipped on the very first day, when there is no yesterday yet
         lines += [f"{PREVIOUS}{key}: {previous.get(key, '')}" for key in ("data", *COST_KEYS)]
-    cost_path().write_text("\n".join(lines) + "\n", encoding="utf-8", newline="\n")
+    safeio.write_text(cost_path(), "\n".join(lines) + "\n")
 
 
 # ---------------------------------------------------------------- the history of what it cost
@@ -1218,8 +1218,7 @@ def append_journal(row: dict[str, str]) -> list[dict[str, str]]:
     KNOWLEDGE_DIR.mkdir(parents=True, exist_ok=True)
     path = journal_path()
     header = "" if _has_header(path) else "\t".join(JOURNAL_COLUMNS) + "\n"
-    with open(path, "a", encoding="utf-8", newline="\n") as f:
-        f.write(header + _journal_line(row) + "\n")
+    safeio.append_text(path, header + _journal_line(row) + "\n")
     rows = read_journal()
     kept = trim_journal(rows)
     if len(kept) != len(rows):
@@ -1270,7 +1269,7 @@ def _journal_line(row: dict[str, str]) -> str:
 
 def _rewrite_journal(rows: list[dict[str, str]]) -> None:
     body = "\t".join(JOURNAL_COLUMNS) + "\n" + "".join(_journal_line(r) + "\n" for r in rows)
-    journal_path().write_text(body, encoding="utf-8", newline="\n")
+    safeio.write_text(journal_path(), body)
 
 
 def _days_back(day: str, days: int) -> str:
@@ -1287,8 +1286,7 @@ def write_summary(rows: list[dict[str, str]], problem: str = "", now: str | None
     KNOWLEDGE_DIR.mkdir(parents=True, exist_ok=True)
     now = now or datetime.now().strftime("%Y-%m-%d %H:%M")
     pairs = summarize(rows, now, problem)
-    summary_path().write_text("".join(f"{key}: {value}\n" for key, value in pairs.items()),
-                              encoding="utf-8", newline="\n")
+    safeio.write_text(summary_path(), "".join(f"{key}: {value}\n" for key, value in pairs.items()))
 
 
 def summarize(rows: list[dict[str, str]], now: str, problem: str = "") -> dict[str, str]:
@@ -1413,14 +1411,13 @@ def _append_learning(row: dict) -> list[dict[str, str]]:
     KNOWLEDGE_DIR.mkdir(parents=True, exist_ok=True)
     path = learning_journal_path()
     header = "" if path.exists() and path.stat().st_size else "\t".join(LEARNING_COLUMNS) + "\n"
-    with open(path, "a", encoding="utf-8", newline="\n") as f:
-        f.write(header + "\t".join(" ".join(str(row.get(c, "")).split()) for c in LEARNING_COLUMNS)
-                + "\n")
+    safeio.append_text(path, header + "\t".join(" ".join(str(row.get(c, "")).split())
+                                                for c in LEARNING_COLUMNS) + "\n")
     rows = _read_learning()
     kept = trim_journal(rows)  # the same two limits as the cost history
     if len(kept) != len(rows):
         body = "".join("\t".join(r.get(c, "") for c in LEARNING_COLUMNS) + "\n" for r in kept)
-        path.write_text("\t".join(LEARNING_COLUMNS) + "\n" + body, encoding="utf-8", newline="\n")
+        safeio.write_text(path, "\t".join(LEARNING_COLUMNS) + "\n" + body)
     return kept
 
 
@@ -1444,8 +1441,7 @@ def write_learning_summary(rows: list[dict[str, str]], problem: str = "",
     KNOWLEDGE_DIR.mkdir(parents=True, exist_ok=True)
     now = now or datetime.now().strftime("%Y-%m-%d %H:%M")
     pairs = summarize_learning(rows, now, problem)
-    learning_path().write_text("".join(f"{k}: {v}\n" for k, v in pairs.items()),
-                               encoding="utf-8", newline="\n")
+    safeio.write_text(learning_path(), "".join(f"{k}: {v}\n" for k, v in pairs.items()))
 
 
 def summarize_learning(rows: list[dict[str, str]], now: str, problem: str = "") -> dict[str, str]:
@@ -1734,14 +1730,9 @@ def note_sources(facts: list[Fact], source: str, day: str, sessions: list[str] |
         return
     ids = " ".join(sessions) or "-"
     try:
-        KNOWLEDGE_DIR.mkdir(parents=True, exist_ok=True)
-        first_time = not (KNOWLEDGE_DIR / SOURCES_NAME).exists()
-        with open(KNOWLEDGE_DIR / SOURCES_NAME, "a", encoding="utf-8", newline="\n") as f:
-            if first_time:
-                f.write(SOURCES_HEADER)
-            for fact in facts:
-                f.write(f"- {day} | {event} | {fact.label()} | {source} | {SESSIONS_FIELD} {ids}"
-                        f" | {fact.text}\n")
+        safeio.append_text(KNOWLEDGE_DIR / SOURCES_NAME, "".join(
+            f"- {day} | {event} | {fact.label()} | {source} | {SESSIONS_FIELD} {ids} | {fact.text}\n"
+            for fact in facts), header=SOURCES_HEADER)
     except OSError as e:
         log(f"the trail of {len(facts)} facts was not written to {SOURCES_NAME}: {e}")
 
@@ -1769,20 +1760,17 @@ def append_facts(facts: list[Fact], day: str | None = None, source: str = "",
     note_sources(again, source, day, sessions, event=SIGHTED_AGAIN)
     if not fresh:
         return []
-    KNOWLEDGE_DIR.mkdir(parents=True, exist_ok=True)
-    first_time = not CANDIDATES_PATH.exists()
-    with open(CANDIDATES_PATH, "a", encoding="utf-8", newline="\n") as f:
-        if first_time:
-            f.write(CANDIDATES_HEADER)
-        for layer in LAYERS:
-            group = [fact for fact in fresh if fact.layer == layer]
-            if not group:
-                continue
-            f.write(f"\n{GROUP_HEADINGS[layer]} — {day}\n\n")
-            for fact in group:
-                f.write(f"- [ ] [{day}] ({fact.label()}) {fact.text}\n")
-                if fact.pointer:  # the line that goes into the durable knowledge in its place
-                    f.write(f"      odsyłacz: {fact.pointer}\n")
+    parts = []
+    for layer in LAYERS:
+        group = [fact for fact in fresh if fact.layer == layer]
+        if not group:
+            continue
+        parts.append(f"\n{GROUP_HEADINGS[layer]} — {day}\n\n")
+        for fact in group:
+            parts.append(f"- [ ] [{day}] ({fact.label()}) {fact.text}\n")
+            if fact.pointer:  # the line that goes into the durable knowledge in its place
+                parts.append(f"      odsyłacz: {fact.pointer}\n")
+    safeio.append_text(CANDIDATES_PATH, "".join(parts), header=CANDIDATES_HEADER)
     note_sources(fresh, source, day, sessions)
     return fresh
 
@@ -1891,6 +1879,7 @@ def _move_marker(material: Material, marker: Marker, zero: str) -> None:
 def catch_up(runs: int = 1, dry_run: bool = False, ask=ask_harvest,
              conn: sqlite3.Connection | None = None) -> list[dict]:
     """Up to `runs` passes in a row, stopping early once the backlog is worked off."""
+    zero_guard()
     out = []
     for _ in range(max(1, runs)):
         r = run(dry_run=dry_run, ask=ask, conn=conn)
@@ -1988,9 +1977,25 @@ def _use_by_keyword(dry_run: bool) -> None:
             f" recorded in this pass; the next one reads the same transcripts again")
 
 
+def zero_guard() -> None:
+    """Nothing is harvested into, or counted from, memory files a power cut left full of zeros
+    (lore.safeio) — the run stops with the name of the file and of its last healthy copy."""
+    safeio.guard(safeio.memory_files(KNOWLEDGE_DIR, instruction_paths()))
+
+
+# Exit code of a run refused because of zeroed memory files — narzedzia\cykl-dzienny.ps1 tells
+# it from an ordinary failure, which is retried; this one waits for a human.
+EXIT_ZEROED = 3
+
+
 def main(argv: list[str] | None = None) -> int:
     argv = sys.argv[1:] if argv is None else argv
     dry_run, runs = _options(argv)
+    try:
+        zero_guard()  # before anything at all writes into wiedza\, the use check included
+    except safeio.ZeroedMemory as e:
+        log(str(e))
+        return EXIT_ZEROED
     _use_by_keyword(dry_run)  # first: it needs no model, so a machine without one still gets it
     try:
         results = catch_up(runs=runs, dry_run=dry_run)

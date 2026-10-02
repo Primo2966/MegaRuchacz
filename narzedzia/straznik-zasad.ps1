@@ -117,6 +117,10 @@ if (Test-Path $plikSufitu) { . $plikSufitu }
 # sam kod co w instaluj-globalnie.ps1. Brak pliku melduje Pilnuj-Kierownika.
 $plikCeliKierownika = Join-Path $PSScriptRoot "kierownik-cele.ps1"
 if (Test-Path $plikCeliKierownika) { . $plikCeliKierownika }
+# Zapis odporny na zanik pradu i rozpoznawanie wyzerowanych plikow pamieci (awaria
+# 2026-10-02, patrz naglowek tego pliku). Brak pliku melduje Sprawdz-Zera - glosno.
+$plikZapisu = Join-Path $PSScriptRoot "zapis-trwaly.ps1"
+if (Test-Path $plikZapisu) { . $plikZapisu }
 
 $POCZATEK = "<!-- MegaRuchacz:start -->"
 $KONIEC   = "<!-- MegaRuchacz:koniec -->"
@@ -197,9 +201,12 @@ function Notuj([string]$tekst) {
 
 function Bez-Bom { return (New-Object System.Text.UTF8Encoding($false)) }
 
+# Plik tymczasowy + zapis przez bufor dysku + podmiana (zapis-trwaly.ps1): CLAUDE.md i kopia
+# dla opencode zapisane zwyklym WriteAllText byly 2026-10-02 wsrod wyzerowanych plikow.
 function Zapisz-Tekst($sciezka, $tekst) {
   $katalog = Split-Path -Parent $sciezka
   if ($katalog -and -not (Test-Path $katalog)) { New-Item -ItemType Directory -Force -Path $katalog | Out-Null }
+  if (Get-Command Zapisz-Trwale -ErrorAction SilentlyContinue) { Zapisz-Trwale $sciezka $tekst (Bez-Bom); return }
   [System.IO.File]::WriteAllText($sciezka, $tekst, (Bez-Bom))
 }
 
@@ -575,8 +582,30 @@ function Dopisz-Dziennik {
   catch { Zanotuj-Wywrotke "zapis dziennika" $_ }
 }
 
+# Kopia z wyzerowanego pliku to nie kopia - 2026-10-02 taka "kopia" zer wygladala potem jak
+# najnowsza zdrowa. Kopiuj-Trwale rzuca wyjatkiem, a wolajacy melduje go jako wywrotke.
 function Kopia-Zapasowa($sciezka, $stempel) {
-  if (Test-Path $sciezka) { Copy-Item $sciezka "$sciezka.bak-$stempel" -Force }
+  if (-not (Test-Path $sciezka)) { return }
+  if (Get-Command Kopiuj-Trwale -ErrorAction SilentlyContinue) { Kopiuj-Trwale $sciezka "$sciezka.bak-$stempel"; return }
+  Copy-Item $sciezka "$sciezka.bak-$stempel" -Force
+}
+
+# ------------------------------------------------- 0a. wyzerowane pliki pamieci
+# Pierwsza rzecz kazdego przebiegu: czy CLAUDE.md, AGENTS.md i pliki wiedza\ nie maja w srodku
+# bajtow 0x00 (zanik pradu tuz po zapisie zostawia pelna dlugosc i same zera). Gdy maja:
+# alarm jako PIERWSZA linia wyjscia hooka, a potem zadnego wpisywania zasad, kopii dla
+# opencode ani cyklu wiedzy - 2026-10-02 straznik dokleil bloki do zer i zrobil ich "kopie".
+$script:Wyzerowane = @()
+function Sprawdz-Zera {
+  if (-not (Get-Command Wyzerowane-Pliki -ErrorAction SilentlyContinue)) {
+    Mow "MegaRuchacz: nie ma $plikZapisu - nie sprawdzam, czy pliki pamieci nie sa wyzerowane, i zapisuje je po staremu."
+    return
+  }
+  # bez @(): funkcja oddaje tablice jednym obiektem, a @() zrobiloby z pustej tablicy jeden element
+  $script:Wyzerowane = Wyzerowane-Pliki $KatalogDomowy
+  if ($script:Wyzerowane.Count -eq 0) { return }
+  Mow ("MegaRuchacz: " + (Opis-Wyzerowanych $script:Wyzerowane $KatalogDomowy $Zrodlo) +
+       " Do czasu przywrocenia nie wpisuje zasad, nie odswiezam kopii dla opencode i nie ruszam cyklu wiedzy.")
 }
 
 # Nadpisuje plik nalezacy do narzedzia, ale tylko gdy faktycznie sie rozni.
@@ -3202,9 +3231,12 @@ try {
   # jedna linia z data przy kazdym przebiegu to jedyny zapis tego, jak ten koszt
   # rosnie w czasie - z niego widac trend, ktorego pojedyncze okno nie pokaze.
   if ($Tlo) {
+    try { Sprawdz-Zera }   catch { Zanotuj-Wywrotke "sprawdzanie zer w plikach pamieci" $_ }
     try { Odswiez-Zrodlo } catch { Zanotuj-Wywrotke "odswiezanie zrodla" $_ }
-    try { Pilnuj-Zasad }   catch { Zanotuj-Wywrotke "pilnowanie zasad" $_ }
-    try { Pilnuj-Kierownika } catch { Zanotuj-Wywrotke "pilnowanie bloku kierownika" $_ }
+    if ($script:Wyzerowane.Count -eq 0) {
+      try { Pilnuj-Zasad }   catch { Zanotuj-Wywrotke "pilnowanie zasad" $_ }
+      try { Pilnuj-Kierownika } catch { Zanotuj-Wywrotke "pilnowanie bloku kierownika" $_ }
+    }
     try { Pilnuj-Hookow-Globalnych } catch { Zanotuj-Wywrotke "hooki instalacji globalnej" $_ }
     try { Pilnuj-Sufitu-Zawsze } catch { Zanotuj-Wywrotke "pilnowanie sufitu ladunku" $_ }
     try { Pilnuj-Przypomnienia-Zawsze } catch { Zanotuj-Wywrotke "podmiana starego hooka przypomnienia" $_ }
@@ -3213,7 +3245,9 @@ try {
     # Cykl wiedzy takze tutaj: na maszynie z samym Codeksem ten hook jest jedynym,
     # ktory w ogole chodzi przy starcie sesji. Ze jest w robocie, uzytkownik zobaczy
     # przy pierwszej wiadomosci - z linii stanu doklejanej przez przypomnienie.js.
-    try { Ruszaj-Cykl }    catch { Zanotuj-Wywrotke "start cyklu wiedzy" $_ }
+    if ($script:Wyzerowane.Count -eq 0) {
+      try { Ruszaj-Cykl }    catch { Zanotuj-Wywrotke "start cyklu wiedzy" $_ }
+    }
     # Najpierw dziennik (zbiera tez wywrotki), potem znacznik obecnosci wraz
     # z nimi - w tej kolejnosci, bo potkniecie samego dziennika tez ma sie zapisac.
     Dopisz-Dziennik
@@ -3287,9 +3321,13 @@ try {
   # Osobne try, zeby potkniecie sie na jednym nie zabralo drugiego.
   # Pobranie idzie pierwsze - reszta porownuje sie z katalogiem zrodlowym,
   # wiec ma sens dopiero wtedy, gdy ten katalog jest swiezy.
+  # Zera najpierw: alarm o nich ma byc pierwsza linia, a reszta ma wiedziec, czego nie ruszac.
+  try { Sprawdz-Zera }     catch { Zanotuj-Wywrotke "sprawdzanie zer w plikach pamieci" $_ }
   try { Odswiez-Zrodlo }   catch { Zanotuj-Wywrotke "odswiezanie zrodla" $_ }
-  try { Pilnuj-Zasad }     catch { Zanotuj-Wywrotke "pilnowanie zasad" $_ }
-  try { Pilnuj-Kierownika } catch { Zanotuj-Wywrotke "pilnowanie bloku kierownika" $_ }
+  if ($script:Wyzerowane.Count -eq 0) {
+    try { Pilnuj-Zasad }     catch { Zanotuj-Wywrotke "pilnowanie zasad" $_ }
+    try { Pilnuj-Kierownika } catch { Zanotuj-Wywrotke "pilnowanie bloku kierownika" $_ }
+  }
   try { Pilnuj-Hookow-Globalnych } catch { Zanotuj-Wywrotke "hooki instalacji globalnej" $_ }
   try { Pilnuj-Sufitu-Zawsze } catch { Zanotuj-Wywrotke "pilnowanie sufitu ladunku" $_ }
   try { Pilnuj-Przypomnienia-Zawsze } catch { Zanotuj-Wywrotke "podmiana starego hooka przypomnienia" $_ }
@@ -3308,7 +3346,9 @@ try {
   try { Zglos-Koszt-Dzienny } catch { Zanotuj-Wywrotke "dzienny rachunek za pamiec" $_ }
   # Na samym koncu: cykl wiedzy przy pierwszej sesji dnia. Linia o tym, co sie
   # zaczelo, ma stac pod rachunkiem, bo to ciag dalszy tej samej sprawy.
-  try { Ruszaj-Cykl }        catch { Zanotuj-Wywrotke "start cyklu wiedzy" $_ }
+  if ($script:Wyzerowane.Count -eq 0) {
+    try { Ruszaj-Cykl }        catch { Zanotuj-Wywrotke "start cyklu wiedzy" $_ }
+  }
   Zapisz-Obecnosc (Nazwa-Trybu)
 } catch {
   # Ostatnia siatka. Przebieg i tak konczy sie kodem 0, bo start sesji jest

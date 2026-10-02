@@ -30,12 +30,40 @@ $Utf8Odczyt = New-Object System.Text.UTF8Encoding($false, $true)
 $script:Bledy = 0
 $script:Raport = @()
 
+# Zapis odporny na zanik pradu i rozpoznawanie wyzerowanych plikow (awaria 2026-10-02:
+# ten skrypt dokleil blok do CLAUDE.md, ktory po zaniku pradu mial w srodku same bajty 0x00).
+$plikZapisu = Join-Path $PSScriptRoot "zapis-trwaly.ps1"
+if (-not (Test-Path $plikZapisu)) { Write-Error "Nie ma $plikZapisu - bez niego nie zapisuje plikow zasad."; exit 1 }
+. $plikZapisu
+
 function Czytaj($sciezka) {
   return [System.IO.File]::ReadAllText($sciezka, $Utf8Odczyt)
 }
 
 function Zapisz($sciezka, $tekst) {
-  [System.IO.File]::WriteAllText($sciezka, $tekst, $Utf8Zapis)
+  Zapisz-Trwale $sciezka $tekst $Utf8Zapis
+}
+
+# Bajt 0x00 w pliku zasad to slad zepsutego zapisu, nie tresc uzytkownika: taki plik
+# zostaje nietkniety i bez kopii, a uzytkownik dostaje adres zdrowej kopii.
+function Wyzerowany($plik, $nazwa) {
+  if (-not (Ma-Zera $plik)) { return $false }
+  $opis = Opis-Wyzerowanych (Wyzerowane-Pliki-Z @($plik)) $KatalogDomowy $Zrodlo
+  Write-Host "BLAD  $nazwa - $opis" -ForegroundColor Red
+  $script:Bledy++
+  $script:Raport += "$nazwa : NIETKNIETY - plik ma bajty 0x00"
+  return $true
+}
+
+function Wyzerowane-Pliki-Z($pliki) {
+  $wynik = @()
+  foreach ($p in $pliki) {
+    $b = [System.IO.File]::ReadAllBytes($p)
+    $zer = 0
+    foreach ($x in $b) { if ($x -eq 0) { $zer++ } }
+    $wynik += [pscustomobject]@{ Sciezka = $p; Zera = $zer; Rozmiar = $b.Length }
+  }
+  return ,$wynik
 }
 
 function Koniec-Linii($tekst) {
@@ -46,7 +74,7 @@ function Koniec-Linii($tekst) {
 
 function Kopia-Zapasowa($sciezka) {
   $bak = "$sciezka.bak-$Stempel"
-  Copy-Item $sciezka $bak -Force
+  Kopiuj-Trwale $sciezka $bak   # odmawia kopii pliku z bajtami 0x00
   return $bak
 }
 
@@ -109,6 +137,7 @@ function Pobierz-Tresc($plikZrodlowy) {
 function Wstaw-Blok($plik, $nazwa, $tresc) {
   $istnieje = Test-Path $plik
   $stary = ""
+  if ($istnieje -and (Wyzerowany $plik $nazwa)) { return }
   if ($istnieje) {
     try { $stary = Czytaj $plik }
     catch {
@@ -181,6 +210,7 @@ function Usun-Blok($plik, $nazwa) {
     $script:Raport += "$nazwa : brak pliku"
     return
   }
+  if (Wyzerowany $plik $nazwa) { return }
   try { $stary = Czytaj $plik }
   catch {
     Write-Host "BLAD  $nazwa - nie umiem odczytac $plik jako UTF-8, nie ruszam go" -ForegroundColor Red

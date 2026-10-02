@@ -127,8 +127,46 @@ function Zbierz-Alarmy($cykl, $rachunek) {
       "Komplet w $($script:NadzDom)\.claude\.megaruchacz-straznik.txt (klucze blad.*) " +
       "oraz w $($script:NadzDom)\.claude\.megaruchacz-tlo.log")
   }
+  # 5. Wyzerowane pliki pamięci - patrz Alarm-Wyzerowanej-Pamieci.
+  $zera = Alarm-Wyzerowanej-Pamieci
+  if ($zera) { $alarmy += $zera }
 
   return ,$alarmy
+}
+
+# Pliki pamięci z bajtami 0x00 w środku. 2026-10-02 zanik prądu tuż po porannym cyklu
+# zostawił CLAUDE.md i jedenaście plików wiedzy z pełną długością i samymi zerami - i nic
+# tego nie zgłosiło. Żaden nasz plik tekstowy nie ma prawa mieć zera, więc próg to jedno
+# zero (fałszywego alarmu z tego nie będzie). Lista plików ta sama, co w
+# narzedzia\zapis-trwaly.ps1 (Pliki-Pamieci) - tu przepisana, bo moduły nadzorcy nie
+# wczytują narzędzi. Cykl i strażnik i tak nic na takich plikach nie robią; to jest
+# głos do człowieka, który musi je przywrócić.
+function Alarm-Wyzerowanej-Pamieci {
+  $dom = $script:NadzDom
+  $pliki = @()
+  foreach ($w in @(".claude\CLAUDE.md", ".codex\AGENTS.md", ".config\opencode\AGENTS.md")) {
+    $p = Join-Path $dom $w
+    if (Test-Path -LiteralPath $p -PathType Leaf) { $pliki += $p }
+  }
+  $wiedza = Join-Path $dom ".claude\wiedza"
+  if (Test-Path -LiteralPath $wiedza) {
+    foreach ($f in @(Get-ChildItem -LiteralPath $wiedza -File -Force)) {
+      if ($f.Name -like "*.tmp-*") { continue }
+      if ((@(".md", ".txt", ".tsv", ".json", ".jsonl", "") -contains $f.Extension.ToLower()) -or $f.Name.StartsWith(".")) { $pliki += $f.FullName }
+    }
+  }
+  $zle = @()
+  foreach ($p in $pliki) {
+    try { $b = [System.IO.File]::ReadAllBytes($p) } catch { continue }
+    if ([Array]::IndexOf($b, [byte]0) -ge 0) { $zle += $p }
+  }
+  if ($zle.Count -eq 0) { return $null }
+  $polecenie = "powershell -ExecutionPolicy Bypass -File `"$($script:NadzZrodlo)\narzedzia\kopie-dzienne.ps1`" -Przywroc"
+  return (Alarm "zera" "MegaRuchacz: pliki pamięci są wyzerowane" (
+    "W środku zostały same zera, zwykle po zaniku prądu tuż po zapisie: " + ($zle -join ", ") + ". " +
+    "Nauka z rozmów i strażnik nic na nich nie budują, dopóki ich nie przywrócisz. " +
+    "Przywroc je z kopii dziennej (wczoraj albo przedwczoraj): $polecenie") "pilne" (
+    "Przywróć pliki z kopii dziennej - gotowe polecenie jest w szczegółach. Do tego czasu nauka z rozmów stoi."))
 }
 
 # Znacznik dla stan-nadzorcy.ps1: ten plik wczytal sie do konca.

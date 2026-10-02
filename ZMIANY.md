@@ -4,6 +4,30 @@ Każda zmiana wypychana na gita dostaje tu wpis. Numer rośnie wg zasady:
 pierwsza cyfra — przebudowa łamiąca zgodność, druga — nowa funkcja,
 trzecia — poprawka.
 
+## 0.25.2 — 2026-10-02
+
+- **Pliki pamięci nie mogą już zostać wyzerowane przez zanik prądu — a gdyby jednak, nic na nich nie
+  powstaje.** 02.10 o 08:03 poranny cykl wiedzy zapisał CLAUDE.md i jedenaście plików w `wiedza\`, a pół
+  minuty później komputer zgasł bez zamknięcia (Kernel-Power 41). Po restarcie te pliki miały pełną
+  długość i w środku same zera; strażnik dokleił do zer bloki zasad i zrobił „kopię zapasową” zer.
+  Teraz cykl (`lore`), strażnik, `wpisz-zasady` i sam cykl dzienny zapisują każdy plik pamięci do pliku
+  tymczasowego obok, wymuszają zapis na dysk i dopiero wtedy podmieniają stary plik. Zanik prądu
+  zostawia więc stary albo nowy plik, nigdy zera. Dopisywanie (źródła faktów, poczekalnia) też idzie
+  od razu na dysk.
+- **Wyzerowany plik pamięci zatrzymuje wszystko i głośno to mówi.** Strażnik przy starcie okna pisze
+  alarm jako pierwszą linię: który plik, ile zer, gdzie leży ostatnia zdrowa kopia i jakim poleceniem ją
+  przywrócić. Do czasu przywrócenia nie wpisuje zasad, nie odświeża kopii dla opencode i nie rusza cyklu.
+  Cykl wiedzy odmawia pracy, zanim cokolwiek przeczyta (stan „wyzerowane”; dozór nie ponawia go
+  w kółko). `wpisz-zasady` odmawia, a kopii z wyzerowanego pliku nie robi nikt. Okno nadzorcy pokazuje
+  pilny alarm „pliki pamięci są wyzerowane”.
+- **Kopie dzienne „wczoraj” i „przedwczoraj”** (`~\.claude\mr\kopie-dzienne\`): CLAUDE.md, AGENTS.md
+  Codeksa i opencode oraz pliki z `wiedza\`. Rotacja raz dziennie, zawsze przed cyklem wiedzy, i tylko
+  ze zdrowych plików. Gdy któryś ma zera, rotacja staje i kopie zostają nietknięte. Przywrócenie
+  wyzerowanych plików jednym poleceniem:
+  `powershell -ExecutionPolicy Bypass -File C:\dev\claude-worker\narzedzia\kopie-dzienne.ps1 -Przywroc`
+  (konkretny plik: `-Plik CLAUDE.md`, starsza kopia: `-Skad przedwczoraj`, stan kopii: `-Stan`).
+  Obecny stan pliku zostaje przed przywróceniem jako dowód.
+
 ## 0.25.1 — 2026-10-01
 
 - **Zakładka Skille już nie miga przy rozwijaniu grup.** Każde kliknięcie grupy budowało dotąd całą
