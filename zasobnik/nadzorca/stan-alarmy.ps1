@@ -130,6 +130,12 @@ function Zbierz-Alarmy($cykl, $rachunek) {
   # 5. Wyzerowane pliki pamięci - patrz Alarm-Wyzerowanej-Pamieci.
   $zera = Alarm-Wyzerowanej-Pamieci
   if ($zera) { $alarmy += $zera }
+  # 6. Kopia zapasowa na Dysk Google stara albo z pominietymi uszkodzonymi plikami (P62) -
+  # progi z uzasadnieniem w stan-kopia.ps1.
+  try {
+    $kop = Alarm-Kopii
+    if ($kop) { $alarmy += $kop }
+  } catch { Zanotuj-Wywrotke "alarm kopii zapasowej" $_ }
 
   return ,$alarmy
 }

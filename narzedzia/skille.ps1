@@ -32,6 +32,16 @@
 #    indziej) - skrypt sam go znajduje, zapisuje nowa sciezke w stanie ("przeniesiony")
 #    i aktualizuje normalnie. Autor skill usunal - to NIE jest blad: stan "usuniety",
 #    kopia u uzytkownika zostaje nietknieta; skasowac ja mozna tylko jawnie (-Tryb usun).
+# 8. Zera po zaniku pradu (P62). 2026-10-02 sprawdzenie skilli zapisalo pliki impeccable,
+#    a ~30 s pozniej komputer zgasl bez zamkniecia: pliki mialy pelna dlugosc i same bajty
+#    0x00, a nastepna aktualizacja z wymuszeniem zrobila z nich "kopie zapasowa" zer.
+#    Teraz: wyzerowany skill to blad w stanie i w zakladce, kopii z niego nie robimy
+#    (Zrob-Kopie odmawia); codzienny przebieg go nie rusza, naprawia go "Aktualizuj"
+#    z potwierdzeniem (-Wymus, wersja ze zrodla, bez kopii zer) albo "cofnij". Cofniecie
+#    pomija wyzerowane kopie i bierze starsza zdrowa - albo odmawia z powodem. Wlasna kopia
+#    zrodla z zerami w .git (bylo: wyzerowany .git\index, "index file corrupt") jest
+#    klonowana od nowa, a z kopii zrodla z zerami w plikach skilla nic nie wgrywamy.
+#    Rozpoznanie zer wspolne z cyklem i kopia zapasowa: zapis-trwaly.ps1 (Uszkodzenie-Zerami).
 #
 # GDZIE CZYTAJA SKILLE (rozpoznanie 2026-09-29, raport .megaruchacz\raporty\P18.md):
 #   Claude Code - ~\.claude\skills\<nazwa>\SKILL.md            -> cel "claude" (zawsze)
@@ -128,6 +138,8 @@ foreach ($t in @($Przerwy -split '[,;\s]+' | Where-Object { $_.Trim() })) {
 $LINII_DZIENNIKA = 3000
 # Pliki, ktore Windows sam podrzuca do katalogow - nie sa czescia skilla.
 $SMIECI = @("desktop.ini", "Thumbs.db", ".DS_Store")
+# Rozpoznawanie plikow wyzerowanych (P58/P62) - te same funkcje co cykl i straznik.
+. (Join-Path $PSScriptRoot "zapis-trwaly.ps1")
 
 $script:Wydruk = New-Object System.Collections.Generic.List[string]
 $script:Bledy  = 0
@@ -579,11 +591,30 @@ function Krok-Pobrania($z) {
       $jest = $false
     }
   }
+  # Kopia uszkodzona zerami (P62) - to nasza kopia, wiec od nowa zamiast ponawiac w kolko.
+  if ($jest) {
+    $usz = Uszkodzenie-Kopii-Zrodla $kat
+    if ($usz) {
+      Dziennik "naprawa" $z.Id "wlasna kopia zrodla uszkodzona po zaniku pradu ($usz) - klonuje od nowa"
+      Pisz "  $($z.Id): kopia źródła była uszkodzona ($usz) - pobieram ją od nowa."
+      Remove-Item -LiteralPath $kat -Recurse -Force
+      $jest = $false
+    }
+  }
   if ($jest) {
     $r = Wolaj-Git $kat @("fetch", "--quiet", "origin", $z.Galaz) $CZAS_FETCH
-    if (-not $r.ok) { $w.powod = $r.powod; $w.siec = (Czy-Siec $r $true); return $w }
-    $w.ok = $true
-    return $w
+    # Git sam mowi o uszkodzeniu, ktorego nie widac po naglowkach (np. obiekt luzem) -
+    # to nie siec, ponowienie wyszloby tak samo; klonujemy od nowa ponizej.
+    if ((-not $r.ok) -and ("$($r.powod)" -match 'index file corrupt|bad signature|is corrupt|corrupt (loose|object|pack)|bad object|unable to read [0-9a-f]{40}|object file .* is empty')) {
+      Dziennik "naprawa" $z.Id "git zglasza uszkodzona kopie zrodla ($($r.powod)) - klonuje od nowa"
+      Pisz "  $($z.Id): git zgłasza uszkodzoną kopię źródła - pobieram ją od nowa."
+      Remove-Item -LiteralPath $kat -Recurse -Force
+      $jest = $false
+    } elseif (-not $r.ok) { $w.powod = $r.powod; $w.siec = (Czy-Siec $r $true); return $w }
+    else {
+      $w.ok = $true
+      return $w
+    }
   }
   if (-not (Test-Path -LiteralPath $KatRepo)) { New-Item -ItemType Directory -Force -Path $KatRepo | Out-Null }
   if (Test-Path -LiteralPath $kat) { Remove-Item -LiteralPath $kat -Recurse -Force }
@@ -698,6 +729,8 @@ function Przygotuj-Zrodlo($z, [bool]$zSieci, $pobranie, $stan) {
     if (-not $jest) { $w.powod = "nie mam jeszcze kopii tego źródła, a sprawdzam bez sieci"; return $w }
     $url = Wolaj-Git $kat @("config", "--get", "remote.origin.url")
     if ((-not $url.ok) -or ($url.tekst.Trim() -ne $z.Adres)) { $w.powod = "adres źródła się zmienił, a bez sieci nie mogę pobrać nowego"; return $w }
+    $usz = Uszkodzenie-Kopii-Zrodla $kat
+    if ($usz) { $w.powod = "kopia źródła jest uszkodzona ($usz), a bez sieci nie mogę pobrać jej od nowa"; return $w }
   } elseif ($null -eq $pobranie -or -not $pobranie.ok) {
     $w.powod = $(if ($null -eq $pobranie) { "pobranie ze źródła nie ruszyło" } else { Opis-Porazki-Pobrania $z $pobranie "pobranie ze źródła" })
     # kopie z poprzedniego razu mamy - commit podajemy, ale ok = $false: to NIE jest swieze sprawdzenie
@@ -869,8 +902,85 @@ function Usun-Katalog([string]$k) {
   if (Test-Path -LiteralPath $k) { Remove-Item -LiteralPath $k -Recurse -Force }
 }
 
+# Wyzerowane pliki w katalogu (skill, kopia zapasowa, kopia zrodla) jednym zdaniem;
+# $null, gdy zdrowy. Pliki, ktore Windows sam podrzuca ($SMIECI), sie nie licza.
+function Opis-Zer([string]$kat, [string[]]$pomin = @()) {
+  $w = Wyzerowane-W-Katalogu $kat $pomin
+  $w = @($w | Where-Object { $SMIECI -notcontains (Split-Path -Leaf $_.Sciezka) })
+  if ($w.Count -eq 0) { return $null }
+  $lista = (@($w | Select-Object -First 4 | ForEach-Object { "$($_.Wzgledna): $($_.Opis)" }) -join "; ")
+  if ($w.Count -gt 4) { $lista += "; i $($w.Count - 4) więcej" }
+  return "$($w.Count) $(Odmien $w.Count 'plik jest wyzerowany' 'pliki są wyzerowane' 'plików jest wyzerowanych') ($lista)"
+}
+
+# Ktore z miejsc instalacji maja skill z zerami: cel.Id -> opis. Pusty slownik = zdrowy.
+function Zera-W-Celach($sk, $cele) {
+  $wynik = [ordered]@{}
+  foreach ($c in $cele) {
+    $o = Opis-Zer (Join-Path $c.Katalog $sk.Folder)
+    if ($o) { $wynik[$c.Id] = $o }
+  }
+  return $wynik
+}
+
+# Czy NASZA kopia repozytorium zrodla nie jest uszkodzona zerami (P62: po zaniku pradu
+# .git\index vibecode byl wyzerowany i kazde pobranie konczylo sie "index file corrupt",
+# piec razy ponawiane jak blad sieci). Pliki binarne gita poznajemy po naglowku - zera maja
+# z natury, a wyzerowany plik naglowka nie ma; tekstowe (HEAD, config, refs) jak kazdy tekst.
+# $null = zdrowa (albo jej nie ma), inaczej opis.
+function Naglowek-Zgodny([string]$p, [byte[]]$oczekiwany) {
+  $fs = [System.IO.File]::Open($p, [System.IO.FileMode]::Open, [System.IO.FileAccess]::Read, [System.IO.FileShare]::ReadWrite)
+  try { $b = New-Object byte[] $oczekiwany.Length; $n = $fs.Read($b, 0, $b.Length) } finally { $fs.Dispose() }
+  if ($n -lt $oczekiwany.Length) { return $false }
+  for ($i = 0; $i -lt $n; $i++) { if ($b[$i] -ne $oczekiwany[$i]) { return $false } }
+  return $true
+}
+
+function Uszkodzenie-Kopii-Zrodla([string]$kat) {
+  $g = Join-Path $kat ".git"
+  if (-not (Test-Path -LiteralPath $g -PathType Container)) { return $null }
+  $zle = @()
+  $binarne = @(
+    @("index", [byte[]](0x44, 0x49, 0x52, 0x43)),                       # "DIRC"
+    @("objects\pack\*.pack", [byte[]](0x50, 0x41, 0x43, 0x4B)),         # "PACK"
+    @("objects\pack\*.idx", [byte[]](0xFF, 0x74, 0x4F, 0x63))           # "\377tOc"
+  )
+  foreach ($para in $binarne) {
+    foreach ($f in @(Get-ChildItem -Path (Join-Path $g $para[0]) -File -Force -ErrorAction SilentlyContinue)) {
+      $ok = $false
+      try { $ok = Naglowek-Zgodny $f.FullName $para[1] } catch { $zle += ".git\$($f.Name): nie da się przeczytać ($($_.Exception.Message))"; continue }
+      if (-not $ok) { $zle += ".git\$($f.FullName.Substring($g.Length + 1)): zły nagłówek (wyzerowany albo ucięty)" }
+    }
+  }
+  $tekstowe = @()
+  foreach ($n in @("HEAD", "config", "packed-refs", "shallow", "info\sparse-checkout")) {
+    $p = Join-Path $g $n
+    if (Test-Path -LiteralPath $p -PathType Leaf) { $tekstowe += $p }
+  }
+  $refs = Join-Path $g "refs"
+  if (Test-Path -LiteralPath $refs) { $tekstowe += @(Get-ChildItem -LiteralPath $refs -Recurse -File -Force | ForEach-Object { $_.FullName }) }
+  foreach ($p in $tekstowe) {
+    $o = $null
+    try { $o = Uszkodzenie-Zerami $p } catch { $o = "nie da się przeczytać ($($_.Exception.Message))" }
+    if ($o) { $zle += ".git\$($p.Substring($g.Length + 1)): $o" }
+  }
+  # pliki skilli rozpakowane w kopii - reset --hard nie poprawi pliku o tym samym rozmiarze
+  # i dacie, wiec wyzerowany zostalby tam na zawsze
+  $robocze = Opis-Zer $kat @(".git")
+  if ($robocze) { $zle += "pliki skilli: $robocze" }
+  if ($zle.Count -eq 0) { return $null }
+  return (@($zle | Select-Object -First 3) -join "; ") + $(if ($zle.Count -gt 3) { "; i $($zle.Count - 3) więcej" })
+}
+
 # Kopia zapasowa przed podmiana: kopie\<folder>\<stempel>\<cel>\ + kopia.txt z opisem.
+# Z wyzerowanego skilla kopii NIE robi (P62) - kopia zer tylko udaje zabezpieczenie,
+# a przy limicie $KOPII_NA_SKILL wypycha ostatnie zdrowe. Wolajacy sprawdza to wczesniej
+# (Zera-W-Celach) i decyduje, co dalej; tu jest drugi bezpiecznik.
 function Zrob-Kopie($sk, [string]$rodzaj, $cele, [hashtable]$zapisy, [string]$naCommit) {
+  $zera = Zera-W-Celach $sk $cele
+  if ($zera.Count -gt 0) {
+    throw "skill jest wyzerowany - kopii zapasowej z zer nie robię: " + (@($zera.Keys | ForEach-Object { "$_ - $($zera[$_])" }) -join "; ")
+  }
   $stempel = Get-Date -Format 'yyyyMMdd-HHmmss'
   $kat = Join-Path (Join-Path $KatKopii $sk.Folder) $stempel
   $i = 1
@@ -905,6 +1015,9 @@ function Zrob-Kopie($sk, [string]$rodzaj, $cele, [hashtable]$zapisy, [string]$na
 # tymczasowego obok stanu (ten sam dysk), dopiero potem zamiana - skill nigdy nie
 # stoi w polowie skopiowany. Po zamianie sprawdzamy odcisk z oczekiwanym.
 function Wgraj-Wersje([string]$skad, [string]$dokad, $oczekiwane) {
+  # Kopia zrodla z zerami (zanik pradu w trakcie pobierania) - nie wgrywamy nic (P62).
+  $zera = Opis-Zer $skad
+  if ($zera) { throw "kopia źródła jest uszkodzona - $zera; nie wgrywam (przy następnym pobraniu kopia źródła zostanie pobrana od nowa)" }
   $tmp = Join-Path $KatTmp ([guid]::NewGuid().ToString("N").Substring(0, 12))
   Kopiuj-Katalog $skad $tmp
   $spr = Odcisk-Lokalny $tmp
@@ -1021,6 +1134,16 @@ function Wykryj($stan, $zrodla, $cele, [bool]$zSieci) {
           $x.cele[$c.Id] = $zapis
         }
         $zapis.stan = $o.Stan; $zapis.powod = $o.Powod; $zapis.najblizszy = $o.Najblizszy
+        # Wyzerowany po zaniku pradu (P62): Ocen-Cel widzi go jako "zmieniony", ale to nie
+        # reka uzytkownika - blad w stanie i w zakladce, z tym, jak naprawic.
+        $zera = Opis-Zer (Join-Path $c.Katalog $sk.Folder)
+        $zapis.wyzerowany = $(if ($zera) { "$($sk.Folder) ($($c.Nazwa)): $zera" } else { "" })
+        if ($zera) {
+          $zapis.powod = "pliki wyzerowane po zaniku prądu (to nie zmiana ręczna)"
+          $tresc = "$($c.Nazwa): skill uszkodzony - $zera. Kopii zapasowej z zer nie robię. Naprawa: `„Aktualizuj teraz`” (wersja od autora) albo `„Cofnij`” (ostatnia zdrowa kopia)."
+          $x.blad = $(if ($x.blad) { "$($x.blad) | $tresc" } else { $tresc })
+          Blad $sk.Nazwa $tresc
+        }
         if ($o.Stan -eq "zgodny" -or $o.Stan -eq "starszy") {
           if (-not $zapis.opieka) {
             $zapis.opieka = $true; $zapis.jak = "przejety"; $zapis.od = $teraz
@@ -1092,9 +1215,25 @@ function Aktualizuj-Skill($stan, $sk, $cele, $ctx, [bool]$jawnie, [bool]$wymus) 
 
   $zapisy = @{}; foreach ($c in $doZrobienia) { $zapisy[$c.Id] = $x.cele[$c.Id] }
   $rodzaj = $(if ($wymus) { "nadpisanie" } else { "aktualizacja" })
-  $kopia = $null
-  try { $kopia = Zrob-Kopie $sk $rodzaj $doZrobienia $zapisy $k.Commit }
-  catch { Blad $sk.Nazwa "nie udało się zrobić kopii zapasowej - NIE aktualizuję: $($_.Exception.Message)"; return 0 }
+  # Wyzerowany skill (P62): kopii z zer nie robimy. Bez zgody (-Wymus) nic nie ruszamy;
+  # ze zgoda wgrywamy wersje od autora - zera nie maja wartosci, ktora kopia by chronila.
+  # Miejsca zdrowe dostaja kopie jak zawsze.
+  $zera = Zera-W-Celach $sk $doZrobienia
+  if ($zera.Count -gt 0 -and -not $wymus) {
+    Blad $sk.Nazwa ("skill jest wyzerowany - kopii zapasowej z zer nie robię i bez Twojej zgody go nie podmieniam: " + (@($zera.Keys | ForEach-Object { "$_ - $($zera[$_])" }) -join "; "))
+    return 0
+  }
+  # (sam blad zer zapisal juz Wykryj w tym przebiegu - tu slad, ze podmiana szla bez kopii)
+  foreach ($id in @($zera.Keys)) {
+    Dziennik "bez-kopii" $sk.Nazwa "$id - skill wyzerowany ($($zera[$id])); kopii z zer nie robie, wgrywam wersje od autora (zgoda: -Wymus)"
+    Pisz "  $($sk.Folder) ($id): był wyzerowany - kopii zapasowej z zer nie robię, wgrywam wersję od autora."
+  }
+  $zdrowe = @($doZrobienia | Where-Object { -not $zera.Contains($_.Id) })
+  $kopia = ""
+  if ($zdrowe.Count -gt 0) {
+    try { $kopia = Zrob-Kopie $sk $rodzaj $zdrowe $zapisy $k.Commit }
+    catch { Blad $sk.Nazwa "nie udało się zrobić kopii zapasowej - NIE aktualizuję: $($_.Exception.Message)"; return 0 }
+  }
 
   $zrobione = 0
   foreach ($c in $doZrobienia) {
@@ -1104,6 +1243,10 @@ function Aktualizuj-Skill($stan, $sk, $cele, $ctx, [bool]$jawnie, [bool]$wymus) 
     try {
       Wgraj-Wersje $skad (Join-Path $c.Katalog $sk.Folder) $najn
     } catch {
+      if ($zera.Contains($c.Id) -or -not $kopia) {
+        Blad $sk.Nazwa "$($c.Nazwa): podmiana się nie udała ($($_.Exception.Message)); kopii nie było (skill był wyzerowany) - spróbuj ponownie albo `„Cofnij`”"
+        continue
+      }
       Blad $sk.Nazwa "$($c.Nazwa): podmiana się nie udała ($($_.Exception.Message)) - przywracam kopię"
       try {
         Usun-Katalog (Join-Path $c.Katalog $sk.Folder)
@@ -1113,7 +1256,7 @@ function Aktualizuj-Skill($stan, $sk, $cele, $ctx, [bool]$jawnie, [bool]$wymus) 
     }
     $rz = Roznica-Wersji $stareP $najn
     $zp.commit = $k.Commit; $zp.data = $k.Data; $zp.pliki = $najn; $zp.stan = "zgodny"; $zp.powod = ""; $zp.najblizszy = ""
-    $zp.opieka = $true; $zp.wstrzymany = $false
+    $zp.opieka = $true; $zp.wstrzymany = $false; $zp.wyzerowany = ""
     if (-not $zp.jak) { $zp.jak = "zainstalowany" }
     # po przenosinach u autora zmiany sprzed przeprowadzki leza pod stara sciezka
     $opisy = Opisy-Zmian $null $k.Katalog $staryCommit $k.Commit @($sk.Sciezka, $(if ($x.przeniesiony) { "$($x.przeniesiony.z)" }))
@@ -1121,7 +1264,7 @@ function Aktualizuj-Skill($stan, $sk, $cele, $ctx, [bool]$jawnie, [bool]$wymus) 
       kiedy = (Teraz); rodzaj = $rodzaj; cel = $c.Id; z = $staryCommit; zData = $staraData; na = $k.Commit; naData = $k.Data
       dodane = @($rz.Dodane); zmienione = @($rz.Zmienione); usuniete = @($rz.Usuniete); kopia = $kopia; opisy = @($opisy)
     }
-    $txt = "$($c.Nazwa): $(Opis-Commita $staryCommit $staraData) -> $(Opis-Commita $k.Commit $k.Data); pliki: +$($rz.Dodane.Count) ~$($rz.Zmienione.Count) -$($rz.Usuniete.Count); kopia: $kopia"
+    $txt = "$($c.Nazwa): $(Opis-Commita $staryCommit $staraData) -> $(Opis-Commita $k.Commit $k.Data); pliki: +$($rz.Dodane.Count) ~$($rz.Zmienione.Count) -$($rz.Usuniete.Count); kopia: $(if ($zera.Contains($c.Id)) { 'BRAK - skill był wyzerowany' } else { $kopia })"
     Dziennik $rodzaj $sk.Nazwa $txt
     Pisz "  $($sk.Folder) - $txt"
     $zrobione++
@@ -1161,19 +1304,42 @@ function Cofnij-Skill($stan, $sk, $cele) {
   $katS = Join-Path $KatKopii $sk.Folder
   if (-not (Test-Path -LiteralPath $katS)) { Blad $sk.Nazwa "nie ma żadnej kopii zapasowej tego skilla - nie ma czego cofać"; return 0 }
   $kopia = $null; $opis = $null
+  $wyzerowane = @()
   foreach ($d in @(Get-ChildItem -LiteralPath $katS -Directory | Sort-Object Name -Descending)) {
+    # Wyzerowana kopia (P62: 2026-10-02 powstaly kopie z wyzerowanego skilla, a kopia.txt
+    # tez moze byc zerami) - nie przywracamy zer, szukamy starszej zdrowej.
+    $zera = Opis-Zer $d.FullName
+    if ($zera) {
+      $wyzerowane += "$($d.Name) ($zera)"
+      Dziennik "uwaga" $sk.Nazwa "kopia $($d.Name) jest wyzerowana - pomijam ja przy cofaniu: $zera"
+      continue
+    }
     $o = Klucze-Z-Pliku (Join-Path $d.FullName "kopia.txt")
     if ($o["przywrocono"]) { continue }
     if ($o["rodzaj"] -eq "przed-cofnieciem") { continue }
     $kopia = $d.FullName; $opis = $o; break
   }
+  if (-not $kopia -and $wyzerowane.Count -gt 0) {
+    Blad $sk.Nazwa ("nie cofam: $($wyzerowane.Count) $(Odmien $wyzerowane.Count 'kopia jest wyzerowana' 'kopie są wyzerowane' 'kopii jest wyzerowanych'), a zdrowej, jeszcze nieprzywróconej nie ma - nie przywracam zer. Wersję od autora wgrasz przyciskiem `„Aktualizuj teraz`”. Pominięte: " + (@($wyzerowane | Select-Object -First 3) -join "; "))
+    return 0
+  }
   if (-not $kopia) { Blad $sk.Nazwa "wszystkie kopie tego skilla zostały już przywrócone - nie ma czego cofać"; return 0 }
+  if ($wyzerowane.Count -gt 0) {
+    Pisz "  $($sk.Folder): pominąłem $($wyzerowane.Count) $(Odmien $wyzerowane.Count 'wyzerowaną kopię' 'wyzerowane kopie' 'wyzerowanych kopii') ($(@($wyzerowane | ForEach-Object { ($_ -split ' ')[0] }) -join ', ')) - przywracam starszą zdrową z $($opis['kiedy'])."
+  }
   $celeKopii = @("$($opis['cele'])" -split ',' | Where-Object { $_ })
   $doCofniecia = @($cele | Where-Object { $_.Jest -and ($celeKopii -contains $_.Id) })
   if ($doCofniecia.Count -eq 0) { Blad $sk.Nazwa "kopia $kopia nie dotyczy żadnego miejsca instalacji na tej maszynie"; return 0 }
   # To, co jest teraz, tez idzie do kopii - cofniecie ma sie dac cofnac.
   $zapisy = @{}; foreach ($c in $doCofniecia) { $zapisy[$c.Id] = $(if ($x) { $x.cele[$c.Id] } else { @{} }) }
   $obecne = @($doCofniecia | Where-Object { Test-Path -LiteralPath (Join-Path $_.Katalog $sk.Folder) })
+  # Obecna wersja wyzerowana (P62) - kopii z zer nie robimy, a cofniecie to wlasnie naprawa.
+  $zera = Zera-W-Celach $sk $obecne
+  foreach ($id in @($zera.Keys)) {
+    Dziennik "bez-kopii" $sk.Nazwa "$id - obecna wersja wyzerowana ($($zera[$id])); kopii z zer nie robie, przywracam zdrowa kopie"
+    Pisz "  $($sk.Folder) ($id): obecna wersja jest wyzerowana - kopii z zer nie robię, przywracam zdrową kopię."
+  }
+  $obecne = @($obecne | Where-Object { -not $zera.Contains($_.Id) })
   $kopiaObecnych = ""
   if ($obecne.Count -gt 0) {
     try { $kopiaObecnych = Zrob-Kopie $sk "przed-cofnieciem" $obecne $zapisy "" }
@@ -1200,7 +1366,7 @@ function Cofnij-Skill($stan, $sk, $cele) {
       $zp = $x.cele[$c.Id]
       $zp.commit = "$($opis["$($c.Id).commit"])"; $zp.data = "$($opis["$($c.Id).data"])"
       $zp.stan = "$($opis["$($c.Id).stan"])"
-      $zp.wstrzymany = $true
+      $zp.wstrzymany = $true; $zp.wyzerowany = ""
       $lok = Odcisk-Lokalny $docel
       $p = @{}; foreach ($rel in $lok.Keys) { $p[$rel] = $lok[$rel][1] }
       $zp.pliki = $p
@@ -1228,6 +1394,7 @@ function Usun-Skill($stan, $sk, $cele) {
   if ($obecne.Count -eq 0) { Pisz "  $($sk.Folder): nie masz go nigdzie - nie ma czego usuwać."; return 0 }
   $zapisy = @{}; foreach ($c in $obecne) { $zapisy[$c.Id] = $(if ($x.cele.ContainsKey($c.Id)) { $x.cele[$c.Id] } else { @{} }) }
   $kopia = $null
+  # (wyzerowany skill: Zrob-Kopie odmawia, wiec bez kopii nie kasujemy - P62)
   try { $kopia = Zrob-Kopie $sk "usuniecie" $obecne $zapisy "" }
   catch { Blad $sk.Nazwa "nie udało się zrobić kopii zapasowej - NIE usuwam: $($_.Exception.Message)"; return 0 }
   $zrobione = 0
@@ -1483,6 +1650,7 @@ function Stan-Dla-Okna($stan, $zrodla, $cele) {
           opieka = $(if ($zp) { [bool]$zp.opieka } else { $false }); wstrzymany = $(if ($zp) { [bool]$zp.wstrzymany } else { $false })
           jak = $(if ($zp) { "$($zp.jak)" } else { "" }); od = $(if ($zp) { "$($zp.od)" } else { "" })
           najblizszy = $(if ($zp) { "$($zp.najblizszy)" } else { "" })
+          wyzerowany = $(if ($zp -and $null -ne $lok) { "$($zp.wyzerowany)" } else { "" })
           zmienionyOdSpisu = ($null -ne $lok -and $zp -and $zp.pliki -and $zp.pliki.Count -gt 0 -and -not (Zgodne $lok $zp.pliki) -and $st -eq "zmieniony" -and $zp.stan -ne "zmieniony")
         }
       }
@@ -1511,6 +1679,7 @@ function Stan-Dla-Okna($stan, $zrodla, $cele) {
         zainstalowany = $zainstalowany
         usuniety = $(if ($sk.Usuniety -and $x -and $x.usuniety) { [pscustomobject]$x.usuniety } elseif ($sk.Usuniety) { [pscustomobject]@{ od = ""; sciezka = $sk.Sciezka; commit = "" } } else { $null })
         przeniesiony = $(if ($x -and $x.przeniesiony -and "$($x.przeniesiony.na)" -eq $sk.Sciezka) { [pscustomobject]$x.przeniesiony } else { $null })
+        wyzerowany = (@($wc | Where-Object { $_.wyzerowany }).Count -gt 0)
         stan = $zbiorczy; dzisZaktualizowany = $dzisAkt; blad = $(if ($x) { "$($x.blad)" } else { "" }); brakujeW = $brakujeW
         sprawdzono = $(if ($x) { "$($x.sprawdzono)" } else { "" })
         najnowszy = $(if ($x -and $x.najnowszy) { [pscustomobject]@{ commit = "$($x.najnowszy.commit)"; data = "$($x.najnowszy.data)" } } else { $null })

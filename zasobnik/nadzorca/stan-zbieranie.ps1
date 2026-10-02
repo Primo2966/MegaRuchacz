@@ -14,7 +14,7 @@
 # cykl, wersja, alarmy - plus slad samego nadzorcy, bo on tez ma nie milczec
 # o sobie. Zbierane raz, zeby dozor i okno nie liczyly tego samego dwa razy.
 function Zbierz-Wszystko([bool]$zSieci, [bool]$zKolejka) {
-  $d = [pscustomobject]@{ Wersja = $null; Cykl = $null; Rachunek = $null; Alarmy = @(); Informacje = @(); Pamiec = $null; Przeliczanie = $null }
+  $d = [pscustomobject]@{ Wersja = $null; Cykl = $null; Rachunek = $null; Alarmy = @(); Informacje = @(); Pamiec = $null; Przeliczanie = $null; Kopia = $null }
 
   try { $d.Wersja = Stan-Wersji $zSieci }
   catch { Zanotuj-Wywrotke "odczyt wersji narzedzia" $_ }
@@ -25,6 +25,10 @@ function Zbierz-Wszystko([bool]$zSieci, [bool]$zKolejka) {
 
   try { $d.Przeliczanie = Postep-Przeliczania }
   catch { Zanotuj-Wywrotke "odczyt postepu przeliczania archiwum" $_ }
+
+  # Kopia zapasowa (P62) - jeden maly plik stanu i data indeksu.
+  try { $d.Kopia = Stan-Kopii }
+  catch { Zanotuj-Wywrotke "odczyt stanu kopii zapasowej" $_ }
 
   try { $d.Cykl = Stan-Cyklu $zKolejka }
   catch { Zanotuj-Wywrotke "odczyt stanu cyklu" $_ }

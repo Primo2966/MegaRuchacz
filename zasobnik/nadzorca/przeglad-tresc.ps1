@@ -301,6 +301,10 @@ function Zbuduj-Przod($d, $problemy, $czas, $start, $zuzycie = $null, $koszt = $
     catch { Zanotuj-Wywrotke "linie stanu do wydruku" $_; $l += "  NIE UDALO SIE ZLOZYC - szczegoly w dzienniku nadzorcy" }
   }
   foreach ($x in $linie) { $l += "  $x" }
+  if ($d) {
+    try { $kop = Ocena-Kopii $d.Kopia; $l += "  $($kop.Linia)$(if ($kop.Waga -eq 'pilne') { '  (czerwony napis)' } elseif ($kop.Waga -eq 'uwaga') { '  (żółty napis)' })" }
+    catch { Zanotuj-Wywrotke "linia kopii zapasowej do wydruku" $_; $l += "  NIE UDALO SIE ZLOZYC LINII KOPII ZAPASOWEJ - szczegoly w dzienniku nadzorcy" }
+  }
   $pm = $null
   try { $pm = Opis-Zmian-Pamieci $(if ($d) { $d.Pamiec } else { $null }) }
   catch { Zanotuj-Wywrotke "zmiany w pamieci do wydruku" $_; $l += "  NIE UDALO SIE ZLOZYC ZMIAN W PAMIECI - szczegoly w dzienniku nadzorcy" }

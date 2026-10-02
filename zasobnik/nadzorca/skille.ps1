@@ -44,6 +44,8 @@ function Napis-Skilla($s) {
     return @("źródło nieznane", $script:KolUwaga)
   }
   $wstrzymany = @($s.cele | Where-Object { $_.wstrzymany }).Count -gt 0
+  # Wyzerowany po zaniku pradu (P62) - przed bledem sprawdzenia, bo mowi, co zrobic.
+  if ($s.wyzerowany) { return @("uszkodzony (same zera) - do naprawy", $script:KolPilne) }
   if ($s.blad) { return @("nie udało się sprawdzić", $script:KolPilne) }
   if ($s.dzisZaktualizowany -and $s.stan -eq "zgodny") { return @("nowa wersja pobrana dziś", $script:KolDobrze) }
   # Autor usunal skill - neutralnie (szaro): to nie usterka, kopia u Ciebie dziala.

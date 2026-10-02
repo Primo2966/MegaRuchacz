@@ -4,6 +4,36 @@ Każda zmiana wypychana na gita dostaje tu wpis. Numer rośnie wg zasady:
 pierwsza cyfra — przebudowa łamiąca zgodność, druga — nowa funkcja,
 trzecia — poprawka.
 
+## 0.26.0 — 2026-10-02
+
+- **Codzienna kopia zapasowa na Dysk Google** (`narzedzia\kopia-zapasowa.ps1`, zadanie Harmonogramu
+  `MegaRuchaczKopia`, codziennie o 12:30, a przegapiona rusza sama po włączeniu komputera). Kopiuje `C:\dev`
+  oraz pliki Claude'a i Codeksa. Pierwsza kopia jest pełna, każda następna trafia do osobnego katalogu dnia
+  i zawiera tylko pliki nowe i zmienione. Niczego nie nadpisuje i nie kasuje. Plik z samymi zerami w środku
+  (uszkodzony zanikiem prądu) nie trafia do kopii, bo zdrowa wersja zostaje w starszej, a w dzienniku kopii
+  staje ALARM. Bazy SQLite kopiuje bezpiecznie także wtedy, gdy są otwarte. Hasła i klucze idą do kopii tylko
+  na wyraźne życzenie (`-ZSekretami`), pliki logowania nigdy. `-Proba` pokazuje, co by skopiowała, i nic nie
+  zapisuje. Plik, który zniknął w trakcie kopii (np. sprzątnięty katalog roboczy agenta), to uwaga, nie błąd.
+- **Okno nadzorcy pokazuje stan kopii zapasowej.** W karcie „Stan” na Przeglądzie jest jedna linia, np.
+  „Kopia zapasowa: dziś o 12:30, 368 plików (445 MB), bez błędów.”. Na czerwono, z kartą „Wymaga działania”
+  i dymkiem raz na dobę, gdy ostatnia udana kopia jest starsza niż dwie doby albo gdy kopia pominęła pliki,
+  które nadal są uszkodzone. Pliki już naprawione dają tylko żółtą linię: wejdą do następnej kopii same.
+  Szczegóły mają osobną kartę: ostatnia udana kopia, ostatni przebieg, lista pominiętych plików, błędy,
+  gdzie leży kopia i jej dziennik, kiedy włącza się alarm i dlaczego. Przez pierwszą godzinę po włączeniu
+  komputera stara kopia jest tylko żółta, bo zaległa właśnie rusza. Na komputerze bez kopii linia mówi „nie
+  jest ustawiona” i nie ma alarmu. Przegląd bez spraw do uwagi nadal mieści się bez przewijania.
+- **Skille nie mają już „kopii zapasowych” z zer.** 02.10 sprawdzenie skilli zapisało pliki jednego skilla
+  tuż przed zanikiem prądu. Zostały same zera, a następna aktualizacja zrobiła z nich kopię zapasową. Teraz
+  wyzerowany skill jest błędem w zakładce Skille („uszkodzony (same zera) – do naprawy”) i pilną sprawą na
+  Przeglądzie. Kopii z niego nie robi nic. Codzienne sprawdzenie go nie rusza, a „Aktualizuj teraz” pyta
+  osobno i wgrywa wersję od autora. „Cofnij” pomija wyzerowane kopie i przywraca starszą zdrową, a gdy takiej
+  nie ma, odmawia i mówi dlaczego. Do sprawdzania zer służy ta sama reguła, co w kopii zapasowej, więc obrazy,
+  czcionki i teksty w UTF-16, które mają zera z natury, nie dają fałszywego alarmu.
+- **Uszkodzona kopia źródła skilli naprawia się sama.** Wyzerowany plik w wewnętrznej kopii repozytorium
+  autora (było: „index file corrupt”, ponawiane sześć razy jak błąd sieci przez cztery minuty) jest teraz
+  rozpoznawany od razu i kopia jest pobierana od nowa. Bez sieci to błąd źródła, a skill zostaje nietknięty.
+  Z kopii źródła z zerami nic nie jest wgrywane.
+
 ## 0.25.2 — 2026-10-02
 
 - **Pliki pamięci nie mogą już zostać wyzerowane przez zanik prądu — a gdyby jednak, nic na nich nie

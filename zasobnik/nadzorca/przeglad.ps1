@@ -497,6 +497,13 @@ function Odmaluj-Stan {
     catch { Zanotuj-Wywrotke "zlozenie linii stanu" $_ }
   }
   foreach ($l in $linie) { $script:PanelStan.Controls.Add((Wiersz-Stanu $l $script:KolTekst)) }
+  # Kopia zapasowa (P62): jedna linia, kolor z oceny (progi w stan-kopia.ps1).
+  if ($script:Dane) {
+    try {
+      $kop = Ocena-Kopii $script:Dane.Kopia
+      $script:PanelStan.Controls.Add((Wiersz-Stanu $kop.Linia (Kolor-Wagi $kop.Waga)))
+    } catch { Zanotuj-Wywrotke "linia kopii zapasowej" $_ }
+  }
   Dodaj-Zmiany-Pamieci
 }
 

@@ -470,7 +470,17 @@ function Pokaz-Okno {
       $para = Znajdz-Skill $n
       if (-not $para) { return }
       $wymus = $false
-      if ($para[0].stan -eq "zmieniony") {
+      if ($para[0].wyzerowany) {
+        # P62: wyzerowany to nie zmiana reczna - kopii z zer skrypt nie zrobi, wiec mowimy to wprost
+        $odp = [System.Windows.Forms.MessageBox]::Show($script:Okno,
+          ("Skill `„$($para[0].folder)`” jest uszkodzony: jego pliki to same zera (zanik prądu)." + "`r`n`r`n" +
+           "Czy wgrać w to miejsce najnowszą wersję od autora? Kopii zapasowej z zer nie robię - nie ma w nich nic do ocalenia." + "`r`n`r`n" +
+           "Po kliknięciu Nie nie stanie się nic."),
+          "Naprawić uszkodzony skill?", [System.Windows.Forms.MessageBoxButtons]::YesNo,
+          [System.Windows.Forms.MessageBoxIcon]::Warning, [System.Windows.Forms.MessageBoxDefaultButton]::Button2)
+        if ($odp -ne [System.Windows.Forms.DialogResult]::Yes) { Notuj "skille: naprawa wyzerowanego $n - uzytkownik nie potwierdzil"; return }
+        $wymus = $true
+      } elseif ($para[0].stan -eq "zmieniony") {
         $odp = [System.Windows.Forms.MessageBox]::Show($script:Okno,
           ("Skill `„$($para[0].folder)`” był zmieniony ręcznie - jego treść nie pasuje do żadnej wersji autora." + "`r`n`r`n" +
            "Czy zastąpić go najnowszą wersją od autora? Twoja wersja trafi do kopii zapasowej i przycisk `„Cofnij ostatnią aktualizację`” ją przywróci." + "`r`n`r`n" +

@@ -128,6 +128,19 @@ function Problemy-Skilli {
   if (-not (Test-Path -LiteralPath (Join-Path $kat "stan.json"))) { return ,$lista }
   $zn = Znacznik-Skilli
   $wynik = "$($zn['wynik'])"
+  # Skille wyzerowane po zaniku pradu (P62) - pole "wyzerowany" w stanie zapisuje
+  # skille.ps1 przy kazdym sprawdzeniu. Regex zamiast ConvertFrom-Json: stan ma ~0,5 MB,
+  # a potrzebne jest tylko to jedno pole.
+  $wyz = @()
+  try {
+    $txt = [System.IO.File]::ReadAllText((Join-Path $kat "stan.json"), [System.Text.Encoding]::UTF8)
+    foreach ($m in [regex]::Matches($txt, '"wyzerowany"\s*:\s*"((?:[^"\\]|\\.)+)"')) { $wyz += [regex]::Unescape($m.Groups[1].Value) }
+  } catch { $wyz = @("nie da się odczytać stanu skilli: $($_.Exception.Message)") }
+  if ($wyz.Count -gt 0) {
+    $lista += [pscustomobject]@{ Waga = "pilne"; Tytul = "Skille uszkodzone: $($wyz.Count) $(if ($wyz.Count -eq 1) { 'skill ma' } else { 'skille mają' }) same zera w plikach"
+      Porada = "Po zaniku prądu pliki skilla mają pełną długość i same zera - Claude czyta je jako pusty albo zepsuty skill. Kopii zapasowej z zer nie robię. W zakładce Skille wybierz skill oznaczony `„uszkodzony`” i kliknij `„Aktualizuj teraz`” (wersja od autora)."
+      Pelne = ($wyz -join "`r`n") }
+  }
   if ($wynik -eq "blad") {
     $lista += [pscustomobject]@{ Waga = "uwaga"; Tytul = "Skille: nie udało się sprawdzić nowych wersji"
       Porada = "Codzienne sprawdzenie ($($zn['dzien'])) trafiło na błąd. Pobranie ze źródła jest ponawiane 5 razy, więc chwilowa czkawka sieci tu nie trafia - to raczej dłuższy brak internetu albo niedostępne źródło. Grupa z czerwonym paskiem w zakładce Skille pokazuje szczegóły. Skille, które masz, działają dalej."

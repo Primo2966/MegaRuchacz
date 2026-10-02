@@ -405,6 +405,47 @@ inwentarz warstw z 25.09, budowa okna sprzed podzialu, pomiary P23/P30 w calosci
   `Pokaz-Info-Skilla`, `Podglad-Skilla`, `Wybierz-Skill`, `Rusz-Operacje-Skilli` +
   `Sprawdz-Operacje-Skilli` (zegar 2 s na `operacja.txt`).
 
+## Zanik pradu, zera i kopie zapasowe (od 0.25.2 / 0.26.0)
+
+- `narzedzia/zapis-trwaly.ps1` (kropka; strazniki, `wpisz-zasady`, `cykl-dzienny`, `kopie-dzienne`, `skille.ps1`): pliki
+  pamieci - `Zapisz-Trwale` (plik tymczasowy obok, WriteThrough + Flush(true), `File.Replace`), `Kopiuj-Trwale` (odmawia
+  zer), `Pliki-Pamieci`, `Wyzerowane-Pliki` (jedno zero = alarm, bo to NASZE pliki tekstowe), `Zdrowa-Kopia`,
+  `Opis-Wyzerowanych`. Pliki CUDZE (skille, kopie zrodel): `Uszkodzenie-Zerami` (ciag >= 64 bajtow 0x00 albo caly plik z
+  zer; binarne po rozszerzeniu tylko "caly plik"; C# `MegaRuchacz.Zera` kompilowany przy 1. uzyciu, zeby straznik nie
+  placil przy starcie), `Wyzerowane-W-Katalogu <kat> [-pomin .git]`. Strona Pythona: `lore/lore/safeio.py`.
+- `narzedzia/kopie-dzienne.ps1` - `~\.claude\mr\kopie-dzienne\wczoraj|przedwczoraj\` (uklad jak w domu), rotacja raz na
+  dobe PRZED cyklem i tylko ze zdrowych plikow; `-Przywroc [-Plik CLAUDE.md] [-Skad przedwczoraj] [-Stan] [-Proba]`.
+  Proba negatywna calosci: `narzedzia/test-zera.ps1` (kopia domu w %TEMP%, 28 prob).
+- `narzedzia/kopia-zapasowa.ps1` - codzienna kopia `C:\dev` i plikow Claude'a/Codeksa na Dysk Google: `pelna-RRRR-MM-DD`,
+  potem `zmiany\RRRR-MM-DD` (nic nie nadpisuje i nie kasuje), `dziennik.txt` w korzeniu kopii. Stan
+  `~\.claude\mr\kopia-stan.txt` (`stan=OK|ALARM|BLAD|TRWA`, `ostatnia`, `plikow`, `mb`, `alarmy`, `bledy`, linie
+  `ALARM WYZEROWANY PLIK - ...: <sciezka> - <opis>`, `BLAD  ...`), `kopia-indeks.tsv` - pisany TYLKO po zakonczonym
+  przebiegu, wiec jego data = ostatnia udana kopia. Wyzerowane pliki pomija z ALARMEM (prog 64 zer, binarne tylko caly
+  plik), SQLite przez `sqlite3.backup`, sekrety tylko z `-ZSekretami`, tokenow logowania nigdy. Zadanie `MegaRuchaczKopia`
+  12:30 (StartWhenAvailable, `conhost --headless`); `-Proba` nic nie pisze.
+- Okno: `zasobnik/nadzorca/stan-kopia.ps1` - `Stan-Kopii` (plik stanu + data indeksu; `Plik-Stanu-Kopii` i
+  `Plik-Indeksu-Kopii` podmienia test okna), `Ocena-Kopii` (linia na karte Stan, waga, alarm), `Alarm-Kopii` (temat
+  `kopia` w `Zbierz-Alarmy`), `Opis-Kopii` (sekcja Szczegolow "Kopia zapasowa na Dysk Google"). Progi z uzasadnieniem w
+  pliku: ostatnia udana > 48 h = pilne (przez 60 min po starcie komputera tylko zolta linia - zalegla kopia wlasnie
+  rusza), `TRWA` > 3 h = przerwana, pominiete uszkodzone pliki = pilne, CHYBA ZE wszystkie sa juz naprawione
+  (`Ile-Nadal-Uszkodzonych`) - wtedy zolta linia bez alarmu. Brak pliku stanu i indeksu = "nie ustawiona", bez alarmu.
+- `narzedzia/skille.ps1` a zera (regula 8 w naglowku): `Opis-Zer`, `Zera-W-Celach`; `Zrob-Kopie` odmawia kopii zer;
+  `Aktualizuj-Skill` bez `-Wymus` nie rusza wyzerowanego skilla, z `-Wymus` wgrywa wersje od autora BEZ kopii (dziennik
+  `bez-kopii`); `Cofnij-Skill` pomija wyzerowane kopie (bierze starsza zdrowa albo odmawia z powodem) i nie robi kopii
+  "przed-cofnieciem" z zer; `Usun-Skill` bez kopii nie kasuje. `Wykryj` zapisuje w stanie pole `wyzerowany`
+  ("folder (cel): opis") przy celu -> JSON `wyzerowany` -> zakladka "uszkodzony (same zera) - do naprawy", osobne pytanie
+  przy "Aktualizuj teraz", Przeglad: pilna sprawa "Skille uszkodzone" (`Problemy-Skilli`, regex po `stan.json`).
+  Wlasna kopia zrodla: `Uszkodzenie-Kopii-Zrodla` (naglowki `.git\index` DIRC, `*.pack` PACK, `*.idx` \377tOc, tekst
+  HEAD/config/refs, pliki skilli w kopii) -> `Krok-Pobrania` klonuje od nowa; tak samo gdy git mowi "index file corrupt" /
+  "bad object" (dawniej 6 prob jak przy sieci); `-BezSieci` z uszkodzona kopia = blad zrodla; `Wgraj-Wersje` odmawia
+  wgrania ze zrodla z zerami.
+- Testy: scratchpad 1ca517cc `test-p62-skille.ps1` (lokalne repo git jako zrodlo, 17 prob; `-Zepsute` = wykrywanie zer
+  wylaczone, pada 12) i `p62\uruchom.ps1` (+ `test-okno.ps1`, `scenariusz.ps1`; ukryty pulpit, trzy stany kopii,
+  `P62_BEZ_PROBLEMOW=1` chowa cudze sprawy do pomiaru miejsca).
+- PULAPKI: zmienne PowerShella nie roznia wielkosci liter (`$t` nadpisuje `$T`); `„ ”` w tekscie w cudzyslowie to dla
+  PowerShella cudzyslow - pisac `` `„ `` i `` `” ``; Przeglad miesci sie bez przewijania tylko bez kart spraw (po linii
+  kopii zapas 37 px) - kazda czerwona karta przewija, jak dotad.
+
 ## Codex i Orca - najwazniejsze (rozpoznania w archiwum)
 
 - Codex 0.157 na biurowej: `C:\Users\<uzytkownik>\.codex\packages\standalone\` (+ npm w `C:\dev\tools\node\`);

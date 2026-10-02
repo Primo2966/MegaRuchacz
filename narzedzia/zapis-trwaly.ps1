@@ -1,6 +1,6 @@
 # Zapis plikow pamieci odporny na zanik zasilania i rozpoznawanie plikow wyzerowanych.
 # Wczytywany kropka (same definicje) przez straznik-zasad.ps1, wpisz-zasady.ps1,
-# cykl-dzienny.ps1 i kopie-dzienne.ps1. Strona Pythona to samo robi w lore\lore\safeio.py.
+# cykl-dzienny.ps1, kopie-dzienne.ps1 i skille.ps1. Strona Pythona to samo robi w lore\lore\safeio.py.
 #
 # Skad to sie wzielo: 2026-10-02 08:03 cykl wiedzy zapisal CLAUDE.md i jedenascie plikow
 # w wiedza\, a ~30 s pozniej komputer padl bez zamkniecia (Kernel-Power 41). NTFS mial juz
@@ -42,6 +42,81 @@ function Pierwsze-Zero([string]$sciezka) {
 function Ma-Zera([string]$sciezka) {
   $i = Pierwsze-Zero $sciezka
   return (($null -ne $i) -and ($i -ge 0))
+}
+
+# Pliki CUDZE (skille, kopie zrodel) - tu jedno zero nie jest dowodem: obraz, czcionka czy
+# tekst w UTF-16 maja zera z natury. Rozpoznanie jak w kopia-zapasowa.ps1: tekst w UTF-8/16/32
+# nie ma nigdy wiecej niz 3 bajty 0x00 pod rzad, a uszkodzenia z 2026-10-02 to bloki
+# 464 - 1 048 576 bajtow zer albo caly plik z samych zer (najmniejszy: 7 bajtow, VERSION
+# skilla impeccable). Prog 64 to zapas w obie strony. Pliki binarne (po rozszerzeniu) bywaja
+# pelne dlugich ciagow zer - u nich wyzerowanie poznajemy tylko po tym, ze CALY plik to zera.
+$script:MinCiagZer = 64
+$script:RozszerzeniaBinarne = @(".png", ".jpg", ".jpeg", ".gif", ".webp", ".ico", ".bmp", ".pdf", ".zip", ".gz", ".7z",
+  ".rar", ".exe", ".dll", ".bin", ".onnx", ".safetensors", ".pyc", ".woff", ".woff2", ".ttf", ".otf", ".eot", ".db",
+  ".sqlite", ".sqlite3", ".mp4", ".webm", ".node", ".xlsx", ".xls", ".docx", ".doc", ".pptx", ".ppt", ".odt", ".ods",
+  ".jar", ".class", ".mp3", ".wav", ".mov", ".avi", ".tar", ".tgz", ".bz2", ".xz", ".wasm", ".pack", ".idx")
+
+# $null = plik zdrowy (albo pusty); inaczej opis uszkodzenia po ludzku. Czytanie w C#
+# (kilkumegabajtowy plik bajt po bajcie w PowerShellu to sekundy); typ kompilowany dopiero
+# przy pierwszym uzyciu, zeby straznik przy starcie okna nie placil za kompilacje.
+function Uszkodzenie-Zerami([string]$sciezka) {
+  if (-not ('MegaRuchacz.Zera' -as [type])) {
+    Add-Type -TypeDefinition @'
+using System;
+using System.IO;
+namespace MegaRuchacz {
+  public static class Zera {
+    public static string Opis(string p, bool binarny, int minCiag) {
+      using (FileStream f = new FileStream(p, FileMode.Open, FileAccess.Read, FileShare.ReadWrite | FileShare.Delete, 65536)) {
+        long dl = f.Length;
+        if (dl == 0) return null;
+        byte[] b = new byte[65536];
+        long poz = 0, ciag = 0, maxCiag = 0, gdzie = 0, start = 0;
+        bool same = true;
+        int n;
+        while ((n = f.Read(b, 0, b.Length)) > 0) {
+          for (int i = 0; i < n; i++) {
+            if (b[i] == 0) {
+              if (ciag == 0) start = poz + i;
+              ciag++;
+              if (ciag > maxCiag) { maxCiag = ciag; gdzie = start; }
+            } else {
+              ciag = 0; same = false;
+              if (binarny) return null;
+            }
+          }
+          poz += n;
+        }
+        if (same) return "caly plik (" + dl + " B) to same bajty 0x00";
+        if (!binarny && maxCiag >= minCiag) return "blok " + maxCiag + " bajtow 0x00 od bajtu " + gdzie + " (z " + dl + " B)";
+        return null;
+      }
+    }
+  }
+}
+'@
+  }
+  if (-not (Test-Path -LiteralPath $sciezka -PathType Leaf)) { return $null }
+  $roz = [System.IO.Path]::GetExtension($sciezka).ToLowerInvariant()
+  return [MegaRuchacz.Zera]::Opis($sciezka, ($script:RozszerzeniaBinarne -contains $roz), $script:MinCiagZer)
+}
+
+# Wszystkie uszkodzone zerami pliki w katalogu (rekurencyjnie): Sciezka, Wzgledna, Opis.
+# $pomin - podkatalogi (sciezki wzgledne) do pominiecia, np. ".git" z wlasnymi plikami binarnymi.
+# Plik, ktorego nie da sie przeczytac, to tez wpis (Opis "nie da sie przeczytac: ...") -
+# lepiej odmowic niz uznac za zdrowy cos, czego nie widzielismy.
+function Wyzerowane-W-Katalogu([string]$katalog, [string[]]$pomin = @()) {
+  $wynik = @()
+  if (-not (Test-Path -LiteralPath $katalog -PathType Container)) { return ,$wynik }
+  $baza = (Resolve-Path -LiteralPath $katalog).ProviderPath.TrimEnd('\')
+  foreach ($f in @(Get-ChildItem -LiteralPath $baza -Recurse -File -Force)) {
+    $wzgl = $f.FullName.Substring($baza.Length + 1)
+    if (@($pomin | Where-Object { $wzgl.StartsWith($_ + '\', [System.StringComparison]::OrdinalIgnoreCase) }).Count -gt 0) { continue }
+    $opis = $null
+    try { $opis = Uszkodzenie-Zerami $f.FullName } catch { $opis = "nie da sie przeczytac: $($_.Exception.Message)" }
+    if ($opis) { $wynik += [pscustomobject]@{ Sciezka = $f.FullName; Wzgledna = $wzgl; Opis = $opis } }
+  }
+  return ,$wynik
 }
 
 # Zapis bajtow: plik tymczasowy obok, WriteThrough + Flush(true), potem podmiana.

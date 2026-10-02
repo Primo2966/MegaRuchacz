@@ -361,6 +361,12 @@ function Sekcje-Szczegolow($d, $wywrotkiNadzorcy, $rozbicie, $start, $koszt = $n
   }
   $lista += $s
 
+  # 6a. Kopia zapasowa na Dysk Google (P62) - na Przegladzie jedna linia, tu reszta.
+  $s = Nowa-Sekcja "Kopia zapasowa na Dysk Google" "Codzienna kopia C:\dev i plików Claude'a (narzedzia\kopia-zapasowa.ps1, zadanie Harmonogramu MegaRuchaczKopia). Pliki z samymi zerami nie trafiają do kopii - ich zdrowe wersje zostają w starszej."
+  try { Dodaj-Wiersze $s (Opis-Kopii $(if ($d) { $d.Kopia } else { $null })) }
+  catch { Zanotuj-Wywrotke "kopia zapasowa do szczegolow" $_; Dodaj-Tekst $s "Nie udało się złożyć - szczegóły w dzienniku nadzorcy." "uwaga" }
+  $lista += $s
+
   # 7. Wersja.
   $s = Nowa-Sekcja "Wersja MegaRuchacza" "Czy na serwerze czeka coś nowszego. Pobiera to przycisk na dole okna - za darmo."
   if ($d -and $d.Wersja) { Dodaj-Wiersze $s (Opis-Wersji $d.Wersja) }
