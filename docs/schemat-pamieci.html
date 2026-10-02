@@ -111,6 +111,23 @@ ul { margin: 0; padding-left: 18px; display: grid; gap: 4px; }
 .card li { font-size: 13.5px; }
 .card.check { border: 1.5px dashed var(--check); background: var(--check-soft); }
 .card.check h2 { color: var(--check); }
+.card .when { font-size: 12px; font-weight: 700; text-transform: uppercase; letter-spacing: .04em; color: var(--up); }
+.card .where { font-size: 12.5px; color: var(--muted); }
+.card.alarm { border: 1.5px solid var(--drop); background: var(--drop-soft); }
+.card.alarm .when, .card.alarm h2 { color: var(--drop); }
+
+/* sekcje pod diagramem */
+.sec { display: grid; gap: 12px; }
+.sec > p { color: var(--muted); font-size: 14px; }
+.box4 { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(400px, 100%), 1fr)); gap: 12px; }
+.mods { display: grid; gap: 12px; }
+@media (min-width: 820px) { .mods { grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); align-items: start; } }
+.file { background: var(--surface); border: 1.5px solid var(--open); border-radius: 12px; overflow: hidden; }
+.file-head { padding: 8px 14px; background: var(--open-soft); color: var(--open); font-weight: 700; font-size: 13.5px; }
+.blk { display: grid; gap: 3px; padding: 9px 14px; border-top: 1px solid var(--line); font-size: 13.5px; }
+.blk:first-of-type { border-top: 0; }
+.blk .mod { justify-self: start; font-size: 11.5px; font-weight: 700; border: 1px solid var(--line); border-radius: 6px; padding: 1px 7px; }
+.file-foot { padding: 9px 14px; border-top: 1px solid var(--line); font-size: 12.5px; color: var(--muted); }
 
 footer { font-size: 12px; color: var(--muted); border-top: 1px solid var(--line); padding-top: 12px; }
 </style>
@@ -132,10 +149,11 @@ footer { font-size: 12px; color: var(--muted); border-top: 1px solid var(--line)
   <div class="node ask" style="--r:1">
     <h3>Twoja rozmowa <span class="tag ask">na żądanie</span></h3>
     <p class="where">baza wszystkich rozmów <code>~\.claude\lore.db</code></p>
+    <p class="where">„na żądanie” tylko z modułem Pamięć rozmów (Lore) — bez niego bazę czyta wyłącznie automat</p>
   </div>
 
   <!-- 2 -->
-  <div class="edge" style="--r:2"><span>codzienne czytanie rozmów, rano (automat)</span></div>
+  <div class="edge" style="--r:2"><span>codzienne czytanie rozmów, rano (automat, zaraz po kopiach dziennych)</span></div>
   <div class="brs" style="--r:2">
     <div class="br drop"><span class="if">jeśli da się sprawdzić i to nieprawda</span><b>odrzucony</b> (np. podana ścieżka nie istnieje)<span class="where">zostaje oznaczony w <code>wiedza\kandydaci.md</code> · <span class="tag off">nigdy</span></span></div>
   </div>
@@ -223,5 +241,84 @@ footer { font-size: 12px; color: var(--muted); border-top: 1px solid var(--line)
   </div>
 </div>
 
-<footer>Sprawdzone w kodzie <code>lore\lore\verify.py</code>, <code>facts.py</code> i <code>usage.py</code> oraz testami (257 zaliczonych), 01.10.2026. <code>~</code> = C:\Users\&lt;uzytkownik&gt;.</footer>
+<section class="sec">
+  <h2>Ochrona przed utratą</h2>
+  <p>Po zaniku prądu pliki pamięci potrafiły zostać wypełnione zerami. Teraz pilnują ich cztery rzeczy.</p>
+  <div class="box4">
+    <div class="card">
+      <span class="when">przy każdym zapisie</span>
+      <h2>Zapis odporny na zanik prądu</h2>
+      <ul>
+        <li>nowa treść trafia najpierw do pliku tymczasowego obok, zapis jest wymuszany na dysk, dopiero potem podmienia stary plik</li>
+        <li>po zaniku prądu zostaje stara albo nowa wersja — nigdy zera</li>
+        <li>dopisywanie (np. <code>wiedza\zrodla.md</code>) też idzie od razu na dysk</li>
+      </ul>
+    </div>
+    <div class="card alarm">
+      <span class="when">gdy plik jest wyzerowany</span>
+      <h2>Uszkodzony plik zatrzymuje wszystko</h2>
+      <ul>
+        <li>nic na nim nie pracuje: czytanie rozmów, wpisywanie zasad i kopie stają</li>
+        <li>alarm jako pierwsza linia przy otwarciu okna rozmowy: który plik, gdzie zdrowa kopia, jak ją przywrócić</li>
+        <li>pilny alarm w aplikacji przy zegarze</li>
+      </ul>
+    </div>
+    <div class="card">
+      <span class="when">codziennie rano, przed czytaniem rozmów</span>
+      <h2>Kopie „wczoraj” i „przedwczoraj”</h2>
+      <p class="where"><code>~\.claude\mr\kopie-dzienne\</code> · na tym komputerze</p>
+      <ul>
+        <li>CLAUDE.md, AGENTS.md Codeksa i opencode, pliki z <code>wiedza\</code></li>
+        <li>tylko ze zdrowych plików — przy zerach kopie zostają nietknięte</li>
+        <li>przywrócenie jednym poleceniem z folderu MegaRuchacza: <code>narzedzia\kopie-dzienne.ps1 -Przywroc</code> (starsza kopia: <code>-Skad przedwczoraj</code>); obecny stan zostaje obok jako dowód</li>
+      </ul>
+    </div>
+    <div class="card">
+      <span class="when">codziennie o 12:30</span>
+      <h2>Kopia zapasowa do wybranego folderu</h2>
+      <ul>
+        <li>folder wybierasz w instalatorze, np. Dysk Google</li>
+        <li>pierwsza kopia pełna, potem w folderze każdego dnia tylko pliki nowe i zmienione</li>
+        <li>nic nie jest nadpisywane ani kasowane — plik usunięty u Ciebie zostaje w kopii</li>
+        <li>wyzerowany plik do kopii nie wchodzi; zdrowa wersja zostaje w starszym folderze</li>
+        <li>przegapiona rusza po włączeniu komputera; jej stan widać w aplikacji przy zegarze</li>
+      </ul>
+    </div>
+  </div>
+</section>
+
+<section class="sec">
+  <h2>Co instalujesz</h2>
+  <p>Wiedza i pamięć rozmów to osobne moduły instalatora. Każdy dopisuje do CLAUDE.md własny fragment zasad dla Claude'a.</p>
+  <div class="mods">
+    <div class="file">
+      <div class="file-head"><code>~\.claude\CLAUDE.md</code></div>
+      <div class="blk"><b>„Co wiem” i „Bieżące”</b> fakty o Tobie (diagram wyżej)<span class="mod">Wiedza o Tobie</span></div>
+      <div class="blk"><b>blok <code>MegaRuchacz:lore</code></b> jak szukać w dawnych rozmowach<span class="mod">Pamięć rozmów (Lore)</span></div>
+      <div class="blk"><b>blok <code>MegaRuchacz:wiedza</code></b> jak korzystać z wiedzy, jak cofnąć zmianę automatu<span class="mod">Wiedza o Tobie</span></div>
+      <div class="blk"><b>blok <code>MegaRuchacz:kierownik</code></b> zasady trybu kierownika<span class="mod">Tryb kierownika</span></div>
+      <div class="file-foot">Blok dopisuje instalacja modułu, a odinstalowanie go zdejmuje. Bloki lore i wiedza stoją też w AGENTS.md Codeksa.</div>
+    </div>
+    <div class="box2">
+      <div class="card">
+        <h2>Dwa osobne moduły</h2>
+        <ul>
+          <li><b>Wiedza o Tobie</b> — pliki z wiedzą („Co wiem”, <code>wiedza\</code>) i codzienne czytanie rozmów</li>
+          <li><b>Pamięć rozmów (Lore)</b> — Claude szuka w dawnych rozmowach na żądanie, a przy wiadomościach dostaje podpowiedzi „Z ARCHIWUM”</li>
+          <li>Wiedza bez Lore działa: rozmowy zbiera ukryty rdzeń, tylko dla porannego automatu — bez wyszukiwania i bez „Z ARCHIWUM”</li>
+        </ul>
+      </div>
+      <div class="card">
+        <h2>Zawsze i w każdej chwili</h2>
+        <ul>
+          <li>aplikacja przy zegarze jest zawsze — to ona uruchamia codzienne zadania</li>
+          <li>instalację zmieniasz w każdej chwili przyciskiem „Zmień instalację” w tej aplikacji</li>
+          <li>przy usuwaniu modułu Twoje dane zostają, chyba że zaznaczysz „usuń też moje dane”</li>
+        </ul>
+      </div>
+    </div>
+  </div>
+</section>
+
+<footer>Sprawdzone w kodzie <code>lore\lore\verify.py</code>, <code>facts.py</code>, <code>usage.py</code>, <code>safeio.py</code>, <code>narzedzia\kopie-dzienne.ps1</code>, <code>kopia-zapasowa.ps1</code>, <code>narzedzia\instalacja\</code> oraz testami (Lore: 462 zaliczone), 02.10.2026. <code>~</code> = Twój folder użytkownika Windows.</footer>
 </div>

@@ -11,8 +11,9 @@ MegaRuchacz ma dwie części:
 - **Workerzy** — Claude nie robi wszystkiego sam. Jest **kierownikiem**: bierze
   Twoje zadanie, dzieli je na kawałki i rozdaje pomocnikom (workerom), którzy pracują
   naraz. Ty w tym czasie piszesz następne zadanie.
-- **Pamięć (Lore)** — zapis wszystkich Twoich rozmów z Claude'em plus krótka
-  wiedza o Tobie i firmie. Dzięki temu nie tłumaczysz tego samego w każdym oknie.
+- **Pamięć** — krótka wiedza o Tobie i firmie (część „Wiedza o Tobie”) plus zapis
+  wszystkich Twoich rozmów z Claude'em do przeszukiwania (część „Pamięć rozmów
+  (Lore)”). Dzięki temu nie tłumaczysz tego samego w każdym oknie.
 
 ### Jak idzie zadanie
 
@@ -33,7 +34,7 @@ MegaRuchacz ma dwie części:
 | Kiedy | Co | Gdzie leży |
 |---|---|---|
 | przy otwarciu okna rozmowy | „Co wiem”: część stała (kim jesteś, firma, jak pracujesz) i „Bieżące” (świeże fakty z datą) | plik instrukcji Claude'a: `~\.claude\CLAUDE.md` |
-| przy każdej Twojej wiadomości | krótkie przypomnienie zasad i, jeśli coś pasuje, 1–2 fragmenty starych rozmów | archiwum rozmów: `lore.db` w `~\.claude` albo `~\.lore` |
+| przy każdej Twojej wiadomości | krótkie przypomnienie zasad i, jeśli coś pasuje, 1–2 fragmenty starych rozmów (z Pamięcią rozmów) | archiwum rozmów: `lore.db` w `~\.claude` albo `~\.lore` |
 | tylko gdy potrzeba | pliki z tabelami i listami oraz przeszukiwanie archiwum | `~\.claude\wiedza\` i to samo archiwum |
 
 Wszystko leży na Twoim komputerze. Fragment z archiwum to **trop, nie dowód** —
@@ -42,7 +43,7 @@ Claude sprawdza go, zanim na nim coś zbuduje.
 ### Raz dziennie MegaRuchacz sam dopisuje wiedzę
 
 **Raz dziennie, rano** (uruchamia to aplikacja w zasobniku; gdy jej nie ma —
-pierwsze okno rozmowy dnia) MegaRuchacz czyta Twoje wypowiedzi z rozmów od
+pierwsze okno rozmowy dnia; tylko z częścią Wiedza o Tobie) MegaRuchacz czyta Twoje wypowiedzi z rozmów od
 ostatniego razu i sam dopisuje z nich wiedzę. Nikt Cię o nic nie pyta. Gdzie co trafia:
 
 - **pojedynczy krótki fakt** → „Bieżące” w `CLAUDE.md`, z datą;
@@ -100,6 +101,12 @@ Ikona przy zegarze. Działa także wtedy, gdy Claude jest zamknięty.
   można podejrzeć treść.
 - **Skille** — polecane skille z kilku zestawów, przy każdym krótki opis po polsku
   i stan u Ciebie (masz / nie masz / starsza wersja / zmieniony ręcznie).
+- **Kopia zapasowa** — na Przeglądzie jedna linia: kiedy była ostatnia kopia i czy
+  bez błędów.
+- **Zmień instalację** — przycisk na dole okna (opis niżej).
+
+Okno pokazuje tylko to, co masz zainstalowane — np. bez Polecanych skilli nie ma
+zakładki Skille.
 
 ### Pilnowanie i aktualizacje
 
@@ -114,6 +121,34 @@ Ikona przy zegarze. Działa także wtedy, gdy Claude jest zamknięty.
 - **Codzienne sprawdzanie skilli** — raz dziennie aplikacja patrzy, czy autorzy
   wydali nowe wersje, i podmienia je z kopią starej. Skilli zmienionych ręcznie nie
   rusza bez pytania.
+
+### Ochrona przed utratą
+
+Wiedza o Tobie zbiera się tygodniami — jedno zgaśnięcie komputera nie może jej
+skasować. Pilnują tego cztery rzeczy (też na [schemacie pamięci](docs/schemat-pamieci.html)):
+
+- **Zapis odporny na zanik prądu.** Nowa treść trafia najpierw do pliku obok i dopiero
+  gdy bezpiecznie leży na dysku, zastępuje stary plik. Po nagłym zgaśnięciu zostaje
+  stara albo nowa wersja — nigdy plik pełen zer.
+- **Alarm przy uszkodzonym pliku.** Gdyby plik pamięci jednak był wyzerowany,
+  MegaRuchacz niczego na nim nie robi, a pierwsza linia w nowym oknie rozmowy mówi:
+  który plik, gdzie leży zdrowa kopia i jak ją przywrócić. Aplikacja przy zegarze
+  pokazuje pilny alarm.
+- **Kopie „wczoraj” i „przedwczoraj”.** Codziennie rano, przed czytaniem rozmów,
+  MegaRuchacz odkłada kopię `CLAUDE.md`, plików instrukcji Codeksa i opencode oraz
+  folderu `wiedza` do `~\.claude\mr\kopie-dzienne\` — tylko ze zdrowych plików.
+  Przywracasz jednym poleceniem uruchomionym w folderze MegaRuchacza:
+
+  ```powershell
+  powershell -ExecutionPolicy Bypass -File narzedzia\kopie-dzienne.ps1 -Przywroc
+  ```
+
+  Starsza kopia: dopisz `-Skad przedwczoraj`. Obecny stan pliku zostaje obok jako dowód.
+- **Codzienna kopia zapasowa do wybranego folderu** (część „Kopia zapasowa”), np. na
+  Dysk Google — o 12:30, a przegapiona rusza po włączeniu komputera. Pierwsza kopia jest
+  pełna, potem każdego dnia tylko pliki nowe i zmienione. Niczego nie nadpisuje ani
+  nie kasuje, a wyzerowany plik do kopii nie wchodzi. Gdy ostatnia udana kopia ma
+  więcej niż dwie doby, aplikacja przy zegarze zapala alarm.
 
 ### Koszt
 
@@ -130,6 +165,23 @@ ponad 15 tys. tokenów.
 Tak samo na obu: zasady kierownika, rejestr i mapa w projekcie, pamięć rozmów
 z wyszukiwaniem, sama aktualizacja z GitHuba i aplikacja w zasobniku.
 
+### Co wybierasz w instalatorze
+
+Zawsze dostajesz **aplikację przy zegarze** i **automatyczne aktualizacje**. Resztę
+zaznaczasz sam:
+
+| Część | Co daje |
+|---|---|
+| **Wiedza o Tobie** | „Co wiem” w `CLAUDE.md` i folder `wiedza`; raz dziennie MegaRuchacz sam dopisuje fakty z Twoich rozmów (opis wyżej). Działa także bez Pamięci rozmów. |
+| **Pamięć rozmów (Lore)** | Claude przeszukuje wszystkie Twoje dawne rozmowy, a do wiadomości dokleja pasujące fragmenty. Jednorazowo pobiera ok. 500 MB. |
+| **Tryb kierownika** | Claude rozdaje zadania workerom (opis na samej górze). |
+| **Polecane skille** | Zestaw skilli z opisami po polsku; aplikacja sama pilnuje ich nowych wersji. |
+| **Kopia zapasowa** | Codzienna kopia do folderu, który wskażesz (patrz „Ochrona przed utratą”). |
+
+Zdanie możesz zmienić w każdej chwili przyciskiem **„Zmień instalację”** w aplikacji
+przy zegarze. Gdy coś usuwasz, Twoje dane zostają, chyba że sam zaznaczysz „usuń też
+moje dane”.
+
 ### Jak zainstalować i zmienić instalację
 
 1. Pobierz MegaRuchacza z GitHuba jako ZIP (zielony przycisk „Code” → „Download ZIP”),
@@ -138,10 +190,8 @@ z wyszukiwaniem, sama aktualizacja z GitHuba i aplikacja w zasobniku.
 2. Jeśli MegaRuchacza nie ma jeszcze na komputerze, okno zapyta o folder (domyślnie
    `MegaRuchacz` w Twoim folderze użytkownika), pobierze go tam i — gdy trzeba —
    samo doinstaluje program git.
-3. Zaznacz, co chcesz mieć. Zawsze dostajesz aplikację przy zegarze i automatyczne
-   aktualizacje. Do wyboru: **Wiedza o Tobie**, **Pamięć rozmów (Lore)**, **Tryb
-   kierownika**, **Polecane skille** i **Kopia zapasowa** (wskazujesz folder).
-   Przycisk „Wszystko” zaznacza całość.
+3. Zaznacz, co chcesz mieć (części opisane wyżej; przy Kopii zapasowej wskazujesz
+   folder). Przycisk „Wszystko” zaznacza całość.
 4. Przed startem widzisz podsumowanie: co się stanie i jakie programy instalator
    doinstaluje (bez uprawnień administratora). Potem postęp krok po kroku; gdy coś
    się nie uda — „Spróbuj ponownie” i „Pokaż szczegóły”.
@@ -194,7 +244,7 @@ W zestawie jest też **Lore — przeszukiwalna pamięć wszystkich Twoich rozmó
 | `CLAUDE.md` | reguły budowania samego narzędzia (tylko to repo) |
 | `zasady-lore.md`, `zasady-wiedza.md` | zasady pamięci wpisywane do plików instrukcji narzędzi AI — blok Lore i blok Wiedzy, każdy przy swojej części |
 | `instaluj.bat`, `instalator/` | instalator z oknem: wybór części, zmiana instalacji, usuwanie |
-| `szablony-global/claude/agents/` | prompty czterech ról: implementer, scout, verifier, zastępca |
+| `szablony-global/claude/agents/` | prompty pięciu ról: implementer, projektant, scout, verifier, zastępca |
 | `szablony-codex/` | to samo dla Codeksa: role, zasady kierownika, hooki |
 | `szablony-opencode/` | to samo dla opencode: role, zasady kierownika, wtyczka rejestru |
 | `lore/` | moduł `pamiec` — serwer MCP z przeszukiwalną pamięcią rozmów |
@@ -204,12 +254,15 @@ W zestawie jest też **Lore — przeszukiwalna pamięć wszystkich Twoich rozmó
 | `nowe-zadanie.ps1` | zakłada izolowaną kopię repo na jedno zadanie |
 | `ZMIANY.md` | historia wersji — co doszło i co się zmieniło |
 
-## Cztery role
+## Pięć ról
 
 - **implementer** — wprowadza konkretną zmianę w wyznaczonych plikach. Pod Claude
   Code pracuje w osobnej kopii repozytorium, więc dwa zadania w tych samych plikach
   mogą lecieć naprawdę równolegle; pod Codeksem i opencode rozłączności pilnuje
   treść zlecenia.
+- **projektant** — to samo co implementer, ale do wyglądu i tekstów widocznych dla
+  Ciebie, uzgodnionych wcześniej w rozmowie; może wołać skille. Na razie tylko pod
+  Claude Code.
 - **scout** — rozpoznanie: gdzie co leży. Tylko czyta, niczego nie blokuje.
 - **verifier** — sprawdza pojedynczą zmianę: czy działa i czy nie psuje reszty.
 - **zastępca** — sprawdza, czy **całość** nadal trzyma się kupy po serii
@@ -221,6 +274,10 @@ zatwierdzone przez `/hooks`), a pod opencode wtyczka `.opencode/plugins/mr-log.j
 której nie trzeba zatwierdzać.
 
 ## Wymagania
+
+Instalator z oknem (`instaluj.bat`) brakujące programy — git, Node.js, Python 3.12
+i `uv` — doinstalowuje sam, bez uprawnień administratora. Lista niżej ma znaczenie
+głównie przy instalacji ręcznej.
 
 - **Windows** — instalator jest w PowerShellu. Wersji na Linuksa i maca nie ma
   i na razie nie planujemy; to świadoma decyzja, nie przeoczenie.
@@ -235,7 +292,8 @@ której nie trzeba zatwierdzać.
   i opencode pamięć działa w całości, a tryb workerów w wersji okrojonej — co
   dokładnie odpada, mówi tabela „Na maszynie z samym Codeksem" (pod opencode jest
   tak samo, tylko nic nie trzeba zatwierdzać).
-- **Python 3.12 + `uv`** — tylko jeśli chcesz Lore, czyli pamięci rozmów.
+- **Python 3.12 + `uv`** — tylko jeśli chcesz Pamięć rozmów (Lore) albo Wiedzę
+  o Tobie.
 
 ## Instalacja
 
@@ -310,8 +368,8 @@ sesji**, bo tam chodzi w tle i nikt na niego nie czeka.
 
 **Obie te rzeczy robi strażnik, a wołają go hooki `SessionStart` — Claude Code
 i Codeksa.** Zadania okresowego do aktualizacji w Harmonogramie zadań Windows
-**nie ma** (moduł pamięci ma swoje dwa, oba startują przy zalogowaniu):
-instalator go nie zakłada, a stare `MegaRuchaczOdswiez` ze starszej wersji zdejmuje
+**nie ma** (zadania, które są — nadzorca, indeks rozmów, rachunek kosztu, kopia
+zapasowa — opisuje „Dzień z życia”): instalator go nie zakłada, a stare `MegaRuchaczOdswiez` ze starszej wersji zdejmuje
 i mówi o tym jedną linią. Pod Codeksem strażnik chodzi w tle i robi dokładnie to
 samo: pobiera nowszą wersję, pilnuje zasad, pilnuje sufitów i nanosi poprawki na
 wdrożenie — tyle że melduje do dziennika `~\.claude\.megaruchacz-tlo.log`, a nie
@@ -369,6 +427,10 @@ czego „poprawiać na wszelki wypadek".
 
 Narzędzie nie jest jedną całością. Składa się z **dwóch niezależnych modułów**
 i każdy instaluje się osobno. Możesz wziąć sam tryb pracy, samą pamięć, albo obydwa.
+
+Instalator z oknem dzieli to drobniej (patrz „Co wybierasz w instalatorze”): moduł
+`workerzy` to tam **Tryb kierownika**, a `pamiec` rozpada się na **Pamięć rozmów
+(Lore)** i **Wiedzę o Tobie** — tę drugą można mieć bez pierwszej.
 
 ### Moduł `workerzy` — rozdawanie roboty
 
@@ -554,9 +616,12 @@ w znaczeniu".
 
 1. **Włączasz komputer.** Przy zalogowaniu startują dwie rzeczy z Harmonogramu zadań:
    ikona **nadzorcy** w zasobniku i indeksowanie, które **co 10 minut** dopisuje nowe
-   rozmowy do archiwum. Żadne zadanie nie chodzi o stałej godzinie.
+   rozmowy do archiwum. O stałej godzinie chodzą tylko dwa zadania, oba bez modelu:
+   rachunek kosztu (08:15) i — z częścią Kopia zapasowa — kopia (12:30; przegapiona
+   rusza po włączeniu komputera).
 2. **Raz dziennie — nauka.** Rusza ją nadzorca (co 15 minut sprawdza, czy dziś już
-   była), a gdy nadzorcy nie ma — pierwsza sesja dnia. Model czyta **tylko wiadomości
+   była), a gdy nadzorcy nie ma — pierwsza sesja dnia. Najpierw powstają kopie
+   „wczoraj” i „przedwczoraj” (patrz „Ochrona przed utratą”). Model czyta **tylko wiadomości
    pisane do agenta** (Twoje i zlecenia, które agent daje podagentom; odpowiedzi
    agenta i wyniki narzędzi pomija), **tylko od ostatniego czytania** i nigdy sprzed
    pierwszego przebiegu na tej maszynie („dzień zerowy"). Wyłowione fakty wpisuje do
@@ -627,6 +692,7 @@ który milknie razem z tym, czego pilnuje, jest bezużyteczny. W oknie:
 - stan nauki: kiedy była, ile materiału czeka;
 - **zmiany w pamięci z numerami do cofnięcia**;
 - postęp przeliczania archiwum na nowy model (patrz niżej);
+- stan kopii zapasowej i przycisk „Zmień instalację”;
 - wersja narzędzia i przycisk „Sprawdź i pobierz nowszą wersję";
 - „Przeczytaj zaległe rozmowy" — jedyny przycisk, który wydaje tokeny, więc **najpierw
   podaje szacunek kosztu i pyta o zgodę** (domyślnie „Nie").
@@ -676,5 +742,5 @@ Wolimy to napisać, niż udawać, że jest komplet.
 - **Mierzymy na oko.** Reguły w `CLAUDE.md` mają uzasadnienia, ale nie mamy liczb,
   które by potwierdzały, ile faktycznie oszczędzają.
 
-Co jest przetestowane: moduł pamięci ma **289 testów** (stan na 2026-09-24) (`uv run pytest` w `lore/`),
+Co jest przetestowane: moduł pamięci ma **470 testów** (stan na 2026-10-02) (`uv run pytest` w `lore/`),
 a instalator sprawdza sam siebie po każdym wdrożeniu.
