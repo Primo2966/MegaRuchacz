@@ -130,6 +130,42 @@ ponad 15 tys. tokenów.
 Tak samo na obu: zasady kierownika, rejestr i mapa w projekcie, pamięć rozmów
 z wyszukiwaniem, sama aktualizacja z GitHuba i aplikacja w zasobniku.
 
+### Jak zainstalować i zmienić instalację
+
+1. Pobierz MegaRuchacza z GitHuba jako ZIP (zielony przycisk „Code” → „Download ZIP”),
+   rozpakuj i kliknij dwa razy plik `instaluj.bat`. Windows może zapytać, czy
+   uruchomić plik z internetu — zgódź się. Otworzy się okno instalatora.
+2. Jeśli MegaRuchacza nie ma jeszcze na komputerze, okno zapyta o folder (domyślnie
+   `MegaRuchacz` w Twoim folderze użytkownika), pobierze go tam i — gdy trzeba —
+   samo doinstaluje program git.
+3. Zaznacz, co chcesz mieć. Zawsze dostajesz aplikację przy zegarze i automatyczne
+   aktualizacje. Do wyboru: **Wiedza o Tobie**, **Pamięć rozmów (Lore)**, **Tryb
+   kierownika**, **Polecane skille** i **Kopia zapasowa** (wskazujesz folder).
+   Przycisk „Wszystko” zaznacza całość.
+4. Przed startem widzisz podsumowanie: co się stanie i jakie programy instalator
+   doinstaluje (bez uprawnień administratora). Potem postęp krok po kroku; gdy coś
+   się nie uda — „Spróbuj ponownie” i „Pokaż szczegóły”.
+5. Na koniec otwórz nowe okno Claude Code (albo Codeksa) — dopiero ono wczyta
+   MegaRuchacza.
+
+**Zmiana instalacji.** Kliknij ikonę MegaRuchacza przy zegarze, a w jej oknie przycisk
+„Zmień instalację” na dole (albo uruchom `instaluj.bat` jeszcze raz). Zaznaczone jest
+to, co masz. Zaznacz, żeby dodać; odznacz, żeby usunąć — instalator zapyta wtedy, czy
+usunąć też Twoje dane (domyślnie nie). Nic się nie dzieje przed „Zastosuj zmiany”.
+Na komputerze, na którym MegaRuchacz był już przed instalatorem, pierwsze otwarcie
+niczego nie zmienia — tylko zapisuje, co jest zainstalowane.
+
+**Usuwanie.** W tym samym oknie przycisk „Usuń MegaRuchacza…” zdejmuje wszystko,
+także aplikację przy zegarze. Co zostaje:
+
+- folder z MegaRuchaczem — możesz go potem skasować sam;
+- Twoje dane: wiedza o Tobie (sekcja „Co wiem” i folder `~\.claude\wiedza`), baza
+  rozmów, zapisy skilli i kopii — chyba że zaznaczysz „usuń też moje dane”;
+- zawsze: same rozmowy, Twoje skille (`~\.claude\skills`), zrobione kopie zapasowe
+  w wybranym folderze, kopie zmienianych plików z końcówką `.bak-…` i mały plik
+  `~\.claude\mr\instalacja.json` z zapisem, że MegaRuchacza nie ma — dzięki niemu
+  nic nie wróci samo.
+
 ---
 
 Tryb pracy, w którym agent AI przestaje być wykonawcą, a staje się **kierownikiem**:
@@ -156,7 +192,8 @@ W zestawie jest też **Lore — przeszukiwalna pamięć wszystkich Twoich rozmó
 |---|---|
 | `szablony-global/claude/zasady-kierownika.md` | zasady kierownika dla Claude Code — serce modułu `workerzy` |
 | `CLAUDE.md` | reguły budowania samego narzędzia (tylko to repo) |
-| `zasady-globalne.md` | zasady wpisywane do plików instrukcji narzędzi AI |
+| `zasady-lore.md`, `zasady-wiedza.md` | zasady pamięci wpisywane do plików instrukcji narzędzi AI — blok Lore i blok Wiedzy, każdy przy swojej części |
+| `instaluj.bat`, `instalator/` | instalator z oknem: wybór części, zmiana instalacji, usuwanie |
 | `szablony-global/claude/agents/` | prompty czterech ról: implementer, scout, verifier, zastępca |
 | `szablony-codex/` | to samo dla Codeksa: role, zasady kierownika, hooki |
 | `szablony-opencode/` | to samo dla opencode: role, zasady kierownika, wtyczka rejestru |
@@ -202,7 +239,10 @@ której nie trzeba zatwierdzać.
 
 ## Instalacja
 
-### Globalnie — raz na komputer (zalecane)
+Najprościej: `instaluj.bat` — patrz „Jak zainstalować i zmienić instalację” na górze.
+Niżej instalacja ręczna, skryptami.
+
+### Globalnie — raz na komputer
 
 ```powershell
 powershell -ExecutionPolicy Bypass -File <ścieżka>\narzedzia\instaluj-globalnie.ps1

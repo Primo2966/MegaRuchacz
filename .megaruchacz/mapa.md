@@ -14,13 +14,16 @@ inwentarz warstw z 25.09, budowa okna sprzed podzialu, pomiary P23/P30 w calosci
 - `wdroz.ps1` - instalator per projekt (sekcje "# 1. Workerzy", "# 2. Pliki stanu", "# 3. Zasady
   + payloady", "# 4. settings.json", "4b. Codex CLI", "# 6. Znacznik wersji"); rejestr modulow
   bierze z `straznik-zasad.ps1 -Moduly`, konczy samosprawdzeniem.
+- `instaluj.bat` + `instalator/` - instalator z oknem (wybor modulow, zmiana, usuwanie; sekcja "Instalacja z wyborem
+  modulow" na koncu mapy); `narzedzia/instalacja/` - rejestr `stan.ps1`, skrypty `modul-*.ps1`, `zaleznosci.ps1`.
 - `narzedzia/`: `instaluj-globalnie.ps1` (tryb globalny), `instaluj-lore.ps1` (Lore: uv, serwer MCP,
-  zadanie `LoreIndex`), `straznik-zasad.ps1` (hook SessionStart), `przypomnienie.js` (hook
+  zadanie `LoreIndex`; od P59b okno konsoli nad `instalacja/lore-czesci.ps1`), `straznik-zasad.ps1` (hook SessionStart), `przypomnienie.js` (hook
   UserPromptSubmit), `koszt-pamieci.ps1` + `koszt/` (rachunek), `cykl-dzienny.ps1` ->
   `wyciagnij-fakty.ps1` + `aktualizuj-wiedze.ps1` (cykl wiedzy), `przekop-archiwum.ps1`
   (jednorazowy przekop archiwum), `skille.ps1`, `kierownik-cele.ps1` (ktore pliki dostaja blok
   kierownika - wspolne instalatora i straznika), `sufit-ladunku.ps1` (sufity ladunkow hookow -
-  wspolne wdroz i straznika), `wpisz-zasady.ps1` (blok Lore/Wiedza ze `zasady-globalne.md`),
+  wspolne wdroz i straznika), `wpisz-zasady.ps1` (bloki lore/wiedza z `zasady-lore.md`/`zasady-wiedza.md`; regula w `zasady-bloki.ps1`,
+  wspolna ze straznikiem i wdroz; `-Blok`, `-Usun`; wg rejestru instalacji),
   `mr-log-codex.js` (rejestr START/KONIEC pod Codeksem), `orca-ustawienia.js` (ustawienia Orki
   miedzy komputerami).
 - `zasobnik/` - okno nadzorcy: `nadzorca.ps1`, `stan-nadzorcy.ps1`, moduly `nadzorca/`,
@@ -148,8 +151,8 @@ inwentarz warstw z 25.09, budowa okna sprzed podzialu, pomiary P23/P30 w calosci
 ## Co leci do modelu (hooki i warstwy pamieci)
 
 - Raz na sesje: `~\.claude\CLAUDE.md` (w kazdym projekcie; "Co wiem" stala - sufit 8000 znakow,
-  "Biezace" `- [RRRR-MM-DD]`, blok `<!-- MegaRuchacz:start/koniec -->` Lore/Wiedza - utrzymuje
-  `Pilnuj-Zasad`, blok kierownika - instalator) i `CLAUDE.md` projektu; straznik (SessionStart) nic
+  "Biezace" `- [RRRR-MM-DD]`, bloki `MegaRuchacz:lore` i `MegaRuchacz:wiedza` (od P59a; stary
+  `MegaRuchacz:start` zamieniany przez straznika na miejscu) - utrzymuje `Pilnuj-Zasad` wg rejestru instalacji, blok kierownika - instalator) i `CLAUDE.md` projektu; straznik (SessionStart) nic
   nie wstrzykuje poza liniami do czlowieka. `~\.claude\mr\megaruchacz-sesja.json` (`Zbuduj-Sesje`)
   w trybie globalnym NIKT nie czyta (relikt po 0.20.0). Natywna pamiec Claude Code
   `~\.claude\projects\C--dev-claude-worker\memory\` - pusta.
@@ -490,3 +493,70 @@ inwentarz warstw z 25.09, budowa okna sprzed podzialu, pomiary P23/P30 w calosci
   ~141 tys.) - wlaczenie po stronie admina proxy. PULAPKA pomiaru `claude -p`: mierz od 2. odpowiedzi
   (serwery MCP dolaczaja po `system/init`). Podproces `claude -p` z Basha workera nie znajduje Git
   Basha (hook straznika pada) - bez wplywu na liczby.
+
+## Instalacja z wyborem modulow (P59a-d, P63, P64; 0.27.0)
+
+Calosc: `.megaruchacz/raporty/P63.md` (inwentarz sprzed instalatora), `P59a..d.md`, `P64.md` (proba calosci).
+
+- Rejestr: `narzedzia/instalacja/stan.ps1` (UMOWA instalatora, skryptow modulow, straznika, nadzorcy i hookow) ->
+  `~\.claude\mr\instalacja.json` {wersja, moduly{wiedza,lore,kierownik,skille,kopia}, kopia{zrodla,cel,
+  wykluczenia[{sciezka,powod,katalog}]}, narzedzia, baza, data}. Brak pliku = sprzed rejestru (wiedza, lore, kierownik,
+  skille wlaczone; kopia, gdy jest `mr\kopia-stan.txt`); nieczytelny = wszystko wlaczone + blad i NIC nie wolno zdejmowac;
+  brak klucza = wlaczony. `baza` (P64) pisze tylko `modul-baza.ps1` (Instaluj true, Usun false), brak pola = true;
+  `baza: false` = slad odinstalowania - straznik `Baza-Usunieta`: nie globalnie (`Jest-Globalna`), hook straznika zdjety
+  (`Rodzaje-Hookow-Wylaczone`). Funkcje: `Czytaj-Instalacje`, `Modul-Wlaczony`, `Ustaw-Modul`, `Ustaw-Baze`,
+  `Zapisz-Instalacje` (atomowo: plik tymczasowy, Flush, `File.Replace` z `[NullString]::Value`).
+- Okno: `instaluj.bat` (ASCII, CRLF pilnuje `.gitattributes`) -> `instalator/okno.ps1` (-Tryb nowy|zmiana tylko podpowiada,
+  -Zrodlo, -KatalogDomowy, -Proba, -KatalogSkryptow = atrapy, -PozaEkranem, -Scenariusz). Tryb z dysku: brak .git =
+  pobieranie (`pobierz.ps1`: git, klon); rejestr albo `.megaruchacz-global` albo `<!-- MegaRuchacz:` w CLAUDE.md/AGENTS.md
+  = zmiana; inaczej nowy. Moduly okna: `wyglad`, `dane` (tabela czesci, wykrywanie, plan, zapis rejestru), `wykonanie`
+  (kroki w osobnych procesach, odczyt KROK/UWAGA/WYNIK, `Odswiez-Path`), `ekrany`. Dziennik
+  `%LOCALAPPDATA%\MegaRuchacz\instalator.log` (NIE w .claude - udawalby zainstalowane Claude Code).
+- Plan (`dane.ps1 Zbuduj-Plan`): `zapamietaj` (rejestr: moduly = stan obecny, kopia, narzedzia) -> Usun odznaczonych
+  (kopia, skille, kierownik, wiedza, lore) -> `zaleznosci.ps1 -Akcja Instaluj -Potrzebne "git,node,uv,python"` (JEDEN
+  napis) -> `modul-baza Instaluj` (nowa instalacja albo tryb zmiany bez bazy - `Baza-Jest` = hook straznika
+  w settings.json) -> Instaluj zaznaczonych (lore, wiedza, kierownik, skille, kopia) -> `wpisz-zasady.ps1`. Po kazdym
+  udanym kroku okno samo ustawia flage (`Ustaw-Flage-Modulu`). Sukces kroku = WYNIK ok:true I kod 0. Do P64 baza szla
+  PRZED zaleznosci (bez gita padala zawsze). "Usuń MegaRuchacza..." (P64, tryb zmiany, `Przelacz-Usuwanie-Calosci`):
+  Usun KAZDEGO modulu (takze niezainstalowanego - sprzata resztki, z -UsunDane dane) + `modul-baza Usun`; rejestr
+  zostaje z `baza: false`; bez kroku zasad (baza zdejmuje bloki sama).
+- Skrypty modulow `narzedzia/instalacja/modul-{baza,wiedza,lore,kierownik,skille,kopia}.ps1 -Akcja Instaluj|Usun|Stan
+  -KatalogDomowy -Zrodlo [-Proba] [-UsunDane]`; wyjscie `KROK:`/`UWAGA:`/`WYNIK: {json ASCII}` (zawsze ostatnia linia),
+  kod 0/1, brak WYNIK = porazka. `wspolne.ps1`: `Start-Modul`, `Zakoncz`, `Zapisz-Modul`, `Po-Zmianie-Rejestru` (straznik
+  `-NaprawGlobalne` + `wpisz-zasady`), `Ustaw-Katalog-Domowy` (dom inny niz profil: zaklada AppData, usuwa CODEX_HOME,
+  LORE_HOME, CLAUDE_HISTORIA_HOME, CLAUDE_CONFIG_DIR wskazujace poza ten dom - P64). `lore-czesci.ps1` = Lore na czesci
+  (srodowisko, indeks, baza, model, MCP + wyrejestrowanie, sprzatanie). `zaleznosci.ps1` = uv, Python 3.12, git, Node bez
+  admina (winget albo zip + SHA-256, PATH uzytkownika REG_EXPAND_SZ). Kto co zaklada i zdejmuje: P59b.md sekcja 2.
+  `modul-kierownik` zdejmuje role i hooki Codeksa z `<dom>\.codex` (tam kladzie je instaluj-globalnie), nie z CODEX_HOME.
+- Wiedza bez Lore: `lore.index --text-only`, `meta.index_mode` text|vectors, `vector_status` = `text_only`; Lore Usun przy
+  wlaczonej wiedzy = LoreIndex wraca do `--text-only`; Lore Instaluj = `lore.migrate` liczy brakujace wektory.
+- Straznik wg rejestru (P59a): `Pilnuj-Zasad` (bloki lore/wiedza, regula `zasady-bloki.ps1`), `Pilnuj-Kierownika` (blok
+  i kopia dla opencode zdejmowane przy kierowniku wylaczonym), hooki wg `Rodzaje-Hookow-Wylaczone`, `Ruszaj-Cykl` tylko
+  z wiedza, tryb `-Dopasuj`. Bloki w CLAUDE.md: `## Co wiem` > `MegaRuchacz:lore` > `MegaRuchacz:wiedza` >
+  `MegaRuchacz:kierownik`; granica `verify.section_bounds` = `## ` albo DOWOLNY `<!-- MegaRuchacz:` (`GUARD_PREFIX`).
+  `przypomnienie.js` czyta rejestr (`MR_INSTALACJA`): ladunek z kierownikiem, linia cyklu z wiedza, archiwum z lore,
+  nic do doklejenia = brak wyjscia, nieczytelny = linia UWAGA.
+- Nadzorca wg rejestru (P59d): `zasobnik/nadzorca/stan-instalacja.ps1` (`Stan-Instalacji`, `Modul-Jest $null x` = $true);
+  zakladki, karty i alarmy (cykl/cykl-*/historia tylko z wiedza, kopia z kopia), dozor (`Czy-Ruszac-Cykl`,
+  `Czy-Sprawdzac-Skille`), przycisk "Zmień instalację" (`Zmien-Instalacje`: `okno.ps1 -Tryb zmiana -Zrodlo -KatalogDomowy`,
+  CreateNoWindow). Rachunek: `koszt-pamieci.ps1` `$script:WiedzaWylaczona` (P64) - rozbicie i raport pelny mowia "modul
+  Wiedza nie jest zainstalowany" zamiast "cykl nie mial okazji".
+- Kopia: `kopia-zapasowa.ps1` `Ustal-Ustawienia` - -Zrodla/-Cel > pole `kopia` rejestru > bez rejestru
+  `narzedzia/kopia-zapasowa-domyslne.json` (ustawienia biura; okno przenosi je do rejestru przy pierwszym zapisie).
+- Zadania Harmonogramu (XML, InteractiveToken, bez admina): `MegaRuchaczNadzorca` (logon +30 s; baza), `LoreKoszt`
+  (08:15; baza), `LoreIndex` (co 10 min; wiedza/lore), `MegaRuchaczKopia` (12:30; kopia).
+- Rozmiary: klon ~9 MB, `lore\.venv` 196 MB, CPython z uv 70 MB, model 496 MB (tylko lore), skille ~50 MB. Repo publiczne:
+  ZIP `github.com/Primo2966/MegaRuchacz/archive/refs/heads/main.zip`; aktualizacje wymagaja klonu git (folder z ZIP =
+  `nie-repo`), dlatego tryb pobieranie klonuje. Sciezka repo zaszyta w hookach, MCP i zadaniach - repo nie przenosic.
+- Testy: `narzedzia/test-rejestru.ps1` (macierz rejestru, straznik, przypomnienie), `narzedzia/instalacja/test-moduly.ps1`
+  (skrypty modulow na kopii repo: zadania MRTEST-, start 2099, atrapy CLI), `instalator/test-instalatora.ps1` (okno na
+  atrapach, zrzuty), `instalator/test-calosci.ps1` (P64: okno + PRAWDZIWE skrypty na kopii repo i domu, kroki a-d, straznik
+  jak hook po kazdym kroku, odcisk prawdziwego stanu przed/po; ok. 6 min).
+- PULAPKI: PS 5.1 nie rozroznia wielkosci liter w nazwach zmiennych - lokalne `$t` przeslania `$T` skryptu (P64, sciezka
+  probna stala sie trescia pliku); `ConvertFrom-Json` w PS 5.1 nie czyta `~\.claude.json` (klucze rozniace sie wielkoscia
+  liter) - czytac node; Codex CLI liczy swoj katalog z profilu, nie z USERPROFILE - w testach wylacznie atrapa; okno
+  dokleja PATH z rejestru ZA PATH procesu (`Odswiez-Path`, od P64 - wczesniej prawdziwe CLI wygrywaly z atrapami);
+  `$HOME` w potomnym PowerShellu = USERPROFILE ze srodowiska, a `GetFolderPath('UserProfile')` = prawdziwy profil;
+  podstawiony dom bez `AppData\Local` = PowerShell pisze `Microsoft\...\ModuleAnalysisCache` do katalogu roboczego;
+  `return ,@()` + `@(f)` = tablica w tablicy; „ ” w napisie "..." koncza napis (trzeba `„ `”); narzedzie Bash halvuje
+  `\\` w heredocach i `sed -i` zdejmuje CR.

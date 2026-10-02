@@ -4,6 +4,62 @@ Każda zmiana wypychana na gita dostaje tu wpis. Numer rośnie wg zasady:
 pierwsza cyfra — przebudowa łamiąca zgodność, druga — nowa funkcja,
 trzecia — poprawka.
 
+## 0.27.0 — 2026-10-02
+
+- **Instalator z oknem: `instaluj.bat`.** Dwuklik otwiera okno instalatora (bez migającej konsoli, nic do
+  instalowania wcześniej). Na komputerze bez MegaRuchacza sam plik `instaluj.bat` pobiera go z GitHuba, pyta
+  o folder, w razie potrzeby zdobywa program git i klonuje repozytorium — dzięki temu potem działają
+  aktualizacje. Ekrany: powitanie z wykrytymi narzędziami (Claude Code, Codex, opencode), wybór części,
+  podsumowanie (co się stanie i jakich programów brakuje), postęp krok po kroku ze „Spróbuj ponownie”
+  i „Pokaż szczegóły” przy błędzie, ekran „Gotowe” z tym, co jest do sprawdzenia.
+- **Wybierasz, co chcesz mieć.** Zawsze: aplikacja przy zegarze i automatyczne aktualizacje. Do wyboru:
+  **Wiedza o Tobie**, **Pamięć rozmów (Lore)**, **Tryb kierownika**, **Polecane skille**, **Kopia zapasowa**
+  (folder docelowy, co kopiować i czego nie). Brakujące programy (uv, Python 3.12, git, Node.js) instalator
+  doinstalowuje sam, bez uprawnień administratora — przez winget albo z paczki ZIP sprawdzonej sumą SHA-256.
+  Wybór zapisuje się w `~\.claude\mr\instalacja.json` i za nim idą strażnik, przypomnienia i aplikacja przy
+  zegarze.
+- **Zmiana instalacji jednym przyciskiem.** W oknie aplikacji przy zegarze jest „Zmień instalację” (albo
+  uruchom `instaluj.bat` jeszcze raz). Zaznaczone jest to, co masz; odznaczenie pyta w oknie, z polem „usuń też
+  moje dane” — domyślnie odznaczonym, więc dane zostają i wracają po ponownym włączeniu. Pierwsze otwarcie na
+  komputerze, na którym MegaRuchacz był już wcześniej, niczego nie zmienia — tylko zapisuje, co jest
+  zainstalowane (kopia zapasowa przechodzi ze swoimi dotychczasowymi ustawieniami, z wyjątkami).
+- **Usuwanie całego MegaRuchacza.** Przycisk „Usuń MegaRuchacza…” w trybie zmiany zdejmuje wszystko, także
+  aplikację przy zegarze i aktualizacje: zasady z plików Twoich narzędzi AI, pomocników, przypomnienia, serwer
+  wyszukiwania i zadania w tle. Zostaje folder z MegaRuchaczem, Twoje dane (chyba że zaznaczysz „usuń też moje
+  dane”), same rozmowy, Twoje skille, zrobione kopie zapasowe i mały zapis, że MegaRuchacza nie ma — dzięki
+  niemu strażnik wywołany choćby z projektu wdrożonego kiedyś `wdroz.ps1` niczego nie dokłada z powrotem.
+  Ponowne uruchomienie instalatora po usunięciu dokłada wszystko, razem z aplikacją przy zegarze.
+- **Wiedza o Tobie bez Pamięci rozmów.** Same pliki z wiedzą i codzienne czytanie rozmów nie wymagają już
+  modelu do wyszukiwania (496 MB): indeks rozmów chodzi wtedy w trybie „tylko tekst”. Włączenie Pamięci
+  rozmów później liczy brakujące wektory w tle; jej wyłączenie przełącza indeks z powrotem na sam tekst.
+- **Zasady pamięci jako dwa bloki: Lore i Wiedza.** Dotychczasowy jeden blok w `CLAUDE.md` i `AGENTS.md`
+  Codeksa to teraz dwa (`MegaRuchacz:lore`, `MegaRuchacz:wiedza`), każdy przy swojej części. Strażnik zamienił
+  stary blok sam, w tym samym miejscu — „Co wiem” i reszta pliku bez zmian. Polecenie „Cofnij” wskazuje wprost
+  folder MegaRuchacza.
+- **Strażnik i przypomnienia słuchają wyboru.** Dogrywają tylko to, co należy do włączonych części, i zdejmują
+  nasze bloki i hooki części wyłączonych. Przypomnienie przy każdej wiadomości: zasady kierownika tylko
+  z Trybem kierownika, linia o czytaniu rozmów z Wiedzą, „Z ARCHIWUM” z Pamięcią rozmów. Codzienne czytanie
+  rozmów rusza tylko z Wiedzą. Uszkodzony zapis instalacji = jedna linia alarmu i nic nie jest zdejmowane.
+- **Okno aplikacji przy zegarze pokazuje tylko to, co masz.** Zakładka Skille tylko ze Skillami, karta
+  i przycisk czytania rozmów tylko z Wiedzą, linia kopii tylko z Kopią, Warstwy pamięci tylko z warstwami
+  zainstalowanych części. Bez Wiedzy nie ma alarmu „nauka z rozmów stoi”, a rachunek mówi „moduł Wiedza nie
+  jest zainstalowany” zamiast „cykl nie miał okazji się odpalić”. Uszkodzony zapis instalacji to czerwona karta.
+- **Kopia zapasowa bierze ustawienia z zapisu instalacji** — dokąd, co i czego nie kopiować, wybrane
+  w oknie. Komputery sprzed instalatora kopiują jak dotąd (`narzedzia\kopia-zapasowa-domyslne.json`).
+- **Fakty nie trafiają już do bloku kierownika:** sekcja „Co wiem” kończy się na każdym znaczniku MegaRuchacza.
+- **Poprawki z próby całości instalatora.** Próba szła przez okno z prawdziwymi skryptami na kopii katalogu
+  domowego (`instalator\test-calosci.ps1`): nowa instalacja, zmiany, usuwanie bez i z danymi, ponowna
+  instalacja — prawdziwe ustawienia i zadania Harmonogramu zostały nietknięte. Wyszło przy niej: programy
+  instalują się teraz przed aplikacją przy zegarze (na komputerze bez gita ten krok padał zawsze, także po
+  „Spróbuj ponownie”); tryb zmiany dokłada aplikację przy zegarze, gdy jej brakuje; Tryb kierownika zdejmuje
+  role Codeksa z `~\.codex`, gdzie je założył (wcześniej szukał ich w katalogu Codeksa Orki, gdy instalator
+  ruszał z jej okna); skrypty pracujące na innym katalogu domowym niż Twój nie sięgają już do Twojej
+  konfiguracji Codeksa i Lore przez zmienne środowiska.
+- **`instaluj.bat` w ZIP-ie z GitHuba ma zawsze końce linii Windows** (`.gitattributes`) — bez tego `cmd`
+  potrafi nie znaleźć etykiety w pliku z ZIP-a.
+- Po aktualizacji na drugim komputerze aplikację przy zegarze trzeba raz uruchomić od nowa (jak po każdej
+  zmianie jej okna).
+
 ## 0.26.0 — 2026-10-02
 
 - **Codzienna kopia zapasowa na Dysk Google** (`narzedzia\kopia-zapasowa.ps1`, zadanie Harmonogramu
