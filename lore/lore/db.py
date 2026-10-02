@@ -117,6 +117,16 @@ LEGACY_EMBED_MODEL = E5_SMALL.name
 META_MODEL = "embed_model"        # model of the vectors in `vectors` — the ONLY ones search ranks
 META_NEXT = "embed_model_next"    # model being built in `vectors_next` during a conversion
 NEXT_TABLE = "vectors_next"
+
+# How the indexer ran last: "vectors" (the normal Lore) or "text" — full text only, no embedding model
+# at all. The text mode is what a machine with the knowledge module but WITHOUT the lore module runs
+# (`python -m lore.index --text-only`, set in the LoreIndex task by the installer): the daily harvest
+# reads `chunks` and never a vector, so 496 MB of model would be dead weight there. Recorded so that
+# every reader (vector_status, the installer, the supervisor) tells "full text by choice" from
+# "vectors missing by accident" — the first is a state, the second an alarm.
+META_INDEX_MODE = "index_mode"
+INDEX_TEXT = "text"
+INDEX_VECTORS = "vectors"
 NEXT_SCHEMA = f"""
 CREATE TABLE IF NOT EXISTS {NEXT_TABLE} (
     chunk_id INTEGER PRIMARY KEY REFERENCES chunks(id) ON DELETE CASCADE,
@@ -357,6 +367,17 @@ def record_embed_model(conn: sqlite3.Connection) -> str:
     return active_model(conn) or name
 
 
+def index_mode(conn: sqlite3.Connection) -> str | None:
+    """INDEX_TEXT or INDEX_VECTORS as the last indexing pass left it; None = never recorded (an older
+    database, indexed the normal way before the mode existed)."""
+    return _meta(conn, META_INDEX_MODE)
+
+
+def record_index_mode(conn: sqlite3.Connection, text_only: bool) -> None:
+    conn.execute("INSERT INTO meta(key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value=excluded.value",
+                 (META_INDEX_MODE, INDEX_TEXT if text_only else INDEX_VECTORS))
+
+
 def has_table(conn: sqlite3.Connection, name: str) -> bool:
     return conn.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name=?", (name,)).fetchone() is not None
 
@@ -415,7 +436,9 @@ def vector_status(conn: sqlite3.Connection) -> dict:
     """Which model the vectors belong to, whether that is the configured one, and how far the conversion is.
 
     `state`: ok | incomplete (the right model, but some chunks lack a valid vector) |
-    migration_needed | migrating | unknown_model. Anything but ok carries a `warning`.
+    migration_needed | migrating | unknown_model | text_only. Anything but ok and text_only carries
+    a `warning`. text_only = the indexer runs WITHOUT the model on purpose (META_INDEX_MODE); missing
+    vectors are then the expected state, not a fault, and it carries a `note` instead.
     """
     active = active_model(conn)
     target = EMBED_MODEL
@@ -453,6 +476,16 @@ def vector_status(conn: sqlite3.Connection) -> dict:
     progress = read_migration_progress()
     if progress is not None:
         out["progress"] = progress
+    if index_mode(conn) == INDEX_TEXT:
+        # Full text by choice: nothing ranks vectors here, so neither a missing vector nor an old model
+        # is a fault - a warning would be a false alarm, and those teach people to ignore alarms.
+        missing = total - out.get("vectors", 0)
+        out["state"] = "text_only"
+        out.pop("warning", None)
+        out["missing"] = missing
+        out["note"] = (f"full text only: the indexer runs without the embedding model (module lore is not "
+                       f"installed) - {missing} of {total} chunks have no vector and semantic search is off; "
+                       f"installing lore computes them ({cmd})")
     return out
 
 
@@ -461,6 +494,8 @@ def warn_on_model_mismatch(conn: sqlite3.Connection) -> None:
     active = active_model(conn)
     if active == EMBED_MODEL:
         return
+    if index_mode(conn) == INDEX_TEXT:
+        return  # full text by choice - no vector is ever ranked, so the model they came from is moot
     key = (str(DB_PATH), active, EMBED_MODEL)
     if key in _warned:
         return

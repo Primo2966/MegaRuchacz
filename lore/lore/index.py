@@ -1,6 +1,13 @@
 """Incremental indexer of Claude Code transcripts (~/.claude/projects/**/*.jsonl and ~/<uuid>*.jsonl from Orca).
 
-Run: uv --directory C:\\dev\\claude-worker\\lore run python -m lore.index
+Run: uv --directory C:\\dev\\claude-worker\\lore run python -m lore.index [--text-only] [--remask]
+
+--text-only: full text only - chunks are stored WITHOUT vectors and the embedding model is never
+loaded or downloaded. That is the indexer of a machine with the knowledge module but without the
+lore module (the daily harvest reads chunks, never a vector); the installer puts the flag into the
+LoreIndex task. The mode of the last pass is recorded (db.META_INDEX_MODE), so missing vectors read
+as a chosen state, not a fault; the first normal pass switches it back, and `python -m lore.migrate`
+gives the text-only chunks their vectors.
 """
 
 from __future__ import annotations
@@ -16,7 +23,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 from .db import (DB_PATH, MODELS, NEXT_TABLE, PROJECTS_DIR, active_model, connect, embed_passages, has_table,
-                 log, now_iso)
+                 log, now_iso, record_index_mode)
 from .masking import mask
 
 CHUNK_SIZE = 1500
@@ -497,13 +504,15 @@ def _tail_to_close(offset: int, st: os.stat_result) -> bool:
 _unknown_warned: set[str | None] = set()
 
 
-def _embed(chunks: list[Chunk], model: str | None):
+def _embed(chunks: list[Chunk], model: str | None, text_only: bool = False):
     """Vectors for new chunks, or None when the database's model is one this code cannot run.
 
     None is not silent: the chunk is stored without a vector (full-text search finds it at once),
     it is said out loud, and `python -m lore.migrate` gives every such chunk a vector.
+    In the text-only mode None is the plan, not a fault: no model is touched and nothing is said
+    per chunk - the mode itself is recorded once per pass (see index()).
     """
-    if not chunks:
+    if not chunks or text_only:
         return None
     if model not in MODELS:
         if model not in _unknown_warned:
@@ -514,8 +523,8 @@ def _embed(chunks: list[Chunk], model: str | None):
     return embed_passages([c.text for c in chunks], model=model)
 
 
-def process_file(conn: sqlite3.Connection, p: Path) -> int:
-    """Adds the new lines of one file. Returns the number of new chunks."""
+def process_file(conn: sqlite3.Connection, p: Path, text_only: bool = False) -> int:
+    """Adds the new lines of one file. Returns the number of new chunks (text_only: without vectors)."""
     path = str(p)
     st = p.stat()
     row = conn.execute(
@@ -563,7 +572,7 @@ def process_file(conn: sqlite3.Connection, p: Path) -> int:
     # with the model of the vectors ALREADY in the database — during a conversion that is the old
     # one (the conversion picks these chunks up by itself), after it the new one
     model = active_model(conn)
-    emb = _embed(chunks, model)
+    emb = _embed(chunks, model, text_only)
 
     # one stamp for the whole pass: this is the moment the material entered the database, and the
     # harvest reads it instead of `ts` (the id breaks the ties inside a pass). See lore/facts.py.
@@ -576,7 +585,7 @@ def process_file(conn: sqlite3.Connection, p: Path) -> int:
             # old one and must not land among the new ones — start over with the model there now
             conn.execute("ROLLBACK")
             log(f"vector model changed to {active_model(conn)} while indexing {_label(p)} - embedding again")
-            return process_file(conn, p)
+            return process_file(conn, p, text_only)
         # somebody may have got there before us (another window / the scheduler)
         row2 = conn.execute("SELECT mtime, size, offset FROM files WHERE path=?", (path,)).fetchone()
         if row2 and row2[0] == st.st_mtime and row2[1] == st.st_size and row2[2] >= new_offset:
@@ -609,8 +618,12 @@ def process_file(conn: sqlite3.Connection, p: Path) -> int:
     return len(chunks)
 
 
-def index(conn: sqlite3.Connection | None = None, quiet: bool = False) -> int:
-    """A full incremental pass over all files. Returns the number of new chunks."""
+def index(conn: sqlite3.Connection | None = None, quiet: bool = False, text_only: bool = False) -> int:
+    """A full incremental pass over all files. Returns the number of new chunks.
+
+    text_only: chunks go in without vectors and the model is never loaded (see the module docstring);
+    the mode is recorded in meta at the start of the pass, so every reader sees the same state.
+    """
     if not _acquire_lock():
         if not quiet:
             log("another process is indexing right now — skipping")
@@ -622,10 +635,11 @@ def index(conn: sqlite3.Connection | None = None, quiet: bool = False) -> int:
     new = 0
     changed_files = 0
     try:
+        record_index_mode(conn, text_only)
         files = find_files()
         for p in files:
             try:
-                n = process_file(conn, p)
+                n = process_file(conn, p, text_only)
             except sqlite3.OperationalError as e:
                 log(f"skipped {p.name}: {e}")
                 continue
@@ -652,8 +666,12 @@ def index(conn: sqlite3.Connection | None = None, quiet: bool = False) -> int:
     return new
 
 
-def remask(conn: sqlite3.Connection) -> int:
-    """Masks all chunks again (after a pattern change); the changed ones get new embeddings."""
+def remask(conn: sqlite3.Connection, text_only: bool = False) -> int:
+    """Masks all chunks again (after a pattern change); the changed ones get new embeddings.
+
+    text_only: no model - the old vector of a changed chunk is dropped instead (it still encodes
+    the unmasked text); `python -m lore.migrate` gives it a new one once lore is installed.
+    """
     changed: list[tuple[int, str]] = []
     for cid, text in conn.execute("SELECT id, text FROM chunks"):
         new = mask(text)
@@ -662,13 +680,13 @@ def remask(conn: sqlite3.Connection) -> int:
     if not changed:
         return 0
     model = active_model(conn)
-    emb = embed_passages([t for _, t in changed], model=model) if model in MODELS else None
+    emb = embed_passages([t for _, t in changed], model=model) if model in MODELS and not text_only else None
     conn.execute("BEGIN IMMEDIATE")
     try:
         if active_model(conn) != model:
             conn.execute("ROLLBACK")
             log("vector model changed during remask - running it again")
-            return remask(conn)
+            return remask(conn, text_only)
         building = has_table(conn, NEXT_TABLE)
         for i, (cid, new) in enumerate(changed):
             conn.execute("INSERT INTO chunks_fts(chunks_fts, rowid, text) SELECT 'delete', id, text FROM chunks WHERE id=?", (cid,))
@@ -676,6 +694,8 @@ def remask(conn: sqlite3.Connection) -> int:
             conn.execute("INSERT INTO chunks_fts(rowid, text) VALUES (?,?)", (cid, new))
             if emb is not None:
                 conn.execute("UPDATE vectors SET emb=? WHERE chunk_id=?", (emb[i].tobytes(), cid))
+            elif text_only:
+                conn.execute("DELETE FROM vectors WHERE chunk_id=?", (cid,))
             if building:  # a new vector of the old text is wrong; the conversion embeds it again
                 conn.execute(f"DELETE FROM {NEXT_TABLE} WHERE chunk_id=?", (cid,))
         conn.execute("COMMIT")
@@ -687,14 +707,16 @@ def remask(conn: sqlite3.Connection) -> int:
 
 
 def main() -> int:
+    text_only = "--text-only" in sys.argv
     conn = connect()
     try:
         if "--remask" in sys.argv:
-            remask(conn)
-        new = index(conn)
+            remask(conn, text_only)
+        new = index(conn, text_only=text_only)
         sessions = conn.execute("SELECT count(DISTINCT session) FROM chunks").fetchone()[0]
         total = conn.execute("SELECT count(*) FROM chunks").fetchone()[0]
-        log(f"database: {DB_PATH} | sessions: {sessions} | chunks: {total} | new now: {new}")
+        mode = "full text only, no vectors" if text_only else "full text + vectors"
+        log(f"database: {DB_PATH} | sessions: {sessions} | chunks: {total} | new now: {new} | mode: {mode}")
     finally:
         conn.close()
     return 0

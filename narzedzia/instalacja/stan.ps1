@@ -21,9 +21,10 @@
 #     przy bledzie NIC nie wolno odinstalowac, tylko alarmowac (Cisza jest zakazana);
 #   - brak klucza modulu w pliku = jak przy braku pliku.
 
-$script:MR_MODULY = @('wiedza', 'lore', 'kierownik', 'skille', 'kopia')
-
-function Moduly-MegaRuchacza { return $script:MR_MODULY }
+# Lista modulow jako funkcja zwracajaca stala, NIE zmienna $script: - zakres $script: w PowerShellu
+# jest dynamiczny (skrypt aktualnie wykonywany), wiec funkcja wolana z innego skryptu widziala
+# pusta liste i wszystkie moduly wychodzily jako wylaczone (zlapal to test P59a).
+function Moduly-MegaRuchacza { return @('wiedza', 'lore', 'kierownik', 'skille', 'kopia') }
 
 function Sciezka-Instalacji([string]$KatalogDomowy = $HOME) {
   return (Join-Path $KatalogDomowy '.claude\mr\instalacja.json')
@@ -31,7 +32,7 @@ function Sciezka-Instalacji([string]$KatalogDomowy = $HOME) {
 
 function Domyslne-Moduly([string]$KatalogDomowy = $HOME) {
   $m = [ordered]@{}
-  foreach ($n in $script:MR_MODULY) { $m[$n] = $true }
+  foreach ($n in (Moduly-MegaRuchacza)) { $m[$n] = $true }
   $m['kopia'] = Test-Path -LiteralPath (Join-Path $KatalogDomowy '.claude\mr\kopia-stan.txt')
   return $m
 }
@@ -56,7 +57,7 @@ function Czytaj-Instalacje([string]$KatalogDomowy = $HOME) {
     $tekst = (New-Object System.Text.UTF8Encoding($false)).GetString($bajty).TrimStart([char]0xFEFF)
     $j = $tekst | ConvertFrom-Json
     if ($null -eq $j -or $null -eq $j.moduly) { throw 'brak pola "moduly"' }
-    foreach ($n in $script:MR_MODULY) {
+    foreach ($n in (Moduly-MegaRuchacza)) {
       if ($null -eq $j.moduly.$n) {
         $j.moduly | Add-Member -NotePropertyName $n -NotePropertyValue $domyslne[$n] -Force
       }
@@ -77,9 +78,12 @@ function Czytaj-Instalacje([string]$KatalogDomowy = $HOME) {
 }
 
 function Modul-Wlaczony([string]$Nazwa, [string]$KatalogDomowy = $HOME) {
-  if ($script:MR_MODULY -notcontains $Nazwa) { throw "nieznany modul MegaRuchacza: $Nazwa" }
+  if ((Moduly-MegaRuchacza) -notcontains $Nazwa) { throw "nieznany modul MegaRuchacza: $Nazwa" }
   $s = Czytaj-Instalacje $KatalogDomowy
-  return [bool]$s.moduly.$Nazwa
+  $v = $s.moduly.$Nazwa
+  # Brak wartosci = wlaczony: blad odczytu nigdy nie moze wylaczyc (i odinstalowac) modulu.
+  if ($null -eq $v) { return $true }
+  return [bool]$v
 }
 
 # Zapis atomowy z wymuszeniem zapisu na dysk: plik tymczasowy w tym samym katalogu,
@@ -114,7 +118,7 @@ function Zapisz-Instalacje($Stan, [string]$KatalogDomowy = $HOME) {
 }
 
 function Ustaw-Modul([string]$Nazwa, [bool]$Wlaczony, [string]$KatalogDomowy = $HOME) {
-  if ($script:MR_MODULY -notcontains $Nazwa) { throw "nieznany modul MegaRuchacza: $Nazwa" }
+  if ((Moduly-MegaRuchacza) -notcontains $Nazwa) { throw "nieznany modul MegaRuchacza: $Nazwa" }
   $s = Czytaj-Instalacje $KatalogDomowy
   if ($s.blad) { throw $s.blad }
   $s.moduly | Add-Member -NotePropertyName $Nazwa -NotePropertyValue $Wlaczony -Force
