@@ -115,7 +115,11 @@ function Tryb-Warstwy {
        Kto = "narzedzia\wyciagnij-fakty.ps1 + aktualizuj-wiedze.ps1 (cykl dzienny)"; Tekst = $w.BiezacaTekst
        Opis = "$uwagaBiez; wpis starszy niz $DniWaznosci dni jest podejrzany"
        BrakSekcji = "w sekcji '## Co wiem' nie ma podsekcji '### Biezace'" })
+  # Od P59a zasady pamieci to bloki nazwane lore i wiedza (petla nizej) - wiersz starego wspolnego
+  # bloku pokazujemy tylko wtedy, gdy ten jeszcze stoi albo gdy nie ma zadnego z nowych (wtedy "brak").
+  $saNoweBloki = (@($w.Bloki | Where-Object { $_.Nazwa -in @("lore", "wiedza") }).Count -gt 0)
   foreach ($pw in $podwarstwy) {
+    if (($pw.Id -eq "claude-globalny-blok") -and $saNoweBloki -and ($w.Blok.Znaki -le 0)) { continue }
     $poz = @($kubSesja | Where-Object { ($_.Krotka -eq $pw.Krotka) -and ($_.Skad -eq $plikClaude) }) | Select-Object -First 1
     $sub = Warstwa $pw.Id $pw.Nazwa $plikClaude "start" $pw.Trwalosc $pw.Kto $pw.Opis "podwarstwa" "claude-globalny"
     $sub.Istnieje = $wGlob.Istnieje; $sub.Bajty = $wGlob.Bajty; $sub.Zmieniony = $wGlob.Zmieniony
@@ -134,6 +138,7 @@ function Tryb-Warstwy {
     if (-not $b.Nazwa) { continue }
     $kto = "automat Pilnuj-Zasad w narzedzia\straznik-zasad.ps1 (kopia zasad narzedzia)"
     if ($b.Nazwa -eq "kierownik") { $kto = "instalator globalny (narzedzia\instaluj-globalnie.ps1, zrodlo: $(Szablon-Kierownika $b.Tekst))" }
+    elseif ($b.Nazwa -in @("lore", "wiedza")) { $kto = "automat Pilnuj-Zasad w narzedzia\straznik-zasad.ps1 (zrodlo: zasady-$($b.Nazwa).md, modul $($b.Nazwa) instalatora)" }
     $sub = Warstwa ("claude-globalny-blok-" + $b.Nazwa) "blok zasad MegaRuchacza: $($b.Nazwa)" $plikClaude "start" "stala" `
       $kto "wchodzi na start sesji razem z calym plikiem; rachunek za start sesji liczy go jako osobna pozycje" `
       "podwarstwa" "claude-globalny"

@@ -222,6 +222,14 @@ function Etap-Pomiar {
     $przypCcUwaga = "w trybie globalnym zaden hook UserPromptSubmit w settings.json nie wskazuje przypomnienia - liczona kopia zastepcza $przypCcSkad, moze nie trafiac do modelu wcale"
     if (@($script:UwagiWarstw).Count -gt 0) { $przypCcUwaga += " (" + (@($script:UwagiWarstw) -join "; ") + ")" }
   }
+  # Modul kierownik wylaczony w rejestrze instalacji (P59a, koszt-pamieci.ps1): przypomnienie.js nie
+  # dokleja ladunku z pliku ani w Claude Code, ani w Codeksie - liczba z pliku bylaby kosztem, ktorego
+  # nikt nie placi. Linia cyklu i "Z ARCHIWUM" sa doklejane dalej, ale tych nie liczylismy nigdy.
+  if ($script:KierownikWylaczony) {
+    $przypCcTresc = $null; $przypCcSkad = $null
+    $przypCcUwaga = "modul kierownik wylaczony w rejestrze instalacji - narzedzia\przypomnienie.js nie dokleja ladunku z pliku"
+    $przypTresc = $null; $przypSkad = $null; $przypZnaki = $null
+  }
   $przypCcZnaki = $null
   if ($przypCcTresc) { $przypCcZnaki = $przypCcTresc.Length }
 

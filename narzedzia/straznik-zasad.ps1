@@ -1,6 +1,6 @@
 # Straznik - pilnuje czterech rzeczy przy kazdym otwarciu okna:
 #   0. czy sam katalog zrodlowy narzedzia nie zostal w tyle za zdalnym repo,
-#   1. czy blok zasad globalnych MegaRuchacza nadal siedzi w ~/.claude/CLAUDE.md,
+#   1. czy bloki zasad pamieci MegaRuchacza (lore, wiedza) nadal siedza w ~/.claude/CLAUDE.md,
 #   2. czy wdrozenie w projekcie nie zostalo w tyle za katalogiem zrodlowym,
 #   3. ile kosztuje pamiec agenta i czy cokolwiek jest UCINANE.
 # Przy instalacji globalnej (~\.claude\.megaruchacz-global) dodatkowo trzyma jeden
@@ -22,6 +22,13 @@
 # wiadomosci ma byc odroznialny od "wszystko gra". Cisze po drugiej stronie
 # (niezatwierdzone hooki Codeksa) meldujemy pod Claude Code i na odwrot - hook,
 # ktory nie chodzi, sam o sobie nie powie nigdy.
+#
+# Od P59a samonaprawa slucha rejestru instalacji (~\.claude\mr\instalacja.json, umowa:
+# narzedzia\instalacja\stan.ps1): dogrywa TYLKO to, co nalezy do wlaczonych modulow, i zdejmuje
+# NASZE bloki i hooki modulow wylaczonych - bloki zasad lore/wiedza (Pilnuj-Zasad), blok
+# kierownika i kopie dla opencode (Pilnuj-Kierownika), hooki globalne (Pilnuj-Hookow-Globalnych),
+# cykl wiedzy (Ruszaj-Cykl). Brak rejestru = jak przed nim (wszystko poza kopia wlaczone).
+# Rejestr nieczytelny = wszystko wlaczone, jedna linia alarmu i ZADNEGO zdejmowania.
 #
 # Uzycie:
 #   powershell -NoProfile -File narzedzia\straznik-zasad.ps1 [-Zrodlo <repo>] [-Projekt <katalog>]
@@ -51,6 +58,10 @@
 #       Z jawnym -Projekt <katalog> zdejmuje tez zdublowane hooki z tego projektu.
 #   powershell -NoProfile -File narzedzia\straznik-zasad.ps1 -UsunGlobalne [-Proba]
 #       zdejmuje hooki MegaRuchacza z ~\.claude\settings.json (cudze zostaja).
+#   powershell -NoProfile -File narzedzia\straznik-zasad.ps1 -Dopasuj
+#       dopasowuje pliki do rejestru instalacji od razu, bez czekania na nastepna sesje:
+#       bloki zasad, blok kierownika, kopia dla opencode, hooki globalne. Bez sieci, cyklu
+#       i rachunku. Dla instalatora po zmianie modulow. Kod 1 = cos sie nie udalo.
 #   -KatalogDomowy  podstawiony katalog domowy - do testow
 
 param(
@@ -64,6 +75,7 @@ param(
   [switch]$KosztCodex,
   [switch]$NaprawGlobalne,
   [switch]$UsunGlobalne,
+  [switch]$Dopasuj,
   [switch]$Proba
 )
 
@@ -121,7 +133,18 @@ if (Test-Path $plikCeliKierownika) { . $plikCeliKierownika }
 # 2026-10-02, patrz naglowek tego pliku). Brak pliku melduje Sprawdz-Zera - glosno.
 $plikZapisu = Join-Path $PSScriptRoot "zapis-trwaly.ps1"
 if (Test-Path $plikZapisu) { . $plikZapisu }
+# Rejestr instalacji (ktore moduly sa wlaczone) - wspolna umowa z instalatorem, nadzorca
+# i hookiem przypomnienia. Starsza kopia narzedzia bez niego = wszystko wlaczone, jak dotad.
+$plikRejestru = Join-Path $PSScriptRoot "instalacja\stan.ps1"
+if (Test-Path $plikRejestru) { . $plikRejestru }
+# Znaczniki i regula skladania blokow zasad pamieci (lore, wiedza) - ten sam kod, ktorym pisze
+# wpisz-zasady.ps1. Brak pliku melduje Pilnuj-Zasad.
+$plikBlokowZasad = Join-Path $PSScriptRoot "zasady-bloki.ps1"
+if (Test-Path $plikBlokowZasad) { . $plikBlokowZasad }
 
+# Znaczniki bloku zasad kierownika w PROJEKTOWYM AGENTS.md (wdroz.ps1, Odswiez-Agents). Do P59a
+# ten sam znacznik nosil w plikach globalnych wspolny blok Lore+Wiedza - dzis to dwa bloki
+# lore/wiedza (zasady-bloki.ps1), a stary blok zamienia na nie Pilnuj-Zasad.
 $POCZATEK = "<!-- MegaRuchacz:start -->"
 $KONIEC   = "<!-- MegaRuchacz:koniec -->"
 
@@ -137,6 +160,32 @@ $plikCodex    = Join-Path $KatalogDomowy ".codex\AGENTS.md"
 # co w wdroz.ps1 - polecenie w PATH albo katalog konfiguracji narzedzia.
 $JestCodex    = [bool](Get-Command codex    -CommandType Application -ErrorAction SilentlyContinue) -or (Test-Path (Split-Path -Parent $plikCodex))
 $JestOpencode = [bool](Get-Command opencode -CommandType Application -ErrorAction SilentlyContinue) -or (Test-Path (Join-Path $KatalogDomowy ".config\opencode"))
+
+# Rejestr instalacji czytamy RAZ na przebieg - wszystkie decyzje przebiegu (co dograc, co zdjac)
+# wynikaja z jednego odczytu. Wywrotka odczytu liczy sie jak rejestr nieczytelny: wszystko
+# wlaczone i nic nie zdejmujemy.
+$script:Instalacja = $null
+if (Get-Command Czytaj-Instalacje -ErrorAction SilentlyContinue) {
+  try { $script:Instalacja = Czytaj-Instalacje $KatalogDomowy }
+  catch {
+    $script:Instalacja = [pscustomobject]@{
+      moduly = [pscustomobject]@{ wiedza = $true; lore = $true; kierownik = $true; skille = $true; kopia = $true }
+      zrodlo = "awaryjne"; blad = "odczyt rejestru instalacji sie wywrocil: $($_.Exception.Message)" }
+  }
+}
+if (-not $script:Instalacja) {
+  $script:Instalacja = [pscustomobject]@{
+    moduly = [pscustomobject]@{ wiedza = $true; lore = $true; kierownik = $true; skille = $true; kopia = $false }
+    zrodlo = "brak-umowy"; blad = $null }
+}
+# Czy modul jest wlaczony - przy braku rejestru i przy rejestrze nieczytelnym zawsze tak; brak
+# klucza tez znaczy "tak" (umowa stan.ps1) - nawet gdy lista modulow umowy wyszla pusta.
+function Modul-Wl([string]$nazwa) {
+  $v = $script:Instalacja.moduly.$nazwa
+  return (($null -eq $v) -or [bool]$v)
+}
+# Czy wolno zdjac cos modulu wylaczonego - nigdy przy rejestrze nieczytelnym.
+function Modul-Wylaczony([string]$nazwa) { return ((-not $script:Instalacja.blad) -and -not (Modul-Wl $nazwa)) }
 
 $plikStanu    = Join-Path $KatalogDomowy ".claude\.megaruchacz-straznik.txt"
 $plikWersji   = Join-Path $Projekt ".claude\megaruchacz-wersja.txt"
@@ -226,26 +275,6 @@ function Znormalizuj([string]$tekst) {
   return ($tekst -replace "`r`n", "`n").Trim()
 }
 
-# Tresc bloku MegaRuchacza z pliku instrukcji - albo $null, gdy bloku nie ma.
-function Tresc-Bloku($sciezka) {
-  $raw = Czytaj-Tekst $sciezka
-  if (-not $raw) { return $null }
-  $i = $raw.IndexOf($POCZATEK)
-  $j = $raw.IndexOf($KONIEC)
-  if ($i -lt 0 -or $j -lt $i) { return $null }
-  return $raw.Substring($i + $POCZATEK.Length, $j - $i - $POCZATEK.Length)
-}
-
-# Tresc do wstrzykniecia ze zrodla - wszystko ponizej linii-znacznika.
-# Znacznik dopasowany bez polskich znakow, zeby nie zalezec od kodowania pliku.
-function Tresc-Zrodla($sciezka) {
-  $raw = Czytaj-Tekst $sciezka
-  if (-not $raw) { return $null }
-  $m = [regex]::Match($raw, '(?m)^<!--[^>]*WSTRZYKNI[^>]*-->[ \t]*\r?\n')
-  if ($m.Success) { return $raw.Substring($m.Index + $m.Length) }
-  return $raw
-}
-
 # Najwyzszy naglowek "## X.Y.Z" w ZMIANY.md. Wpisy nie zawsze ida po kolei,
 # wiec liczy sie najwyzszy numer, nie pierwszy z brzegu.
 function Wersja-Narzedzia($plikZmian) {
@@ -307,6 +336,16 @@ function Dopisz-Klucze($sciezka, $nowe) {
   Zapisz-Klucze $sciezka $stan
 }
 
+# To samo scalenie, tylko w druga strone - zdejmuje wymienione klucze, reszte zostawia.
+# Zapis tylko wtedy, gdy ktorys z nich w ogole byl.
+function Usun-Klucze($sciezka, [string[]]$nazwy) {
+  $stan = Czytaj-Klucze $sciezka
+  $byly = @($nazwy | Where-Object { $stan.Contains($_) })
+  if ($byly.Count -eq 0) { return }
+  foreach ($k in $byly) { $stan.Remove($k) }
+  Zapisz-Klucze $sciezka $stan
+}
+
 # ------------------------------- znacznik obecnosci, wywrotki i cisza hookow
 # Najdrozsza usterka tego narzedzia nie wyglada jak usterka, tylko jak spokoj:
 # hook niezatwierdzony w Codeksie (/hooks), piaskownica, ktora nie przepuszcza
@@ -322,6 +361,9 @@ function Dopisz-Klucze($sciezka, $nowe) {
 $GODZIN_CISZY = 24
 $WYWROTEK_NAJWYZEJ = 5
 $script:Wywrotki = @()
+# Ile napraw sie nie udalo (zasady, blok kierownika, kopia dla opencode) - z tego bierze sie
+# kod wyjscia trybu -Dopasuj; hook startowy konczy sie zerem zawsze.
+$script:Niepowodzenia = 0
 
 # Tryb, w ktorym straznik akurat chodzi - to samo slowo jest koncowka klucza
 # "byl.<tryb>". CLAUDE_PROJECT_DIR ustawia samo Claude Code, wolajac hooka; bez
@@ -606,6 +648,16 @@ function Sprawdz-Zera {
   if ($script:Wyzerowane.Count -eq 0) { return }
   Mow ("MegaRuchacz: " + (Opis-Wyzerowanych $script:Wyzerowane $KatalogDomowy $Zrodlo) +
        " Do czasu przywrocenia nie wpisuje zasad, nie odswiezam kopii dla opencode i nie ruszam cyklu wiedzy.")
+}
+
+# Rejestr instalacji nieczytelny (pusty, wyzerowany po zaniku pradu, zly JSON) - jedna linia
+# alarmu przy kazdym przebiegu, zaraz po alarmie o zerach. Do czasu naprawy pilnujemy wszystkiego
+# jak przed rejestrem i niczego nie zdejmujemy: rejestr, ktorego nie umiemy przeczytac, nie ma
+# prawa odinstalowac modulu.
+function Zglos-Rejestr {
+  if (-not $script:Instalacja.blad) { return }
+  Mow ("MegaRuchacz: ALARM - $($script:Instalacja.blad). Do czasu naprawy pilnuje wszystkich modulow jak dotad " +
+       "i niczego nie zdejmuje; rejestr zapisze od nowa ponowne uruchomienie instalatora (instaluj.bat).")
 }
 
 # Nadpisuje plik nalezacy do narzedzia, ale tylko gdy faktycznie sie rozni.
@@ -1204,7 +1256,12 @@ function Nanies-Poprawki($zrodlo, $projekt) {
 # dostawal wpisy podwojnie (w globalnych staly dwa rozne mr-log.js).
 
 $PlikZnacznikaGlobalnego = Join-Path $KatalogDomowy ".claude\.megaruchacz-global"
-function Jest-Globalna { return (Test-Path $PlikZnacznikaGlobalnego) }
+# Instalacja globalna: znacznik instaluj-globalnie.ps1 albo (od P59a) rejestr instalatora
+# z wyborem modulow - straznik (baza) jest w nim zawsze, wiec rejestr tez znaczy "globalnie".
+function Jest-Globalna {
+  if (Test-Path $PlikZnacznikaGlobalnego) { return $true }
+  return ($script:Instalacja.zrodlo -in @("plik", "awaryjne"))
+}
 
 # Projekt, w ktorym hookow MegaRuchacza ma NIE byc, bo robia to globalne. Wyjatek:
 # wdroz.ps1 -WymusProjektowo zostawia w pliku wersji "projektowo: wymuszone" -
@@ -1339,6 +1396,9 @@ function Pod-Blokada([scriptblock]$robota) {
 # Jeden komplet hookow MegaRuchacza w instalacji globalnej. "zasady" (stary wpis
 # "cat ...megaruchacz-sesja.json") nie ma wzoru: zasady ida blokiem w ~\.claude\CLAUDE.md,
 # wiec nowej instalacji go nie dokladamy - istniejacy zostaje, zdejmujemy tylko duplikaty.
+# Od P59a komplet zalezy od rejestru instalacji: straznik (baza) zawsze; przypomnienie, gdy
+# wlaczony ktorykolwiek z modulow, ktorych tresc dokleja (kierownik - ladunek, wiedza - linia
+# cyklu, lore - "Z ARCHIWUM"); rejestr pracy workerow tylko przy kierowniku.
 function Wzory-Hookow-Globalnych($zrodlo, $domClaude) {
   $r = $zrodlo.Replace("\","/").TrimEnd("/")
   $d = $domClaude.Replace("\","/").TrimEnd("/")
@@ -1347,16 +1407,30 @@ function Wzory-Hookow-Globalnych($zrodlo, $domClaude) {
   $straznik = 'powershell -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "' + $r +
               '/narzedzia/straznik-zasad.ps1" -Zrodlo "' + $r + '" -Projekt "$CLAUDE_PROJECT_DIR" || true'
   $przypomnienie = 'node "' + $r + '/narzedzia/przypomnienie.js" "' + $przyp + '" || cat "' + $przyp + '"'
-  return @(
+  $wzory = @(
     [pscustomobject]@{ zdarzenie = "SessionStart"; rodzaj = "straznik"
-      hook = [pscustomobject]@{ type = "command"; command = $straznik; shell = "bash"; timeout = 15; statusMessage = "MegaRuchacz: straznik zasad" } },
-    [pscustomobject]@{ zdarzenie = "UserPromptSubmit"; rodzaj = "przypomnienie"
-      hook = [pscustomobject]@{ type = "command"; command = $przypomnienie; shell = "bash"; timeout = 5 } },
-    [pscustomobject]@{ zdarzenie = "SubagentStart"; rodzaj = "rejestr"
-      hook = [pscustomobject]@{ type = "command"; command = ('node "' + $log + '"'); timeout = 5; statusMessage = "MegaRuchacz: wpis do rejestru pracy" } },
-    [pscustomobject]@{ zdarzenie = "SubagentStop"; rodzaj = "rejestr"
-      hook = [pscustomobject]@{ type = "command"; command = ('node "' + $log + '" stop'); timeout = 5; statusMessage = "MegaRuchacz: wpis do rejestru pracy" } }
+      hook = [pscustomobject]@{ type = "command"; command = $straznik; shell = "bash"; timeout = 15; statusMessage = "MegaRuchacz: straznik zasad" } }
   )
+  if ((Rodzaje-Hookow-Wylaczone) -notcontains "przypomnienie") {
+    $wzory += [pscustomobject]@{ zdarzenie = "UserPromptSubmit"; rodzaj = "przypomnienie"
+      hook = [pscustomobject]@{ type = "command"; command = $przypomnienie; shell = "bash"; timeout = 5 } }
+  }
+  if ((Rodzaje-Hookow-Wylaczone) -notcontains "rejestr") {
+    $wzory += [pscustomobject]@{ zdarzenie = "SubagentStart"; rodzaj = "rejestr"
+      hook = [pscustomobject]@{ type = "command"; command = ('node "' + $log + '"'); timeout = 5; statusMessage = "MegaRuchacz: wpis do rejestru pracy" } }
+    $wzory += [pscustomobject]@{ zdarzenie = "SubagentStop"; rodzaj = "rejestr"
+      hook = [pscustomobject]@{ type = "command"; command = ('node "' + $log + '" stop'); timeout = 5; statusMessage = "MegaRuchacz: wpis do rejestru pracy" } }
+  }
+  return $wzory
+}
+
+# Rodzaje NASZYCH hookow globalnych, ktore maja zniknac, bo ich moduly sa wylaczone w rejestrze
+# (Rodzaj-Hooka). Rejestr nieczytelny albo go brak = pusta lista - wtedy nic nie znika.
+function Rodzaje-Hookow-Wylaczone {
+  $w = @()
+  if ((Modul-Wylaczony "kierownik") -and (Modul-Wylaczony "wiedza") -and (Modul-Wylaczony "lore")) { $w += "przypomnienie" }
+  if (Modul-Wylaczony "kierownik") { $w += "rejestr" }
+  return $w
 }
 
 function Wzor-Dla($wzory, $zdarzenie, $rodzaj) {
@@ -1371,10 +1445,11 @@ function Wzor-Dla($wzory, $zdarzenie, $rodzaj) {
 #     ktory juz jest identyczny ze wzorem, inaczej pierwszy, i ten dostaje postac wzoru,
 #   - pozostale nasze tego rodzaju znikaja; grupa, ktora zostala pusta, znika cala,
 #   - brakujace wzgledem wzoru dokladamy na koncu zdarzenia,
-#   - $usun = zdejmij wszystkie nasze, niczego nie dokladaj.
+#   - $usun = zdejmij wszystkie nasze, niczego nie dokladaj,
+#   - $doZdjecia = rodzaje zdejmowane mimo braku $usun (moduly wylaczone w rejestrze instalacji).
 # Cudzych wpisow (Rodzaj-Hooka = $null) i cudzych grup nie dotykamy wcale - zostaja
 # tymi samymi obiektami, wiec Do-Json wypisze je dokladnie tak, jak byly.
-function Uporzadkuj-Hooki($s, $wzory, [bool]$usun) {
+function Uporzadkuj-Hooki($s, $wzory, [bool]$usun, [string[]]$doZdjecia = @()) {
   $wynik = [ordered]@{ Usuniete = @(); Dodane = @(); Poprawione = @() }
   $maHooki = ($s.PSObject.Properties.Name -contains "hooks") -and ($null -ne $s.hooks)
   if (-not $maHooki) {
@@ -1427,7 +1502,7 @@ function Uporzadkuj-Hooki($s, $wzory, [bool]$usun) {
         # wiec hook bylby prawdziwym duplikatem. UWAGA na historie: od 2026-09-24
         # do 0.21.0 blok mial wersje opencode/Codex i ten hook NIE byl duplikatem,
         # tylko jedyna wersja dla Claude Code - patrz raport P5.
-        if ($usun -or $rodzaj -eq "zasady" -or $wybrane[$klucz].poz -ne "$gi|$hi") {
+        if ($usun -or $rodzaj -eq "zasady" -or ($doZdjecia -contains $rodzaj) -or $wybrane[$klucz].poz -ne "$gi|$hi") {
           $wynik.Usuniete += "$z/$rodzaj"
           $zmianaGrupy = $true
           continue
@@ -1479,8 +1554,11 @@ function Opis-Zmian-Hookow($wynik, [string]$slowoUsuniete) {
 
 # Pliki, ktore wolaja hooki globalne: rejestr i ladunek przypomnienia. Hook wskazujacy
 # na nieistniejacy plik sypalby bledem przy kazdym workerze albo kazdej wiadomosci,
-# wiec dokladamy je (i odswiezamy z kopia zapasowa) razem z hookami.
+# wiec dokladamy je (i odswiezamy z kopia zapasowa) razem z hookami. Oba naleza do modulu
+# kierownik - przy wylaczonym ich nie dokladamy (przypomnienie.js ladunku wtedy nie czyta,
+# a zdjecie samych plikow to robota odinstalowania modulu, nie straznika).
 function Odswiez-Pliki-Globalne($domClaude, $stempel) {
+  if (Modul-Wylaczony "kierownik") { return @() }
   $pary = @(
     @((Join-Path $Zrodlo "szablony-global\claude\mr-log.js"), (Join-Path $domClaude "megaruchacz-mr-log.js")),
     @((Join-Path $Zrodlo ".claude\orchestrator-reminder.json"), (Join-Path $domClaude "mr\orchestrator-reminder.json"))
@@ -1520,9 +1598,13 @@ function Napraw-Hooki-Globalne([bool]$usun) {
       return $false
     }
     $wzory = @()
-    if (-not $usun) { $wzory = @(Wzory-Hookow-Globalnych $Zrodlo $domClaude) }
-    $wynik = Uporzadkuj-Hooki $u.s $wzory $usun
-    $slowo = if ($usun) { "zdjete" } else { "usuniete duplikaty" }
+    $wylaczone = @()
+    if (-not $usun) {
+      $wzory = @(Wzory-Hookow-Globalnych $Zrodlo $domClaude)
+      $wylaczone = @(Rodzaje-Hookow-Wylaczone)
+    }
+    $wynik = Uporzadkuj-Hooki $u.s $wzory $usun $wylaczone
+    $slowo = if ($usun) { "zdjete" } elseif ($wylaczone.Count -gt 0) { "zdjete duplikaty i hooki modulow wylaczonych w rejestrze instalacji" } else { "usuniete duplikaty" }
     $opis = Opis-Zmian-Hookow $wynik $slowo
     if (-not $opis) { Notuj "hooki globalne: bez zmian"; return $true }
     if ($Proba) { Mow "PROBA  $plik - $opis"; return $true }
@@ -2124,66 +2206,69 @@ function Przewin-Zrodlo($cyt) {
 # Pliki instrukcji do pilnowania. Claude Code czyta ~\.claude\CLAUDE.md, Codex
 # ~\.codex\AGENTS.md - i to jest jedyna droga zasad na maszynie bez Claude Code,
 # bo Codex wczytuje AGENTS.md sam, bez zadnego hooka. Zapisuje wpisz-zasady.ps1
-# (oba pliki naraz), tu tylko sprawdzamy, czy blok nadal tam siedzi i jest swiezy.
-# Klucz to nazwa pola w pliku stanu - "blok" zostaje przy CLAUDE.md, zeby stare
-# pliki stanu dalej sie zgadzaly.
+# (oba pliki naraz), tu tylko sprawdzamy, czy bloki nadal tam siedza i sa swieze.
 function Cele-Zasad {
   $cele = @(
-    [ordered]@{ nazwa = "Claude Code"; plik = $plikDomowy; klucz = "blok"; limit = 0 }
+    [ordered]@{ nazwa = "Claude Code"; plik = $plikDomowy; limit = 0 }
   )
   # Codeksa uznajemy za obecnego po jego katalogu domowym - tak samo jak robia
   # to wpisz-zasady.ps1 i instaluj-lore.ps1.
   if (Test-Path (Split-Path -Parent $plikCodex)) {
-    $cele += [ordered]@{ nazwa = "Codex"; plik = $plikCodex; klucz = "blok.codex"; limit = $LIMIT_AGENTS }
+    $cele += [ordered]@{ nazwa = "Codex"; plik = $plikCodex; limit = $LIMIT_AGENTS }
   }
   # przecinek z premedytacja: bez niego lista jednoelementowa wraca jako goly
   # slownik, a nie tablica - ta sama pulapka, ktora zlapala rejestr modulow
   return ,$cele
 }
 
+# Od P59a dwa bloki zasad pamieci - lore i wiedza, kazdy przy swoim module z rejestru instalacji
+# (zasady-bloki.ps1). Plik jest "zgodny", gdy zlozenie go od nowa (Zloz-Plik-Zasad - ta sama
+# regula, ktora pisze wpisz-zasady.ps1) nie zmienia w nim ani znaku. Inaczej wolamy
+# wpisz-zasady.ps1 i sprawdzamy wynik z dysku. Przy okazji migracja: stary wspolny blok
+# MegaRuchacz:start zamienia sie na nowe na swoim miejscu, "Co wiem" nad nim zostaje co do bajtu.
+# Do P59a w pliku stanu lezaly skroty bloku (zrodlo, blok, blok.codex) - dzis zbedne, sprzatamy je.
 function Pilnuj-Zasad {
-  $oczekiwane = Tresc-Zrodla (Join-Path $Zrodlo "zasady-globalne.md")
-  if (-not $oczekiwane) { return }
-  $skrotZrodla = Skrot (Znormalizuj $oczekiwane)
-  $stan = Czytaj-Klucze $plikStanu
+  if (-not (Get-Command Zloz-Plik-Zasad -ErrorAction SilentlyContinue)) {
+    Mow "MegaRuchacz: nie ma $plikBlokowZasad - nie pilnuje blokow zasad pamieci (Lore, wiedza) w plikach instrukcji."
+    return
+  }
+  $chciane = Chciane-Bloki-Zasad $KatalogDomowy
+  $tresci = [ordered]@{}
+  try {
+    foreach ($n in (Bloki-Zasad)) { if ($chciane.Nazwy -contains $n) { $tresci[$n] = Tresc-Zrodla-Zasad $Zrodlo $n } }
+  } catch {
+    Mow "MegaRuchacz: zasady pamieci - $($_.Exception.Message); bloki zostaja, jakie sa, dopoki zrodlo nie wroci."
+    return
+  }
+  $zdejmij = @()
+  if ($chciane.Zdejmuj) { $zdejmij = @(Bloki-Zasad | Where-Object { $chciane.Nazwy -notcontains $_ }) }
   $cele = Cele-Zasad
 
-  # Zgodne, gdy blok zawiera tresc ze zrodla, albo gdy oba skroty sa takie same
-  # jak przy ostatnim udanym wpisie - to drugie ratuje nas, gdyby wpisz-zasady.ps1
-  # skladalo blok inaczej, niz wyglada surowe zrodlo.
-  $skroty = [ordered]@{ zrodlo = $skrotZrodla }
   $doNaprawy = @()
   foreach ($c in $cele) {
-    $blok = Tresc-Bloku $c.plik
-    $skrotBloku = Skrot (Znormalizuj $blok)
-    $skroty[$c.klucz] = $skrotBloku
-    $zgodne = $false
-    if ($blok) {
-      if ((Znormalizuj $blok).Contains((Znormalizuj $oczekiwane))) {
-        $zgodne = $true
-      } elseif ($stan["zrodlo"] -eq $skrotZrodla -and $stan[$c.klucz] -eq $skrotBloku) {
-        $zgodne = $true
-      }
+    $tekst = ""
+    if (Test-Path -LiteralPath $c.plik) {
+      try { $tekst = [System.IO.File]::ReadAllText($c.plik, (New-Object System.Text.UTF8Encoding($false, $true))) }
+      catch { Mow "MegaRuchacz: $($c.plik) nie czyta sie jako UTF-8 - nie pilnuje w nim zasad pamieci."; $script:Niepowodzenia++; continue }
     }
-    if (-not $zgodne) {
-      $powod = if ($blok) { "nieaktualne" } else { "zniknely" }
-      $doNaprawy += [ordered]@{ nazwa = $c.nazwa; plik = $c.plik; powod = $powod }
-    }
+    $oczekiwany = $null
+    try { $oczekiwany = Zloz-Plik-Zasad $tekst $tresci $zdejmij }
+    catch { Mow "MegaRuchacz: zasady pamieci w $($c.plik): $($_.Exception.Message) - nie ruszam, popraw znaczniki recznie."; $script:Niepowodzenia++; continue }
+    if ($oczekiwany -ceq $tekst) { continue }
+    $doNaprawy += [ordered]@{ nazwa = $c.nazwa; plik = $c.plik; opis = ((Roznice-Zasad $tekst $tresci $zdejmij) -join ", ") }
   }
 
   if ($doNaprawy.Count -eq 0) {
-    $rozne = $false
-    foreach ($k in $skroty.Keys) { if ($stan[$k] -ne $skroty[$k]) { $rozne = $true } }
-    if ($rozne) { Dopisz-Klucze $plikStanu $skroty }
-    Notuj ("zasady: aktualne (" + (($cele | ForEach-Object { $_.nazwa }) -join ", ") + ")")
+    Usun-Klucze $plikStanu @("zrodlo", "blok", "blok.codex")
+    Notuj ("zasady pamieci: aktualne (" + (($cele | ForEach-Object { $_.nazwa }) -join ", ") + ")")
     Pilnuj-Limitu $cele
     return
   }
 
-  $opis = ($doNaprawy | ForEach-Object { "$($_.nazwa): $($_.powod)" }) -join ", "
+  $opis = ($doNaprawy | ForEach-Object { "$($_.nazwa): $($_.opis)" }) -join "; "
   $wpisz = Join-Path $Zrodlo "narzedzia\wpisz-zasady.ps1"
   if (-not (Test-Path $wpisz)) {
-    Mow "MegaRuchacz: zasady globalne wymagaja poprawki ($opis), a nie ma $wpisz - wpisz je recznie."
+    Mow "MegaRuchacz: zasady pamieci wymagaja poprawki ($opis), a nie ma $wpisz - wpisz je recznie."
     return
   }
   $kod = 1
@@ -2193,23 +2278,25 @@ function Pilnuj-Zasad {
     $kod = $LASTEXITCODE
   } catch { $kod = 1 }
 
-  # Po naprawie liczymy wszystko jeszcze raz z dysku - to, co wpisz-zasady.ps1
+  # Po naprawie skladamy wszystko jeszcze raz z dysku - to, co wpisz-zasady.ps1
   # wypisalo o sobie, nie jest dowodem.
-  $nowe = [ordered]@{ zrodlo = $skrotZrodla }
   $nadal = @()
-  foreach ($c in $cele) {
-    $blok = Tresc-Bloku $c.plik
-    $nowe[$c.klucz] = Skrot (Znormalizuj $blok)
-    if (-not $blok) { $nadal += $c.nazwa }
+  foreach ($c in $doNaprawy) {
+    $tekst = ""
+    try { if (Test-Path -LiteralPath $c.plik) { $tekst = [System.IO.File]::ReadAllText($c.plik, (New-Object System.Text.UTF8Encoding($false, $true))) } }
+    catch { $nadal += $c.nazwa; continue }
+    try { if ((Zloz-Plik-Zasad $tekst $tresci $zdejmij) -cne $tekst) { $nadal += $c.nazwa } }
+    catch { $nadal += $c.nazwa }
   }
   if ($kod -eq 0 -and $nadal.Count -eq 0) {
-    Dopisz-Klucze $plikStanu $nowe
-    Mow "MegaRuchacz: zasady globalne wymagaly poprawki ($opis) - wpisalem je z powrotem."
+    Usun-Klucze $plikStanu @("zrodlo", "blok", "blok.codex")
+    Mow "MegaRuchacz: zasady pamieci wymagaly poprawki ($opis) - poprawione, reszta plikow bez zmian."
     Pilnuj-Limitu $cele
   } else {
     $ogon = ""
-    if ($nadal.Count -gt 0) { $ogon = ", nadal bez bloku: " + ($nadal -join ", ") }
-    Mow "MegaRuchacz: zasady globalne ($opis), a odtworzenie nie wyszlo (kod ${kod}${ogon}) - uruchom $wpisz recznie."
+    if ($nadal.Count -gt 0) { $ogon = ", nadal niezgodne: " + ($nadal -join ", ") }
+    Mow "MegaRuchacz: zasady pamieci ($opis), a poprawka nie wyszla (kod ${kod}${ogon}) - uruchom $wpisz recznie."
+    $script:Niepowodzenia++
   }
 }
 
@@ -2221,16 +2308,49 @@ function Pilnuj-Zasad {
 # aktualizacja tresci to robota instalatora (tu nie wiemy, czy wariant nie byl
 # wymuszony). Tylko przy instalacji globalnej - wdrozenie per projekt tego bloku
 # w plikach globalnych nie ma i miec nie ma.
+# Od P59a modul kierownik wylaczony w rejestrze instalacji = blok zdejmujemy (Zdejmij-Kierownika)
+# razem z nasza kopia zasad dla opencode, ktora istnieje wylacznie dla wariantu bloku.
 function Powiedz-Kierownik([string]$tekst) {
   Mow $tekst
   # W tle nikt nie czyta ekranu - zdanie czeka na najblizszy przebieg z widownia.
   if ($Tlo) { Odloz-Wiadomosc $tekst }
 }
 
+# Wycina NASZ blok kierownika (po znacznikach) z ~/.claude/CLAUDE.md i ~/.codex/AGENTS.md. Dubel
+# albo samotny znacznik - jedna linia do czlowieka, plik zostaje (nie zgadujemy, co jest czyje).
+function Zdejmij-Kierownika {
+  if (-not (Get-Command Bez-Bloku-Kierownika -ErrorAction SilentlyContinue)) {
+    Powiedz-Kierownik "MegaRuchacz: modul kierownik wylaczony w rejestrze instalacji, a $plikCeliKierownika nie umie zdjac bloku (starsza kopia) - blok zostaje."
+    return
+  }
+  $stempel = Get-Date -Format "yyyyMMdd-HHmmss"
+  foreach ($c in @([ordered]@{ nazwa = "~/.claude/CLAUDE.md"; plik = $plikDomowy }, [ordered]@{ nazwa = "~/.codex/AGENTS.md"; plik = $plikCodex })) {
+    if (-not (Test-Path -LiteralPath $c.plik)) { continue }
+    try { $tekst = Czytaj-Utf8 $c.plik }
+    catch { Powiedz-Kierownik "MegaRuchacz: $($c.nazwa) nie czyta sie jako UTF-8 - nie zdejmuje z niego bloku zasad kierownika."; $script:Niepowodzenia++; continue }
+    if ((Ile-Blokow-Kierownika $tekst) -eq 0) { continue }
+    try {
+      $nowy = Bez-Bloku-Kierownika $tekst
+      Kopia-Zapasowa $c.plik $stempel
+      Zapisz-Tekst $c.plik $nowy
+      if ((Ile-Blokow-Kierownika (Czytaj-Utf8 $c.plik)) -ne 0) { throw "po zapisie blok nadal jest w pliku" }
+      Powiedz-Kierownik "MegaRuchacz: modul kierownik wylaczony w rejestrze instalacji - zdjalem blok zasad kierownika z $($c.nazwa) (kopia .bak-$stempel obok)."
+    } catch {
+      Powiedz-Kierownik "MegaRuchacz: modul kierownik wylaczony, a bloku zasad kierownika w $($c.nazwa) nie udalo sie zdjac ($($_.Exception.Message))."
+      $script:Niepowodzenia++
+    }
+  }
+}
+
 function Pilnuj-Kierownika {
   if (-not (Jest-Globalna)) { return }
   if (-not (Get-Command Z-Blokiem-Kierownika -ErrorAction SilentlyContinue)) {
     Powiedz-Kierownik "MegaRuchacz: nie ma $plikCeliKierownika - nie pilnuje bloku zasad kierownika (uruchom narzedzia\instaluj-globalnie.ps1)."
+    return
+  }
+  if (Modul-Wylaczony "kierownik") {
+    Zdejmij-Kierownika
+    Pilnuj-Kopii-Opencode (Join-Path $Zrodlo "szablony-opencode\zasady-kierownika.md")
     return
   }
   $szablony = [ordered]@{
@@ -2277,6 +2397,7 @@ function Pilnuj-Kierownika {
       Powiedz-Kierownik "MegaRuchacz: w $($c.nazwa) brakowalo bloku zasad kierownika - wpisalem go (wariant $($c.wariant))."
     } catch {
       Powiedz-Kierownik "MegaRuchacz: w $($c.nazwa) brakuje bloku zasad kierownika, a wpisanie nie wyszlo ($($_.Exception.Message)). Uruchom narzedzia\instaluj-globalnie.ps1."
+      $script:Niepowodzenia++
     }
   }
   Pilnuj-Kopii-Opencode $szablony["opencode"]
@@ -2286,11 +2407,25 @@ function Pilnuj-Kierownika {
 # pierwszy istnieje. Nasza kopia (Kopia-Dla-Opencode) ma nadazac za CLAUDE.md,
 # bo "Co wiem" zmienia sie codziennie. Zakladamy ja, gdy CLAUDE.md ma blok
 # w wariancie innym niz opencode; istniejaca nasza kopie odswiezamy zawsze.
+# Przy module kierownik wylaczonym kopia nie ma po co istniec (jej jedyna roznica wobec CLAUDE.md
+# to wariant bloku kierownika) - NASZA (po znaczniku w pierwszej linii) kasujemy i opencode czyta
+# wprost ~/.claude/CLAUDE.md: to samo "Co wiem" i te same bloki zasad pamieci.
 function Pilnuj-Kopii-Opencode($szablonOpencode) {
   if (-not $JestOpencode) { return }
   $plikOc = Join-Path $KatalogDomowy ".config\opencode\AGENTS.md"
   $nasza = Jest-Kopia-Opencode $plikOc
   if ((Test-Path $plikOc) -and -not $nasza) { Notuj "opencode: wlasny $plikOc uzytkownika - nie ruszam"; return }
+  if (Modul-Wylaczony "kierownik") {
+    if (-not $nasza) { return }
+    try {
+      Remove-Item -LiteralPath $plikOc -Force -ErrorAction Stop
+      Powiedz-Kierownik "MegaRuchacz: modul kierownik wylaczony - zdjalem kopie zasad dla opencode ($plikOc); opencode czyta teraz wprost ~/.claude/CLAUDE.md."
+    } catch {
+      Powiedz-Kierownik "MegaRuchacz: modul kierownik wylaczony, a kopii zasad dla opencode ($plikOc) nie udalo sie zdjac - $($_.Exception.Message)."
+      $script:Niepowodzenia++
+    }
+    return
+  }
   if (-not (Test-Path $plikDomowy)) { return }
   try { $cm = Czytaj-Utf8 $plikDomowy } catch { Powiedz-Kierownik "MegaRuchacz: ~/.claude/CLAUDE.md nie czyta sie jako UTF-8 - nie odswiezam kopii zasad dla opencode."; return }
   if (-not (Test-Path $szablonOpencode)) {
@@ -2307,7 +2442,7 @@ function Pilnuj-Kopii-Opencode($szablonOpencode) {
     if ($nowa -ceq $stara) { return }
     Zapisz-Tekst $plikOc $nowa
     if ($nasza) { Notuj "opencode: odswiezona kopia zasad $plikOc" }
-    else { Powiedz-Kierownik "MegaRuchacz: opencode dostal wlasna kopie zasad ($plikOc) - wariant dla opencode, z 'Co wiem' i blokiem Lore." }
+    else { Powiedz-Kierownik "MegaRuchacz: opencode dostal wlasna kopie zasad ($plikOc) - wariant dla opencode, z 'Co wiem' i blokami zasad pamieci." }
   } catch {
     Powiedz-Kierownik "MegaRuchacz: kopia zasad dla opencode ($plikOc) nie dala sie zlozyc - $($_.Exception.Message)."
   }
@@ -2341,6 +2476,9 @@ function Pilnuj-Wersji {
   foreach ($m in (Rejestr-Modulow)) {
     $k = "modul." + $m.nazwa
     $wdrozona = $stan["$k.wersja"]
+    # Lore odznaczone w instalatorze (rejestr instalacji) - nie proponujemy go i nie zapowiadamy
+    # jego aktualizacji przy kazdej nowej wersji; wroci, gdy uzytkownik zaznaczy je sam.
+    if (($m.nazwa -eq "pamiec") -and (Modul-Wylaczony "lore")) { continue }
 
     # Modul jeszcze niezainstalowany - proponujemy raz, z kosztem, i tyle.
     if (-not $wdrozona) {
@@ -2901,6 +3039,9 @@ function Ile-Wywolan($n) {
 # i do ladunku hooka pod Codeksem (Wypisz-Koszt-Codex). Dwie kopie tego samego
 # meldunku rozjechalyby sie przy pierwszej poprawce.
 function Linie-Kosztu-Cyklu {
+  # Modul wiedza wylaczony w rejestrze instalacji: cyklu nie ma z wyboru, a stary plik kosztu
+  # krzyczalby "cykl nie chodzi" - falszywy alarm.
+  if (Modul-Wylaczony "wiedza") { return @() }
   $plik = Join-Path $KatalogDomowy ".claude\wiedza\.koszt-cyklu.txt"
   if (-not (Test-Path $plik)) {
     return @("    cykl wiedzy: kosztu jeszcze nie policzyl - jesli cykl chodzi, liczba bedzie po jego najblizszym przebiegu")
@@ -3066,6 +3207,9 @@ function Ruszaj-Cykl {
   if (-not (Test-Path $skrypt)) { return }
   # bez modulu pamieci nie ma czego czytac - i nie ma po co budzic procesu
   if (-not (Test-Path (Join-Path $Zrodlo "lore\pyproject.toml"))) { return }
+  # Cykl to modul wiedza. Odznaczony w instalatorze (rejestr instalacji) = cyklu nie ma z wyboru
+  # uzytkownika, a nie z awarii - dlatego bez slowa na ekranie, tylko slad w dzienniku.
+  if (Modul-Wylaczony "wiedza") { Notuj "cykl wiedzy: modul wiedza wylaczony w rejestrze instalacji - nie ruszam"; return }
 
   $katWiedzy = Join-Path $KatalogDomowy ".claude\wiedza"
   $dzis = Get-Date -Format 'yyyy-MM-dd'
@@ -3191,6 +3335,25 @@ try {
     if ($ok) { exit 0 } else { exit 1 }
   }
 
+  # Tryb dla instalatora po zmianie modulow - pliki dopasowane do rejestru instalacji od razu,
+  # a nie przy nastepnym otwarciu okna: bloki zasad pamieci, blok kierownika z kopia dla opencode
+  # i hooki globalne. Bez pobierania z gita, cyklu wiedzy i rachunku. Wyzerowane pliki pamieci
+  # blokuja zapis tak samo jak przy starcie sesji. Kod 1 = cos sie nie udalo (opis na ekranie).
+  if ($Dopasuj) {
+    try { Sprawdz-Zera } catch { Zanotuj-Wywrotke "sprawdzanie zer w plikach pamieci" $_ }
+    try { Zglos-Rejestr } catch { Zanotuj-Wywrotke "odczyt rejestru instalacji" $_ }
+    $hookiOk = $true
+    if ($script:Wyzerowane.Count -eq 0) {
+      try { Pilnuj-Zasad } catch { Zanotuj-Wywrotke "pilnowanie zasad" $_ }
+      try { Pilnuj-Kierownika } catch { Zanotuj-Wywrotke "pilnowanie bloku kierownika" $_ }
+    } else { $script:Niepowodzenia++ }
+    try { if (Jest-Globalna) { $hookiOk = Napraw-Hooki-Globalne $false } } catch { Zanotuj-Wywrotke "hooki instalacji globalnej" $_ }
+    foreach ($w in $script:Wywrotki) { Write-Host "MegaRuchacz: wywrocilo sie: $w" }
+    Zapisz-Obecnosc "dopasuj"
+    if ($script:Niepowodzenia -gt 0 -or $script:Wywrotki.Count -gt 0 -or -not $hookiOk) { exit 1 }
+    exit 0
+  }
+
   # Tryb pomocniczy - policz rachunek za pamiec i odloz gotowa linie do pliku
   # podrecznego. Startuje go straznik sam, osobnym procesem, wiec nikt tu nie
   # czeka i nikt nie czyta: zadnego wypisywania, zadnych innych sprawdzen.
@@ -3232,6 +3395,7 @@ try {
   # rosnie w czasie - z niego widac trend, ktorego pojedyncze okno nie pokaze.
   if ($Tlo) {
     try { Sprawdz-Zera }   catch { Zanotuj-Wywrotke "sprawdzanie zer w plikach pamieci" $_ }
+    try { Zglos-Rejestr }  catch { Zanotuj-Wywrotke "odczyt rejestru instalacji" $_ }
     try { Odswiez-Zrodlo } catch { Zanotuj-Wywrotke "odswiezanie zrodla" $_ }
     if ($script:Wyzerowane.Count -eq 0) {
       try { Pilnuj-Zasad }   catch { Zanotuj-Wywrotke "pilnowanie zasad" $_ }
@@ -3323,6 +3487,7 @@ try {
   # wiec ma sens dopiero wtedy, gdy ten katalog jest swiezy.
   # Zera najpierw: alarm o nich ma byc pierwsza linia, a reszta ma wiedziec, czego nie ruszac.
   try { Sprawdz-Zera }     catch { Zanotuj-Wywrotke "sprawdzanie zer w plikach pamieci" $_ }
+  try { Zglos-Rejestr }    catch { Zanotuj-Wywrotke "odczyt rejestru instalacji" $_ }
   try { Odswiez-Zrodlo }   catch { Zanotuj-Wywrotke "odswiezanie zrodla" $_ }
   if ($script:Wyzerowane.Count -eq 0) {
     try { Pilnuj-Zasad }     catch { Zanotuj-Wywrotke "pilnowanie zasad" $_ }
@@ -3332,9 +3497,13 @@ try {
   try { Pilnuj-Sufitu-Zawsze } catch { Zanotuj-Wywrotke "pilnowanie sufitu ladunku" $_ }
   try { Pilnuj-Przypomnienia-Zawsze } catch { Zanotuj-Wywrotke "podmiana starego hooka przypomnienia" $_ }
   try { Pilnuj-Wersji }    catch { Zanotuj-Wywrotke "pilnowanie wersji wdrozenia" $_ }
-  try { Zglos-Kandydatow } catch { Zanotuj-Wywrotke "poczekalnia faktow" $_ }
-  try { Zglos-Odsylacze }  catch { Zanotuj-Wywrotke "odsylacze plikow wiedzy" $_ }
-  try { Zglos-Cykl }       catch { Zanotuj-Wywrotke "meldunek o cyklu" $_ }
+  # Poczekalnia, odsylacze i meldunek o cyklu to modul wiedza - odznaczony w instalatorze nie ma
+  # o czym meldowac, a stary stan cyklu krzyczalby "cykl nie chodzi" (falszywy alarm).
+  if (-not (Modul-Wylaczony "wiedza")) {
+    try { Zglos-Kandydatow } catch { Zanotuj-Wywrotke "poczekalnia faktow" $_ }
+    try { Zglos-Odsylacze }  catch { Zanotuj-Wywrotke "odsylacze plikow wiedzy" $_ }
+    try { Zglos-Cykl }       catch { Zanotuj-Wywrotke "meldunek o cyklu" $_ }
+  }
   # Wywrotki z przebiegow bez widowni i cisza po stronie Codeksa - tu jest
   # jedyne miejsce, w ktorym maja szanse dotrzec do czlowieka.
   try { Zglos-Wywrotki }   catch { Zanotuj-Wywrotke "meldunek o wywrotkach" $_ }

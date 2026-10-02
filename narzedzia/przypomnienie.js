@@ -31,6 +31,15 @@
 // ~\.claude\wiedza\.powiadomienia-stan.json (do testow: MR_POWIADOMIENIA_STAN).
 // Ostrzezenie o dlugiej rozmowie (tez P26) usuniete 2026-10-01 (P43) decyzja uzytkownika:
 // linia przychodzila dopiero po wyslaniu wiadomosci, kiedy koszt juz poszedl.
+//
+// Od P59a (instalator z wyborem modulow) kazda czesc idzie tylko przy swoim module z rejestru
+// instalacji ~\.claude\mr\instalacja.json (umowa: narzedzia\instalacja\stan.ps1): ladunek
+// z pliku - kierownik, linia o cyklu - wiedza, "Z ARCHIWUM" - lore. Brak rejestru = jak dotad
+// (wszystko); rejestr nieczytelny = jak dotad plus jedna linia alarmu na poczatku (w rytmie
+// alarmu archiwum). Bez ladunku kierownika linia cyklu i archiwum ida dalej - do P59a brak pliku
+// ladunku konczyl skrypt na wejsciu i zabieral je ze soba. Gdy nie ma nic do doklejenia, skrypt
+// nie wypisuje nic. Zmienne do testow: MR_INSTALACJA (plik rejestru), MR_INSTALACJA_ALARM (stan
+// alarmu o nieczytelnym rejestrze).
 
 const fs = require("fs");
 const os = require("os");
@@ -340,6 +349,60 @@ function odnotujPowiadomienie(plikStanu, tresc) {
   zapiszStan(plikStanu, stan);
 }
 
+// ---------------------------------------------------------------- rejestr instalacji (P59a)
+
+// Moduly, od ktorych zalezy, co ten hook dokleja.
+const MODULY_PRZYPOMNIENIA = ["kierownik", "wiedza", "lore"];
+
+// Rejestr wybranych modulow - te same zasady odczytu co Czytaj-Instalacje w stan.ps1: brak pliku =
+// wszystko wlaczone; pusty, z bajtem 0x00, zly JSON albo bez "moduly" = wszystko wlaczone + blad;
+// brak klucza modulu (albo null) = wlaczony. Jeden maly odczyt pliku na wiadomosc.
+function rejestrInstalacji(plik) {
+  const wszystko = {};
+  for (const n of MODULY_PRZYPOMNIENIA) wszystko[n] = true;
+  const zly = (powod) => ({ moduly: wszystko, blad: "nie umiem odczytac rejestru instalacji " +
+    plik.replace(os.homedir(), "~") + ": " + powod });
+  let b;
+  try { b = fs.readFileSync(plik); }
+  catch (e) {
+    if (e && e.code === "ENOENT") return { moduly: wszystko, blad: null };
+    return zly(String(e && e.message || e));
+  }
+  if (b.length === 0) return zly("plik jest pusty");
+  if (b.indexOf(0) >= 0) return zly("plik zawiera bajty 0x00 (uszkodzony, np. po zaniku zasilania)");
+  let j = null;
+  try { j = JSON.parse(b.toString("utf8").replace(/^﻿/, "")); } catch (e) { return zly(String(e.message)); }
+  if (j === null || typeof j !== "object" || j.moduly === undefined || j.moduly === null) return zly('brak pola "moduly"');
+  const moduly = {};
+  for (const n of MODULY_PRZYPOMNIENIA) {
+    const v = j.moduly[n];
+    moduly[n] = (v === undefined || v === null) ? true : Boolean(v);
+  }
+  return { moduly, blad: null };
+}
+
+// Linia alarmu o nieczytelnym rejestrze: przy pierwszym wystapieniu, przy zmianie przyczyny i potem
+// co GODZIN_MIEDZY_ALARMAMI - ten sam rytm co alarm archiwum (linia przy kazdej wiadomosci uczy ja
+// ignorowac). Stan w malym pliku obok rejestru; zdrowy rejestr go sprzata. "" = nic do pokazania.
+function alarmRejestru(blad, plikAlarmu) {
+  if (!blad) {
+    if (fs.existsSync(plikAlarmu)) usun(plikAlarmu);
+    return "";
+  }
+  const stan = czytajStan(plikAlarmu);
+  const teraz = new Date();
+  const ostatni = Date.parse(stan.czas);
+  if (stan.powod === blad && !isNaN(ostatni) && (teraz - ostatni) / 3600000 < GODZIN_MIEDZY_ALARMAMI) return "";
+  zapiszStan(plikAlarmu, { powod: blad, czas: teraz.toISOString() });
+  let l = "UWAGA: " + blad + " - doklejam wszystko jak przed rejestrem; zapisze go od nowa instalator (instaluj.bat).";
+  if (l.length > MAX_STAN) l = l.slice(0, MAX_STAN - 3) + "...";
+  return l;
+}
+
+// Czy wolno oddac surowy ladunek w ostatniej desce ratunku (glowna().catch) - nie przy module
+// kierownik wylaczonym w rejestrze: ladunek to jego tresc.
+let kierownikWlaczony = true;
+
 // ---------------------------------------------------------------- calosc
 
 function wypisz(tekst) {
@@ -360,6 +423,10 @@ async function glowna() {
     path.join(os.homedir(), ".claude", "wiedza", ".archiwum-stan.json");
   const plikPowiadomien = process.env.MR_POWIADOMIENIA_STAN ||
     path.join(os.homedir(), ".claude", "wiedza", ".powiadomienia-stan.json");
+  const plikRejestru = process.env.MR_INSTALACJA ||
+    path.join(os.homedir(), ".claude", "mr", "instalacja.json");
+  const plikAlarmuRejestru = process.env.MR_INSTALACJA_ALARM ||
+    path.join(os.homedir(), ".claude", "mr", ".instalacja-alarm.json");
 
   // Wejscie hooka NAJPIERW: o tym, ze to powiadomienie, trzeba wiedziec, zanim linia cyklu
   // zniknie z dysku (meldunek koncowy pokazuje sie tylko raz - nie moze pojsc do powiadomienia).
@@ -376,49 +443,65 @@ async function glowna() {
     process.exit(0);
   }
 
-  const surowy = plikLadunku ? czytaj(plikLadunku) : null;
-  if (!surowy) {
-    // Brak ladunku to nie jest powod, zeby wywrocic wiadomosc uzytkownika -
-    // po prostu nie ma czego doklejac.
-    process.exit(0);
-  }
+  // Ktore czesci w ogole doklejamy - rejestr instalacji (P59a).
+  const rejestr = rejestrInstalacji(plikRejestru);
+  const mod = rejestr.moduly;
+  kierownikWlaczony = mod.kierownik;
+  let alarm = "";
+  try { alarm = alarmRejestru(rejestr.blad, plikAlarmuRejestru); }
+  catch (e) { process.stderr.write("przypomnienie.js: alarm o rejestrze: " + (e && e.message || e) + "\n"); }
 
+  // Plik ladunku daje tez "koperte" odpowiedzi (np. suppressOutput Claude Code) - bierzemy ja
+  // takze przy wylaczonym kierowniku, ale wtedy bez jego tresci.
+  const surowy = plikLadunku ? czytaj(plikLadunku) : null;
   let ladunek = null;
-  try { ladunek = JSON.parse(surowy); } catch (e) { ladunek = null; }
-  if (!ladunek || !ladunek.hookSpecificOutput ||
-      typeof ladunek.hookSpecificOutput.additionalContext !== "string") {
+  if (surowy) { try { ladunek = JSON.parse(surowy); } catch (e) { ladunek = null; } }
+  const umiemy = ladunek && ladunek.hookSpecificOutput &&
+    typeof ladunek.hookSpecificOutput.additionalContext === "string";
+  if (surowy && !umiemy && mod.kierownik) {
     // Plik jest, ale nie ma w nim ladunku, ktory umiemy uzupelnic - oddajemy go
     // slowo w slowo, dokladnie tak, jak robilo to wczesniejsze "cat".
     wypisz(surowy);
     return;
   }
-
+  // Bez pliku ladunku (albo bez kierownika i z nieczytelnym plikiem) - pusta koperta. Brak
+  // ladunku nie jest powodem, zeby zabrac linie cyklu i podpowiedz z archiwum.
+  if (!umiemy) ladunek = { hookSpecificOutput: { hookEventName: "UserPromptSubmit", additionalContext: "" } };
   const kontekst = ladunek.hookSpecificOutput;
+  if (!mod.kierownik) kontekst.additionalContext = "";
+
   let linia = "";
-  try { linia = liniaCyklu(plikPostepu); } catch (e) { linia = ""; }
-  if (linia) kontekst.additionalContext = linia + "\n" + kontekst.additionalContext;
+  if (mod.wiedza) { try { linia = liniaCyklu(plikPostepu); } catch (e) { linia = ""; } }
+  if (linia) kontekst.additionalContext = linia + (kontekst.additionalContext ? "\n" + kontekst.additionalContext : "");
 
   // Podpowiedz z archiwum. Cokolwiek tu padnie, przypomnienie wychodzi nizej bez zmian.
   const zasady = kontekst.additionalContext;
-  try {
-    const budzet = Math.min(MAX_ARCHIWUM, SUFIT_LADUNKU - zasady.length - 2);
-    const w = archiwum(wejscie, budzet, plikStanu);
-    let calosc = zasady;
-    if (w.alarm) calosc = w.alarm + "\n" + calosc;
-    if (w.blok) calosc = calosc + "\n\n" + w.blok;
-    kontekst.additionalContext = calosc;
-  } catch (e) {
-    kontekst.additionalContext = zasady;
-    process.stderr.write("przypomnienie.js: podpowiedz z archiwum padla: " + (e && e.stack || e) + "\n");
+  if (mod.lore) {
+    try {
+      const budzet = Math.min(MAX_ARCHIWUM, SUFIT_LADUNKU - zasady.length - 2);
+      const w = archiwum(wejscie, budzet, plikStanu);
+      let calosc = zasady;
+      if (w.alarm) calosc = w.alarm + (calosc ? "\n" + calosc : "");
+      if (w.blok) calosc = calosc ? calosc + "\n\n" + w.blok : w.blok;
+      kontekst.additionalContext = calosc;
+    } catch (e) {
+      kontekst.additionalContext = zasady;
+      process.stderr.write("przypomnienie.js: podpowiedz z archiwum padla: " + (e && e.stack || e) + "\n");
+    }
   }
+  // Alarm o rejestrze na samym poczatku - sufit ucina koniec, poczatek przezywa zawsze.
+  if (alarm) kontekst.additionalContext = alarm + (kontekst.additionalContext ? "\n" + kontekst.additionalContext : "");
+  // Nic do doklejenia (np. same moduly bez tresci w tym hooku) - zadnego wyjscia.
+  if (!kontekst.additionalContext) process.exit(0);
   wypisz(JSON.stringify(ladunek));
 }
 
 glowna().catch((e) => {
   // Ostatnia deska: blad poza podpowiedzia (nie powinien sie zdarzyc). Oddajemy ladunek
   // tak, jak lezy na dysku - dokladnie to, co robilo "cat" - i zostawiamy slad na stderr.
+  // Przy kierowniku wylaczonym w rejestrze nie oddajemy nic: ladunek to jego tresc.
   process.stderr.write("przypomnienie.js: " + (e && e.stack || e) + "\n");
-  if (jestPowiadomienie) process.exit(0);
+  if (jestPowiadomienie || !kierownikWlaczony) process.exit(0);
   const surowy = process.argv[2] ? czytaj(process.argv[2]) : null;
   if (surowy) wypisz(surowy); else process.exit(0);
 });

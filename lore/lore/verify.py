@@ -90,7 +90,12 @@ INSTRUCTION_PATHS = (
 )
 
 KNOWLEDGE_HEADING = "## Co wiem"
-GUARD_MARKER = "<!-- MegaRuchacz:start -->"  # from here down the file belongs to the installer
+GUARD_MARKER = "<!-- MegaRuchacz:start -->"  # the shared rules block of the installer until P59a
+# Any marker of the installer ends "## Co wiem": since P59a the rules are two blocks of their own
+# (<!-- MegaRuchacz:lore:start -->, <!-- MegaRuchacz:wiedza:start -->), and the manager's block
+# (<!-- MegaRuchacz:kierownik:start -->) opens with a "# " heading the "## " rule does not see — a file
+# with only that block below "Co wiem" would get facts written into it.
+GUARD_PREFIX = "<!-- MegaRuchacz:"
 DEFAULT_SUBSECTION = "### Nad czym pracuje"
 EMPTY_MARKER = "_(pusto)_"  # placeholder of an empty subsection — the first entry replaces it
 
@@ -593,7 +598,7 @@ def section_bounds(lines: list[str]) -> tuple[int, int] | None:
         return None
     for j in range(start, len(lines)):
         stripped = lines[j].strip()
-        if stripped.startswith("## ") or stripped == GUARD_MARKER:
+        if stripped.startswith("## ") or stripped.startswith(GUARD_PREFIX):
             return start, j
     return start, len(lines)
 

@@ -62,8 +62,9 @@ function Etap-Kubelki {
 
   $kubSesja = @()
   if ($w.Blok.Znaki -gt 0) {
-    $kubSesja += Pozycja "blok zasad MegaRuchacza w CLAUDE.md" $w.Blok.Znaki $plikClaude `
-      "ten blok nalezy do narzedzia - skracaj go w zrodle i wgraj przez wdroz.ps1, nie recznie" `
+    # stary wspolny blok (do P59a) - do najblizszego przebiegu straznika, ktory zamieni go na lore + wiedza
+    $kubSesja += Pozycja "blok zasad MegaRuchacza w CLAUDE.md (stary, wspolny)" $w.Blok.Znaki $plikClaude `
+      "ten blok nalezy do narzedzia - straznik zamieni go na bloki lore i wiedza przy najblizszym otwarciu okna" `
       "zasady globalne"
   }
   if ($w.Stala.Znaki -gt 0) {
@@ -76,8 +77,9 @@ function Etap-Kubelki {
       "skasuj wpisy starsze niz $DniWaznosci dni albo przenies te trwale do warstwy stalej" `
       "warstwa biezaca" $uwagaBiezaca
   }
-  # Bloki nazwane w CLAUDE.md (dzis: zasady kierownika z instaluj-globalnie.ps1,
-  # ~12 tys. znakow). Claude Code wczytuje CALY plik, wiec leca do modelu przy
+  # Bloki nazwane w CLAUDE.md (zasady kierownika z instaluj-globalnie.ps1, ~12 tys.
+  # znakow; od P59a takze zasady pamieci: bloki lore i wiedza, ktore zastapily blok
+  # glowny). Claude Code wczytuje CALY plik, wiec leca do modelu przy
   # kazdym starcie sesji - do 2026-09-25 rachunek ich nie liczyl, bo mierzyl
   # tylko blok glowny i sekcje "Co wiem". Pozycja na blok, klucz = nazwa bloku
   # (z tej tablicy bierze liczby tryb -Warstwy, zeby nie liczyc drugi raz).
@@ -88,6 +90,14 @@ function Etap-Kubelki {
       $poz = Pozycja "zasady kierownika w CLAUDE.md (blok kierownik)" $b.Znaki $plikClaude `
         "ten blok wgrywa narzedzia\instaluj-globalnie.ps1 - skracaj go w $(Szablon-Kierownika $b.Tekst) i wgraj ponownie, nie recznie" `
         "zasady kierownika"
+    } elseif ($b.Nazwa -eq "lore") {
+      $poz = Pozycja "zasady Lore w CLAUDE.md (blok lore)" $b.Znaki $plikClaude `
+        "ten blok wpisuje straznik (narzedzia\wpisz-zasady.ps1) z zasady-lore.md - skracaj go w zrodle, nie recznie" `
+        "zasady Lore"
+    } elseif ($b.Nazwa -eq "wiedza") {
+      $poz = Pozycja "zasady wiedzy w CLAUDE.md (blok wiedza)" $b.Znaki $plikClaude `
+        "ten blok wpisuje straznik (narzedzia\wpisz-zasady.ps1) z zasady-wiedza.md - skracaj go w zrodle, nie recznie" `
+        "zasady wiedzy"
     } else {
       $poz = Pozycja "blok '$($b.Nazwa)' w CLAUDE.md" $b.Znaki $plikClaude `
         "ten blok nalezy do narzedzia - skracaj go w zrodle i wgraj ponownie, nie recznie" `

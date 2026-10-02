@@ -113,6 +113,10 @@ param(
   [switch]$UsunZadanie
 )
 
+# Stary wspolny blok zasad pamieci (do P59a). Od P59a zasady pamieci to dwa bloki nazwane
+# <!-- MegaRuchacz:lore:start --> i <!-- MegaRuchacz:wiedza:start --> - Zmierz-Warstwy liczy je
+# razem z innymi blokami nazwanymi (np. kierownik), a ten znacznik zostaje dla pliku jeszcze
+# niezmigrowanego (stary blok zamienia na nowe straznik, Pilnuj-Zasad).
 $ZnacznikStart  = "<!-- MegaRuchacz:start -->"
 $ZnacznikKoniec = "<!-- MegaRuchacz:koniec -->"
 
@@ -249,6 +253,11 @@ foreach ($modulKosztu in @("podstawy", "warstwy", "sufity", "nauka", "baza-lore"
     exit 1
   }
 }
+# Rejestr instalacji (narzedzia\instalacja\stan.ps1, od P59a): przy module kierownik wylaczonym
+# narzedzia\przypomnienie.js nie dokleja ladunku z pliku, wiec rachunek go nie liczy (Etap-Pomiar).
+# Starsza kopia bez umowy, brak rejestru albo rejestr nieczytelny = jak dotad.
+$plikRejestruInstalacji = Join-Path (Split-Path -Parent $katModulowKosztu) "instalacja\stan.ps1"
+if (Test-Path -LiteralPath $plikRejestruInstalacji) { . $plikRejestruInstalacji }
 
 # --- przebieg ----------------------------------------------------------------
 
@@ -280,6 +289,14 @@ $plikHistoria    = Join-Path $katWiedzy ".koszt-historia.tsv"
 $plikPodsum      = Join-Path $katWiedzy ".koszt-podsumowanie.txt"
 $bazaLore     = Join-Path $katKlaudii "lore.db"
 $plikAgents   = Join-Path $KatalogDomowy ".codex\AGENTS.md"
+# Modul kierownik odznaczony w instalatorze - TYLKO przy rejestrze czytelnym (nieczytelny = wszystko
+# wlaczone, tak jak go traktuje przypomnienie.js).
+$script:KierownikWylaczony = $false
+if (Get-Command Czytaj-Instalacje -ErrorAction SilentlyContinue) {
+  $rejestrInstalacji = Czytaj-Instalacje $KatalogDomowy
+  $kierownikWRejestrze = $rejestrInstalacji.moduly.kierownik   # brak klucza = wlaczony (umowa stan.ps1)
+  $script:KierownikWylaczony = ((-not $rejestrInstalacji.blad) -and ($null -ne $kierownikWRejestrze) -and -not [bool]$kierownikWRejestrze)
+}
 
 if ($UsunZadanie)  { Usun-Zadanie }
 if ($ZalozZadanie) { Zaloz-Zadanie $PSCommandPath $KatalogDomowy $plikOstatni }

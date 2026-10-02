@@ -283,8 +283,9 @@ function Raport-Pelny {
   if ($w.Jest -and (-not $w.MaSekcje)) {
     Linia "  (sekcji '## Co wiem' w tym pliku nie ma - warstwa stala i biezaca sa puste)"
   }
-  if ($w.Jest -and ($w.Blok.Znaki -eq 0)) {
-    Linia "  (bloku zasad MegaRuchacza w tym pliku nie ma)"
+  # od P59a zasady pamieci to bloki nazwane lore i wiedza; stary wspolny blok to $w.Blok
+  if ($w.Jest -and ($w.Blok.Znaki -eq 0) -and (@($w.Bloki | Where-Object { $_.Nazwa -in @("lore", "wiedza") }).Count -eq 0)) {
+    Linia "  (blokow zasad pamieci MegaRuchacza - lore, wiedza - w tym pliku nie ma)"
   }
   foreach ($nb in @($w.BlokiBezKonca)) {
     Linia "  UWAGA: blok '$nb' w $plikClaude ma znacznik startu bez znacznika konca - nie umiem go odciac ani policzyc." "Yellow"

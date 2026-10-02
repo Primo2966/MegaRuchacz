@@ -407,10 +407,11 @@ if ($JestOpencode) {
   Write-Host ""
 }
 Write-Host "2) Poza projektem - zasady globalne:"
-Write-Host "   do $plikDomowy i do ~\.codex\AGENTS.md zostanie dopisany blok"
-Write-Host "   miedzy znacznikami <!-- MegaRuchacz:start --> i <!-- MegaRuchacz:koniec -->."
+Write-Host "   do $plikDomowy i do ~\.codex\AGENTS.md zostana dopisane bloki zasad"
+Write-Host "   pamieci: <!-- MegaRuchacz:lore:start --> i <!-- MegaRuchacz:wiedza:start -->"
+Write-Host "   (kazdy przy swoim module z rejestru instalacji; bez rejestru - oba)."
 Write-Host "   Twoje wlasne zapiski zostaja nietkniete, przed zmiana powstaje kopia zapasowa,"
-Write-Host "   a caly blok da sie usunac: narzedzia\wpisz-zasady.ps1 -Usun"
+Write-Host "   a bloki da sie usunac: narzedzia\wpisz-zasady.ps1 -Usun"
 Write-Host ""
 Write-Host "3) Aktualizacja narzedzia - przy starcie sesji, nie w tle co godzine:"
 Write-Host "   nowsza wersje z gita pobiera straznik zasad, wolany hookiem SessionStart"
@@ -1436,9 +1437,21 @@ if ($null -ne $wynikOdswiezania) {
   Nie-Sprawdzono "czy hook startowy naprawde cos podciagnie, widac dopiero po otwarciu nowej sesji - slad zostaje w ~\.claude\.megaruchacz-tlo.log"
 }
 
+# Od P59a zasady pamieci to dwa bloki (lore, wiedza), kazdy przy swoim module z rejestru
+# instalacji - sprawdzamy te, ktore wedlug rejestru maja stac (narzedzia\zasady-bloki.ps1).
 $blokOk = $false
-if (Test-Path $plikDomowy) { $blokOk = ((Get-Content $plikDomowy -Raw) -like "*<!-- MegaRuchacz:start -->*") }
-Sprawdz "blok zasad globalnych zapisany w $plikDomowy" $blokOk "nie ma znacznika MegaRuchacz:start"
+$czemuBlok = "nie ma narzedzia\zasady-bloki.ps1 - nie wiem, jakie bloki maja stac"
+$plikBlokowZasad = Join-Path $Zrodlo "narzedzia\zasady-bloki.ps1"
+if (Test-Path $plikBlokowZasad) {
+  . $plikBlokowZasad
+  $chcianeBloki = @((Chciane-Bloki-Zasad $KatalogDomowy).Nazwy)
+  $trescDomowa = ""
+  if (Test-Path $plikDomowy) { $trescDomowa = [System.IO.File]::ReadAllText($plikDomowy) }
+  $brakBlokow = @($chcianeBloki | Where-Object { -not $trescDomowa.Contains((Znaczniki-Zasad $_)[0]) })
+  $blokOk = ($brakBlokow.Count -eq 0)
+  $czemuBlok = "brak blokow: " + ($brakBlokow -join ", ")
+}
+Sprawdz "bloki zasad pamieci zapisane w $plikDomowy" $blokOk $czemuBlok
 Nie-Sprawdzono "zasady globalne sa zapisane w pliku; czy Twoj klient je czyta, widac dopiero w nowej sesji"
 
 foreach ($m in $Moduly) {

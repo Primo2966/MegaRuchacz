@@ -168,7 +168,11 @@ def _hook(tmp_path: Path, payload, **env) -> tuple[str, dict]:
     reminder.write_text(json.dumps({"hookSpecificOutput": {"hookEventName": "UserPromptSubmit",
                                                            "additionalContext": RULES}}), encoding="utf-8")
     state = tmp_path / "state.json"
-    full_env = dict(os.environ, MR_ARCHIWUM_STAN=str(state), MR_LORE_PYTHON=sys.executable, LORE_HOME=str(tmp_path))
+    # Since P59a the hook reads the installation registry (~/.claude/mr/instalacja.json) - a test must
+    # not depend on the modules chosen on the machine it runs on: no registry = everything on.
+    full_env = dict(os.environ, MR_ARCHIWUM_STAN=str(state), MR_LORE_PYTHON=sys.executable, LORE_HOME=str(tmp_path),
+                    MR_INSTALACJA=str(tmp_path / "no-registry.json"),
+                    MR_INSTALACJA_ALARM=str(tmp_path / "registry-alarm.json"))
     full_env.update(env)
     r = subprocess.run([node, str(HOOK), str(reminder), str(tmp_path / "no-progress")],
                        input=payload if isinstance(payload, str) else json.dumps(payload),

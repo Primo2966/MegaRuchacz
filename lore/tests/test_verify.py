@@ -336,6 +336,76 @@ def test_everything_outside_the_knowledge_section_stays_byte_for_byte(sandbox):
     assert after.split(verify.GUARD_MARKER)[1] == before.split(verify.GUARD_MARKER)[1]
 
 
+# Since P59a the installer writes two rules blocks of its own (Lore, wiedza) instead of the shared
+# one, and the manager's block may be the only one below "Co wiem".
+SPLIT_BLOCKS = """<!-- MegaRuchacz:lore:start -->
+## Pamięć rozmów (Lore)
+
+- Szukaj w historii przez `lore_search`.
+<!-- MegaRuchacz:lore:koniec -->
+
+<!-- MegaRuchacz:wiedza:start -->
+## Wiedza („Co wiem")
+
+- Automat raz dziennie wyławia fakty.
+<!-- MegaRuchacz:wiedza:koniec -->
+"""
+
+MANAGER_BLOCK = """<!-- MegaRuchacz:kierownik:start -->
+# MegaRuchacz — kierownik projektu (Claude Code)
+
+Ta sesja to kierownik, nie wykonawca.
+
+## Reguła numer jeden: odpowiadasz w sekundach
+
+- Każdy Agent idzie w tle.
+<!-- MegaRuchacz:kierownik:koniec -->
+"""
+
+
+# "Co wiem" without "### Bieżące": the first current fact creates the subsection at the very end of
+# the section - exactly where a section running into a block would take it inside that block.
+NO_CURRENT = "# Ustalenia globalne\n\n## Co wiem\n\n### O użytkowniku\n\n- Nie jest programistą.\n\n"
+
+
+def test_the_split_rules_blocks_end_the_section_and_stay_byte_for_byte(sandbox):
+    (sandbox / "CLAUDE.md").write_text(NO_CURRENT + SPLIT_BLOCKS + "\n" + MANAGER_BLOCK, encoding="utf-8")
+    p = existing(sandbox)
+    candidates(sandbox, f"Kod robota to `{p}`.")
+    before = rules_text(sandbox)
+
+    verify.run()
+
+    after = rules_text(sandbox)
+    first = "<!-- MegaRuchacz:lore:start -->"
+    assert after.split("## Co wiem")[0] == before.split("## Co wiem")[0]
+    assert after.split(first)[1] == before.split(first)[1]
+    assert f"- [2026-09-16] Kod robota to `{p}`." in after.split(first)[0]
+
+
+def test_with_only_the_managers_block_below_no_fact_lands_inside_it(sandbox):
+    # The manager's block opens with a "# " heading, which the "## " rule does not see: before P59a
+    # a file without the shared block took the facts into the manager's rules (P63, H6).
+    (sandbox / "CLAUDE.md").write_text(NO_CURRENT + MANAGER_BLOCK, encoding="utf-8")
+    p = existing(sandbox)
+    candidates(sandbox, f"Kod robota to `{p}`.")
+    before = rules_text(sandbox)
+
+    verify.run()
+
+    after = rules_text(sandbox)
+    first = "<!-- MegaRuchacz:kierownik:start -->"
+    assert after.split(first)[1] == before.split(first)[1]
+    assert f"- [2026-09-16] Kod robota to `{p}`." in after.split(first)[0]
+
+
+@pytest.mark.parametrize("marker", ["<!-- MegaRuchacz:start -->", "<!-- MegaRuchacz:lore:start -->",
+                                    "<!-- MegaRuchacz:wiedza:start -->", "<!-- MegaRuchacz:kierownik:start -->"])
+def test_any_marker_of_the_installer_ends_the_knowledge_section(marker):
+    lines = ["# Ustalenia globalne", "", "## Co wiem", "", "- fakt", "", marker, "# Nagłówek bloku", "- reguła"]
+    assert verify.section_bounds(lines) == (3, 6)
+
+
 def test_without_the_knowledge_section_nothing_is_approved(sandbox):
     (sandbox / "CLAUDE.md").write_text("# Ustalenia globalne\n\nNic tu nie ma.\n", encoding="utf-8")
     p = existing(sandbox)

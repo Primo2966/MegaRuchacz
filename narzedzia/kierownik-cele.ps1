@@ -71,6 +71,26 @@ function Z-Blokiem-Kierownika([string]$stary, [string]$tresc) {
   return $stary.TrimEnd("`r", "`n") + $nl + $nl + $blok + $nl
 }
 
+# Tekst pliku bez bloku kierownika (modul kierownik wylaczony w rejestrze instalacji): blok
+# wyciety razem ze znacznikami, bez podwojnej pustej linii po nim. Brak bloku = tekst bez zmian;
+# dubel albo samotny znacznik = wyjatek - tego nie naprawiamy po cichu.
+function Bez-Bloku-Kierownika([string]$stary) {
+  if ($null -eq $stary) { return "" }
+  $ile = Ile-Blokow-Kierownika $stary
+  if ($ile -gt 1) { throw "jest $ile blokow kierownika (dubel)" }
+  $i = $stary.IndexOf($KIEROWNIK_POCZATEK, [System.StringComparison]::Ordinal)
+  $j = $stary.IndexOf($KIEROWNIK_KONIEC, [System.StringComparison]::Ordinal)
+  if (($i -ge 0) -xor ($j -ge 0)) { throw "jest tylko jeden znacznik bloku kierownika" }
+  if ($i -lt 0) { return $stary }
+  if ($j -lt $i) { throw "znaczniki bloku kierownika stoja w zlej kolejnosci" }
+  $nl = if ($stary.Contains("`r`n")) { "`r`n" } else { "`n" }
+  $przed = $stary.Substring(0, $i).TrimEnd("`r", "`n")
+  $po = $stary.Substring($j + $KIEROWNIK_KONIEC.Length).TrimStart("`r", "`n")
+  if ($przed.Length -eq 0) { return $po }
+  if ($po.Length -eq 0) { return $przed + $nl }
+  return $przed + $nl + $nl + $po
+}
+
 # opencode czyta globalnie PIERWSZY istniejacy z ~/.config/opencode/AGENTS.md
 # i ~/.claude/CLAUDE.md (docs: opencode.ai/docs/rules). Pole "instructions" tylko
 # DOKLADA pliki, a dolozenie CLAUDE.md wnioslo by wariant Claude Code. Jedyna droga

@@ -53,7 +53,7 @@ try {
   foreach ($k in @("narzedzia", "szablony-global", "szablony-opencode", "szablony-codex", "zasobnik")) {
     if (Test-Path (Join-Path $Zrodlo $k)) { Copy-Item -Recurse (Join-Path $Zrodlo $k) (Join-Path $Z $k) }
   }
-  foreach ($f in @("zasady-globalne.md", "ZMIANY.md")) { Copy-Item (Join-Path $Zrodlo $f) (Join-Path $Z $f) }
+  foreach ($f in @("zasady-lore.md", "zasady-wiedza.md", "ZMIANY.md")) { Copy-Item (Join-Path $Zrodlo $f) (Join-Path $Z $f) }
 
   $nl = "`n"
   [System.IO.File]::WriteAllText((Join-Path $H ".claude\CLAUDE.md"),
@@ -82,10 +82,11 @@ try {
   # sciezka zdrowa nie moze byc zablokowana: usuniety blok Lore straznik ma wpisac z powrotem
   # (do 0.25.2 pierwsza wersja kontroli zer brala pusta liste za jeden wyzerowany plik)
   $trescCm = [System.IO.File]::ReadAllText($claude)   # nie $t - PowerShell nie rozroznia wielkosci liter, a $T to katalog testu
-  $i = $trescCm.IndexOf("<!-- MegaRuchacz:start -->"); $j = $trescCm.IndexOf("<!-- MegaRuchacz:koniec -->")
-  [System.IO.File]::WriteAllText($claude, $trescCm.Substring(0, $i) + $trescCm.Substring($j + 27), (New-Object System.Text.UTF8Encoding($false)))
+  $koniecLore = "<!-- MegaRuchacz:lore:koniec -->"
+  $i = $trescCm.IndexOf("<!-- MegaRuchacz:lore:start -->"); $j = $trescCm.IndexOf($koniecLore)
+  [System.IO.File]::WriteAllText($claude, $trescCm.Substring(0, $i) + $trescCm.Substring($j + $koniecLore.Length), (New-Object System.Text.UTF8Encoding($false)))
   $s = Odpal (Join-Path $Z "narzedzia\straznik-zasad.ps1") @("-Zrodlo", $Z, "-Projekt", $P, "-KatalogDomowy", $H)
-  Sprawdz "zdrowy dom: straznik wpisuje usuniety blok z powrotem" ([System.IO.File]::ReadAllText($claude).Contains("<!-- MegaRuchacz:start -->")) $s.Tekst
+  Sprawdz "zdrowy dom: straznik wpisuje usuniety blok z powrotem" ([System.IO.File]::ReadAllText($claude).Contains("<!-- MegaRuchacz:lore:start -->")) $s.Tekst
   $stanS = [System.IO.File]::ReadAllText((Join-Path $H ".claude\.megaruchacz-straznik.txt"))
   Sprawdz "zdrowy dom: straznik bez wywrotek" ($stanS -notmatch "blad\.\d") $stanS
 

@@ -1,25 +1,32 @@
-# Wpisuje zasady globalne MegaRuchacza do plikow instrukcji narzedzi AI uzytkownika.
-# Zrodlo tresci: zasady-globalne.md (tylko to, co jest pod linia-znacznikiem).
+# Wpisuje zasady pamieci MegaRuchacza do plikow instrukcji narzedzi AI uzytkownika.
+# Od P59a dwa bloki, kazdy dla wlasnego modulu instalatora (regula skladania: zasady-bloki.ps1):
+#   lore    zasady-lore.md   -> <!-- MegaRuchacz:lore:start -->   ... <!-- MegaRuchacz:lore:koniec -->
+#   wiedza  zasady-wiedza.md -> <!-- MegaRuchacz:wiedza:start --> ... <!-- MegaRuchacz:wiedza:koniec -->
+# Zrodlo tresci: tylko to, co w pliku stoi pod linia-znacznikiem. Stary wspolny blok
+# <!-- MegaRuchacz:start --> (do P59a) zamieniany jest na nowe NA SWOIM MIEJSCU - "Co wiem"
+# nad nim i reszta pliku zostaja co do bajtu.
 #
 # Uzycie:
 #   powershell -File C:\dev\claude-worker\narzedzia\wpisz-zasady.ps1
+#                             bloki wedlug rejestru instalacji (~\.claude\mr\instalacja.json):
+#                             modul wlaczony - blok wpisany albo odswiezony, wylaczony - zdjety;
+#                             brak rejestru = oba bloki; rejestr nieczytelny = oba, nic nie zdejmuje
+#     -Blok lore,wiedza       tylko te bloki (wpisz albo odswiez); pozostale zostaja, jakie sa
+#     -Usun                   wycina bloki razem ze znacznikami (z -Blok - tylko te)
 #     -Proba                  wypisuje, co by zrobil, ale nic nie zapisuje
-#     -Usun                   wycina blok razem ze znacznikami
 #     -Zrodlo <katalog>       katalog glowny repo (domyslnie katalog nad narzedzia\)
 #     -KatalogDomowy <kat>    wewnetrzne: podmiana bazy sciezek docelowych (testy)
 #
-# Tresc laduje miedzy znacznikami MegaRuchacz:start / :koniec. Reszta pliku -
-# czyli wlasne zapiski uzytkownika - zostaje nietknieta. Przed kazda zmiana kopia.
+# Reszta pliku - czyli wlasne zapiski uzytkownika - zostaje nietknieta. Przed kazda zmiana kopia.
 
 param(
   [string]$Zrodlo = (Split-Path -Parent $PSScriptRoot),
   [string]$KatalogDomowy = $HOME,
+  [string[]]$Blok = @(),
   [switch]$Usun,
   [switch]$Proba
 )
 
-$ZnacznikStart  = "<!-- MegaRuchacz:start -->"
-$ZnacznikKoniec = "<!-- MegaRuchacz:koniec -->"
 $Stempel = Get-Date -Format "yyyyMMdd-HHmmss"
 
 # UTF-8 bez BOM przy zapisie, UTF-8 rzucajacy bledem przy odczycie -
@@ -35,6 +42,10 @@ $script:Raport = @()
 $plikZapisu = Join-Path $PSScriptRoot "zapis-trwaly.ps1"
 if (-not (Test-Path $plikZapisu)) { Write-Error "Nie ma $plikZapisu - bez niego nie zapisuje plikow zasad."; exit 1 }
 . $plikZapisu
+# Znaczniki, regula skladania blokow i odczyt rejestru instalacji - wspolne ze straznikiem.
+$plikBlokow = Join-Path $PSScriptRoot "zasady-bloki.ps1"
+if (-not (Test-Path $plikBlokow)) { Write-Error "Nie ma $plikBlokow - bez niego nie wiem, jak skladac bloki zasad."; exit 1 }
+. $plikBlokow
 
 function Czytaj($sciezka) {
   return [System.IO.File]::ReadAllText($sciezka, $Utf8Odczyt)
@@ -66,21 +77,16 @@ function Wyzerowane-Pliki-Z($pliki) {
   return ,$wynik
 }
 
-function Koniec-Linii($tekst) {
-  if ($tekst.Contains("`r`n")) { return "`r`n" }
-  if ($tekst.Contains("`n"))   { return "`n" }
-  return "`r`n"
-}
-
 function Kopia-Zapasowa($sciezka) {
   $bak = "$sciezka.bak-$Stempel"
   Kopiuj-Trwale $sciezka $bak   # odmawia kopii pliku z bajtami 0x00
   return $bak
 }
 
-# Odczyt kontrolny po zapisie - najczestsza cicha wpadka na Windowsie to
-# rozsypane polskie znaki, wiec porownujemy to, co wyszlo, z tym, co mialo wejsc.
-function Sprawdz-Zapis($plik, $nazwa, $blok, $maByc) {
+# Odczyt kontrolny po zapisie - najczestsza cicha wpadka na Windowsie to rozsypane polskie
+# znaki, wiec porownujemy to, co wyszlo, z tym, co mialo wejsc: kazdy blok, ktory ma stac,
+# stoi co do znaku, a po blokach zdjetych nie zostal ani jeden znacznik.
+function Sprawdz-Zapis($plik, $nazwa, $bloki, $zdjete) {
   try { $sprawdzony = Czytaj $plik }
   catch {
     Write-Host "BLAD  $nazwa - po zapisie $plik nie daje sie odczytac jako UTF-8" -ForegroundColor Red
@@ -92,49 +98,49 @@ function Sprawdz-Zapis($plik, $nazwa, $blok, $maByc) {
     $script:Bledy++
     return $false
   }
-  if ($maByc -and $sprawdzony.IndexOf($blok, [System.StringComparison]::Ordinal) -lt 0) {
-    Write-Host "BLAD  $nazwa - blok w $plik nie zgadza sie z tym, co mialo byc zapisane" -ForegroundColor Red
-    $script:Bledy++
-    return $false
+  foreach ($b in $bloki) {
+    if ($sprawdzony.IndexOf($b, [System.StringComparison]::Ordinal) -lt 0) {
+      Write-Host "BLAD  $nazwa - blok w $plik nie zgadza sie z tym, co mialo byc zapisane" -ForegroundColor Red
+      $script:Bledy++
+      return $false
+    }
   }
-  if ((-not $maByc) -and ($sprawdzony.Contains($ZnacznikStart) -or $sprawdzony.Contains($ZnacznikKoniec))) {
-    Write-Host "BLAD  $nazwa - w $plik dalej siedza znaczniki MegaRuchacza" -ForegroundColor Red
-    $script:Bledy++
-    return $false
+  foreach ($n in $zdjete) {
+    foreach ($znacznik in (Znaczniki-Zasad $n)) {
+      if ($sprawdzony.Contains($znacznik)) {
+        Write-Host "BLAD  $nazwa - w $plik dalej siedzi znacznik $znacznik" -ForegroundColor Red
+        $script:Bledy++
+        return $false
+      }
+    }
   }
   return $true
 }
 
-# --- tresc do wstrzykniecia --------------------------------------------------
+# --- jeden plik docelowy -----------------------------------------------------
 
-function Pobierz-Tresc($plikZrodlowy) {
-  $linie = (Czytaj $plikZrodlowy) -split "\r?\n"
-  $start = -1
-  for ($i = 0; $i -lt $linie.Count; $i++) {
-    if ($linie[$i] -match '^<!--.*WSTRZYKNI.*-->\s*$') { $start = $i; break }
+# Ktore bloki maja w tym pliku stac, a ktore zniknac - wedlug trybu, w jakim skrypt wywolano.
+# $obecne liczy stary wspolny blok za oba, wiec "-Blok lore" na starym bloku nie gubi wiedzy.
+function Ktore-Bloki($obecne) {
+  $wszystkie = @(Bloki-Zasad)
+  $w = [pscustomobject]@{ Chciane = @(); Zdjac = @() }
+  if ($Blok.Count -gt 0) {
+    if ($Usun) {
+      $w.Chciane = @($obecne | Where-Object { $Blok -notcontains $_ })
+      $w.Zdjac = @($Blok)
+    } else {
+      $w.Chciane = @($wszystkie | Where-Object { ($obecne -contains $_) -or ($Blok -contains $_) })
+    }
+  } elseif ($Usun) {
+    $w.Zdjac = $wszystkie
+  } else {
+    $w.Chciane = @($script:Chciane.Nazwy)
+    if ($script:Chciane.Zdejmuj) { $w.Zdjac = @($wszystkie | Where-Object { $script:Chciane.Nazwy -notcontains $_ }) }
   }
-  if ($start -lt 0) {
-    Write-Error "W $plikZrodlowy nie ma linii-znacznika 'TRESC DO WSTRZYKNIECIA PONIZEJ TEJ LINII'."
-    exit 1
-  }
-  $ogon = @()
-  if ($start -lt ($linie.Count - 1)) { $ogon = @($linie[($start + 1)..($linie.Count - 1)]) }
-  # obcinamy puste linie z gory i z dolu na indeksach, nie zakresami -
-  # zakres 0..-1 w PowerShellu zawija sie na koniec tablicy i robi petle bez konca
-  $od = 0
-  $doo = $ogon.Count - 1
-  while ($od -le $doo -and $ogon[$od].Trim() -eq "")  { $od++ }
-  while ($doo -ge $od -and $ogon[$doo].Trim() -eq "") { $doo-- }
-  if ($od -gt $doo) {
-    Write-Error "W $plikZrodlowy pod linia-znacznikiem nie ma zadnej tresci."
-    exit 1
-  }
-  return @($ogon[$od..$doo])
+  return $w
 }
 
-# --- operacje na pliku docelowym ---------------------------------------------
-
-function Wstaw-Blok($plik, $nazwa, $tresc) {
+function Popraw-Plik($plik, $nazwa) {
   $istnieje = Test-Path $plik
   $stary = ""
   if ($istnieje -and (Wyzerowany $plik $nazwa)) { return }
@@ -146,111 +152,56 @@ function Wstaw-Blok($plik, $nazwa, $tresc) {
       return
     }
   }
-
-  $nl = Koniec-Linii $stary
-  $blok = ($ZnacznikStart, ($tresc -join $nl), $ZnacznikKoniec) -join $nl
-  $linijek = ($blok -split "\r?\n").Count
-
-  $i = $stary.IndexOf($ZnacznikStart, [System.StringComparison]::Ordinal)
-  $j = $stary.IndexOf($ZnacznikKoniec, [System.StringComparison]::Ordinal)
-
-  if (($i -ge 0) -xor ($j -ge 0)) {
-    Write-Host "BLAD  $nazwa - w $plik jest tylko jeden znacznik MegaRuchacza, nie ruszam go" -ForegroundColor Red
-    $script:Bledy++
-    return
-  }
-  if ($i -ge 0 -and $j -lt $i) {
-    Write-Host "BLAD  $nazwa - znaczniki MegaRuchacza w $plik sa w zlej kolejnosci, nie ruszam go" -ForegroundColor Red
+  $znalezione = Znajdz-Bloki-Zasad $stary
+  if ($znalezione.Blad) {
+    Write-Host "BLAD  $nazwa - w $plik $($znalezione.Blad), nie ruszam go" -ForegroundColor Red
     $script:Bledy++
     return
   }
 
-  if ($i -ge 0) {
-    $co = "podmieniam blok"
-    $nowy = $stary.Substring(0, $i) + $blok + $stary.Substring($j + $ZnacznikKoniec.Length)
-  } elseif ($stary.Trim().Length -eq 0) {
-    if ($istnieje) { $co = "wpisuje blok do pustego pliku" } else { $co = "zakladam plik z blokiem" }
-    $nowy = $blok + $nl
-  } else {
-    $co = "dopisuje blok na koncu"
-    $nowy = $stary.TrimEnd("`r", "`n") + $nl + $nl + $blok + $nl
-  }
+  $plan = Ktore-Bloki @(Obecne-Bloki-Zasad $stary)
+  $chciane = @($plan.Chciane)
+  $zdjac = @($plan.Zdjac)
+  $tresci = [ordered]@{}
+  foreach ($n in (Bloki-Zasad)) { if ($chciane -contains $n) { $tresci[$n] = $script:Tresci[$n] } }
 
+  $nowy = Zloz-Plik-Zasad $stary $tresci $zdjac
   if ($nowy -ceq $stary) {
-    Write-Host "--  $nazwa - blok juz jest aktualny: $plik"
-    $script:Raport += "$nazwa : bez zmian (blok aktualny)"
+    if ($istnieje) { Write-Host "--  $nazwa - bloki zasad juz sa aktualne: $plik" }
+    else { Write-Host "--  $nazwa - nie ma pliku $plik i nie ma czego do niego wpisac" }
+    $script:Raport += "$nazwa : bez zmian"
     return
   }
+  $co = (Roznice-Zasad $stary $tresci $zdjac) -join "; "
+  if (-not $istnieje) { $co = "zakladam plik ($co)" }
 
   if ($Proba) {
-    Write-Host "PROBA  $nazwa - $co ($linijek linii) w $plik"
+    Write-Host "PROBA  $nazwa - $co w $plik"
     if ($istnieje) { Write-Host "PROBA  $nazwa - kopia trafilaby do $plik.bak-$Stempel" }
-    $script:Raport += "$nazwa : PROBA, $co, $linijek linii"
+    $script:Raport += "$nazwa : PROBA, $co"
     return
   }
 
+  $katalog = Split-Path -Parent $plik
+  if (-not (Test-Path $katalog)) { New-Item -ItemType Directory -Force -Path $katalog | Out-Null }
   $bak = $null
   if ($istnieje) { $bak = Kopia-Zapasowa $plik }
   Zapisz $plik $nowy
 
-  if (-not (Sprawdz-Zapis $plik $nazwa $blok $true)) { return }
+  $nl = "`r`n"
+  if (-not $nowy.Contains("`r`n") -and $nowy.Contains("`n")) { $nl = "`n" }
+  $bloki = @($tresci.Keys | ForEach-Object { Tekst-Bloku-Zasad $_ $tresci[$_] $nl })
+  # stary wspolny blok po zlozeniu nie zostaje nigdy - zamieniony albo zdjety
+  $zdjete = @($zdjac | Where-Object { -not $tresci.Contains($_) }) + @("stary")
+  if (-not (Sprawdz-Zapis $plik $nazwa $bloki $zdjete)) { return }
 
-  Write-Host "OK  $nazwa - $co ($linijek linii): $plik"
-  $wpis = "$nazwa : $co, $linijek linii"
+  Write-Host "OK  $nazwa - ${co}: $plik"
+  $wpis = "$nazwa : $co"
   if ($bak) {
     Write-Host "    kopia: $bak"
     $wpis = "$wpis, kopia $bak"
   }
   $script:Raport += $wpis
-}
-
-function Usun-Blok($plik, $nazwa) {
-  if (-not (Test-Path $plik)) {
-    Write-Host "--  $nazwa - nie ma pliku $plik, nie ma czego usuwac"
-    $script:Raport += "$nazwa : brak pliku"
-    return
-  }
-  if (Wyzerowany $plik $nazwa) { return }
-  try { $stary = Czytaj $plik }
-  catch {
-    Write-Host "BLAD  $nazwa - nie umiem odczytac $plik jako UTF-8, nie ruszam go" -ForegroundColor Red
-    $script:Bledy++
-    return
-  }
-
-  $i = $stary.IndexOf($ZnacznikStart, [System.StringComparison]::Ordinal)
-  $j = $stary.IndexOf($ZnacznikKoniec, [System.StringComparison]::Ordinal)
-  if ($i -lt 0 -or $j -lt $i) {
-    Write-Host "--  $nazwa - w $plik nie ma bloku MegaRuchacza, zostawiam"
-    $script:Raport += "$nazwa : bez zmian (brak bloku)"
-    return
-  }
-
-  $nl = Koniec-Linii $stary
-  $wyciete = ($stary.Substring($i, $j + $ZnacznikKoniec.Length - $i) -split "\r?\n").Count
-  $przed = $stary.Substring(0, $i).TrimEnd("`r", "`n")
-  $po    = $stary.Substring($j + $ZnacznikKoniec.Length).TrimStart("`r", "`n")
-
-  # sklejamy tak, zeby po wycieciu nie zostala podwojna pusta linia
-  if ($przed.Length -eq 0)  { $nowy = $po }
-  elseif ($po.Length -eq 0) { $nowy = $przed + $nl }
-  else                      { $nowy = $przed + $nl + $nl + $po }
-
-  if ($Proba) {
-    Write-Host "PROBA  $nazwa - wycialbym blok ($wyciete linii) z $plik"
-    Write-Host "PROBA  $nazwa - kopia trafilaby do $plik.bak-$Stempel"
-    $script:Raport += "$nazwa : PROBA, wyciecie bloku, $wyciete linii"
-    return
-  }
-
-  $bak = Kopia-Zapasowa $plik
-  Zapisz $plik $nowy
-
-  if (-not (Sprawdz-Zapis $plik $nazwa $null $false)) { return }
-
-  Write-Host "OK  $nazwa - blok wyciety ($wyciete linii): $plik"
-  Write-Host "    kopia: $bak"
-  $script:Raport += "$nazwa : blok wyciety, $wyciete linii, kopia $bak"
 }
 
 # --- przebieg ----------------------------------------------------------------
@@ -261,17 +212,36 @@ if (-not (Test-Path $KatalogDomowy)) {
 }
 $KatalogDomowy = (Resolve-Path $KatalogDomowy).Path
 
-$tresc = $null
-if (-not $Usun) {
-  if (-not (Test-Path $Zrodlo)) { Write-Error "Nie ma takiego katalogu zrodlowego: $Zrodlo"; exit 1 }
-  $Zrodlo = (Resolve-Path $Zrodlo).Path
-  $plikZrodlowy = Join-Path $Zrodlo "zasady-globalne.md"
-  if (-not (Test-Path $plikZrodlowy)) {
-    Write-Error "Nie ma pliku ze zrodlem zasad: $plikZrodlowy"
+# "-Blok lore,wiedza" z powershell -File przychodzi jako jeden napis
+$Blok = @($Blok | ForEach-Object { "$_" -split ',' } | ForEach-Object { $_.Trim().ToLowerInvariant() } | Where-Object { $_ })
+foreach ($n in $Blok) {
+  if ((Bloki-Zasad) -notcontains $n) {
+    Write-Error "Nie znam bloku zasad '$n' - sa: $((Bloki-Zasad) -join ', ')."
     exit 1
   }
-  $tresc = Pobierz-Tresc $plikZrodlowy
-  Write-Host "Zrodlo: $plikZrodlowy ($($tresc.Count) linii tresci)"
+}
+
+$script:Chciane = Chciane-Bloki-Zasad $KatalogDomowy
+if (($Blok.Count -eq 0) -and -not $Usun) {
+  if ($script:Chciane.Blad) {
+    Write-Host "UWAGA  $($script:Chciane.Blad) - wpisuje oba bloki zasad i niczego nie zdejmuje." -ForegroundColor Yellow
+  } else {
+    $opis = if ($script:Chciane.Nazwy.Count -gt 0) { $script:Chciane.Nazwy -join ", " } else { "zaden" }
+    Write-Host "Bloki wedlug rejestru instalacji ($($script:Chciane.Zrodlo)): $opis"
+  }
+}
+
+# Tresci ze zrodla - potrzebne zawsze poza pelnym -Usun (przy -Usun -Blok stary blok zamienia
+# sie na bloki, ktore maja zostac, wiec ich tresc tez musi byc pod reka).
+$script:Tresci = @{}
+if ($Blok.Count -gt 0 -or -not $Usun) {
+  if (-not (Test-Path $Zrodlo)) { Write-Error "Nie ma takiego katalogu zrodlowego: $Zrodlo"; exit 1 }
+  $Zrodlo = (Resolve-Path $Zrodlo).Path
+  foreach ($n in (Bloki-Zasad)) {
+    try { $script:Tresci[$n] = Tresc-Zrodla-Zasad $Zrodlo $n }
+    catch { Write-Error "Zasady ${n}: $($_.Exception.Message)"; exit 1 }
+    Write-Host "Zrodlo: $(Join-Path $Zrodlo "zasady-$n.md") ($(@($script:Tresci[$n]).Count) linii tresci)"
+  }
 }
 
 if ($Proba) { Write-Host "TRYB PROBY - nic nie zostanie zapisane" -ForegroundColor Yellow }
@@ -282,23 +252,16 @@ $Cele = @(
 )
 
 foreach ($cel in $Cele) {
-  $plik = Join-Path $cel.Katalog $cel.Plik
-
-  if (-not (Test-Path $cel.Katalog)) {
-    if (-not $cel.Zakladaj) {
-      Write-Host "--  $($cel.Nazwa) - nie ma $($cel.Katalog), czyli nie ma tego narzedzia na tej maszynie: pomijam"
-      $script:Raport += "$($cel.Nazwa) : pominiete (brak narzedzia)"
-      continue
-    }
-    if ($Proba) {
-      Write-Host "PROBA  $($cel.Nazwa) - zalozylbym katalog $($cel.Katalog)"
-    } else {
-      New-Item -ItemType Directory -Force -Path $cel.Katalog | Out-Null
-    }
+  if (-not (Test-Path $cel.Katalog) -and -not $cel.Zakladaj) {
+    Write-Host "--  $($cel.Nazwa) - nie ma $($cel.Katalog), czyli nie ma tego narzedzia na tej maszynie: pomijam"
+    $script:Raport += "$($cel.Nazwa) : pominiete (brak narzedzia)"
+    continue
   }
-
-  if ($Usun) { Usun-Blok $plik $cel.Nazwa }
-  else       { Wstaw-Blok $plik $cel.Nazwa $tresc }
+  try { Popraw-Plik (Join-Path $cel.Katalog $cel.Plik) $cel.Nazwa }
+  catch {
+    Write-Host "BLAD  $($cel.Nazwa) - $($_.Exception.Message)" -ForegroundColor Red
+    $script:Bledy++
+  }
 }
 
 Write-Host ""
@@ -313,6 +276,6 @@ if ($script:Bledy -gt 0) {
 
 Write-Host ""
 if ($Proba)    { Write-Host "Proba zakonczona - zaden plik nie ruszony." }
-elseif ($Usun) { Write-Host "Gotowe - blok MegaRuchacza usuniety, reszta plikow bez zmian." }
+elseif ($Usun) { Write-Host "Gotowe - bloki zasad MegaRuchacza usuniete, reszta plikow bez zmian." }
 else           { Write-Host "Gotowe - zasady wpisane. Zamknij i otworz narzedzie na nowo." }
 exit 0
