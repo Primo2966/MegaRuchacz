@@ -270,6 +270,11 @@ function Nowy-Dom([string]$nazwa) {
   return $d
 }
 
+# Baza jest, gdy w settings.json stoi hook straznika (dane.ps1 Baza-Jest, P64) - dom "z instalacja".
+function Dom-Z-Baza([string]$dom) {
+  [System.IO.File]::WriteAllText((Join-Path $dom '.claude\settings.json'), '{"hooks":{"SessionStart":[{"hooks":[{"type":"command","command":"powershell -File \"C:/x/narzedzia/straznik-zasad.ps1\" || true"}]}]}}', (New-Object System.Text.UTF8Encoding($false)))
+}
+
 function Zapisz-Scenariusz([string]$nazwa, [string]$kroki) {
   $raport = Join-Path $Robocze "raport-$nazwa.txt"
   if (Test-Path -LiteralPath $raport) { Remove-Item -LiteralPath $raport -Force }
@@ -371,7 +376,8 @@ $script:TestKroki = @(
   [void](Ocen-Raport 'nowa instalacja' $sc $r)
   $w = Wszystkie-Wywolania
   $kol = Kolejnosc $w
-  $ocz = 'zaleznosci:Sprawdz > modul-baza:Instaluj > zaleznosci:Instaluj > modul-lore:Instaluj > modul-lore:Instaluj > modul-wiedza:Instaluj > modul-kierownik:Instaluj > modul-skille:Instaluj > modul-kopia:Instaluj > wpisz-zasady:Proba=False'
+  # P64: programy PRZED baza (umowa P59b - baza wymaga gita)
+  $ocz = 'zaleznosci:Sprawdz > zaleznosci:Instaluj > modul-baza:Instaluj > modul-lore:Instaluj > modul-lore:Instaluj > modul-wiedza:Instaluj > modul-kierownik:Instaluj > modul-skille:Instaluj > modul-kopia:Instaluj > wpisz-zasady:Proba=False'
   Wynik 'nowa instalacja - kolejnosc skryptow' ($kol -eq $ocz) $kol
   $pot = @($w | Where-Object { $_ -like '*|zaleznosci|Instaluj|*' })
   Wynik 'nowa instalacja - lista programow jednym napisem' (($pot.Count -eq 1) -and ($pot[0] -like '*Potrzebne=git,node,uv,python|*')) "$($pot -join ' ')"
@@ -383,6 +389,7 @@ $script:TestKroki = @(
 # --- B. tryb zmiany --------------------------------------------------------------
 if (Chce 'zmiana') {
   $dom = Nowy-Dom 'zmiana'
+  Dom-Z-Baza $dom
   New-Item -ItemType Directory -Force -Path (Join-Path $dom '.claude\mr') | Out-Null
   [System.IO.File]::WriteAllText((Join-Path $dom '.claude\mr\instalacja.json'), '{"wersja":1,"moduly":{"wiedza":true,"lore":true,"kierownik":true,"skille":true,"kopia":false},"kopia":null,"narzedzia":{"claude":true,"codex":false,"opencode":false},"data":"2026-10-01 10:00:00"}', $Utf8)
   $kopie = Join-Path $Robocze 'kopie-zmiana'
@@ -417,11 +424,80 @@ $script:TestKroki = @(
   Wynik 'tryb zmiany - rejestr' $ok ($(if ($rej) { $rej | ConvertTo-Json -Compress -Depth 5 } else { 'brak pliku' }))
 }
 
+# --- B2. usuniecie calego MegaRuchacza (P64) -----------------------------------------
+# Przycisk "Usuń MegaRuchacza…": pytanie z polem danych, "Zostaw MegaRuchacza" cofa, a plan to Usun KAZDEGO
+# modulu (takze niezainstalowanego - sprzata resztki) i na koncu baza, bez kroku zasad i bez programow.
+if (Chce 'usun') {
+  $dom = Nowy-Dom 'usun'
+  Dom-Z-Baza $dom
+  New-Item -ItemType Directory -Force -Path (Join-Path $dom '.claude\mr') | Out-Null
+  [System.IO.File]::WriteAllText((Join-Path $dom '.claude\mr\instalacja.json'), '{"wersja":1,"moduly":{"wiedza":true,"lore":true,"kierownik":true,"skille":false,"kopia":false},"kopia":null,"narzedzia":{"claude":true,"codex":false,"opencode":false},"data":"2026-10-01 10:00:00"}', $Utf8)
+  $sc = Zapisz-Scenariusz 'usun' @'
+$script:TestKroki = @(
+  @{ N = 'wybor z karta usuwania'; Czekaj = { $script:Ekran -eq 'wybor' }; Sprawdz = { Tak ($script:BUsunWszystko -and ($script:BUsunWszystko.Text -eq 'Usuń MegaRuchacza…') -and ($script:ZnaczekZawsze.Text -eq 'jest')) "przycisk: $($script:BUsunWszystko.Text)" } },
+  @{ N = 'Usun MegaRuchacza'; Zrob = { $script:BUsunWszystko.PerformClick() } },
+  @{ N = 'pytanie o calosc'; Czekaj = { $script:Nakladka.Visible }; Zrzut = '21-usun-pytanie'; Sprawdz = { Tak ($script:PolePytania -and -not $script:PolePytania.Checked -and (-not $script:BDalej.Enabled)) 'pole danych odznaczone, przyciski okna zablokowane' } },
+  @{ N = 'zostaw w pytaniu'; Zrob = { $script:PrzyciskiPytania[1].PerformClick() }; Sprawdz = { Tak ((-not $script:Wybor.UsunWszystko) -and $script:Wybor.Moduly.wiedza -and ($script:LStopka.Text -eq 'Nic nie zmieniłeś.')) "Zostaw = nic sie nie zmienia" } },
+  @{ N = 'Usun MegaRuchacza z danymi'; Zrob = { $script:BUsunWszystko.PerformClick() } },
+  @{ N = 'pytanie 2'; Czekaj = { $script:Nakladka.Visible } },
+  @{ N = 'usun wszystko z danymi'; Zrob = { $script:PolePytania.Checked = $true; $script:PrzyciskiPytania[0].PerformClick() }; Zrzut = '22-usun-wybor'; Sprawdz = { $m = $script:Wybor.Moduly; Tak ($script:Wybor.UsunWszystko -and $script:Wybor.UsunDaneWszystko -and -not ($m.wiedza -or $m.lore -or $m.kierownik) -and ($script:ZnaczekZawsze.Text -eq 'usunę z danymi') -and ($script:BUsunWszystko.Text -eq 'Zostaw MegaRuchacza') -and $script:BDalej.Enabled) "znaczek bazy: $($script:ZnaczekZawsze.Text), przycisk: $($script:BUsunWszystko.Text)" } },
+  @{ N = 'Zostaw MegaRuchacza cofa'; Zrob = { $script:BUsunWszystko.PerformClick() }; Sprawdz = { $m = $script:Wybor.Moduly; Tak ((-not $script:Wybor.UsunWszystko) -and $m.wiedza -and $m.lore -and $m.kierownik -and ($script:ZnaczekZawsze.Text -eq 'jest')) 'stan jak na starcie' } },
+  @{ N = 'jeszcze raz usun'; Zrob = { $script:BUsunWszystko.PerformClick() } },
+  @{ N = 'pytanie 3'; Czekaj = { $script:Nakladka.Visible } },
+  @{ N = 'usun z danymi'; Zrob = { $script:PolePytania.Checked = $true; $script:PrzyciskiPytania[0].PerformClick() } },
+  @{ N = 'zaznaczenie czesci odwoluje usuwanie calosci'; Zrob = { $script:CheckboxyModulow.skille.Checked = $true }; Sprawdz = { Tak ((-not $script:Wybor.UsunWszystko) -and ($script:ZnaczekZawsze.Text -eq 'jest')) "UsunWszystko: $($script:Wybor.UsunWszystko)" } },
+  @{ N = 'odznacz skille'; Zrob = { $script:CheckboxyModulow.skille.Checked = $false } },
+  @{ N = 'usun calosc na koniec'; Zrob = { $script:BUsunWszystko.PerformClick() } },
+  @{ N = 'pytanie 4'; Czekaj = { $script:Nakladka.Visible } },
+  @{ N = 'usun z danymi 2'; Zrob = { $script:PolePytania.Checked = $true; $script:PrzyciskiPytania[0].PerformClick() } },
+  @{ N = 'zastosuj'; Zrob = { $script:BDalej.PerformClick() } },
+  @{ N = 'podsumowanie usuwania'; Czekaj = { $script:Ekran -eq 'podsumowanie' }; Zrzut = '23-usun-podsumowanie'; Sprawdz = { $ids = @($script:PlanDoWykonania | ForEach-Object { $_.Id }) -join ','; $dane = @($script:PlanDoWykonania | Where-Object { $_.PSObject.Properties['UsunDane'] -and $_.UsunDane }).Count; Tak (($ids -eq 'zapamietaj,kopia-Usun,skille-Usun,kierownik-Usun,wiedza-Usun,lore-Usun,baza-Usun') -and ($dane -eq 6) -and ($script:BDalej.Text -eq 'Tak, usuń')) "plan: $ids; z danymi: $dane; przycisk: $($script:BDalej.Text)" } },
+  @{ N = 'tak, usun'; Zrob = { $script:BDalej.PerformClick() } },
+  @{ N = 'gotowe po usunieciu'; Czekaj = { $script:Ekran -eq 'gotowe' }; Limit = 90; Zrzut = '24-usun-gotowe' }
+)
+'@
+  Wyczysc-Wywolania
+  $r = Uruchom-Ps $Okno (Argumenty-Okna $dom $sc.Plik $Atrapy) 240
+  [void](Ocen-Raport 'usuniecie calosci' $sc $r)
+  $w = Wszystkie-Wywolania
+  $kol = Kolejnosc $w
+  $ocz = 'modul-kopia:Usun > modul-skille:Usun > modul-kierownik:Usun > modul-wiedza:Usun > modul-lore:Usun > modul-baza:Usun'
+  Wynik 'usuniecie calosci - kolejnosc skryptow (bez programow i zasad)' ($kol -eq $ocz) $kol
+  $bezDanych = @($w | Where-Object { $_ -notlike '*UsunDane=True*' })
+  Wynik 'usuniecie calosci - kazdy skrypt z -UsunDane' (($w.Count -eq 6) -and ($bezDanych.Count -eq 0)) "$($bezDanych -join ' ')"
+  $rej = Czytaj-Rejestr $dom
+  Wynik 'usuniecie calosci - rejestr: wszystkie moduly wylaczone' ($rej -and -not ($rej.moduly.wiedza -or $rej.moduly.lore -or $rej.moduly.kierownik -or $rej.moduly.skille -or $rej.moduly.kopia)) ($(if ($rej) { $rej.moduly | ConvertTo-Json -Compress } else { 'brak pliku' }))
+}
+
+# --- B3. tryb zmiany bez bazy (P64): zapis instalacji jest, hooka straznika nie ma ----------
+if (Chce 'bezbazy') {
+  $dom = Nowy-Dom 'bezbazy'
+  New-Item -ItemType Directory -Force -Path (Join-Path $dom '.claude\mr') | Out-Null
+  [System.IO.File]::WriteAllText((Join-Path $dom '.claude\mr\instalacja.json'), '{"wersja":1,"moduly":{"wiedza":false,"lore":false,"kierownik":false,"skille":false,"kopia":false},"kopia":null,"narzedzia":null,"baza":false,"data":"2026-10-01 10:00:00"}', $Utf8)
+  $sc = Zapisz-Scenariusz 'bezbazy' @'
+$script:TestKroki = @(
+  @{ N = 'wybor po usunieciu'; Czekaj = { $script:Ekran -eq 'wybor' }; Zrzut = '25-bez-bazy-wybor'; Sprawdz = { Tak (($script:Tryb -eq 'zmiana') -and (-not $script:BazaJest) -and ($script:ZnaczekZawsze.Text -eq '') -and (-not $script:BDalej.Enabled) -and ($script:BUsunWszystko.Text -eq 'Posprzątaj resztki…')) "baza $($script:BazaJest), znaczek '$($script:ZnaczekZawsze.Text)', przycisk '$($script:BUsunWszystko.Text)', stopka: $($script:LStopka.Text)" } },
+  @{ N = 'zaznacz kierownika'; Zrob = { $script:CheckboxyModulow.kierownik.Checked = $true }; Sprawdz = { Tak (($script:ZnaczekZawsze.Text -eq 'dodam') -and $script:BDalej.Enabled) "znaczek bazy: $($script:ZnaczekZawsze.Text)" } },
+  @{ N = 'zastosuj'; Zrob = { $script:BDalej.PerformClick() } },
+  @{ N = 'podsumowanie z baza'; Czekaj = { ($script:Ekran -eq 'podsumowanie') -and $script:Sprawdzenie -and ($script:Sprawdzenie.Zadanie.Stan -ne 'trwa') }; Zrzut = '26-bez-bazy-podsumowanie'; Sprawdz = { $ids = @($script:PlanDoWykonania | ForEach-Object { $_.Id }) -join ','; Tak ($ids -eq 'zapamietaj,zaleznosci-Instaluj,baza-Instaluj,kierownik-Instaluj,zasady') "plan: $ids" } },
+  @{ N = 'tak, zastosuj'; Zrob = { $script:BDalej.PerformClick() } },
+  @{ N = 'gotowe'; Czekaj = { $script:Ekran -eq 'gotowe' }; Limit = 90 }
+)
+'@
+  Wyczysc-Wywolania
+  $r = Uruchom-Ps $Okno (Argumenty-Okna $dom $sc.Plik $Atrapy) 180
+  [void](Ocen-Raport 'tryb zmiany bez bazy' $sc $r)
+  $w = Wszystkie-Wywolania
+  $pot = @($w | Where-Object { $_ -like '*|zaleznosci|Instaluj|*' })
+  Wynik 'tryb zmiany bez bazy - git wsrod programow (baza go wymaga)' (($pot.Count -eq 1) -and ($pot[0] -like '*Potrzebne=git,node|*')) "$($pot -join ' ')"
+}
+
 # --- C. zmiana bez rejestru (instalacja sprzed rejestru) -----------------------------
 # Komputer z kopia zapasowa sprzed rejestru (jak biuro): ustawienia kopii maja przyjsc z
 # narzedzia\kopia-zapasowa-domyslne.json (cel, zrodla, 7 wykluczen) i trafic do rejestru bez zmian (P59d).
 if (Chce 'bezrejestru') {
   $dom = Nowy-Dom 'bezrejestru'
+  Dom-Z-Baza $dom
   New-Item -ItemType Directory -Force -Path (Join-Path $dom '.claude\mr') | Out-Null
   [System.IO.File]::WriteAllText((Join-Path $dom '.claude\.megaruchacz-global'), "zrodlo: $Repo`r`nwersja: 0.25.2`r`n", $Utf8)
   $backup = Join-Path $Robocze 'Backup'
@@ -508,7 +584,7 @@ $script:TestKroki = @(
   @{ N = 'ponow 2'; Zrob = { $script:BPonow.PerformClick() } },
   @{ N = 'smieci zamiast JSON = blad'; Czekaj = { ($script:PlanStan -eq 'blad') -and ($script:Plan[$script:PlanIndeks].Proby -eq 3) }; Limit = 60; Sprawdz = { Tak ($script:LBleduTresc.Text -like '*nie umiem odczytać*') "$($script:LBleduTresc.Text)" } },
   @{ N = 'ponow 3'; Zrob = { $script:BPonow.PerformClick() } },
-  @{ N = 'czwarte podejscie przechodzi'; Czekaj = { ($script:Plan[1].Stan -eq 'ok') }; Limit = 60; Sprawdz = { Tak ($script:Plan[1].Proby -eq 4) "podejsc: $($script:Plan[1].Proby)" } },
+  @{ N = 'czwarte podejscie przechodzi'; Czekaj = { (@($script:Plan | Where-Object { $_.Id -eq 'baza-Instaluj' })[0].Stan -eq 'ok') }; Limit = 60; Sprawdz = { $b = @($script:Plan | Where-Object { $_.Id -eq 'baza-Instaluj' })[0]; Tak ($b.Proby -eq 4) "podejsc: $($b.Proby)" } },
   @{ N = 'reszta do konca'; Czekaj = { ($script:PlanStan -eq 'blad') -or ($script:Ekran -eq 'gotowe') }; Limit = 90; Zrob = { if ($script:PlanStan -eq 'blad') { $script:BPonow.PerformClick() } } },
   @{ N = 'gotowe'; Czekaj = { $script:Ekran -eq 'gotowe' }; Limit = 90 }
 )

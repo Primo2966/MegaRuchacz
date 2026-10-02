@@ -114,6 +114,26 @@ function Wykryj-Narzedzia {
   return $wynik
 }
 
+# Czy stoi baza (aplikacja przy zegarze + aktualizacje): hook straznika w ~\.claude\settings.json.
+# To on pilnuje zasad i hookow przy kazdym starcie sesji; bez niego tryb zmiany musi baze dolozyc
+# (modul-baza.ps1 -Akcja Instaluj), zanim cokolwiek doda - np. po usunieciu calego MegaRuchacza
+# z zachowanym zapisem albo gdy ktos zdjal hook recznie. Do P64 tryb zmiany bazy nie wolal nigdy.
+function Baza-Jest {
+  $p = Join-Path $script:Dom '.claude\settings.json'
+  if (Test-Path -LiteralPath $p) {
+    try { if ([System.IO.File]::ReadAllText($p) -match 'straznik-zasad\.ps1') { return $true } }
+    catch { Zapisz-Dziennik "nie odczytalem $p ($($_.Exception.Message)) - licze, ze baza jest"; return $true }
+  }
+  # Komputer z samym Codeksem nie ma hooka straznika w ~\.claude - baze widac tam po zadaniu nadzorcy.
+  # Harmonogram jest jeden na komputer: przy podstawionym katalogu domowym (testy) zadanie nic o tym
+  # domu nie mowi, wiec wtedy liczy sie sam hook.
+  if ($script:Dom.TrimEnd('\') -ieq ([Environment]::GetFolderPath('UserProfile')).TrimEnd('\')) {
+    try { if (Get-ScheduledTask -TaskName 'MegaRuchaczNadzorca' -ErrorAction SilentlyContinue) { return $true } }
+    catch { Zapisz-Dziennik "nie sprawdzilem zadania nadzorcy ($($_.Exception.Message)) - licze, ze bazy nie ma" }
+  }
+  return $false
+}
+
 # Czy MegaRuchacz juz jest: rejestr instalacji, a bez niego slady starej instalacji
 # (znacznik trybu globalnego albo blok zasad MegaRuchacza w pliku instrukcji).
 function Wykryj-Instalacje {
@@ -310,8 +330,20 @@ function Policz-Zmiany {
   # Lore usuwane przy zostajacej Wiedzy samo zostawia rdzen, z ktorego Wiedza czyta (modul-lore.ps1,
   # P59b), a usuniecia ida przed instalacjami - zadnego dodatkowego kroku dla Wiedzy.
   $kopiaZm = [bool](($zostaje -contains 'kopia') -and (Kopia-Zmieniona))
-  $cos = [bool](($dodaj.Count + $usun.Count) -gt 0 -or $kopiaZm)
-  return [pscustomobject]@{ Dodaj = $dodaj; Usun = $usun; Zostaje = $zostaje; Nie = $nie; KopiaZmieniona = $kopiaZm; Cokolwiek = $cos }
+  # Usuniecie calego MegaRuchacza (przycisk w trybie zmiany) i dolozenie brakujacej bazy (P64).
+  $wszystko = [bool]$script:Wybor.UsunWszystko
+  $dodajBaze = [bool](($script:Tryb -eq 'zmiana') -and (-not $wszystko) -and (-not $script:BazaJest) -and (($dodaj.Count + $zostaje.Count) -gt 0))
+  $cos = [bool](($dodaj.Count + $usun.Count) -gt 0 -or $kopiaZm -or $wszystko -or $dodajBaze)
+  return [pscustomobject]@{ Dodaj = $dodaj; Usun = $usun; Zostaje = $zostaje; Nie = $nie; KopiaZmieniona = $kopiaZm; Cokolwiek = $cos
+    UsunWszystko = $wszystko; DodajBaze = $dodajBaze }
+}
+
+# Dane, ktore znikna z "usun tez moje dane" przy usuwaniu calego MegaRuchacza - tylko czesci,
+# ktore cos na tym komputerze trzymaja (kierownik nie trzyma).
+function Opis-Danych-Wszystkich {
+  $l = @()
+  foreach ($id in $script:MODULY.Keys) { if ($script:MODULY[$id].Dane) { $l += $script:MODULY[$id].Dane } }
+  return ($l -join '; ')
 }
 
 function Do-Instalacji($zm) {
@@ -383,13 +415,32 @@ function Zadanie-Zaleznosci([string]$akcja, $programy) {
   return (Nowe-Zadanie -Id "zaleznosci-$akcja" -Napis "Programy potrzebne do działania: $(Nazwy-Programow $programy)" -Plik (Sciezka-Skryptu 'zaleznosci.ps1') -Argumenty $a -Umowa $true)
 }
 
+# KOLEJNOSC (umowa P59b, raport P59b sekcja 1): zaleznosci PRZED baza - baza wymaga gita, a do P64
+# okno wolalo baze przed zaleznosci.ps1, wiec na komputerze bez gita krok bazy padal zawsze, takze
+# po "Sprobuj ponownie". Usuniecia ida przed doinstalowaniem programow (nie potrzebuja ich).
 function Zbuduj-Plan {
   $zm = Policz-Zmiany
   $script:ZmianyPlanu = $zm
   $plan = New-Object System.Collections.ArrayList
   [void]$plan.Add((Nowe-Zadanie -Id 'zapamietaj' -Napis 'Zapamiętuję Twój wybór' -Wewnetrzne { param($z) Zapamietaj-Wybor }))
   $nowa = ($script:Tryb -eq 'nowy')
-  if ($nowa) { [void]$plan.Add((Zadanie-Modulu 'baza' 'Instaluj' $false (Nazwa-Modulu 'baza'))) }
+  if ($zm.UsunWszystko) {
+    # Cale odinstalowanie (umowa P59b, pkt 5): Usun KAZDEGO modulu - takze niezainstalowanego, bo
+    # Usun na takim jest nieszkodliwy, sprzata resztki starszych wersji, a z -UsunDane zdejmuje dane
+    # zostawione przy wczesniejszym usuwaniu - na koncu baza (odmawia, dopoki jakis modul jest
+    # wlaczony). Bez kroku zasad: baza zdejmuje bloki sama. Zapis instalacji zostaje z "baza":
+    # false (modul-baza.ps1) - po nim okno wie, ze bazy nie ma, a straznik niczego nie doklada.
+    $dane = [bool]$script:Wybor.UsunDaneWszystko
+    foreach ($id in $script:KOLEJNOSC_USUWANIA) {
+      if ($script:Obecne[$id]) { $n = "Usuwam: $(Nazwa-Modulu $id)" }
+      elseif ($dane -and $script:MODULY[$id].Dane) { $n = "Usuwam pozostałe dane: $(Nazwa-Modulu $id)" }
+      else { $n = "Sprzątam resztki: $(Nazwa-Modulu $id)" }
+      if ($dane -and $script:Obecne[$id] -and $script:MODULY[$id].Dane) { $n += ' (razem z danymi)' }
+      [void]$plan.Add((Zadanie-Modulu $id 'Usun' $dane $n))
+    }
+    [void]$plan.Add((Zadanie-Modulu 'baza' 'Usun' $dane "Usuwam: $(Nazwa-Modulu 'baza')"))
+    return ,$plan
+  }
   foreach ($id in (Po-Kolei $zm.Usun $script:KOLEJNOSC_USUWANIA)) {
     $dane = [bool]$script:Wybor.UsunDane[$id]
     $n = "Usuwam: $(Nazwa-Modulu $id)"
@@ -397,8 +448,11 @@ function Zbuduj-Plan {
     [void]$plan.Add((Zadanie-Modulu $id 'Usun' $dane $n))
   }
   $inst = Do-Instalacji $zm
-  $prog = Programy-Dla $inst $nowa
+  $zBaza = ($nowa -or $zm.DodajBaze)
+  $prog = Programy-Dla $inst $zBaza
   if ($prog.Count -gt 0) { [void]$plan.Add((Zadanie-Zaleznosci 'Instaluj' $prog)) }
+  if ($nowa) { [void]$plan.Add((Zadanie-Modulu 'baza' 'Instaluj' $false (Nazwa-Modulu 'baza'))) }
+  elseif ($zm.DodajBaze) { [void]$plan.Add((Zadanie-Modulu 'baza' 'Instaluj' $false "Dodaję: $(Nazwa-Modulu 'baza')")) }
   foreach ($id in $inst) {
     $n = Nazwa-Modulu $id
     if (($id -eq 'kopia') -and $zm.KopiaZmieniona) { $n = 'Kopia zapasowa: nowe ustawienia' }

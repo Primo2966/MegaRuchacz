@@ -13,8 +13,9 @@
 #     (brak pliku znaczy tam "wszystko wlaczone" - tak jak bylo)
 #   - zdejmuje stare zadania (MegaRuchaczOdswiez, LoreCykl i spolka)
 # Usun: tylko gdy zaden modul nie jest juz wlaczony - inaczej zostalyby bez straznika i nadzorcy.
-#   Zdejmuje hooki MegaRuchacza (cudze zostaja), nadzorce, LoreKoszt i blok zasad MegaRuchacz:start.
-#   -UsunDane dodatkowo pliki stanu straznika w ~\.claude (.megaruchacz-*). Rejestr zostaje.
+#   Zdejmuje hooki MegaRuchacza (cudze zostaja), nadzorce, LoreKoszt i bloki zasad MegaRuchacza.
+#   -UsunDane dodatkowo pliki stanu straznika w ~\.claude (.megaruchacz-*). Rejestr zostaje
+#   z "baza": false (P64) - slad, dzieki ktoremu straznik niczego nie doklada z powrotem.
 #
 # Uzycie (umowa wyjscia - naglowek wspolne.ps1):
 #   powershell -NoProfile -ExecutionPolicy Bypass -File narzedzia\instalacja\modul-baza.ps1
@@ -116,9 +117,14 @@ try {
         Plan "zalozylbym rejestr modulow $(Sciezka-Instalacji $KatalogDomowy) - wszystkie moduly wylaczone, do wlaczenia w oknie"
       } else {
         foreach ($n in (Moduly-MegaRuchacza)) { $rej.moduly | Add-Member -NotePropertyName $n -NotePropertyValue $false -Force }
+        $rej | Add-Member -NotePropertyName baza -NotePropertyValue $true -Force
         Zapisz-Instalacje $rej $KatalogDomowy
         Krok "zalozony rejestr modulow $(Sciezka-Instalacji $KatalogDomowy) - zaden modul jeszcze nie jest wlaczony"
       }
+    } elseif ($rej.baza -ne $true) {
+      # Slad po usunieciu calego MegaRuchacza (baza = false, P64) - baza wraca, a z nia straznik.
+      if ($Proba) { Plan "zapisalbym w rejestrze modulow: baza znowu jest" }
+      else { Ustaw-Baze $true $KatalogDomowy; Krok "rejestr modulow: baza znowu jest (MegaRuchacz byl wczesniej usuniety z tego komputera)" }
     }
 
     # 2. hook straznika
@@ -177,6 +183,13 @@ try {
     Zakoncz $false ("baza zostaje, bo wlaczone sa moduly: " + ($wlaczone -join ", ") + "$skad - najpierw je usun (modul-<nazwa>.ps1 -Akcja Usun)") @{ rejestr = (Rejestr-Do-Wyniku $rej $KatalogDomowy) }
   }
   $ok = $true
+  # Slad odinstalowania w rejestrze (stan.ps1, P64): straznik wywolany potem z jakiegos projektu nie
+  # uzna tego za instalacje globalna i nie dolozy swojego hooka. Przed zdejmowaniem - gdyby cos
+  # dalej sie nie udalo, slad i tak stoi. Bez pliku rejestru (instalacja sprzed niego) nie ma gdzie.
+  if ($rej.zrodlo -eq "plik") {
+    if ($Proba) { Plan "zapisalbym w rejestrze modulow: baza usunieta (zeby nic nie wrocilo samo)" }
+    else { Ustaw-Baze $false $KatalogDomowy; Krok "rejestr modulow: baza usunieta - plik rejestru zostaje jako slad, zeby straznik niczego nie dokladal z powrotem" }
+  }
   $h = Napraw-Hooki $Zrodlo $KatalogDomowy -Usun
   if (-not $h.Ok) { $ok = $false; Ostrzezenie "hooki MegaRuchacza w $Ustawienia nie zostaly zdjete: $(Sedno $h.Tekst)" }
   elseif (-not $Proba) { Krok "zdjete hooki MegaRuchacza z $Ustawienia (cudze zostaly)" }
@@ -184,7 +197,9 @@ try {
   $arg = @("-Zrodlo", $Zrodlo, "-Usun")
   if ($Proba) { $arg += "-Proba" }
   $w = Uruchom-Skrypt $Zasobnik $arg 120
-  Przekaz-Uwagi $w.Tekst "nadzorca"
+  # "nikt nie pilnuje cyklu wiedzy" z zainstaluj-zasobnik -Usun: baza znika tylko przy wylaczonej wiedzy,
+  # wiec cyklu nie ma - w "Do sprawdzenia" okna bylby to falszywy alarm (proba calosci P64).
+  Przekaz-Uwagi (@($w.Tekst -split "`r?`n" | Where-Object { $_ -notmatch 'nikt nie pilnuje cyklu wiedzy' }) -join "`n") "nadzorca"
   if ($w.Kod -ne 0) { $ok = $false; Ostrzezenie "nadzorca nie zostal zdjety: $(Sedno $w.Tekst)" }
   elseif ($Proba) { Plan "zamknalbym nadzorce i zdjal zadanie $($script:ZadanieNadzorcy)" }
   else { Krok "nadzorca zamkniety, zadanie $($script:ZadanieNadzorcy) zdjete" }

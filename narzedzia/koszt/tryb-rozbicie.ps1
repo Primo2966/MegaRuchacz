@@ -158,7 +158,12 @@ function Tryb-Rozbicie {
   # Naglowek stoi tu ZAWSZE, takze bez ani jednej liczby: zniknal 2026-09-17
   # i przez to rachunek milczal o calym trzecim rodzaju kosztu.
   $naglowekCyklu = "RAZ NA DOBE - uczenie sie na wczesniejszych rozmowach"
-  if (-not $cykl) {
+  if ($script:WiedzaWylaczona) {
+    # P64: modul wiedza odznaczony w instalatorze - nauki nie ma, wiec nie ma czego liczyc ani na co czekac
+    # (stary plik kosztu z czasow, gdy byla, tez nic dzis nie mowi).
+    $blok += Kubelek-Niezmierzony $naglowekCyklu "nie ma" `
+      "modul Wiedza nie jest zainstalowany (rejestr instalacji) - nauka z rozmow nie chodzi i nic nie kosztuje"
+  } elseif (-not $cykl) {
     $blok += Kubelek-Niezmierzony $naglowekCyklu "jeszcze nie liczone" `
       "cykl nie mial okazji sie odpalic (brak $(Sciezka-Ludzka $plikCyklKoszt))"
   } elseif ($null -eq $cykl.Tokeny) {

@@ -316,7 +316,10 @@ function Raport-Pelny {
   Linia "  cykl dzienny wola model, zeby przeczytal wczorajsze rozmowy i wylowil z nich"
   Linia "  fakty. Dlatego nie dodajemy go do tamtych - to osobne pieniadze, placone raz"
   Linia "  na dobe, a zsumowane sugerowalyby, ze tyle kosztuje kazda sesja."
-  if (-not $cykl) {
+  if ($script:WiedzaWylaczona) {
+    # P64: modul wiedza odznaczony w instalatorze - nauki nie ma z wyboru, a nie z braku przebiegu
+    Linia "  Modul Wiedza nie jest zainstalowany (rejestr instalacji) - cykl wiedzy nie chodzi i nic nie kosztuje."
+  } elseif (-not $cykl) {
     Linia "  Cykl jeszcze nie liczyl kosztu - nie ma pliku $plikCyklKoszt."
     Linia "  To normalny stan, nie awaria: liczba pojawi sie po pierwszym przebiegu cyklu,"
     Linia "  ktory wylowi fakty (narzedzia\cykl-dzienny.ps1)."

@@ -1258,8 +1258,11 @@ function Nanies-Poprawki($zrodlo, $projekt) {
 $PlikZnacznikaGlobalnego = Join-Path $KatalogDomowy ".claude\.megaruchacz-global"
 # Instalacja globalna: znacznik instaluj-globalnie.ps1 albo (od P59a) rejestr instalatora
 # z wyborem modulow - straznik (baza) jest w nim zawsze, wiec rejestr tez znaczy "globalnie".
+# Wyjatek (P64): rejestr z "baza": false to slad po usunieciu calego MegaRuchacza - wtedy NIE
+# globalnie, bo inaczej straznik wywolany z jakiegos projektu dolozylby z powrotem swoj hook.
 function Jest-Globalna {
   if (Test-Path $PlikZnacznikaGlobalnego) { return $true }
+  if (Baza-Usunieta) { return $false }
   return ($script:Instalacja.zrodlo -in @("plik", "awaryjne"))
 }
 
@@ -1407,10 +1410,11 @@ function Wzory-Hookow-Globalnych($zrodlo, $domClaude) {
   $straznik = 'powershell -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "' + $r +
               '/narzedzia/straznik-zasad.ps1" -Zrodlo "' + $r + '" -Projekt "$CLAUDE_PROJECT_DIR" || true'
   $przypomnienie = 'node "' + $r + '/narzedzia/przypomnienie.js" "' + $przyp + '" || cat "' + $przyp + '"'
-  $wzory = @(
-    [pscustomobject]@{ zdarzenie = "SessionStart"; rodzaj = "straznik"
+  $wzory = @()
+  if ((Rodzaje-Hookow-Wylaczone) -notcontains "straznik") {
+    $wzory += [pscustomobject]@{ zdarzenie = "SessionStart"; rodzaj = "straznik"
       hook = [pscustomobject]@{ type = "command"; command = $straznik; shell = "bash"; timeout = 15; statusMessage = "MegaRuchacz: straznik zasad" } }
-  )
+  }
   if ((Rodzaje-Hookow-Wylaczone) -notcontains "przypomnienie") {
     $wzory += [pscustomobject]@{ zdarzenie = "UserPromptSubmit"; rodzaj = "przypomnienie"
       hook = [pscustomobject]@{ type = "command"; command = $przypomnienie; shell = "bash"; timeout = 5 } }
@@ -1426,11 +1430,19 @@ function Wzory-Hookow-Globalnych($zrodlo, $domClaude) {
 
 # Rodzaje NASZYCH hookow globalnych, ktore maja zniknac, bo ich moduly sa wylaczone w rejestrze
 # (Rodzaj-Hooka). Rejestr nieczytelny albo go brak = pusta lista - wtedy nic nie znika.
+# Hook straznika nalezy do bazy: znika tylko przy "baza": false (usuniety caly MegaRuchacz, P64) -
+# inaczej skrypty modulow wolane przy sprzataniu po odinstalowaniu (-NaprawGlobalne) kladlyby go z powrotem.
 function Rodzaje-Hookow-Wylaczone {
   $w = @()
   if ((Modul-Wylaczony "kierownik") -and (Modul-Wylaczony "wiedza") -and (Modul-Wylaczony "lore")) { $w += "przypomnienie" }
   if (Modul-Wylaczony "kierownik") { $w += "rejestr" }
+  if (Baza-Usunieta) { $w += "straznik" }
   return $w
+}
+
+# Rejestr czytelny i z "baza": false - slad po usunieciu calego MegaRuchacza (stan.ps1, P64).
+function Baza-Usunieta {
+  return ((-not $script:Instalacja.blad) -and ($script:Instalacja.zrodlo -eq "plik") -and ($script:Instalacja.baza -eq $false))
 }
 
 function Wzor-Dla($wzory, $zdarzenie, $rodzaj) {

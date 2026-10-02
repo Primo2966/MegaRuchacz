@@ -480,6 +480,10 @@ function Scenariusz-Wiedza {
   $dom5 = Dom "wiedza-kierownik"
   [System.IO.File]::WriteAllText((Join-Path $dom5 ".claude\CLAUDE.md"), "# Ustalenia globalne`n`n<!-- MegaRuchacz:kierownik:start -->`n# MegaRuchacz - kierownik`n<!-- MegaRuchacz:kierownik:koniec -->`n")
   [void](Modul "baza" "Instaluj" $dom5 @("-BezStartu"))   # rejestr: bez niego lore liczy sie jako wlaczone (indeks z wektorami)
+  # Rejestr zgodny z plikiem: blok kierownika stoi, wiec kierownik wlaczony. Od P64 Po-Zmianie-Rejestru wola
+  # straznik -Dopasuj, a ten blok kierownika wylaczonego w rejestrze zdejmuje od razu (tak jak przy starcie sesji).
+  . (Join-Path $Repo "narzedzia\instalacja\stan.ps1")
+  Ustaw-Modul "kierownik" $true $dom5
   $r = Modul "wiedza" "Instaluj" $dom5
   $wyglad = [System.IO.File]::ReadAllText((Join-Path $dom5 ".claude\CLAUDE.md"))
   $iCw = $wyglad.IndexOf("## Co wiem"); $iK = $wyglad.IndexOf("<!-- MegaRuchacz:kierownik:start -->"); $iDane = $wyglad.IndexOf("### Dane referencyjne")
@@ -487,6 +491,7 @@ function Scenariusz-Wiedza {
   Sprawdz "wiedza: dom z blokiem kierownika - szkielet nad nim, bez pustego starego bloku MegaRuchacz:start" (($r.Kod -eq 0) -and ($iCw -ge 0) -and ($iCw -lt $iK) -and ($miedzy -notmatch "MegaRuchacz:start")) $wyglad
   [void](Czekaj-Na-Tlo)
   $r = Modul "wiedza" "Usun" $dom5
+  Ustaw-Modul "kierownik" $false $dom5   # baza odmawia, dopoki jakis modul jest wlaczony
   [void](Modul "baza" "Usun" $dom5)
   Sprawdz "wiedza: po przypadku z blokiem kierownika sprzatniete (zadanie LoreIndex zdjete)" (($r.Kod -eq 0) -and -not (Zadanie "LoreIndex")) $r.Tekst
   # wyzerowany CLAUDE.md (zanik pradu) = odmowa, plik nietkniety, bez kopii zer

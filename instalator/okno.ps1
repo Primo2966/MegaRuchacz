@@ -14,7 +14,8 @@
 #                z obecnym stanem -> podsumowanie -> zmiany -> gotowe. Odznaczenie zainstalowanej
 #                czesci pyta w oknie, z polem "usun tez moje dane" (domyslnie odznaczonym).
 #
-# KOLEJNOSC (umowa P59c z P59b): baza -> zaleznosci.ps1 -> wybrane moduly -> wpisz-zasady.ps1.
+# KOLEJNOSC (umowa P59c z P59b, od P64): usuniecia -> zaleznosci.ps1 -> baza (nowa instalacja albo tryb
+#   zmiany bez bazy) -> wybrane moduly -> wpisz-zasady.ps1. "Usuń MegaRuchacza…": Usun kazdego modulu -> baza Usun.
 #   narzedzia\instalacja\modul-<baza|wiedza|lore|kierownik|skille|kopia>.ps1 -Akcja Instaluj|Usun
 #     -KatalogDomowy <kat> -Zrodlo <repo> [-Proba] [-UsunDane]
 #   narzedzia\instalacja\zaleznosci.ps1 -Akcja Sprawdz|Instaluj -Potrzebne "uv,python,git,node" [-Proba]
@@ -240,8 +241,12 @@ function Ustal-Stan-Poczatkowy {
   }
   $zestaw = 'wlasny'
   if (@($mod.Values | Where-Object { -not $_ }).Count -eq 0) { $zestaw = 'wszystko' }
-  $script:Wybor = [pscustomobject]@{ Moduly = $mod; UsunDane = @{}; KopiaCel = $kp.Cel; KopiaZrodla = $kp.Zrodla; KopiaWykluczenia = $kp.Wykluczenia; Zestaw = $zestaw; Wlasny = $null }
-  Zapisz-Dziennik "stan poczatkowy: tryb $($script:Tryb), rejestr $($script:Instalacja.zrodlo), obecne $((@($script:Obecne.Keys | Sort-Object | ForEach-Object { "$_=$($script:Obecne[$_])" })) -join ' '), kopia -> $($kp.Cel) ($($kp.Skad), wykluczen $(@($kp.Wykluczenia).Count))"
+  # UsunWszystko: przycisk "Usuń MegaRuchacza" w trybie zmiany (P64) - razem z baza; zapis instalacji
+  # zostaje z "baza": false. BazaJest: hook straznika albo zadanie nadzorcy (dane.ps1 Baza-Jest).
+  $script:Wybor = [pscustomobject]@{ Moduly = $mod; UsunDane = @{}; KopiaCel = $kp.Cel; KopiaZrodla = $kp.Zrodla; KopiaWykluczenia = $kp.Wykluczenia; Zestaw = $zestaw; Wlasny = $null
+    UsunWszystko = $false; UsunDaneWszystko = $false }
+  $script:BazaJest = Baza-Jest
+  Zapisz-Dziennik "stan poczatkowy: tryb $($script:Tryb), rejestr $($script:Instalacja.zrodlo), baza $($script:BazaJest), obecne $((@($script:Obecne.Keys | Sort-Object | ForEach-Object { "$_=$($script:Obecne[$_])" })) -join ' '), kopia -> $($kp.Cel) ($($kp.Skad), wykluczen $(@($kp.Wykluczenia).Count))"
 }
 
 # Narzedzia wykrywane PRZED czymkolwiek, co pisze w katalogu domowym.

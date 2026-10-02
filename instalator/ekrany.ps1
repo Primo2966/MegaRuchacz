@@ -661,6 +661,17 @@ function Ekran-Wybor($root) {
   else { Ustaw-Podtytul 'Zaznacz, co chcesz mieć. Później możesz to zmienić - wystarczy uruchomić instalator jeszcze raz.' }
   if ($script:Instalacja.blad) { $root.Controls.Add((Karta-Bledu-Rejestru)) }
   elseif ($zmiana -and ($script:Instalacja.zrodlo -eq 'domyslne')) { $root.Controls.Add((Karta-Bez-Rejestru)) }
+  elseif ($zmiana -and (-not $script:BazaJest) -and (@($script:MODULY.Keys | Where-Object { $script:Obecne[$_] }).Count -eq 0)) {
+    # Po usunieciu calego MegaRuchacza zapis instalacji zostaje (baza = false) - okno otwiera sie
+    # wtedy w trybie zmiany z pustym wyborem; jedno zdanie, co tu sie dzieje (P64).
+    $kb = Nowa-Karta $script:SzerKarty $script:TloUwaga
+    $kb.Padding = New-Object System.Windows.Forms.Padding(22, 12, 22, 12)
+    $kb.Controls.Add((Etykieta-Zawijana 'MegaRuchacza nie ma teraz na tym komputerze' $script:CzZwyklaGruba $script:KolUwaga $script:SzerWnetrza))
+    $lb = Etykieta-Zawijana 'Został usunięty wcześniej. Zaznacz, co chcesz mieć z powrotem - zainstaluję to razem z aplikacją przy zegarze i automatycznymi aktualizacjami. Jeśli przy usuwaniu dane zostały na dysku, wrócą.' $script:CzZwykla $script:KolTekst $script:SzerWnetrza
+    $lb.Margin = New-Object System.Windows.Forms.Padding(0, 2, 0, 0)
+    $kb.Controls.Add($lb)
+    $root.Controls.Add($kb)
+  }
   $szw = $script:SzerWnetrza
   $k = Nowa-Karta $script:SzerKarty
   $k.Padding = New-Object System.Windows.Forms.Padding(22, 14, 22, 8)
@@ -696,6 +707,8 @@ function Ekran-Wybor($root) {
     }
   }
   $root.Controls.Add($k)
+  $script:BUsunWszystko = $null
+  if ($zmiana) { $root.Controls.Add((Karta-Usuwania-Calosci)) }
   if ($zmiana) {
     Ustaw-Przyciski -Anuluj 'Anuluj' -Dalej 'Zastosuj zmiany' -PoAnuluj { Zamknij-Okno } -PoDalej { Pokaz-Ekran 'podsumowanie' }
   } else {
@@ -798,8 +811,88 @@ function Wiersz-Zawsze {
   $d.Margin = New-Object System.Windows.Forms.Padding(0, 2, 10, 0)
   $s = Znaczek-Stanu
   if ($script:Tryb -eq 'zmiana') { $s.Text = 'jest' }
+  # Znaczek bazy zmienia sie z wyborem (Odswiez-Wybor): "usunę" przy usuwaniu calego MegaRuchacza,
+  # "dodam", gdy bazy brakuje (P64).
+  $script:ZnaczekZawsze = $s
   $t.Controls.Add($n, 0, 0); $t.Controls.Add($d, 1, 0); $t.Controls.Add($s, 2, 0)
   return $t
+}
+
+# Usuniecie calego MegaRuchacza (P64; umowa P59b: Usun kazdego modulu, na koncu baza). Osobna karta
+# pod wyborem, bo odznaczenie wszystkich czesci zostawia aplikacje przy zegarze i aktualizacje -
+# tu znika takze ona. Zwykly (szary) przycisk: sam niczego nie zabiera, pyta w oknie; czerwony jest
+# dopiero "Usuń wszystko" w pytaniu, a i tak nic sie nie dzieje przed "Zastosuj zmiany".
+function Karta-Usuwania-Calosci {
+  $szw = $script:SzerWnetrza
+  $k = Nowa-Karta $script:SzerKarty
+  $k.Padding = New-Object System.Windows.Forms.Padding(22, 12, 22, 12)
+  $w = Poziomy
+  $b = Nowy-Przycisk 'Usuń MegaRuchacza…' 210
+  $b.Margin = New-Object System.Windows.Forms.Padding(0, 0, 14, 0)
+  $b.Add_Click({ try { Przelacz-Usuwanie-Calosci } catch { Zanotuj-Wywrotke "przycisk Usun MegaRuchacza" $_ } })
+  $script:BUsunWszystko = $b
+  $script:LUsunWszystko = Etykieta-Zawijana '' $script:CzMala $script:KolSzary ($szw - 224)
+  $script:LUsunWszystko.Margin = New-Object System.Windows.Forms.Padding(0, 1, 0, 0)
+  $w.Controls.Add($b); $w.Controls.Add($script:LUsunWszystko)
+  $k.Controls.Add($w)
+  return $k
+}
+
+function Odswiez-Usuwanie-Calosci {
+  if (-not $script:BUsunWszystko -or $script:BUsunWszystko.IsDisposed) { return }
+  if ($script:Wybor.UsunWszystko) {
+    $script:BUsunWszystko.Text = 'Zostaw MegaRuchacza'
+    $t = '„Zastosuj zmiany” usunie MegaRuchacza z tego komputera'
+    if ($script:Wybor.UsunDaneWszystko) { $t += ' razem z Twoimi danymi.' } else { $t += ' - Twoje dane zostaną na dysku.' }
+    Ustaw-Tekst $script:LUsunWszystko $t $script:KolPilne
+  } elseif ((-not $script:BazaJest) -and (@($script:MODULY.Keys | Where-Object { $script:Obecne[$_] }).Count -eq 0)) {
+    # MegaRuchacz juz usuniety (zapis z "baza": false) - zostaje sprzatanie resztek i danych.
+    $script:BUsunWszystko.Text = 'Posprzątaj resztki…'
+    Ustaw-Tekst $script:LUsunWszystko 'Zdejmie to, co mogło zostać po MegaRuchaczu, a jeśli zechcesz - także Twoje dane.' $script:KolSzary
+  } else {
+    $script:BUsunWszystko.Text = 'Usuń MegaRuchacza…'
+    Ustaw-Tekst $script:LUsunWszystko 'Usuwa z tego komputera wszystko, co MegaRuchacz zainstalował - także aplikację przy zegarze i automatyczne aktualizacje.' $script:KolSzary
+  }
+}
+
+# Pierwsze klikniecie pyta (z polem "usun tez moje dane"), drugie - gdy usuwanie juz wybrane - je cofa.
+function Przelacz-Usuwanie-Calosci {
+  if ($script:Wybor.UsunWszystko) {
+    $script:Wybor.UsunWszystko = $false; $script:Wybor.UsunDaneWszystko = $false
+    foreach ($id in @($script:MODULY.Keys)) { $script:Wybor.Moduly[$id] = [bool]$script:Obecne[$id] }
+    $script:Wybor.UsunDane = @{}
+    $script:Wybor.Zestaw = 'wlasny'; $script:Wybor.Wlasny = $null
+    Odswiez-Wybor
+    return
+  }
+  if ($script:Instalacja.blad) {
+    Ustaw-Tekst $script:LBladRejestru 'Usuwanie jest wstrzymane, dopóki zapis instalacji jest uszkodzony - najpierw kliknij „Odłóż uszkodzony zapis”.' $script:KolPilne
+    return
+  }
+  $tytul = 'Usunąć MegaRuchacza z tego komputera?'
+  $linie = @(
+    'Zniknie aplikacja przy zegarze, automatyczne aktualizacje i wszystkie części MegaRuchacza: zasady w plikach Twoich narzędzi AI, pomocnicy, przypomnienia i zadania w tle.',
+    'Usunę to dopiero po kliknięciu „Zastosuj zmiany” - do tego czasu możesz to cofnąć.',
+    "Folder z MegaRuchaczem ($($script:Zrodlo)) zostanie - możesz go potem skasować sam.")
+  if ((-not $script:BazaJest) -and (@($script:MODULY.Keys | Where-Object { $script:Obecne[$_] }).Count -eq 0)) {
+    # MegaRuchacz juz usuniety - zostaje sprzatanie resztek i (na zyczenie) danych.
+    $tytul = 'Posprzątać to, co zostało po MegaRuchaczu?'
+    $linie = @('MegaRuchacza już nie ma na tym komputerze. Mogę jeszcze zdjąć resztki (jeśli jakieś zostały) i - jeśli zaznaczysz - usunąć Twoje dane.',
+               'Zrobię to dopiero po kliknięciu „Zastosuj zmiany”.')
+  }
+  Pokaz-Pytanie -Tytul $tytul -Linie $linie -Pole "Usuń też moje dane: $(Opis-Danych-Wszystkich)" `
+    -OpisPola 'Bez zaznaczenia dane zostają na dysku i wrócą, gdy zainstalujesz MegaRuchacza ponownie. Same rozmowy, Twoje skille i zrobione kopie zapasowe zostają zawsze.' `
+    -Tak 'Usuń wszystko' -Nie 'Zostaw' -TakGrozne $true -PoTak {
+      param($zaz)
+      $script:Wybor.UsunWszystko = $true; $script:Wybor.UsunDaneWszystko = [bool]$zaz
+      $script:Wybor.UsunDane = @{}
+      foreach ($id in @($script:MODULY.Keys)) {
+        $script:Wybor.Moduly[$id] = $false
+        if ($script:Obecne[$id] -and $zaz) { $script:Wybor.UsunDane[$id] = $true }
+      }
+      $script:Wybor.Zestaw = 'wlasny'; $script:Wybor.Wlasny = $null
+      Odswiez-Wybor
+    }
 }
 
 function Wiersz-Modulu([string]$id) {
@@ -1013,6 +1106,17 @@ function Odswiez-Wybor {
       }
       Ustaw-Tekst $script:TagiModulow[$id] $t $kol
     }
+    # Baza: "usunę" z calym MegaRuchaczem, "dodam", gdy jej brakuje, a cos ma zostac (P64).
+    $tz = 'jest'; $kz = $script:KolSzary
+    if ($script:Wybor.UsunWszystko) {
+      $tz = 'usunę'; $kz = $script:KolPilne
+      if ($script:Wybor.UsunDaneWszystko) { $tz = 'usunę z danymi' }
+    } elseif (-not $script:BazaJest) {
+      $tz = ''
+      if (@($script:MODULY.Keys | Where-Object { $script:Wybor.Moduly[$_] }).Count -gt 0) { $tz = 'dodam'; $kz = $script:KolMr }
+    }
+    Ustaw-Tekst $script:ZnaczekZawsze $tz $kz
+    Odswiez-Usuwanie-Calosci
   }
   Styl-Przelacznika $script:BWszystko ($script:Wybor.Zestaw -eq 'wszystko')
   Styl-Przelacznika $script:BWlasny ($script:Wybor.Zestaw -ne 'wszystko')
@@ -1024,14 +1128,17 @@ function Odswiez-Wybor {
 # go przywraca (razem z odpowiedziami na pytania o usuniecie - byly juz potwierdzone).
 function Wybierz-Zestaw([string]$zestaw) {
   if ($zestaw -eq 'wszystko') {
-    if ($script:Wybor.Zestaw -ne 'wszystko') { $script:Wybor.Wlasny = @{ Moduly = $script:Wybor.Moduly.Clone(); UsunDane = $script:Wybor.UsunDane.Clone() } }
+    if ($script:Wybor.Zestaw -ne 'wszystko') { $script:Wybor.Wlasny = @{ Moduly = $script:Wybor.Moduly.Clone(); UsunDane = $script:Wybor.UsunDane.Clone(); UsunWszystko = $script:Wybor.UsunWszystko; UsunDaneWszystko = $script:Wybor.UsunDaneWszystko } }
     $script:Wybor.Zestaw = 'wszystko'
     foreach ($id in @($script:MODULY.Keys)) { $script:Wybor.Moduly[$id] = $true }
     $script:Wybor.UsunDane = @{}
+    $script:Wybor.UsunWszystko = $false; $script:Wybor.UsunDaneWszystko = $false
   } else {
     if (($script:Wybor.Zestaw -eq 'wszystko') -and $script:Wybor.Wlasny) {
       $script:Wybor.Moduly = $script:Wybor.Wlasny.Moduly.Clone()
       $script:Wybor.UsunDane = $script:Wybor.Wlasny.UsunDane.Clone()
+      $script:Wybor.UsunWszystko = [bool]$script:Wybor.Wlasny.UsunWszystko
+      $script:Wybor.UsunDaneWszystko = [bool]$script:Wybor.Wlasny.UsunDaneWszystko
     }
     $script:Wybor.Zestaw = 'wlasny'
   }
@@ -1074,6 +1181,8 @@ function Po-Zmianie-Modulu($cb) {
   }
   $script:Wybor.Moduly[$id] = [bool]$cb.Checked
   if ($cb.Checked) { $script:Wybor.UsunDane.Remove($id) }
+  # Zaznaczona czesc potrzebuje bazy - usuwanie calego MegaRuchacza przestaje obowiazywac.
+  if ($cb.Checked -and $script:Wybor.UsunWszystko) { $script:Wybor.UsunWszystko = $false; $script:Wybor.UsunDaneWszystko = $false }
   $script:Wybor.Zestaw = 'wlasny'; $script:Wybor.Wlasny = $null
   Odswiez-Wybor
 }
@@ -1129,9 +1238,29 @@ function Ekran-Podsumowanie($root) {
       $k.Controls.Add($l)
       $k.Controls.Add((Punkt ((@($zm.Nie) | ForEach-Object { Nazwa-Modulu $_ }) -join ', ') $script:KolSzary))
     }
+  } elseif ($zm.UsunWszystko) {
+    # Cale odinstalowanie (P64): co zniknie, a co zostaje - bez zgadywania.
+    $dane = [bool]$script:Wybor.UsunDaneWszystko
+    $u = @()
+    foreach ($id in $script:MODULY.Keys) { if ($script:Obecne[$id]) { $u += (Nazwa-Modulu $id) } }
+    if ($script:BazaJest -or $u.Count) { $u += 'Aplikację przy zegarze i automatyczne aktualizacje' }
+    else { $u += 'Resztki MegaRuchacza (zadania w tle, wpisy w plikach narzędzi AI) - jeśli jakieś zostały' }
+    $k.Controls.Add((Etykieta 'Usunę MegaRuchacza z tego komputera' $script:CzZwyklaGruba $script:KolPilne))
+    foreach ($x in $u) { $k.Controls.Add((Punkt $x $script:KolPilne)) }
+    if ($dane) { $k.Controls.Add((Punkt "Twoje dane: $(Opis-Danych-Wszystkich)" $script:KolPilne)) }
+    $l = Etykieta 'Zostaje' $script:CzZwyklaGruba $script:KolTekst
+    $l.Margin = New-Object System.Windows.Forms.Padding(0, 10, 0, 2)
+    $k.Controls.Add($l)
+    $zost = @("Folder z MegaRuchaczem ($($script:Zrodlo)) - możesz go potem skasować sam")
+    if (-not $dane) { $zost += 'Twoje dane (wiedza o Tobie, baza dawnych rozmów, zapis opieki nad skillami i kopii) - wrócą, gdy zainstalujesz MegaRuchacza ponownie' }
+    $zost += 'Same rozmowy, Twoje skille i zrobione kopie zapasowe'
+    $zost += "Mały plik z zapisem, że MegaRuchacza nie ma ($(Sciezka-Instalacji $script:Dom)) - dzięki niemu nic nie wróci samo"
+    foreach ($x in $zost) { $k.Controls.Add((Punkt $x $script:KolSzary)) }
   } else {
     $grupy = @()
-    if (@($zm.Dodaj).Count) { $grupy += ,@('Dodam', @($zm.Dodaj | ForEach-Object { Opis-W-Podsumowaniu $_ }), $script:KolTekst) }
+    $dod = @($zm.Dodaj | ForEach-Object { Opis-W-Podsumowaniu $_ })
+    if ($zm.DodajBaze) { $dod = @('Aplikację przy zegarze i automatyczne aktualizacje (nie było ich)') + $dod }
+    if ($dod.Count) { $grupy += ,@('Dodam', $dod, $script:KolTekst) }
     if (@($zm.Usun).Count) {
       $u = @()
       foreach ($id in $zm.Usun) {
@@ -1146,8 +1275,8 @@ function Ekran-Podsumowanie($root) {
     if ($zm.KopiaZmieniona) { $inne += "Kopia zapasowa - nowe ustawienia: $(Opis-Kopii)" }
     if ($inne.Count) { $grupy += ,@('Zmienię', $inne, $script:KolTekst) }
     $bez = @($zm.Zostaje | Where-Object { -not (($_ -eq 'kopia') -and $zm.KopiaZmieniona) } | ForEach-Object { Nazwa-Modulu $_ })
-    $bez = @('Aplikacja przy zegarze i automatyczne aktualizacje') + $bez
-    $grupy += ,@('Bez zmian', @($bez -join ', '), $script:KolSzary)
+    if ($script:BazaJest) { $bez = @('Aplikacja przy zegarze i automatyczne aktualizacje') + $bez }
+    if ($bez.Count) { $grupy += ,@('Bez zmian', @($bez -join ', '), $script:KolSzary) }
     $pierwsza = $true
     foreach ($g in $grupy) {
       $l = Etykieta $g[0] $script:CzZwyklaGruba $script:KolTekst
@@ -1168,7 +1297,8 @@ function Ekran-Podsumowanie($root) {
   $root.Controls.Add($k)
 
   $inst = Do-Instalacji $zm
-  $prog = Programy-Dla $inst $nowa
+  $prog = Programy-Dla $inst ($nowa -or $zm.DodajBaze)
+  if ($zm.UsunWszystko) { $inst = @(); $prog = @() }
   $k2 = Nowa-Karta $script:SzerKarty
   $k2.Controls.Add((Tytul-Karty 'Programy'))
   $script:LProgramy = $null; $script:ListaProgramow = $null
@@ -1195,6 +1325,7 @@ function Ekran-Podsumowanie($root) {
 
   $glowny = 'Zainstaluj'
   if (-not $nowa) { $glowny = 'Tak, zastosuj' }
+  if ($zm.UsunWszystko) { $glowny = 'Tak, usuń' }
   Ustaw-Przyciski -Anuluj 'Anuluj' -Wstecz 'Wstecz' -Dalej $glowny -PoAnuluj { Zamknij-Okno } -PoWstecz { Pokaz-Ekran 'wybor' } -PoDalej { Uruchom-Plan $script:PlanDoWykonania }
   if ($brak.Count -gt 0) {
     Ustaw-Wlaczony $script:BDalej $false
@@ -1272,6 +1403,7 @@ function Ekran-Postep($root) {
   $tyt = 'Instaluję MegaRuchacza'
   if ($script:Tryb -eq 'zmiana') { $tyt = 'Wprowadzam zmiany' }
   elseif ($script:Tryb -eq 'pobieranie') { $tyt = 'Pobieram MegaRuchacza' }
+  if ($script:Wybor -and $script:Wybor.UsunWszystko) { $tyt = 'Usuwam MegaRuchacza' }
   Ustaw-Podtytul 'Okno możesz w tym czasie przesuwać - praca idzie w tle.'
   $k = Nowa-Karta $script:SzerKarty
   $k.Padding = New-Object System.Windows.Forms.Padding(22, 18, 22, 14)
@@ -1478,6 +1610,8 @@ function Ekran-Gotowe($root) {
   $zn.Margin = New-Object System.Windows.Forms.Padding(0, 0, 6, 0)
   $tyt = 'Gotowe! MegaRuchacz jest zainstalowany.'
   if ($zmiana) { $tyt = 'Gotowe! Zmiany są wprowadzone.' }
+  $calosc = [bool]($script:Wybor -and $script:Wybor.UsunWszystko)
+  if ($calosc) { $tyt = 'Gotowe! MegaRuchacz jest usunięty z tego komputera.' }
   if ($script:Proba) { $tyt = 'Próba zakończona - nic nie zostało zainstalowane ani zapisane.' }
   $t = Etykieta-Zawijana $tyt $script:CzSrednia $script:KolDobrze ($szw - 40)
   $t.Margin = New-Object System.Windows.Forms.Padding(0, 4, 0, 0)
@@ -1491,6 +1625,14 @@ function Ekran-Gotowe($root) {
   if ($script:Proba) {
     $k.Controls.Add((Punkt-Numer $nr 'Nic się nie zmieniło.' "Skrypty pokazały tylko, co by zrobiły - wszystko jest w zapisie: $($script:Dziennik).")); $nr++
     $k.Controls.Add((Punkt-Numer $nr 'Żeby zainstalować naprawdę' 'uruchom instalator bez -Proba - zwykłym dwuklikiem na instaluj.bat.')); $nr++
+  } elseif ($calosc) {
+    $k.Controls.Add((Punkt-Numer $nr "Zamknij i otwórz na nowo okna $narz." 'Okna otwarte wcześniej mają jeszcze MegaRuchacza w pamięci, dopóki ich nie zamkniesz.')); $nr++
+    $k.Controls.Add((Punkt-Numer $nr 'Folder z MegaRuchaczem możesz skasować.' "To $($script:Zrodlo) - nic już z niego nie korzysta.")); $nr++
+    if ($script:Wybor.UsunDaneWszystko) {
+      $k.Controls.Add((Punkt-Numer $nr 'Twoje dane są usunięte.' 'Zostały same rozmowy, Twoje skille (folder skills Claude Code) i zrobione kopie zapasowe w wybranym folderze.')); $nr++
+    } else {
+      $k.Controls.Add((Punkt-Numer $nr 'Twoje dane zostały na dysku.' "Wiedza o Tobie (sekcja `„Co wiem`” i folder $($script:Dom)\.claude\wiedza), baza dawnych rozmów i zapisy skilli i kopii - wrócą, gdy zainstalujesz MegaRuchacza ponownie.")); $nr++
+    }
   } else {
     $k.Controls.Add((Punkt-Numer $nr "Otwórz nowe okno $narz." 'Dopiero nowe okno rozmowy wczyta MegaRuchacza. Okna otwarte wcześniej działają po staremu, dopóki ich nie zamkniesz.')); $nr++
     if (-not $zmiana) {

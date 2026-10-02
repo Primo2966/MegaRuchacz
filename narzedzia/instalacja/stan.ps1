@@ -10,9 +10,15 @@
 #     "moduly": { "wiedza": true, "lore": true, "kierownik": true, "skille": true, "kopia": false },
 #     "kopia": { "zrodla": ["C:\\dev"], "cel": "G:\\..." }   albo null,
 #     "narzedzia": { "claude": true, "codex": false, "opencode": false }   albo null,
+#     "baza": true,
 #     "data": "RRRR-MM-DD GG:MM:SS"
 #   }
 # Baza (aplikacja przy zegarze + straznik/aktualizacje) jest zawsze - nie ma jej w "moduly".
+# Pole "baza" (od P64) pisze tylko modul-baza.ps1: true po Instaluj, false po Usun (usuniecie calego
+# MegaRuchacza). Brak pola = true. "baza": false to slad odinstalowania: straznik nie uznaje wtedy
+# instalacji za globalna (nie doklada swojego hooka, gdy wywola go np. hook projektu z wdroz.ps1),
+# a moduly sa wylaczone, wiec nic nie wraca samo. Bez pliku straznik wrocilby do zasad "sprzed
+# rejestru" (wszystko wlaczone) - dlatego rejestr po odinstalowaniu zostaje.
 #
 # Zasady odczytu (te same w Node i Pythonie):
 #   - brak pliku = instalacja sprzed rejestru: wiedza, lore, kierownik, skille wlaczone;
@@ -45,6 +51,7 @@ function Czytaj-Instalacje([string]$KatalogDomowy = $HOME) {
     moduly    = [pscustomobject]$domyslne
     kopia     = $null
     narzedzia = $null
+    baza      = $true
     data      = $null
     zrodlo    = 'domyslne'
     blad      = $null
@@ -66,6 +73,10 @@ function Czytaj-Instalacje([string]$KatalogDomowy = $HOME) {
       if (-not ($j.PSObject.Properties.Name -contains $pole)) {
         $j | Add-Member -NotePropertyName $pole -NotePropertyValue $null -Force
       }
+    }
+    # Brak pola albo wartosc nie-logiczna = baza jest (jak przy braku klucza modulu).
+    if (-not ($j.PSObject.Properties.Name -contains 'baza') -or ($j.baza -isnot [bool])) {
+      $j | Add-Member -NotePropertyName baza -NotePropertyValue $true -Force
     }
     $j | Add-Member -NotePropertyName zrodlo -NotePropertyValue 'plik' -Force
     $j | Add-Member -NotePropertyName blad -NotePropertyValue $null -Force
@@ -115,6 +126,13 @@ function Zapisz-Instalacje($Stan, [string]$KatalogDomowy = $HOME) {
     Remove-Item -LiteralPath $tmp -Force -ErrorAction SilentlyContinue
     throw "nie udalo sie zapisac rejestru instalacji $p : $($_.Exception.Message)"
   }
+}
+
+function Ustaw-Baze([bool]$Jest, [string]$KatalogDomowy = $HOME) {
+  $s = Czytaj-Instalacje $KatalogDomowy
+  if ($s.blad) { throw $s.blad }
+  $s | Add-Member -NotePropertyName baza -NotePropertyValue $Jest -Force
+  Zapisz-Instalacje $s $KatalogDomowy
 }
 
 function Ustaw-Modul([string]$Nazwa, [bool]$Wlaczony, [string]$KatalogDomowy = $HOME) {

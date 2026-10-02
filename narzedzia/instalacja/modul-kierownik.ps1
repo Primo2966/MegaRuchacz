@@ -37,7 +37,10 @@ $Zrodlo = $s0.Zrodlo; $KatalogDomowy = $s0.KatalogDomowy
 
 $Globalnie  = Join-Path $Zrodlo "narzedzia\instaluj-globalnie.ps1"
 $DomClaude  = Join-Path $KatalogDomowy ".claude"
-$DomCodex   = if ($env:CODEX_HOME) { $env:CODEX_HOME } else { Join-Path $KatalogDomowy ".codex" }
+# ~\.codex, nie CODEX_HOME: tam role i hooki rejestru kladzie instaluj-globalnie.ps1 (do katalogu
+# Codeksa Orki nic nie piszemy - narzedzia\kierownik-cele.ps1). Z CODEX_HOME zdejmowanie szukaloby
+# ich w innym katalogu niz ten, w ktorym leza (P64).
+$DomCodex   = Join-Path $KatalogDomowy ".codex"
 $Ustawienia = Join-Path $DomClaude "settings.json"
 $Ladunek    = Join-Path $DomClaude "mr\orchestrator-reminder.json"
 $RejestrJs  = Join-Path $DomClaude "megaruchacz-mr-log.js"
@@ -92,7 +95,9 @@ function Usun-Z-Codeksa {
   catch { Ostrzezenie "$plik nie jest czystym JSON-em - hookow rejestru Codeksa nie zdejmuje"; return $false }
   if ($null -eq $s -or $null -eq $s.hooks) { return $ok }
   $zmiana = $false
-  foreach ($z in @($s.hooks.PSObject.Properties.Name)) {
+  # Lista nazw przez ForEach-Object, nie @(...Properties.Name): przy pustym "hooks": {} (zostaje po
+  # pierwszym zdjeciu) @(...) daje jeden $null, a $s.hooks.$null = ... wywracalo cale Usun (P64).
+  foreach ($z in @($s.hooks.PSObject.Properties | ForEach-Object { $_.Name })) {
     $grupy = @()
     foreach ($g in @($s.hooks.$z)) {
       if ($null -eq $g -or -not ($g.PSObject.Properties.Name -contains "hooks")) { $grupy += ,$g; continue }

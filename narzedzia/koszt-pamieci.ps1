@@ -292,10 +292,15 @@ $plikAgents   = Join-Path $KatalogDomowy ".codex\AGENTS.md"
 # Modul kierownik odznaczony w instalatorze - TYLKO przy rejestrze czytelnym (nieczytelny = wszystko
 # wlaczone, tak jak go traktuje przypomnienie.js).
 $script:KierownikWylaczony = $false
+# Tak samo modul wiedza (P64): bez niego rachunek nie mowi o nauce "jeszcze nie liczone, cykl nie mial
+# okazji sie odpalic" - nauki po prostu nie ma z wyboru uzytkownika.
+$script:WiedzaWylaczona = $false
 if (Get-Command Czytaj-Instalacje -ErrorAction SilentlyContinue) {
   $rejestrInstalacji = Czytaj-Instalacje $KatalogDomowy
   $kierownikWRejestrze = $rejestrInstalacji.moduly.kierownik   # brak klucza = wlaczony (umowa stan.ps1)
   $script:KierownikWylaczony = ((-not $rejestrInstalacji.blad) -and ($null -ne $kierownikWRejestrze) -and -not [bool]$kierownikWRejestrze)
+  $wiedzaWRejestrze = $rejestrInstalacji.moduly.wiedza
+  $script:WiedzaWylaczona = ((-not $rejestrInstalacji.blad) -and ($null -ne $wiedzaWRejestrze) -and -not [bool]$wiedzaWRejestrze)
 }
 
 if ($UsunZadanie)  { Usun-Zadanie }

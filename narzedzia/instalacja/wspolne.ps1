@@ -112,11 +112,25 @@ function Start-Modul([string]$nazwa, [string]$akcja, [bool]$proba, [string]$zrod
 # a [Environment]::GetFolderPath zwraca PUSTY napis, gdy katalogu nie ma - PowerShell zapisal wtedy
 # swoja pamiec podreczna modulow (Microsoft\Windows\PowerShell\ModuleAnalysisCache) wzgledem
 # katalogu roboczego, czyli do repo (zlapane w testach 2026-10-02).
+#
+# Zmienne, ktore wskazuja konfiguracje PRAWDZIWEGO uzytkownika (CODEX_HOME - np. Orka ustawia
+# ja swoim procesom, LORE_HOME, CLAUDE_CONFIG_DIR), przy podstawionym domu zostalyby po staremu:
+# role i hooki Codeksa, wpis MCP albo baza Lore poszlyby wtedy do prawdziwych katalogow. Dlatego
+# przy domu innym niz profil uzytkownika zmienna wskazujaca POZA ten dom znika (z krokiem na
+# ekranie) - zlapane w probie calosci P64 (okno uruchomione z sesji Orki mialo CODEX_HOME Orki).
 function Ustaw-Katalog-Domowy([string]$dom) {
   if ($dom -ine ([Environment]::GetFolderPath("UserProfile")).TrimEnd('\')) {
     foreach ($k in @("AppData\Local", "AppData\Roaming")) {
       $p = Join-Path $dom $k
       if (-not (Test-Path -LiteralPath $p)) { New-Item -ItemType Directory -Force -Path $p | Out-Null }
+    }
+    foreach ($n in @("CODEX_HOME", "LORE_HOME", "CLAUDE_HISTORIA_HOME", "CLAUDE_CONFIG_DIR")) {
+      $v = [Environment]::GetEnvironmentVariable($n)
+      if (-not $v) { continue }
+      $wDomu = $v.TrimEnd('\').StartsWith($dom.TrimEnd('\') + '\', [System.StringComparison]::OrdinalIgnoreCase) -or ($v.TrimEnd('\') -ieq $dom.TrimEnd('\'))
+      if ($wDomu) { continue }
+      [Environment]::SetEnvironmentVariable($n, $null)
+      Krok "zmienna $n wskazywala poza katalog domowy ($v) - pomijam ja, bo pracuje na innym domu niz Twoj"
     }
   }
   if ($env:USERPROFILE -and ($env:USERPROFILE.TrimEnd('\') -ieq $dom)) { return }
@@ -234,7 +248,7 @@ function Rejestr-Do-Wyniku($s, [string]$dom) {
   if ($null -eq $s) { return $null }
   $m = [ordered]@{}
   foreach ($n in (Moduly-MegaRuchacza)) { $m[$n] = [bool]$s.moduly.$n }
-  return [ordered]@{ moduly = $m; zrodlo = $s.zrodlo; blad = $s.blad; plik = (Sciezka-Instalacji $dom) }
+  return [ordered]@{ moduly = $m; baza = ($s.baza -ne $false); zrodlo = $s.zrodlo; blad = $s.blad; plik = (Sciezka-Instalacji $dom) }
 }
 
 # Zapis jak Ustaw-Modul (stan.ps1), z jednym dodatkiem. Gdy rejestru jeszcze nie ma (instalacja
@@ -389,13 +403,19 @@ function Napraw-Hooki([string]$zrodlo, [string]$dom, [switch]$Usun) {
 }
 
 # Po zmianie rejestru: hooki i bloki zasad maja odpowiadac nowemu wyborowi (straznik i wpisz-zasady
-# czytaja rejestr). Zwraca $true, gdy oba przeszly; porazka kazdego to UWAGA z powodem.
+# czytaja rejestr). Zwraca $true, gdy wszystko przeszlo; porazka kazdego to UWAGA z powodem.
+# Na koniec straznik -Dopasuj (P59a): blok kierownika i KOPIA ZASAD DLA OPENCODE (~\.config\opencode\
+# AGENTS.md - lustro CLAUDE.md) - bez tego kopia zostawala ze starymi blokami do nastepnego startu sesji
+# (proba calosci P64: po zdjeciu Lore straznik poprawial ja dopiero przy otwarciu okna).
 function Po-Zmianie-Rejestru([string]$zrodlo, [string]$dom) {
   $h = Napraw-Hooki $zrodlo $dom
   $ok = $true
   if (-not $h.Ok) { $ok = $false; Ostrzezenie "hooki w ~\.claude\settings.json nie zostaly ulozone wedlug rejestru: $(Sedno $h.Tekst)" }
   elseif (-not $script:MR.proba) { Krok "hooki MegaRuchacza ulozone wedlug rejestru (~\.claude\settings.json)" }
   if (-not (Wpisz-Zasady $zrodlo $dom)) { $ok = $false }
+  if ($script:MR.proba) { Plan "straznik-zasad.ps1 -Dopasuj: blok kierownika i kopia zasad dla opencode wedlug rejestru"; return $ok }
+  $d = Uruchom-Skrypt (Join-Path $zrodlo "narzedzia\straznik-zasad.ps1") @("-Dopasuj", "-Zrodlo", $zrodlo, "-KatalogDomowy", $dom) 180
+  if ($d.Kod -ne 0) { $ok = $false; Ostrzezenie "blok kierownika albo kopia zasad dla opencode nie zostaly dopasowane do rejestru (straznik -Dopasuj, kod $($d.Kod)): $(Sedno $d.Tekst)" }
   return $ok
 }
 

@@ -52,10 +52,11 @@ function Wynik([bool]$ok, [string]$komunikat, $dodatki = @{}) {
 }
 
 # PATH tego procesu jest z chwili startu okna - git zainstalowany przed chwila jest tylko
-# w rejestrze (PATH uzytkownika / maszyny).
+# w rejestrze (PATH uzytkownika / maszyny). Najpierw PATH procesu, potem brakujace z rejestru -
+# tak samo jak Odswiez-Path w wykonanie.ps1 (P64: to, co dal wolajacy, wygrywa).
 function Odswiez-Path {
   $czesci = New-Object System.Collections.Generic.List[string]
-  foreach ($z in @([Environment]::GetEnvironmentVariable('Path', 'Machine'), [Environment]::GetEnvironmentVariable('Path', 'User'), $env:Path)) {
+  foreach ($z in @($env:Path, [Environment]::GetEnvironmentVariable('Path', 'Machine'), [Environment]::GetEnvironmentVariable('Path', 'User'))) {
     foreach ($e in "$z".Split(';')) {
       $e = [Environment]::ExpandEnvironmentVariables($e.Trim())
       if ($e -and -not $czesci.Contains($e)) { $czesci.Add($e) }

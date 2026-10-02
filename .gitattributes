@@ -1,0 +1,4 @@
+# Pliki .bat zawsze z CRLF: cmd.exe czyta skrypt z samym LF tak, ze potrafi nie trafic
+# w etykiete przy goto. ZIP z GitHuba (git archive) bierze konce linii z tego pliku, a nie
+# z ustawien komputera, na ktorym repo powstalo (P59c, P64). Tylko .bat - reszty nie ruszamy.
+*.bat text eol=crlf

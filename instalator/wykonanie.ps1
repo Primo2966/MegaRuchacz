@@ -68,10 +68,15 @@ function Cytuj-Argument([string]$a) {
 # PATH procesu okna zostaje z chwili startu, a zaleznosci.ps1 dopisuje nowe programy do PATH
 # uzytkownika w rejestrze. Bez odswiezenia kolejne kroki (dzieci okna) nie widzialyby uv, gita
 # ani Node'a zainstalowanych minute wczesniej.
+# KOLEJNOSC: najpierw PATH procesu, potem dopiero to, czego w nim nie ma, z rejestru. Nowo
+# zainstalowany program i tak sie znajdzie (jego katalogu w PATH procesu nie bylo), a to, co
+# dal oknu wolajacy, wygrywa - proba calosci (test-calosci.ps1) daje atrapy claude/codex na
+# poczatku PATH, a prawdziwe CLI z PATH uzytkownika pisalyby do prawdziwej konfiguracji
+# (Codex liczy swoj katalog z profilu, nie z USERPROFILE). Do P64 rejestr szedl pierwszy.
 function Odswiez-Path {
   try {
     $czesci = New-Object System.Collections.Generic.List[string]
-    foreach ($zrodlo in @([Environment]::GetEnvironmentVariable('Path', 'Machine'), [Environment]::GetEnvironmentVariable('Path', 'User'), $env:Path)) {
+    foreach ($zrodlo in @($env:Path, [Environment]::GetEnvironmentVariable('Path', 'Machine'), [Environment]::GetEnvironmentVariable('Path', 'User'))) {
       foreach ($e in "$zrodlo".Split(';')) {
         $e = [Environment]::ExpandEnvironmentVariables($e.Trim())
         if ($e -and -not $czesci.Contains($e)) { $czesci.Add($e) }
