@@ -100,10 +100,16 @@ function Zapisz-Instalacje($Stan, [string]$KatalogDomowy = $HOME) {
   } finally {
     $fs.Dispose()
   }
-  if (Test-Path -LiteralPath $p) {
-    [System.IO.File]::Replace($tmp, $p, $null)
-  } else {
-    [System.IO.File]::Move($tmp, $p)
+  try {
+    # [NullString]::Value - goly $null PowerShell podaje .NET jako pusty napis, a Replace go odrzuca.
+    if (Test-Path -LiteralPath $p) {
+      [System.IO.File]::Replace($tmp, $p, [NullString]::Value)
+    } else {
+      [System.IO.File]::Move($tmp, $p)
+    }
+  } catch {
+    Remove-Item -LiteralPath $tmp -Force -ErrorAction SilentlyContinue
+    throw "nie udalo sie zapisac rejestru instalacji $p : $($_.Exception.Message)"
   }
 }
 
