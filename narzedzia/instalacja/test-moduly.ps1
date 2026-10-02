@@ -444,8 +444,10 @@ function Scenariusz-Wiedza {
   $cm = [System.IO.File]::ReadAllText((Join-Path $dom ".claude\CLAUDE.md"))
   $pod = @("### O u$([char]0x017C)ytkowniku", "### O firmie", "### Nad czym pracuje", "### Jak pracuje", "### Bie$([char]0x017C)$([char]0x0105)ce", "### Dane referencyjne")
   Sprawdz "wiedza: szkielet '## Co wiem' z szescioma podsekcjami jak w verify.py" (($cm -match "(?m)^## Co wiem") -and (@($pod | Where-Object { $cm.Contains($_) }).Count -eq 6)) $cm
-  $iCw = $cm.IndexOf("### Dane referencyjne"); $iG = $cm.IndexOf("<!-- MegaRuchacz:start -->")
-  Sprawdz "wiedza: zaraz pod szkieletem stoi <!-- MegaRuchacz:start --> (granica sekcji dla verify.py)" (($iG -gt $iCw) -and ($cm.Substring($iCw, $iG - $iCw) -notmatch "<!-- MegaRuchacz:kierownik")) $cm
+  # granica sekcji w verify.py: pod ostatnia podsekcja szkieletu stoi znacznik bloku MegaRuchacza
+  # (po P59a: blok wiedzy z rejestru), bez zadnego naglowka "## " pomiedzy
+  $iCw = $cm.IndexOf("### Dane referencyjne"); $iG = $cm.IndexOf("<!-- MegaRuchacz:", [Math]::Max(0, $iCw))
+  Sprawdz "wiedza: zaraz pod szkieletem stoi znacznik bloku MegaRuchacza (granica sekcji dla verify.py)" (($iCw -ge 0) -and ($iG -gt $iCw) -and ($cm.Substring($iCw, $iG - $iCw) -notmatch "(?m)^## ")) $cm
   Sprawdz "wiedza: katalog wiedza\ i kopia dzienna 'wczoraj'" ((Test-Path (Join-Path $dom ".claude\wiedza")) -and (Test-Path (Join-Path $dom ".claude\mr\kopie-dzienne\wczoraj"))) $r.Tekst
   Sprawdz "wiedza: brak zalogowania claude/codex = UWAGA, nie odmowa" ((($r.Uwagi -join " ") -match "zalogowania|zaloguj")) ($r.Uwagi -join " | ")
   Sprawdz "wiedza: tlo indeksu skonczylo sie" (Czekaj-Na-Tlo)
@@ -472,6 +474,21 @@ function Scenariusz-Wiedza {
   $r = Modul "wiedza" "Usun" $dom @("-UsunDane")
   $cm3 = [System.IO.File]::ReadAllText((Join-Path $dom ".claude\CLAUDE.md"))
   Sprawdz "wiedza: Usun -UsunDane usuwa wiedza\, kopie dzienne, 'Co wiem' (kopia CLAUDE.md obok) i lore.db" (($r.Kod -eq 0) -and -not (Test-Path (Join-Path $dom ".claude\wiedza")) -and -not (Test-Path (Join-Path $dom ".claude\mr\kopie-dzienne")) -and ($cm3 -notmatch "## Co wiem") -and (@(Get-ChildItem (Join-Path $dom ".claude") -Filter "CLAUDE.md.bak-*").Count -gt 0) -and -not (Test-Path (Join-Path $dom ".lore\lore.db"))) $r.Tekst
+  # Dom z blokiem kierownika: szkielet ma stanac nad nim. To bezpieczne tylko dlatego, ze verify.py (od P59a)
+  # konczy sekcje na KAZDYM znaczniku MegaRuchacza - warunek sprawdzany wprost, inaczej fakty szlyby do bloku.
+  Sprawdz "warunek: verify.py konczy 'Co wiem' na kazdym znaczniku <!-- MegaRuchacz: (GUARD_PREFIX)" ([System.IO.File]::ReadAllText((Join-Path $Repo "lore\lore\verify.py")) -match '(?m)^GUARD_PREFIX\s*=\s*"<!-- MegaRuchacz:"')
+  $dom5 = Dom "wiedza-kierownik"
+  [System.IO.File]::WriteAllText((Join-Path $dom5 ".claude\CLAUDE.md"), "# Ustalenia globalne`n`n<!-- MegaRuchacz:kierownik:start -->`n# MegaRuchacz - kierownik`n<!-- MegaRuchacz:kierownik:koniec -->`n")
+  [void](Modul "baza" "Instaluj" $dom5 @("-BezStartu"))   # rejestr: bez niego lore liczy sie jako wlaczone (indeks z wektorami)
+  $r = Modul "wiedza" "Instaluj" $dom5
+  $wyglad = [System.IO.File]::ReadAllText((Join-Path $dom5 ".claude\CLAUDE.md"))
+  $iCw = $wyglad.IndexOf("## Co wiem"); $iK = $wyglad.IndexOf("<!-- MegaRuchacz:kierownik:start -->"); $iDane = $wyglad.IndexOf("### Dane referencyjne")
+  $miedzy = if ($iDane -ge 0 -and $iK -gt $iDane) { $wyglad.Substring($iDane, $iK - $iDane) } else { "?" }
+  Sprawdz "wiedza: dom z blokiem kierownika - szkielet nad nim, bez pustego starego bloku MegaRuchacz:start" (($r.Kod -eq 0) -and ($iCw -ge 0) -and ($iCw -lt $iK) -and ($miedzy -notmatch "MegaRuchacz:start")) $wyglad
+  [void](Czekaj-Na-Tlo)
+  $r = Modul "wiedza" "Usun" $dom5
+  [void](Modul "baza" "Usun" $dom5)
+  Sprawdz "wiedza: po przypadku z blokiem kierownika sprzatniete (zadanie LoreIndex zdjete)" (($r.Kod -eq 0) -and -not (Zadanie "LoreIndex")) $r.Tekst
   # wyzerowany CLAUDE.md (zanik pradu) = odmowa, plik nietkniety, bez kopii zer
   $dom4 = Dom "wiedza-zera"
   [System.IO.File]::WriteAllBytes((Join-Path $dom4 ".claude\CLAUDE.md"), (New-Object byte[] 300))
@@ -581,8 +598,8 @@ function Scenariusz-Kierownik {
   Sprawdz "kierownik: role i hooki rejestru Codeksa zdjete, cudzy hook Codeksa zostal" ((@(Get-ChildItem (Join-Path $dom ".codex\agents") -Filter "*.toml" -ErrorAction SilentlyContinue | Where-Object { (Get-Content $_.FullName -Raw) -match "kierownik-template" }).Count -eq 0) -and ($hc -notmatch "mr-log-codex") -and ($hc -match "cudzy\.js")) $hc
   Sprawdz "kierownik: hook straznika (baza) zostal" ((Hooki $dom "SessionStart" 'straznik-zasad\.ps1') -eq 1)
   $znaRejestr = [System.IO.File]::ReadAllText((Join-Path $Repo "narzedzia\straznik-zasad.ps1")) -match 'Czytaj-Instalacje|instalacja\\stan\.ps1'
-  $sa = ((Hooki $dom "SubagentStart" 'mr-log\.js') -gt 0) -or (Test-Path (Join-Path $dom ".claude\mr\orchestrator-reminder.json"))
-  if ($znaRejestr) { Sprawdz "kierownik: straznik nie przywraca hookow rejestru ani ladunku (zna rejestr)" (-not $sa) }
+  $sa = ((Hooki $dom "SubagentStart" 'mr-log\.js') -gt 0) -or (Test-Path (Join-Path $dom ".claude\mr\orchestrator-reminder.json")) -or (Test-Path (Join-Path $dom ".claude\megaruchacz-mr-log.js"))
+  if ($znaRejestr) { Sprawdz "kierownik: po Usun nie ma hookow rejestru, ladunku przypomnienia ani megaruchacz-mr-log.js (straznik zna rejestr)" (-not $sa) }
   elseif ($sa) { Info "kierownik: straznik w kopii (HEAD) nie zna jeszcze rejestru - po Usun przywrocil hooki rejestru/ladunek (samonaprawa P63 C4; poprawia P59a)" }
 }
 

@@ -129,6 +129,11 @@ try {
     $a = @("-Zrodlo", $Zrodlo, "-KatalogDomowy", $KatalogDomowy, "-BezPytania")
     if ($rej.narzedzia -and $rej.narzedzia.codex) { $a += "-Codex"; Krok "rejestr mowi, ze uzywasz Codeksa - role i rejestr dostanie tez Codex" }
     if ($Proba) { $a += "-Proba" }
+    # Rejestr PRZED instaluj-globalnie.ps1: ten wola straznika (-NaprawGlobalne), a straznik od P59a
+    # kladzie hooki rejestru START/KONIEC i ladunek tylko przy kierowniku wlaczonym w rejestrze - bez
+    # tego samosprawdzenie instaluj-globalnie widzialoby braki. Porazka = rejestr wraca do stanu sprzed.
+    $bylWlaczony = [bool]$rej.moduly.kierownik
+    Zapisz-Modul "kierownik" $true $KatalogDomowy
     $w = Uruchom-Skrypt $Globalnie $a 300
     if ($Proba) {
       # samosprawdzenie instaluj-globalnie.ps1 chodzi takze na probie i widzi wtedy braki tego, czego
@@ -136,10 +141,15 @@ try {
       Plan "zasady kierownika, role agentow, rejestr START/KONIEC i przypomnienie (instaluj-globalnie.ps1 -Proba)"
     } else {
       Przekaz-Uwagi $w.Tekst "instaluj-globalnie"
-      if ($w.Kod -ne 0) { Zakoncz $false "tryb kierownika nie stanal: $(Sedno $w.Tekst)" }
+      if ($w.Kod -ne 0) {
+        if (-not $bylWlaczony) {
+          try { Zapisz-Modul "kierownik" $false $KatalogDomowy; [void](Po-Zmianie-Rejestru $Zrodlo $KatalogDomowy) }
+          catch { Ostrzezenie "nie udalo sie cofnac wpisu w rejestrze: $($_.Exception.Message)" }
+        }
+        Zakoncz $false "tryb kierownika nie stanal: $(Sedno $w.Tekst)"
+      }
       Krok "zasady kierownika, role agentow, rejestr START/KONIEC i przypomnienie na miejscu (instaluj-globalnie.ps1)"
     }
-    Zapisz-Modul "kierownik" $true $KatalogDomowy
     $ok = Po-Zmianie-Rejestru $Zrodlo $KatalogDomowy
     if ($Proba) { Zakoncz $true "proba: kierownik dalby sie zainstalowac" }
     $rej2 = Czytaj-Instalacje $KatalogDomowy
@@ -157,16 +167,18 @@ try {
   if ($Proba) { Plan "zasady kierownika, role, rejestr workerow i znacznik zdjete (instaluj-globalnie.ps1 -Usun)" }
   else { Krok "zdjete: zasady kierownika, role Claude Code i opencode, rejestr workerow, znacznik instalacji (instaluj-globalnie.ps1 -Usun)" }
   $ok = Usun-Z-Codeksa
-  if (Test-Path -LiteralPath $Ladunek) {
-    if ($Proba) { Plan "usunalbym ladunek przypomnienia $Ladunek" }
-    else {
-      try { Remove-Item -LiteralPath $Ladunek -Force -ErrorAction Stop; Krok "usuniety ladunek przypomnienia kierownika ($Ladunek)" }
-      catch { $ok = $false; Ostrzezenie "nie udalo sie usunac $Ladunek : $($_.Exception.Message)" }
-    }
-  }
   Krok "klucz 'worktree' w ~\.claude\settings.json zostaje - mogl byc ustawiony przez Ciebie"
   Zapisz-Modul "kierownik" $false $KatalogDomowy
   if (-not (Po-Zmianie-Rejestru $Zrodlo $KatalogDomowy)) { $ok = $false }
+  # Pliki wolane przez hooki kierownika - PO ulozeniu hookow wedlug rejestru. Straznik ich juz nie
+  # dogrywa, ale sam nie kasuje; bez nich zostajacy bez node'a "|| cat <ladunek>" w hooku przypomnienia
+  # nie wypisze juz zasad kierownika (P59a).
+  foreach ($p in @($Ladunek, $RejestrJs)) {
+    if (-not (Test-Path -LiteralPath $p)) { continue }
+    if ($Proba) { Plan "usunalbym $p"; continue }
+    try { Remove-Item -LiteralPath $p -Force -ErrorAction Stop; Krok "usuniety plik kierownika $p" }
+    catch { $ok = $false; Ostrzezenie "nie udalo sie usunac $p : $($_.Exception.Message)" }
+  }
   if ($UsunDane) { Krok "modul kierownik nie trzyma Twoich danych w katalogu domowym (rejestr i mapa zostaja w projektach, w .megaruchacz\)" }
   if ($Proba) { Zakoncz $ok "proba: kierownik dalby sie usunac" }
   $kom = if ($ok) { "kierownik wylaczony - zamknij i otworz okna narzedzi" } else { "kierownik wylaczony, ale nie wszystko udalo sie zdjac - szczegoly w uwagach" }

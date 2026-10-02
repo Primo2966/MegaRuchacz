@@ -245,7 +245,7 @@ function Rejestr-Do-Wyniku($s, [string]$dom) {
 function Zapisz-Modul([string]$nazwa, [bool]$wlaczony, [string]$dom) {
   $slowo = if ($wlaczony) { "wlaczony" } else { "wylaczony" }
   if ($script:MR.proba) { Plan "rejestr modulow: $nazwa = $slowo"; return }
-  if ($script:MR_MODULY -notcontains $nazwa) { throw "nieznany modul MegaRuchacza: $nazwa" }
+  if ((Moduly-MegaRuchacza) -notcontains $nazwa) { throw "nieznany modul MegaRuchacza: $nazwa" }
   $s = Czytaj-Instalacje $dom
   if ($s.blad) { throw $s.blad }
   $zakladam = ($s.zrodlo -eq "domyslne")

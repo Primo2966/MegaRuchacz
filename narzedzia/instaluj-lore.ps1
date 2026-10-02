@@ -347,8 +347,13 @@ function Sprawdz-Wektory {
     return
   }
   if ($TylkoTekst) {
+    # Wiedza bez lore: wektory nie sa uzywane, wiec ich brak (incomplete), stary albo nieznany model
+    # (migration_needed, unknown_model) to stan prawidlowy - BLAD bylby falszywym alarmem (P59a).
     if ($s.Stan -eq "text_only") { Zapisz-Wynik "tryb indeksu" $true "tylko tekst - wyszukiwanie pelnotekstowe, bez wektorow (tak ma byc)" }
-    else { Zapisz-Wynik "tryb indeksu" $false "baza jest w stanie '$($s.Stan)', a mialo byc 'tylko tekst'" }
+    elseif (@("ok", "incomplete", "unknown_model", "migration_needed", "migrating") -contains $s.Stan) {
+      Zapisz-Wynik "tryb indeksu" $true "tylko tekst - wektory nie sa tu uzywane (stan bazy: $($s.Stan); tryb zapisze pierwszy przebieg indeksu)"
+    }
+    else { Zapisz-Wynik "tryb indeksu" $false "nieznany stan bazy '$($s.Stan)': $($s.Ostrzezenie)" }
     return
   }
   switch ($s.Stan) {

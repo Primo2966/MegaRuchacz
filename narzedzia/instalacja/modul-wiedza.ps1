@@ -8,10 +8,9 @@
 #     wektorow (~496 MB) i bez wyszukiwania po sensie - cykl wiedzy wektorow nie uzywa.
 #   - szkielet sekcji "## Co wiem" (O uzytkowniku / O firmie / Nad czym pracuje / Jak pracuje /
 #     Biezace / Dane referencyjne - puste), jesli jej nie ma. Bez niej weryfikacja niczego nie zapisze.
-#     Stoi zawsze TUZ nad blokiem <!-- MegaRuchacz:start --> (granica sekcji w lore\lore\verify.py):
-#     przed blokiem kierownika granicy nie ma i fakty moglyby trafic do jego srodka. Gdy bloku
-#     MegaRuchacz:start jeszcze nie ma, szkielet dostaje pusty blok, ktory wpisz-zasady.ps1 wypelnia
-#     w miejscu (dopisalby go inaczej na koncu pliku, za blokiem kierownika).
+#     Stoi nad PIERWSZYM znacznikiem <!-- MegaRuchacz: (bloki lore, wiedza, kierownik): lore\lore\verify.py
+#     (section_bounds, GUARD_PREFIX od P59a) konczy sekcje na "## " albo na kazdym takim znaczniku, wiec
+#     fakty nie trafia do srodka zadnego bloku. Bez znacznikow - na koncu pliku (bloki dopisza sie pod nim).
 #   - katalog ~\.claude\wiedza\ i pierwsza kopie dzienna plikow pamieci (narzedzia\kopie-dzienne.ps1)
 #   - sprawdza, czy jest zalogowane CLI "claude" albo "codex" - wylawianie faktow je wola (kazdy
 #     przebieg to tokeny z planu uzytkownika). Brak = UWAGA, nie odmowa.
@@ -46,8 +45,7 @@ $Wiedza    = Join-Path $Claude "wiedza"
 $KopieDz   = Join-Path $Claude "mr\kopie-dzienne"
 $StanCyklu = Join-Path $Wiedza ".cykl-stan"
 $Naglowek  = "## Co wiem"
-$Granica   = "<!-- MegaRuchacz:start -->"
-$GranicaK  = "<!-- MegaRuchacz:koniec -->"
+$Znacznik  = "<!-- MegaRuchacz:"   # = GUARD_PREFIX w lore\lore\verify.py
 $Utf8      = New-Object System.Text.UTF8Encoding($false)
 $Utf8Scisly = New-Object System.Text.UTF8Encoding($false, $true)
 
@@ -63,36 +61,24 @@ function Ma-Co-Wiem([string]$tekst) {
   return $false
 }
 
-# Tekst CLAUDE.md po dolozeniu szkieletu (albo $null, gdy sekcja juz jest).
+# Tekst CLAUDE.md po dolozeniu szkieletu (albo $null, gdy sekcja juz jest): nad pierwszym znacznikiem
+# MegaRuchacza (verify.py konczy na nim sekcje), a bez znacznikow - na koncu pliku.
 function Z-Szkieletem([string]$stary) {
   if (Ma-Co-Wiem $stary) { return $null }
   $nl = Koniec-Linii $stary
   $szkielet = (@($Naglowek, "") + @($Podsekcje | ForEach-Object { $_, "" })) -join $nl
-  $linie = [System.Collections.Generic.List[string]]@($stary -split "`r?`n")
-  $iStart = -1; $iPierwszy = -1
-  for ($i = 0; $i -lt $linie.Count; $i++) {
-    $t = $linie[$i].Trim()
-    if ($iStart -lt 0 -and $t -eq $Granica) { $iStart = $i }
-    if ($iPierwszy -lt 0 -and $t.StartsWith("<!-- MegaRuchacz:")) { $iPierwszy = $i }
-  }
-  if ($iStart -ge 0) {
-    # tuz nad blokiem zasad: verify.py konczy sekcje na tym znaczniku
-    $przed = (@($linie | Select-Object -First $iStart) -join $nl).TrimEnd()
-    $po = @($linie | Select-Object -Skip $iStart) -join $nl
-    $sklejka = if ($przed) { $przed + $nl + $nl } else { "" }
-    return ($sklejka + $szkielet + $po)
-  }
-  # bloku zasad jeszcze nie ma: szkielet + pusty blok (wpisz-zasady wypelni go w tym miejscu)
-  $blok = $Granica + $nl + $GranicaK
+  $linie = @($stary -split "`r?`n")
+  $iPierwszy = -1
+  for ($i = 0; $i -lt $linie.Count; $i++) { if ($linie[$i].Trim().StartsWith($Znacznik)) { $iPierwszy = $i; break } }
   if ($iPierwszy -ge 0) {
     $przed = (@($linie | Select-Object -First $iPierwszy) -join $nl).TrimEnd()
     $po = @($linie | Select-Object -Skip $iPierwszy) -join $nl
     $sklejka = if ($przed) { $przed + $nl + $nl } else { "" }
-    return ($sklejka + $szkielet + $blok + $nl + $nl + $po)
+    return ($sklejka + $szkielet + $po)
   }
   $cialo = $stary.TrimEnd()
   if (-not $cialo) { $cialo = "# Ustalenia globalne" }
-  return ($cialo + $nl + $nl + $szkielet + $blok + $nl)
+  return ($cialo + $nl + $nl + $szkielet.TrimEnd() + $nl)
 }
 
 # Tekst bez sekcji "Co wiem" (do -UsunDane): od naglowka do nastepnego "## " albo znacznika
