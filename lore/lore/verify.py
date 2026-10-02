@@ -287,14 +287,14 @@ def _clean(raw: list[str]) -> list[str]:
 # the fact may well be true over there. Such a fact is simply not checkable here.
 _ELSEWHERE = re.compile(
     r"\b(?:na|w)\s+(?:laptopie|serwerze|maszynie|komputerze|hoscie|hoście)\b"
-    r"|\bmagazyn2\b"
     r"|\b(?:192\.168|10\.)\d",
     re.IGNORECASE,
 )
 
 
 def on_another_machine(text: str) -> bool:
-    return bool(_ELSEWHERE.search(text))
+    local = machine_words().elsewhere_re
+    return bool(_ELSEWHERE.search(text) or (local and local.search(text)))
 
 
 # The user works on two machines, and one fact may name the path on each: 'na biurowej w
@@ -308,7 +308,77 @@ _CLAUSE_END = re.compile(r";|\.\s")
 
 
 def _names_other_machine(text: str) -> bool:
-    return bool(_OTHER_MACHINE.search(_HOME_DIRECTORY.sub(" ", text)))
+    text = _HOME_DIRECTORY.sub(" ", text)
+    local = machine_words().other_machine_re
+    return bool(_OTHER_MACHINE.search(text) or (local and local.search(text)))
+
+
+# The names of the user's other computers and the words that point at his second machine (the
+# account name there) are his own, so they are not written above - the repository is public (P67).
+# They come from ~/.claude/mr/lokalne.json, the settings of THIS machine kept outside the repo
+# (the PowerShell side reads the same file, narzedzia\instalacja\stan.ps1):
+#     "lore": {"inne_komputery": ["magazyn2"], "druga_maszyna": ["jan"]}
+# inne_komputery: a fact naming one is not checkable here at all (as 'na laptopie' above);
+# druga_maszyna: only the path the fact ties to it is let go (as 'na domowej').
+# No file, no field = the general words alone: a path on such a machine is then flagged like any
+# missing path - a possible false alarm, never a silent pass. A file that cannot be read is said
+# out loud in the state of the run (_reason) and the general words go on alone.
+LOCAL_SETTINGS = CLAUDE_HOME / "mr" / "lokalne.json"
+
+
+def _any_word(words: tuple[str, ...]) -> re.Pattern | None:
+    if not words:
+        return None
+    return re.compile(r"\b(?:" + "|".join(re.escape(w) for w in words) + r")\b", re.IGNORECASE)
+
+
+@dataclass
+class MachineWords:
+    elsewhere: tuple[str, ...] = ()
+    other_machine: tuple[str, ...] = ()
+    problem: str = ""  # why the file could not be used; '' when it is fine or simply absent
+
+    def __post_init__(self) -> None:
+        self.elsewhere_re = _any_word(self.elsewhere)
+        self.other_machine_re = _any_word(self.other_machine)
+
+
+_machine_words_cache: dict = {}
+
+
+def machine_words(path: Path | None = None) -> MachineWords:
+    """The local words of lokalne.json — read again only when the file changes."""
+    path = path or LOCAL_SETTINGS
+    try:
+        st = path.stat()
+    except FileNotFoundError:
+        return MachineWords()
+    except OSError as e:
+        return MachineWords(problem=f"{path}: {e}")
+    key = (str(path), st.st_mtime_ns, st.st_size)
+    if key not in _machine_words_cache:
+        _machine_words_cache.clear()
+        _machine_words_cache[key] = _read_machine_words(path)
+    return _machine_words_cache[key]
+
+
+def _read_machine_words(path: Path) -> MachineWords:
+    try:
+        raw = path.read_bytes()
+        if b"\0" in raw:
+            raise ValueError("bajty 0x00 w srodku (uszkodzony zapis)")
+        section = json.loads(raw.decode("utf-8-sig")).get("lore") or {}
+
+        def words(key: str) -> tuple[str, ...]:
+            value = section.get(key) or []
+            if not isinstance(value, list) or not all(isinstance(w, str) for w in value):
+                raise ValueError(f"pole lore.{key} ma byc lista napisow")
+            return tuple(w.strip() for w in value if w.strip())
+
+        return MachineWords(words("inne_komputery"), words("druga_maszyna"))
+    except (OSError, ValueError, AttributeError) as e:  # JSONDecodeError is a ValueError
+        log(f"local settings {path} unreadable ({e}) - only the general words are used")
+        return MachineWords(problem=f"{path}: {e}")
 
 
 def _lead_ins(text: str, paths: list[str]) -> dict[str, str]:
@@ -2102,6 +2172,9 @@ def _reason(r: dict) -> str:
     if r["no_room"]:
         alarms.append(f"UWAGA: {len(r['no_room'])} zestawien bez miejsca na odsylacz (prog"
                       f" {STABLE_LIMIT} znakow) - zostaly w biezacej, pliku nie zalozono")
+    if r.get("local_settings"):
+        alarms.append(f"UWAGA: ustawienia lokalne nieczytelne ({r['local_settings']}) - nazwy"
+                      f" innych komputerow nieznane, ich sciezki moga wyjsc jako niepotwierdzone")
     reason = _plain_reason(r)
     if r["new_files"]:
         reason += f"; nowe pliki wiedzy z odsylaczem: {', '.join(r['new_files'])}"
@@ -2174,7 +2247,8 @@ def run(dry_run: bool = False, exists=None, day: str | None = None) -> dict:
            "expired": [], "own_old": [], "references": [], "stable_chars": 0, "compared": 0,
            "replaced": [], "slept": [], "woken": [], "pending": 0, "changes": [],
            "report": [], "powod": "", "new_files": [], "pointers_added": [], "unpointed": [],
-           "unnamed": [], "no_room": [], "archived": [], "archive_failed": 0}
+           "unnamed": [], "no_room": [], "archived": [], "archive_failed": 0,
+           "local_settings": machine_words().problem}
     files = instruction_files()
     out["files"] = [str(path) for path in files]
     ws = Workspace()

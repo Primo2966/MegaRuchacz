@@ -214,10 +214,10 @@
   #   Inne   - znane zrodlo, ale poza opieka MegaRuchacza (Uwaga mowi dlaczego).
   # Kazdy inny katalog spoza bazy zakladka oznacza "zrodlo nieznane" - bez zgadywania.
   # Pola: Folder (nazwa katalogu u uzytkownika), Opis (po polsku, dla laika), Skad, Uwaga.
-  Wlasne = @(
-    @{ Folder = 'connecting-to-magazyn2'; Opis = 'Jak łączyć się z komputerem Magazyn2 w biurze (SSH), co na nim działa i gdzie szukać dzienników.'; Skad = 'Napisany w Twojej rozmowie 19.08.2026 (projekt projekt-g).' }
-    @{ Folder = 'sqp-slowa-kluczowe';       Opis = 'Jak czytać raporty Amazon SQP i decydować, które słowa kluczowe wpisać do tytułu oferty.'; Skad = 'Napisany na Twoje zlecenie 16.09.2026 (projekt projekt-d).' }
-  )
+  # Wlasne skille konkretnego uzytkownika (z nazwami jego komputerow i projektow) NIE stoja tutaj -
+  # repo jest publiczne (P67). Dochodza z pola skille.wlasne w ~\.claude\mr\lokalne.json tego komputera
+  # (te same pola: folder, opis, skad); narzedzia\skille.ps1 dokleja je do tej listy.
+  Wlasne = @()
   Inne = @(
     @{ Folder = 'orchestration'; Opis = 'Koordynacja wielu agentów w aplikacji Orca: wiadomości, zadania, czekanie na wyniki.'; Skad = 'Repozytorium stablyai/orca (aplikacja Orca), wgrany 09.09.2026 narzędziem „skills” (npx skills).'; Uwaga = 'Aktualizuje go narzędzie „skills” albo Orca, nie MegaRuchacz - to dowiązanie do katalogu ~\.agents\skills, wspólnego z Codeksem.' }
     @{ Folder = 'synced';        Opis = 'Skille z Twojego konta claude.ai (np. pdf, xlsx), w podkatalogu.'; Skad = 'Kopia z konta claude.ai, którą dogrywa i odświeża sam Claude Code.'; Uwaga = 'Nie ruszać ręcznie - Claude Code nadpisuje ten katalog przy każdej synchronizacji.' }

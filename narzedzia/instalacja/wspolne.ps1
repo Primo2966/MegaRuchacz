@@ -253,9 +253,10 @@ function Rejestr-Do-Wyniku($s, [string]$dom) {
 
 # Zapis jak Ustaw-Modul (stan.ps1), z jednym dodatkiem. Gdy rejestru jeszcze nie ma (instalacja
 # sprzed instalatora), pierwszy zapis go ZAKLADA - a narzedzia\kopia-zapasowa.ps1 z rejestrem bez
-# pola "kopia" konczy sie bledem (P59d: bez rejestru bierze kopia-zapasowa-domyslne.json). Wlaczona
-# dotad kopia stanelaby wiec przez instalacje zupelnie innego modulu. Dlatego przy zakladaniu
-# rejestru z wlaczona kopia pole "kopia" dostaje te same ustawienia domyslne - kopia idzie jak szla.
+# pola "kopia" konczy sie bledem (P59d: bez rejestru bierze ustawienia z Kopia-Bez-Rejestru - pole
+# kopia z ~\.claude\mr\lokalne.json, a bez niego szablon z repo, P67). Wlaczona dotad kopia stanelaby
+# wiec przez instalacje zupelnie innego modulu. Dlatego przy zakladaniu rejestru z wlaczona kopia pole
+# "kopia" dostaje te same ustawienia, ktore kopia brala dotad - kopia idzie jak szla.
 function Zapisz-Modul([string]$nazwa, [bool]$wlaczony, [string]$dom) {
   $slowo = if ($wlaczony) { "wlaczony" } else { "wylaczony" }
   if ($script:MR.proba) { Plan "rejestr modulow: $nazwa = $slowo"; return }
@@ -265,13 +266,14 @@ function Zapisz-Modul([string]$nazwa, [bool]$wlaczony, [string]$dom) {
   $zakladam = ($s.zrodlo -eq "domyslne")
   $s.moduly | Add-Member -NotePropertyName $nazwa -NotePropertyValue $wlaczony -Force
   if ($zakladam -and [bool]$s.moduly.kopia -and -not $s.kopia) {
-    $plikDom = Join-Path $Zrodlo "narzedzia\kopia-zapasowa-domyslne.json"
     try {
-      $d = (New-Object System.Text.UTF8Encoding($false)).GetString([System.IO.File]::ReadAllBytes($plikDom)).TrimStart([char]0xFEFF) | ConvertFrom-Json
-      $s | Add-Member -NotePropertyName kopia -NotePropertyValue ([pscustomobject]@{ zrodla = @($d.zrodla); cel = $d.cel; wykluczenia = @($d.wykluczenia) }) -Force
-      Krok "zakladam rejestr modulow, a kopia zapasowa jest wlaczona - jej dotychczasowe ustawienia (kopia-zapasowa-domyslne.json: cel $($d.cel)) ida do pola kopia, kopia idzie dalej jak szla"
+      $d = Kopia-Bez-Rejestru $Zrodlo $dom
+      $k = $d.Kopia
+      $s | Add-Member -NotePropertyName kopia -NotePropertyValue ([pscustomobject]@{ zrodla = @($k.zrodla); cel = $k.cel; wykluczenia = @($k.wykluczenia) }) -Force
+      Krok "zakladam rejestr modulow, a kopia zapasowa jest wlaczona - jej dotychczasowe ustawienia ($($d.Plik): cel $($k.cel)) ida do pola kopia, kopia idzie dalej jak szla"
+      if (-not $k.cel) { Ostrzezenie "w dotychczasowych ustawieniach kopii ($($d.Plik)) nie ma celu - kopia zapasowa zatrzyma sie z bledem, dopoki nie wybierzesz jej celu w oknie instalatora" }
     } catch {
-      Ostrzezenie "zakladam rejestr modulow bez ustawien kopii (nie odczytalem $plikDom : $($_.Exception.Message)) - kopia zapasowa zatrzyma sie z bledem, dopoki nie wybierzesz jej celu w oknie instalatora"
+      Ostrzezenie "zakladam rejestr modulow bez ustawien kopii (nie odczytalem ich: $($_.Exception.Message)) - kopia zapasowa zatrzyma sie z bledem, dopoki nie wybierzesz jej celu w oknie instalatora"
     }
   }
   Zapisz-Instalacje $s $dom

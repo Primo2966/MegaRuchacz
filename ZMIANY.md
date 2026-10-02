@@ -395,7 +395,7 @@ trzecia — poprawka.
 ## 0.20.1 — 2026-09-25
 
 - **Automat nie flaguje już ścieżek z drugiego komputera.** Ścieżka opisana jako
-  „na domowej”, „w domu” albo „<login-domowy>” nie dostaje znacznika „niepotwierdzone” tylko
+  „na domowej”, „w domu” albo „`<login-domowy>`” nie dostaje znacznika „niepotwierdzone” tylko
   dlatego, że nie ma jej na tym komputerze.
 
 ## 0.20.0 — 2026-09-24

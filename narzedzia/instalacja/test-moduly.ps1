@@ -651,7 +651,7 @@ function Scenariusz-Kopia {
   New-Item -ItemType Directory -Force -Path (Join-Path $dom "dane"), (Join-Path $dom "dane\cache") | Out-Null
   . (Join-Path $Repo "narzedzia\instalacja\stan.ps1")
   $r = Modul "kopia" "Instaluj" $dom
-  Sprawdz "kopia: bez rejestru = odmowa z odeslaniem do ustawien domyslnych skryptu kopii" (($r.Kod -eq 1) -and ($r.W.komunikat -match "kopia-zapasowa-domyslne\.json") -and -not (Zadanie "MegaRuchaczKopia") -and -not (Rejestr $dom)) $r.Tekst
+  Sprawdz "kopia: bez rejestru = odmowa z odeslaniem do ustawien skryptu kopii (lokalne.json, szablon)" (($r.Kod -eq 1) -and ($r.W.komunikat -match "lokalne\.json") -and ($r.W.komunikat -match "kopia-zapasowa-domyslne\.json") -and -not (Zadanie "MegaRuchaczKopia") -and -not (Rejestr $dom)) $r.Tekst
   $s = Czytaj-Instalacje $dom; Zapisz-Instalacje $s $dom
   $r = Modul "kopia" "Instaluj" $dom
   Sprawdz "kopia: rejestr bez pola kopia = odmowa" (($r.Kod -eq 1) -and ($r.W.komunikat -match "nie ma ustawien kopii") -and -not (Zadanie "MegaRuchaczKopia")) $r.Tekst
@@ -681,14 +681,44 @@ function Scenariusz-Kopia {
   Sprawdz "kopia: cel bez zrodel = UWAGA 'tylko pliki Claude'a i Codeksa'" (($r.Kod -eq 0) -and (($r.Uwagi -join " ") -match "tylko pliki Claude'a i Codeksa") -and ($r.W.szczegoly.tylko_pliki_claude_codex -eq $true)) $r.Tekst
   [void](Modul "kopia" "Usun" $dom2)
   # komputer sprzed instalatora z wlaczona kopia: pierwszy zapis rejestru (tu: wylaczenie skilli)
-  # przenosi ustawienia domyslne do pola kopia - inaczej kopia-zapasowa.ps1 skonczylaby sie bledem
+  # przenosi ustawienia, na ktorych kopia dotad chodzila - pole kopia ustawien tego komputera
+  # (~\.claude\mr\lokalne.json, P67) - do pola kopia; inaczej kopia-zapasowa.ps1 skonczylaby sie bledem
+  $utf8 = New-Object System.Text.UTF8Encoding($false)
+  $lok = [pscustomobject]@{ kopia = [pscustomobject]@{ zrodla = @("~\dane", "C:\dev"); cel = (Join-Path $T "kopie-cel-3")
+    wykluczenia = @([pscustomobject]@{ sciezka = "~\dane\cache"; powod = "test"; katalog = $true }, [pscustomobject]@{ sciezka = "C:\dev\tools\git"; powod = "test"; katalog = $true }) } }
   $dom3 = Dom "kopia-sprzed-rejestru"
   New-Item -ItemType Directory -Force -Path (Join-Path $dom3 ".claude\mr") | Out-Null
   Set-Content -LiteralPath (Join-Path $dom3 ".claude\mr\kopia-stan.txt") -Value "stan=OK" -Encoding ASCII
+  [System.IO.File]::WriteAllText((Join-Path $dom3 ".claude\mr\lokalne.json"), ($lok | ConvertTo-Json -Depth 5), $utf8)
   $r = Modul "skille" "Usun" $dom3
   $rj = Rejestr $dom3
+  Sprawdz "kopia: zalozenie rejestru przenosi ustawienia kopii z lokalne.json (cel, zrodla, wykluczenia)" (($r.Kod -eq 0) -and $rj.moduly.kopia -and ($rj.kopia.cel -eq $lok.kopia.cel) -and (@($rj.kopia.wykluczenia).Count -eq 2) -and (@($rj.kopia.zrodla).Count -eq 2)) ($rj | ConvertTo-Json -Compress -Depth 5)
+  # proba negatywna: bez lokalne.json idzie szablon z repo - bez celu i wykluczen (nic prywatnego z repo),
+  # a brak celu jest powiedziany, nie przemilczany
+  $dom4 = Dom "kopia-bez-lokalnych"
+  New-Item -ItemType Directory -Force -Path (Join-Path $dom4 ".claude\mr") | Out-Null
+  Set-Content -LiteralPath (Join-Path $dom4 ".claude\mr\kopia-stan.txt") -Value "stan=OK" -Encoding ASCII
+  $r = Modul "skille" "Usun" $dom4
+  $rj = Rejestr $dom4
   $dom_json = [System.IO.File]::ReadAllText((Join-Path $Repo "narzedzia\kopia-zapasowa-domyslne.json")) | ConvertFrom-Json
-  Sprawdz "kopia: zalozenie rejestru przenosi ustawienia domyslne kopii (cel, zrodla, wykluczenia)" (($r.Kod -eq 0) -and $rj.moduly.kopia -and ($rj.kopia.cel -eq $dom_json.cel) -and (@($rj.kopia.wykluczenia).Count -eq @($dom_json.wykluczenia).Count) -and (@($rj.kopia.zrodla).Count -eq @($dom_json.zrodla).Count)) ($rj | ConvertTo-Json -Compress -Depth 5)
+  Sprawdz "kopia: bez lokalne.json rejestr dostaje szablon z repo (bez celu i wykluczen) i UWAGE o braku celu" (($r.Kod -eq 0) -and $rj.moduly.kopia -and (-not $rj.kopia.cel) -and (-not $dom_json.cel) -and (@($rj.kopia.wykluczenia).Count -eq 0) -and (@($rj.kopia.zrodla).Count -eq @($dom_json.zrodla).Count) -and (($r.Uwagi -join " ") -match "nie ma celu")) ($r.Tekst + " | " + ($rj | ConvertTo-Json -Compress -Depth 5))
+  # sam skrypt kopii bez rejestru (-Proba nic nie pisze): ustawienia z lokalne.json; bez nich szablon bez
+  # celu = BLAD z powodem; lokalne.json wyzerowany = BLAD z powodem, a nie ciche przejscie na szablon
+  $dom5 = Dom "kopia-skrypt"
+  New-Item -ItemType Directory -Force -Path (Join-Path $dom5 ".claude\mr"), (Join-Path $dom5 "dane") | Out-Null
+  [System.IO.File]::WriteAllText((Join-Path $dom5 "dane\plik.txt"), "tresc", $utf8)
+  $lok5 = [pscustomobject]@{ kopia = [pscustomobject]@{ zrodla = @("~\dane"); cel = (Join-Path $T "kopie-cel-5"); wykluczenia = @() } }
+  $plik5 = Join-Path $dom5 ".claude\mr\lokalne.json"
+  [System.IO.File]::WriteAllText($plik5, ($lok5 | ConvertTo-Json -Depth 5), $utf8)
+  $skryptKopii = Join-Path $Repo "narzedzia\kopia-zapasowa.ps1"
+  $r = Uruchom $skryptKopii @("-Proba", "-KatalogDomowy", $dom5) (Srodowisko $dom5) 300
+  Sprawdz "kopia-zapasowa -Proba bez rejestru: zrodla i cel z lokalne.json" (($r.Kod -eq 0) -and ($r.Tekst -match "ustawienia: ustawienia tego komputera") -and ($r.Tekst -match "kopie-cel-5") -and ($r.Tekst -match "do skopiowania: 1 plikow")) $r.Tekst
+  Remove-Item -LiteralPath $plik5 -Force
+  $r = Uruchom $skryptKopii @("-Proba", "-KatalogDomowy", $dom5) (Srodowisko $dom5) 300
+  Sprawdz "kopia-zapasowa -Proba bez rejestru i bez lokalne.json: szablon bez celu = BLAD z powodem" (($r.Kod -eq 1) -and ($r.Tekst -match "nie ma celu kopii") -and ($r.Tekst -match "szablon")) $r.Tekst
+  [System.IO.File]::WriteAllBytes($plik5, (New-Object byte[] 64))
+  $r = Uruchom $skryptKopii @("-Proba", "-KatalogDomowy", $dom5) (Srodowisko $dom5) 300
+  Sprawdz "kopia-zapasowa -Proba: lokalne.json wyzerowany = BLAD z powodem, bez cichego szablonu" (($r.Kod -eq 1) -and ($r.Tekst -match "nie umiem odczytac ustawien lokalnych") -and ($r.Tekst -match "0x00")) $r.Tekst
 }
 
 function Scenariusz-Rejestr {

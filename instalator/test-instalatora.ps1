@@ -493,8 +493,9 @@ $script:TestKroki = @(
 }
 
 # --- C. zmiana bez rejestru (instalacja sprzed rejestru) -----------------------------
-# Komputer z kopia zapasowa sprzed rejestru (jak biuro): ustawienia kopii maja przyjsc z
-# narzedzia\kopia-zapasowa-domyslne.json (cel, zrodla, 7 wykluczen) i trafic do rejestru bez zmian (P59d).
+# Komputer z kopia zapasowa sprzed rejestru (jak biuro): ustawienia kopii maja przyjsc z pola kopia
+# ustawien tego komputera ~\.claude\mr\lokalne.json (cel, zrodla, wykluczenia - poza publicznym repo,
+# P67) i trafic do rejestru bez zmian (P59d). Proba negatywna bez lokalne.json - nizej, 'bezlokalnych'.
 if (Chce 'bezrejestru') {
   $dom = Nowy-Dom 'bezrejestru'
   Dom-Z-Baza $dom
@@ -502,7 +503,15 @@ if (Chce 'bezrejestru') {
   [System.IO.File]::WriteAllText((Join-Path $dom '.claude\.megaruchacz-global'), "zrodlo: $Repo`r`nwersja: 0.25.2`r`n", $Utf8)
   $backup = Join-Path $Robocze 'Backup'
   [System.IO.File]::WriteAllText((Join-Path $dom '.claude\mr\kopia-stan.txt'), "stan=OK`r`nostatnia=2026-10-02 08:54:06`r`ncel=$backup\zmiany\2026-10-02`r`n", $Utf8)
-  $dom_json = [System.IO.File]::ReadAllText((Join-Path $Repo 'narzedzia\kopia-zapasowa-domyslne.json'), $Utf8) | ConvertFrom-Json
+  $dom_json = [pscustomobject]@{
+    zrodla = @('~\.claude', '~\.claude.json', '~\.codex', 'C:\dev')
+    cel = (Join-Path $Robocze 'Kopia-z-ustawien-lokalnych')
+    wykluczenia = @(
+      [pscustomobject]@{ sciezka = 'C:\dev\tools\git'; powod = 'program przenosny - odtwarzalny z instalatora'; katalog = $true },
+      [pscustomobject]@{ sciezka = 'C:\dev\projekt-e\nagrania'; powod = 'nagrania diagnostyczne'; katalog = $true },
+      [pscustomobject]@{ sciezka = 'C:\dev\projekt-f\_tools\cache'; powod = 'pamiec podreczna narzedzia'; katalog = $true })
+  }
+  [System.IO.File]::WriteAllText((Join-Path $dom '.claude\mr\lokalne.json'), ([pscustomobject]@{ kopia = $dom_json } | ConvertTo-Json -Depth 5), (New-Object System.Text.UTF8Encoding($false)))
   $celJson = "$($dom_json.cel)".TrimEnd('\')
   $ileWykl = @($dom_json.wykluczenia).Count
   $sc = Zapisz-Scenariusz 'bezrejestru' (@'
@@ -523,9 +532,32 @@ $script:TestKroki = @(
   Wynik 'zmiana bez rejestru - rejestr zapisany' $ok ($(if ($rej) { $rej.moduly | ConvertTo-Json -Compress } else { 'brak pliku' }))
   $wy = @(); if ($rej -and $rej.kopia) { $wy = @($rej.kopia.wykluczenia) }
   $ok = $rej -and ($rej.kopia.cel -eq $celJson) -and ($wy.Count -eq $ileWykl) -and (@($wy | Where-Object { $_.sciezka -and $_.powod -and ($_.katalog -eq $true) }).Count -eq $ileWykl) -and (@($rej.kopia.zrodla) -contains (Join-Path $dom '.claude')) -and (@($rej.kopia.zrodla) -contains 'C:\dev')
-  Wynik 'zmiana bez rejestru - ustawienia kopii przeniesione z kopia-zapasowa-domyslne.json' $ok ($(if ($rej) { $rej.kopia | ConvertTo-Json -Compress -Depth 5 } else { 'brak pliku' }))
+  Wynik 'zmiana bez rejestru - ustawienia kopii przeniesione z lokalne.json' $ok ($(if ($rej) { $rej.kopia | ConvertTo-Json -Compress -Depth 5 } else { 'brak pliku' }))
   $w = Wszystkie-Wywolania
   Wynik 'zmiana bez rejestru - zaden skrypt nie ruszony' ($w.Count -eq 0) "wywolan: $($w.Count) $(Kolejnosc $w)"
+}
+
+# --- C2. jak C, ale bez lokalne.json (proba negatywna, P67) --------------------------
+# Szablon z repo (narzedzia\kopia-zapasowa-domyslne.json) nie ma celu ani wykluczen i okno go nie bierze:
+# cel z folderu ostatniej kopii (kopia-stan.txt), zero wykluczen - nic z publicznego repo nie udaje
+# ustawien tego komputera.
+if (Chce 'bezlokalnych') {
+  $dom = Nowy-Dom 'bezlokalnych'
+  Dom-Z-Baza $dom
+  New-Item -ItemType Directory -Force -Path (Join-Path $dom '.claude\mr') | Out-Null
+  [System.IO.File]::WriteAllText((Join-Path $dom '.claude\.megaruchacz-global'), "zrodlo: $Repo`r`nwersja: 0.25.2`r`n", $Utf8)
+  $backup = Join-Path $Robocze 'Backup-bez-lokalnych'
+  [System.IO.File]::WriteAllText((Join-Path $dom '.claude\mr\kopia-stan.txt'), "stan=OK`r`nostatnia=2026-10-02 08:54:06`r`ncel=$backup\zmiany\2026-10-02`r`n", $Utf8)
+  $sc = Zapisz-Scenariusz 'bezlokalnych' (@'
+$script:TestKroki = @(
+  @{ N = 'wybor bez rejestru i bez lokalne.json'; Czekaj = { $script:Ekran -eq 'wybor' }; Sprawdz = { Tak (($script:Tryb -eq 'zmiana') -and $script:Wybor.Moduly.kopia) "tryb $($script:Tryb), kopia zaznaczona (jest kopia-stan.txt)" } },
+  @{ N = 'proba negatywna: cel z ostatniej kopii, zadnych wykluczen z repo'; Sprawdz = { Tak (($script:KopiaNaStart.Skad -eq 'ostatnia') -and ($script:Wybor.KopiaCel -eq '__CEL__') -and (@($script:Wybor.KopiaWykluczenia).Count -eq 0)) "skad $($script:KopiaNaStart.Skad), cel $($script:Wybor.KopiaCel), wykluczen $(@($script:Wybor.KopiaWykluczenia).Count)" } }
+)
+'@).Replace('__CEL__', $backup)
+  Wyczysc-Wywolania
+  $r = Uruchom-Ps $Okno (Argumenty-Okna $dom $sc.Plik $Atrapy) 120
+  [void](Ocen-Raport 'zmiana bez lokalne.json' $sc $r)
+  Wynik 'zmiana bez lokalne.json - rejestr nie zapisany (nic nie klikniete)' (-not (Test-Path -LiteralPath (Join-Path $dom '.claude\mr\instalacja.json'))) ''
 }
 
 # --- D. uszkodzony rejestr (proba negatywna: nic nie usuwa) --------------------------

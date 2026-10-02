@@ -1066,6 +1066,21 @@ def test_a_run_that_added_nothing_says_why(sandbox):
     assert s["powod"].startswith("nic nie doszlo") and "odrzucone" in s["powod"]
 
 
+def test_probe_unreadable_local_settings_reach_the_state_of_the_run(sandbox, monkeypatch):
+    """The words of this machine (lokalne.json) broken: the run goes on, but says so (P67)."""
+    p = sandbox / "lokalne.json"
+    p.write_bytes(b"\x00" * 16)  # zeroed, as after a power cut
+    monkeypatch.setattr(verify, "LOCAL_SETTINGS", p)
+    waiting_room(sandbox, entry(f"Robot leży w `{MISSING}`."))
+
+    verify.run(day="2026-09-17")
+
+    assert state(sandbox)["powod"].startswith("UWAGA: ustawienia lokalne nieczytelne")
+    p.write_text('{"lore": {"druga_maszyna": ["jan"]}}', encoding="utf-8")
+    verify.run(day="2026-09-17")
+    assert "ustawienia lokalne" not in state(sandbox)["powod"]  # a healthy file raises nothing
+
+
 def test_an_empty_waiting_room_still_reports_a_run(sandbox):
     verify.run(day="2026-09-17")
 

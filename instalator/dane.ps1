@@ -219,12 +219,13 @@ function Rozwin-Tylde([string]$p) {
 
 # Ustawienia kopii na start - skad, w tej kolejnosci:
 #  1. pole kopia rejestru ({zrodla, cel, wykluczenia});
-#  2. kopia chodzi bez rejestru (jest ~\.claude\mr\kopia-stan.txt): narzedzia\kopia-zapasowa-domyslne.json,
-#     czyli DOKLADNIE to, co dzis kopiuje kopia-zapasowa.ps1 bez rejestru - razem z wykluczeniami
-#     (wymog P59d: pierwszy zapis rejestru na takim komputerze niczego nie zmienia po cichu);
-#     bez tego pliku - folder ostatniej kopii z kopia-stan.txt;
+#  2. kopia chodzi bez rejestru (jest ~\.claude\mr\kopia-stan.txt): pole kopia ustawien tego komputera
+#     ~\.claude\mr\lokalne.json (stan.ps1 Kopia-Bez-Rejestru), czyli DOKLADNIE to, co dzis kopiuje
+#     kopia-zapasowa.ps1 bez rejestru - razem z wykluczeniami (wymog P59d: pierwszy zapis rejestru na
+#     takim komputerze niczego nie zmienia po cichu); bez tego pola - folder ostatniej kopii z kopia-stan.txt;
 #  3. nowa kopia: Dysk Google, a bez niego Dokumenty; zrodla = znane foldery, ktore istnieja.
-# Plik domyslnych NIE jest brany dla nowej kopii - ma sciezki komputera biurowego.
+# Szablon z repo (narzedzia\kopia-zapasowa-domyslne.json) NIE jest brany - nie ma celu ani wykluczen,
+# a prawdziwe ustawienia komputera leza poza publicznym repo (P67).
 function Poczatkowa-Kopia {
   $cel = $null; $skad = ''
   $zrodla = New-Object System.Collections.ArrayList
@@ -233,13 +234,10 @@ function Poczatkowa-Kopia {
   $rej = $script:Instalacja.kopia
   if ($rej -and ($rej.cel -or @($rej.zrodla).Count)) { $zestaw = $rej; $skad = 'rejestr' }
   elseif (Test-Path -LiteralPath (Join-Path $script:Dom '.claude\mr\kopia-stan.txt')) {
-    $plik = Join-Path $script:Zrodlo 'narzedzia\kopia-zapasowa-domyslne.json'
-    if (Test-Path -LiteralPath $plik) {
-      try {
-        $zestaw = ([System.IO.File]::ReadAllText($plik, (New-Object System.Text.UTF8Encoding($false))).TrimStart([char]0xFEFF) | ConvertFrom-Json)
-        $skad = 'dotychczasowe'
-      } catch { Zanotuj-Wywrotke "odczyt dotychczasowych ustawien kopii $plik" $_ }
-    }
+    try {
+      $d = Kopia-Bez-Rejestru $script:Zrodlo $script:Dom
+      if ($d.Lokalne) { $zestaw = $d.Kopia; $skad = 'dotychczasowe' }
+    } catch { Zanotuj-Wywrotke "odczyt dotychczasowych ustawien kopii ($(Sciezka-Lokalnych $script:Dom))" $_ }
     if (-not $zestaw) {
       $ost = Cel-Z-Ostatniej-Kopii
       if ($ost) { $cel = $ost; $skad = 'ostatnia' }

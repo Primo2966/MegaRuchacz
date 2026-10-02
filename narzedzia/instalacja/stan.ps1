@@ -142,3 +142,59 @@ function Ustaw-Modul([string]$Nazwa, [bool]$Wlaczony, [string]$KatalogDomowy = $
   $s.moduly | Add-Member -NotePropertyName $Nazwa -NotePropertyValue $Wlaczony -Force
   Zapisz-Instalacje $s $KatalogDomowy
 }
+
+# ---------------------------------------------------------------- ustawienia lokalne (P67)
+# Plik: <KatalogDomowy>\.claude\mr\lokalne.json (UTF-8) - ustawienia TEGO komputera, ktorych nie ma
+# w repozytorium, bo repo jest publiczne: sciezki, nazwy komputerow i projektow uzytkownika.
+# Nikt go nie zaklada sam - piszesz go Ty (albo kierownik przy przenosinach). Pola:
+#   "kopia":  { "zrodla": [...], "cel": "...", "wykluczenia": [...] }  - kopia BEZ rejestru instalacji
+#             (format jak pole kopia rejestru i narzedzia\kopia-zapasowa-domyslne.json)
+#   "lore":   { "inne_komputery": [...], "druga_maszyna": [...] }  - lore\lore\verify.py: nazwy innych
+#             komputerow i slowa wskazujace druga maszyne (np. konto na niej) w sciezkach faktow
+#   "skille": { "wlasne": [{ "folder": "...", "opis": "...", "skad": "..." }] }  - narzedzia\skille.ps1:
+#             Twoje wlasne skille (jak lista Wlasne w skille\katalog.psd1)
+# Brak pliku albo pola = zachowanie domyslne, bez niczego prywatnego. Plik nieczytelny = pole "blad";
+# kto czyta, ten melduje (Cisza jest zakazana) i nie zgaduje w zamian.
+
+function Sciezka-Lokalnych([string]$KatalogDomowy = $HOME) {
+  return (Join-Path $KatalogDomowy '.claude\mr\lokalne.json')
+}
+
+function Czytaj-Lokalne([string]$KatalogDomowy = $HOME) {
+  $p = Sciezka-Lokalnych $KatalogDomowy
+  $wynik = [pscustomobject]@{ plik = $p; jest = $false; dane = $null; blad = $null }
+  if (-not (Test-Path -LiteralPath $p)) { return $wynik }
+  $wynik.jest = $true
+  try {
+    $bajty = [System.IO.File]::ReadAllBytes($p)
+    if ($bajty.Length -eq 0) { throw 'plik jest pusty' }
+    if ([Array]::IndexOf($bajty, [byte]0) -ge 0) { throw 'plik zawiera bajty 0x00 (uszkodzony, np. po zaniku zasilania)' }
+    $j = (New-Object System.Text.UTF8Encoding($false)).GetString($bajty).TrimStart([char]0xFEFF) | ConvertFrom-Json
+    if ($j -isnot [System.Management.Automation.PSCustomObject]) { throw 'to nie jest obiekt JSON' }
+    $wynik.dane = $j
+  } catch {
+    $wynik.blad = "nie umiem odczytac ustawien lokalnych $p : $($_.Exception.Message)"
+  }
+  return $wynik
+}
+
+# Ustawienia kopii BEZ rejestru (instalacja sprzed instalatora): pole "kopia" z lokalne.json, a bez
+# niego szablon z repo (narzedzia\kopia-zapasowa-domyslne.json - bez celu, wiec kopia nie ruszy, dopoki
+# ktos go nie wybierze). Plik lokalny albo szablon nieczytelny = wyjatek: nie zgadujemy z drugiego.
+# Zwraca Plik (skad), Kopia ({zrodla, cel, wykluczenia}) i Lokalne ($true = z lokalne.json).
+function Kopia-Bez-Rejestru([string]$Zrodlo, [string]$KatalogDomowy = $HOME) {
+  $l = Czytaj-Lokalne $KatalogDomowy
+  if ($l.blad) { throw $l.blad }
+  if ($l.dane -and $l.dane.kopia) { return [pscustomobject]@{ Plik = $l.plik; Kopia = $l.dane.kopia; Lokalne = $true } }
+  $szablon = Join-Path $Zrodlo 'narzedzia\kopia-zapasowa-domyslne.json'
+  if (-not (Test-Path -LiteralPath $szablon)) { throw "nie ma szablonu ustawien kopii $szablon (a w $($l.plik) nie ma pola kopia)" }
+  try {
+    $bajty = [System.IO.File]::ReadAllBytes($szablon)
+    if ($bajty.Length -eq 0) { throw 'plik jest pusty' }
+    if ([Array]::IndexOf($bajty, [byte]0) -ge 0) { throw 'plik zawiera bajty 0x00 (uszkodzony zapis)' }
+    $k = (New-Object System.Text.UTF8Encoding($false)).GetString($bajty).TrimStart([char]0xFEFF) | ConvertFrom-Json
+  } catch {
+    throw "nie umiem odczytac szablonu ustawien kopii $szablon : $($_.Exception.Message)"
+  }
+  return [pscustomobject]@{ Plik = $szablon; Kopia = $k; Lokalne = $false }
+}

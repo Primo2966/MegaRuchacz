@@ -5,13 +5,14 @@
 #   - z rejestru instalacji ~\.claude\mr\instalacja.json, pole "kopia"
 #     {zrodla:[...], cel:"...", wykluczenia:[{sciezka, powod, katalog}]} - wybor
 #     uzytkownika z instalatora (umowa: narzedzia\instalacja\stan.ps1);
-#   - BEZ rejestru (instalacja sprzed instalatora) - z pliku obok,
-#     kopia-zapasowa-domyslne.json: te same zrodla, cel i wykluczenia projektow, co
-#     dotad, wiec komputer biurowy kopiuje jak przed zmiana;
+#   - BEZ rejestru (instalacja sprzed instalatora) - z pola "kopia" ustawien tego
+#     komputera ~\.claude\mr\lokalne.json (P67: zrodla, cel i wykluczenia projektow
+#     leza poza publicznym repo; umowa: narzedzia\instalacja\stan.ps1), a bez niego
+#     z szablonu obok, kopia-zapasowa-domyslne.json - bez celu, wiec BLAD z powodem;
 #   - -Zrodla i -Cel podane wprost wygrywaja z jednym i drugim.
 # Rejestr jest, ale bez celu kopii = BLAD z powodem (nie zgadujemy celu cudzego
 # komputera z ustawien domyslnych); z celem, ale bez listy zrodel = pliki Claude'a
-# i Codeksa i UWAGA w dzienniku; rejestr nieczytelny = ustawienia domyslne i ALARM
+# i Codeksa i UWAGA w dzienniku; rejestr nieczytelny = ustawienia jak bez rejestru i ALARM
 # w dzienniku i pliku stanu (kopia ma isc, a ktos ma sie dowiedziec).
 #
 # UKLAD KOPII - nic nigdy nie jest nadpisywane ani kasowane:
@@ -37,8 +38,8 @@
 #   kopia-zapasowa.ps1 -ZSekretami     dolacza .env, klucze SSH, ~\.claude\sekrety (domyslnie NIE)
 #   kopia-zapasowa.ps1 -ZalozZadanie   zadanie MegaRuchaczKopia, codziennie o -Godzina (12:30)
 #   kopia-zapasowa.ps1 -UsunZadanie
-#   -KatalogDomowy <kat>               podmiana katalogu domowego (testy): rejestr, "~"
-#                                      w ustawieniach, plik stanu i indeks liczone od niego
+#   -KatalogDomowy <kat>               podmiana katalogu domowego (testy): rejestr, lokalne.json,
+#                                      "~" w ustawieniach, plik stanu i indeks liczone od niego
 # Pliku logowania Claude'a (.credentials.json) i auth.json Codeksa NIE kopiujemy nigdy -
 # do odtworzenia pracy nie sa potrzebne, a daja dostep do konta.
 #
@@ -449,7 +450,7 @@ Regula '\\node\\node\.exe$' "program przenosny (node.exe) - odtwarzalny" $false
 Regula '\\minio\.exe$' "program przenosny (minio.exe) - odtwarzalny" $false
 # Wykluczenia konkretnych folderow uzytkownika (np. programy przenosne w C:\dev\tools,
 # nagrania robota w jednym z projektow) NIE sa tu - przychodza z ustawien (rejestr albo
-# kopia-zapasowa-domyslne.json) i dochodza do tej listy w Ustal-Ustawienia nizej.
+# ~\.claude\mr\lokalne.json) i dochodza do tej listy w Ustal-Ustawienia nizej.
 
 # ~\.claude i ~\.codex: katalogi techniczne. Zostaja: CLAUDE.md, wiedza, skills,
 # agents, commands, mr, projects (transkrypty), file-history, settings, lore.db.
@@ -564,21 +565,13 @@ function Kopiuj-Sqlite([string]$zrodlo, [string]$dst, [long]$czas) {
 
 # --- ustawienia: co kopiowac, dokad, czego nie (P59d) --------------------------
 # Skad - patrz naglowek. Umowa rejestru (narzedzia\instalacja\stan.ps1) wczytywana
-# kropka wewnatrz funkcji: rejestr czyta sie tym samym kodem, co u instalatora,
-# straznika i nadzorcy. "~" na poczatku sciezki = katalog domowy ($H).
-$PlikDomyslnych = Join-Path $PSScriptRoot "kopia-zapasowa-domyslne.json"
+# kropka wewnatrz funkcji: rejestr i ustawienia lokalne czyta sie tym samym kodem, co
+# u instalatora, straznika i nadzorcy. "~" na poczatku sciezki = katalog domowy ($H).
 
 function Rozwin-Sciezke([string]$p) {
   $p = "$p".Trim()
   if ($p -match '^~(\\|/|$)') { $p = $H + $p.Substring(1) }
   return $p.TrimEnd('\')
-}
-
-function Czytaj-Json([string]$plik) {
-  $b = [IO.File]::ReadAllBytes($plik)
-  if ($b.Length -eq 0) { throw "plik $plik jest pusty" }
-  if ([Array]::IndexOf($b, [byte]0) -ge 0) { throw "plik $plik ma w srodku bajty 0x00 (uszkodzony zapis)" }
-  return ((New-Object Text.UTF8Encoding($false)).GetString($b).TrimStart([char]0xFEFF) | ConvertFrom-Json)
 }
 
 # Zwraca Skad (opis po ludzku), Zrodla, Cel, Wykluczenia, Alarm (rejestr nieczytelny),
@@ -598,13 +591,16 @@ function Ustal-Ustawienia {
     if (-not $s.kopia) { $u.Brak = "rejestr instalacji $rejestr nie ma ustawien kopii (pole kopia: zrodla i cel) - wybierz je w instalatorze"; return $u }
     $k = $s.kopia
   } else {
-    if (-not (Test-Path -LiteralPath $PlikDomyslnych)) { throw "nie ma ustawien domyslnych kopii $PlikDomyslnych (a rejestru instalacji $rejestr nie ma albo jest nieczytelny)" }
-    $k = Czytaj-Json $PlikDomyslnych
+    # rejestru nie ma albo jest nieczytelny: ustawienia tego komputera (lokalne.json), a bez nich
+    # szablon z repo; lokalne.json nieczytelny = wyjatek, czyli BLAD z powodem (Bez-Ustawien)
+    $d = Kopia-Bez-Rejestru (Split-Path -Parent $PSScriptRoot) $H
+    $k = $d.Kopia
+    $opis = if ($d.Lokalne) { "ustawienia tego komputera $($d.Plik)" } else { "szablon $($d.Plik) (w $(Sciezka-Lokalnych $H) nie ma pola kopia)" }
     if ($s.blad) {
-      $u.Skad = "ustawienia domyslne $PlikDomyslnych (REJESTR INSTALACJI NIECZYTELNY)"
-      $u.Alarm = "ALARM rejestr instalacji nieczytelny ($($s.blad)) - zrodla, cel i wykluczenia kopii wziete z ustawien domyslnych $PlikDomyslnych"
+      $u.Skad = "$opis (REJESTR INSTALACJI NIECZYTELNY)"
+      $u.Alarm = "ALARM rejestr instalacji nieczytelny ($($s.blad)) - zrodla, cel i wykluczenia kopii wziete z: $opis"
     } else {
-      $u.Skad = "ustawienia domyslne $PlikDomyslnych (nie ma rejestru instalacji $rejestr - instalacja sprzed instalatora)"
+      $u.Skad = "$opis (nie ma rejestru instalacji $rejestr - instalacja sprzed instalatora)"
     }
   }
   $u.Zrodla = @(@($k.zrodla) | Where-Object { "$_".Trim() } | ForEach-Object { Rozwin-Sciezke $_ })

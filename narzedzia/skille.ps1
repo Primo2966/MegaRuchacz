@@ -416,6 +416,30 @@ function Wczytaj-Katalog {
       if ($para[0] -eq "Wlasne") { $script:Wlasne += $o } else { $script:Inne += $o }
     }
   }
+  # P67: wlasne skille tego uzytkownika (z nazwami jego komputerow i projektow) leza poza publicznym
+  # repo - pole skille.wlasne w ~\.claude\mr\lokalne.json (umowa: narzedzia\instalacja\stan.ps1).
+  # Plik nieczytelny albo zly wpis nie zatrzymuje bazy, ale nie milczy: dziennik i linia UWAGA, a te
+  # skille wychodza wtedy jako "zrodlo nieznane".
+  $umowa = Join-Path $PSScriptRoot "instalacja\stan.ps1"
+  if (Test-Path -LiteralPath $umowa) {
+    . $umowa
+    $l = Czytaj-Lokalne $Dom
+    if ($l.blad) {
+      Dziennik "uwaga" "" $l.blad
+      Pisz "UWAGA: $($l.blad) - Twoje własne skille pokażę jako „źródło nieznane”."
+    } elseif ($l.dane -and $l.dane.skille) {
+      foreach ($w in @($l.dane.skille.wlasne)) {
+        if ($null -eq $w) { continue }
+        if (-not "$($w.folder)".Trim()) {
+          Dziennik "uwaga" "" "wpis w skille.wlasne pliku $($l.plik) bez pola folder - pominiety"
+          Pisz "UWAGA: wpis w skille.wlasne pliku $($l.plik) bez pola folder - pominięty."
+          continue
+        }
+        if (@($script:Wlasne | Where-Object { $_.Folder -eq "$($w.folder)" }).Count) { continue }
+        $script:Wlasne += [pscustomobject]@{ Folder = "$($w.folder)"; Opis = "$($w.opis)"; Skad = "$($w.skad)"; Uwaga = "$($w.uwaga)"; Rodzaj = "wlasny" }
+      }
+    }
+  }
   return ,$zrodla
 }
 

@@ -1,22 +1,12 @@
 {
-  "opis": "Ustawienia domyslne narzedzia\\kopia-zapasowa.ps1 - uzywane TYLKO bez rejestru instalacji (~\\.claude\\mr\\instalacja.json), czyli na instalacji sprzed instalatora; z rejestrem zrodla, cel i wykluczenia biora sie z jego pola \"kopia\" (ten sam format). To sa ustawienia komputera biurowego z 0.26.0: najpierw pliki Claude'a i Codeksa (najwazniejsze), potem C:\\dev (Lore chodzi z C:\\dev\\claude-worker\\lore, wiec jest w C:\\dev); ~\\.agents, bo tam prowadzi dowiazanie ~\\.claude\\skills\\orchestration; projekt projekt-d lezy juz na Dysku Google i nie jest kopiowany drugi raz. \"~\" na poczatku sciezki = katalog domowy. Wykluczenie: sciezka (dokladnie ta, bez wzorcow), powod (trafia do dziennika i -Proba), katalog (true = katalog, false = plik, brak = jedno i drugie).",
+  "opis": "Szablon ustawien narzedzia\\kopia-zapasowa.ps1 dla instalacji sprzed instalatora (bez rejestru ~\\.claude\\mr\\instalacja.json) - uzywany TYLKO wtedy, gdy w ustawieniach tego komputera ~\\.claude\\mr\\lokalne.json nie ma pola \"kopia\". Prawdziwe ustawienia komputera (cel kopii, foldery projektow, wykluczenia) leza w tamtym pliku, poza repozytorium, bo repo jest publiczne (P67); format pola ten sam: zrodla, cel, wykluczenia (umowa: narzedzia\\instalacja\\stan.ps1). Szablon nie ma celu, wiec kopia na nim nie ruszy - stan=BLAD z powodem, nie po cichu - dopoki cel nie stanie w lokalne.json albo w rejestrze (okno instalatora). \"~\" na poczatku sciezki = katalog domowy. Wykluczenie: sciezka (dokladnie ta, bez wzorcow), powod (trafia do dziennika i -Proba), katalog (true = katalog, false = plik, brak = jedno i drugie).",
   "zrodla": [
     "~\\.claude",
     "~\\.claude.json",
     "~\\.codex",
     "~\\.config\\opencode",
-    "~\\.agents",
-    "~\\orca",
-    "C:\\dev"
+    "~\\.agents"
   ],
-  "cel": "G:\\M\u00f3j dysk\\<folder>\\Backup",
-  "wykluczenia": [
-    { "sciezka": "C:\\dev\\tools\\git", "powod": "program przenosny (Git, PostgreSQL+pgAdmin, Node, gh) - odtwarzalny z instalatora", "katalog": true },
-    { "sciezka": "C:\\dev\\tools\\pgsql", "powod": "program przenosny (Git, PostgreSQL+pgAdmin, Node, gh) - odtwarzalny z instalatora", "katalog": true },
-    { "sciezka": "C:\\dev\\tools\\node", "powod": "program przenosny (Git, PostgreSQL+pgAdmin, Node, gh) - odtwarzalny z instalatora", "katalog": true },
-    { "sciezka": "C:\\dev\\tools\\gh", "powod": "program przenosny (Git, PostgreSQL+pgAdmin, Node, gh) - odtwarzalny z instalatora", "katalog": true },
-    { "sciezka": "C:\\dev\\projekt-e\\bledy", "powod": "nagrania diagnostyczne robota (ok. 680 MB zipow z bledow)", "katalog": true },
-    { "sciezka": "C:\\dev\\projekt-e\\nagrania", "powod": "nagrania diagnostyczne robota (ok. 680 MB zipow z bledow)", "katalog": true },
-    { "sciezka": "C:\\dev\\projekt-f\\_tools\\cache", "powod": "pamiec podreczna narzedzia", "katalog": true }
-  ]
+  "cel": "",
+  "wykluczenia": []
 }

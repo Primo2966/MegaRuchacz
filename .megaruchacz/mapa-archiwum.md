@@ -794,7 +794,7 @@ Wynik i metoda: `.megaruchacz/raporty/P23-dodatki-liczby.md` (w zalacznikach dwa
 Dopelnia sekcje P23 wyzej (tam transkrypty okien interaktywnych; `claude -p --no-session-persistence` transkryptow nie zostawia,
 wiec mierzone z `--output-format stream-json`). Surowe wyjscia byly tylko w scratchpadzie sesji - tymczasowe, nie do szukania.
 
-- WYNIK: przez `ANTHROPIC_BASE_URL` (<ADRES-PROXY>) z `ENABLE_TOOL_SEARCH=true` dziala PELNY mechanizm: narzedzia MCP odlozone ->
+- WYNIK: przez `ANTHROPIC_BASE_URL` (`<ADRES-PROXY>`) z `ENABLE_TOOL_SEARCH=true` dziala PELNY mechanizm: narzedzia MCP odlozone ->
   `ToolSearch {"query":"select:mcp__lore__lore_stats","max_results":1}` -> wynik `[{"type":"tool_reference","tool_name":"mcp__lore__lore_stats"}]`
   -> kolejne zapytanie z tym blokiem przyjete bez bledu -> uzycie narzedzia (`lore_stats`). Bez zmiennej `ToolSearch` nie ma na liscie narzedzi.
   Sprawdzono TYLKO `select:` z dokladna nazwa jednego narzedzia - nie wyszukiwanie slowami i nie kilka narzedzi naraz.

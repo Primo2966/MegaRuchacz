@@ -8,7 +8,8 @@
 #   "~" na poczatku sciezki = katalog domowy. Rejestr z celem, ale BEZ listy zrodel = kopia samych
 #   plikow Claude'a i Codeksa (~\.claude, ~\.claude.json, ~\.codex, ~\.config\opencode, ~\.agents).
 #   Rejestr bez celu = skrypt kopii konczy sie BLEDEM, wiec modul tez odmawia. Bez rejestru (instalacja
-#   sprzed instalatora) skrypt kopii bierze narzedzia\kopia-zapasowa-domyslne.json.
+#   sprzed instalatora) skrypt kopii bierze pole "kopia" ustawien tego komputera ~\.claude\mr\lokalne.json,
+#   a bez niego szablon narzedzia\kopia-zapasowa-domyslne.json (P67, umowa: stan.ps1 Kopia-Bez-Rejestru).
 # Pole wpisuje okno instalatora (wybor folderu), zanim zawola ten skrypt.
 #
 # Co robi:
@@ -41,7 +42,6 @@ $s0 = Start-Modul "kopia" $Akcja ([bool]$Proba) $Zrodlo $KatalogDomowy
 $Zrodlo = $s0.Zrodlo; $KatalogDomowy = $s0.KatalogDomowy
 
 $Skrypt      = Join-Path $Zrodlo "narzedzia\kopia-zapasowa.ps1"
-$Domyslne    = Join-Path $Zrodlo "narzedzia\kopia-zapasowa-domyslne.json"
 $PlikStanu   = Join-Path $KatalogDomowy ".claude\mr\kopia-stan.txt"
 $PlikIndeksu = Join-Path $KatalogDomowy ".claude\mr\kopia-indeks.tsv"
 # te same korzenie, co $KorzenieClaude w kopia-zapasowa.ps1 (kopia bez listy zrodel)
@@ -64,11 +64,12 @@ function Ustawienia-Kopii($rej) {
     if (-not $rej.kopia) { $u.Brak = "w rejestrze nie ma ustawien kopii (pole kopia: cel i zrodla) - wybierz folder w oknie instalatora"; return $u }
     $k = $rej.kopia
   } else {
-    $u.Skad = "narzedzia\kopia-zapasowa-domyslne.json (rejestru jeszcze nie ma - instalacja sprzed instalatora)"
     try {
-      $b = [System.IO.File]::ReadAllBytes($Domyslne)
-      $k = (New-Object System.Text.UTF8Encoding($false)).GetString($b).TrimStart([char]0xFEFF) | ConvertFrom-Json
-    } catch { $u.Brak = "nie umiem odczytac ustawien domyslnych kopii $Domyslne : $($_.Exception.Message)"; return $u }
+      $d = Kopia-Bez-Rejestru $Zrodlo $KatalogDomowy
+      $k = $d.Kopia
+      $u.Skad = "szablon narzedzia\kopia-zapasowa-domyslne.json (rejestru jeszcze nie ma, a w $(Sciezka-Lokalnych $KatalogDomowy) nie ma pola kopia)"
+      if ($d.Lokalne) { $u.Skad = "ustawienia tego komputera $($d.Plik) (rejestru jeszcze nie ma - instalacja sprzed instalatora)" }
+    } catch { $u.Skad = "ustawienia kopii bez rejestru"; $u.Brak = "nie umiem odczytac ustawien kopii bez rejestru: $($_.Exception.Message)"; return $u }
   }
   if ($k.cel) { $u.Cel = Rozwin $k.cel }
   $u.Zrodla = @(@($k.zrodla) | Where-Object { "$_".Trim() } | ForEach-Object { Rozwin $_ })
@@ -130,7 +131,7 @@ try {
     # Wlaczenie modulu zapisuje rejestr - a skrypt kopii z rejestrem bez pola "kopia" konczy sie
     # bledem. Dlatego bez ustawien w rejestrze nie wlaczamy (okno wpisuje je przed tym wywolaniem).
     if ($rej.zrodlo -ne "plik" -or -not $rej.kopia) {
-      $dzis = if ($rej.zrodlo -ne "plik") { " Do tego czasu skrypt kopii chodzi na ustawieniach z narzedzia\kopia-zapasowa-domyslne.json." } else { "" }
+      $dzis = if ($rej.zrodlo -ne "plik") { " Do tego czasu skrypt kopii chodzi na ustawieniach tego komputera ($(Sciezka-Lokalnych $KatalogDomowy), pole kopia), a bez nich na szablonie narzedzia\kopia-zapasowa-domyslne.json." } else { "" }
       Zakoncz $false ("w rejestrze modulow nie ma ustawien kopii (pole kopia: cel, zrodla, wykluczenia) - okno instalatora zapisuje je po wyborze folderu." + $dzis)
     }
     $u = Ustawienia-Kopii $rej

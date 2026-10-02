@@ -488,7 +488,7 @@ inwentarz warstw z 25.09, budowa okna sprzed podzialu, pomiary P23/P30 w calosci
   odkladane (ostatni `deferred_tools_delta` 11.09) - 108,5-122,7 tys. tokenow na KAZDE wywolanie
   rozmowy glownej i podagenta z pelnym zestawem (general-purpose, Explore, Plan...; role MegaRuchacza
   bez MCP startuja z 10-41 tys.); w cenniku API 17-20% kosztu. Ruch idzie przez proxy
-  `ANTHROPIC_BASE_URL` (<ADRES-PROXY>); z `ENABLE_TOOL_SEARCH=true` odkladanie przez to proxy
+  `ANTHROPIC_BASE_URL` (`<ADRES-PROXY>`); z `ENABLE_TOOL_SEARCH=true` odkladanie przez to proxy
   DZIALA (sprawdzone `claude -p`: ToolSearch `select:` -> `tool_reference` -> uzycie; kontekst ~50 zamiast
   ~141 tys.) - wlaczenie po stronie admina proxy. PULAPKA pomiaru `claude -p`: mierz od 2. odpowiedzi
   (serwery MCP dolaczaja po `system/init`). Podproces `claude -p` z Basha workera nie znajduje Git
