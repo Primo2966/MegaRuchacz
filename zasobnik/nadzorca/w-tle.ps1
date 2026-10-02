@@ -314,7 +314,11 @@ function Zakoncz-Krok($k, [string]$stan, [string]$powod) {
       switch ($id) {
         "dane" {
           if ($porazka) { $script:DaneBlad = $powod }
-          else { $script:Dane = $k.Wynik; $script:DaneCzas = $k.Koniec; $script:DaneBlad = $null }
+          else {
+            $script:Dane = $k.Wynik; $script:DaneCzas = $k.Koniec; $script:DaneBlad = $null
+            # P59d: swiezy odczyt rejestru instalacji - zakladki i karty za nim
+            if ($script:Dane) { Ustaw-Instalacje-Okna $script:Dane.Instalacja }
+          }
         }
         "start" {
           if ($porazka) { $script:Start = [pscustomobject]@{ Powod = "pomiar się wywrócił: $powod"; MrSesja = $null } }
@@ -374,7 +378,8 @@ function Powod-Kawalka([string]$id) {
       if (-not $script:Dane) { return "nic nie wróciło" }
       if (-not $script:Dane.Rachunek) { return "rachunek za pamięć się nie policzył - szczegóły w dzienniku nadzorcy" }
       if ($script:Dane.Rachunek.Powod) { return "rachunek za pamięć: $($script:Dane.Rachunek.Powod)" }
-      if (-not $script:Dane.Cykl) { return "nie odczytałem stanu nauki z rozmów - szczegóły w dzienniku nadzorcy" }
+      # bez modulu Wiedza stanu nauki nie czytamy wcale (P59d) - to nie brak
+      if ((-not $script:Dane.Cykl) -and (Modul-Jest $script:Dane.Instalacja "wiedza")) { return "nie odczytałem stanu nauki z rozmów - szczegóły w dzienniku nadzorcy" }
     }
     "start" { if ($script:Start -and $script:Start.Powod) { return "nie zmierzono, bo $($script:Start.Powod)" } }
     "zuzycie" {
@@ -463,6 +468,8 @@ function Wejdz-Do-Widoku([string]$widok, [bool]$otwarcie = $false) {
   }
   if ($otwarcie) {
     foreach ($w in @("przeglad", "szczegoly", "warstwy", "skille")) {
+      # zakladki Skille bez jej modulu nie ma - jej danych nie liczymy (P59d)
+      if (($w -eq "skille") -and -not (Modul-Jest $script:Instalacja "skille")) { continue }
       foreach ($id in @($WIDOK_KAWALKI[$w])) { if (Brakuje-Kawalka $id) { [void](Rusz-Krok $id) } }
     }
   }

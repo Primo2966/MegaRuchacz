@@ -1,6 +1,7 @@
 ﻿# zasobnik\nadzorca\warstwy.ps1 - czesc zasobnik\nadzorca.ps1 (patrz BUDOWA
 # w jego naglowku). Zakladka Warstwy pamieci: lista warstw z Warstwy-Pamieci
-# (Napelnij-Warstwy, Zdanie-Warstw, $KOLEJNOSC_KIEDY), opisy po ludzku (kiedy,
+# (Napelnij-Warstwy, Zdanie-Warstw, $KOLEJNOSC_KIEDY) - od P59d tylko warstwy
+# zainstalowanych modulow (Moduly-Warstwy), opisy po ludzku (kiedy,
 # trwalosc, stan, rozmiar) i prawa strona: dwie kolumny o warstwie
 # (Pokaz-Info-Warstwy) i podglad tresci (Pokaz-Podglad).
 # Skad wolane: w-tle.ps1 (Wyrenderuj-Widok -> Napelnij-Warstwy) i okno.ps1
@@ -160,6 +161,29 @@ function Zdanie-Warstw($dw) {
   return $z
 }
 
+# Do ktorego modulu nalezy warstwa (P59d) - pusta lista = warstwa zawsze (Claude Code
+# sam, CLAUDE.md, pliki projektu). Liste warstw sklada koszt-pamieci.ps1 -Warstwy
+# (narzedzia\koszt\tryb-warstwy.ps1); tu tylko przypisanie po Id, a dla ladunkow hooka
+# po pliku - ladunki zasad kierownika (megaruchacz-sesja.json, orchestrator-reminder.json)
+# leza pod roznymi Id. Blok "MegaRuchacz:start" niesie dzis zasady Lore i Wiedzy naraz,
+# wiec jest, gdy jest ktorykolwiek z nich; blok o nazwie modulu (np. "kierownik") nalezy
+# do tego modulu. Nieznana warstwa jest zawsze - schowanie czegos, czego nie znamy,
+# byloby cisza.
+function Moduly-Warstwy($wa) {
+  $id = "$($wa.Id)"
+  if ($id -eq "claude-globalny-blok") { return ,@("wiedza", "lore") }
+  if ($id -match '^claude-globalny-blok-(.+)$') {
+    if ($NADZ_MODULY -contains $Matches[1]) { return ,@($Matches[1]) }
+    return ,@()
+  }
+  if (@("claude-globalny-stala", "claude-globalny-biezace", "doklejka-cykl", "wiedza") -contains $id) { return ,@("wiedza") }
+  if ("$($wa.Rodzic)" -eq "wiedza") { return ,@("wiedza") }
+  if (@("doklejka-archiwum", "lore") -contains $id) { return ,@("lore") }
+  if ((@("przypomnienie", "przypomnienie-codex", "mapa", "worklog") -contains $id) -or ($id -match '^ladunek-\d+$')) { return ,@("kierownik") }
+  if (($id -match '^sesja-\d+$') -and ("$($wa.Sciezka)" -match '(megaruchacz-sesja|orchestrator-reminder)\.json$')) { return ,@("kierownik") }
+  return ,@()
+}
+
 # Etykieta podsumowania rosnie razem z tekstem - uciety koniec zdania bylby
 # ucieciem po cichu, a tego w tym projekcie nie wolno.
 function Dopasuj-Etykiete($l) {
@@ -197,7 +221,19 @@ function Napelnij-Warstwy {
       [void]$lv.Groups.Add($g)
       $grupy[$k] = $g
     }
+    # P59d: na liscie tylko warstwy zainstalowanych modulow (Moduly-Warstwy). Schowane
+    # nie znikaja po cichu: zdanie nad lista mowi, ile ich jest i z jakich modulow, a te,
+    # ktore mimo to trafiaja do kazdej rozmowy (np. sekcja "Co wiem" zostala w CLAUDE.md po
+    # odinstalowaniu Wiedzy), wymienia z nazwy na zolto - kosztuja tokeny.
+    $pokazane = @(); $schowane = @(); $wczytywane = @(); $modulySchowanych = @()
     foreach ($wa in @($dw.Warstwy)) {
+      $mod = Moduly-Warstwy $wa   # bez @() - zwraca ",$lista" (zasada w stan-nadzorcy.ps1)
+      if (($mod.Count -eq 0) -or (@($mod | Where-Object { Modul-Jest $script:Instalacja $_ }).Count -gt 0)) { $pokazane += $wa; continue }
+      $schowane += $wa
+      foreach ($m in $mod) { if ($modulySchowanych -notcontains $NAZWY_MODULOW[$m]) { $modulySchowanych += $NAZWY_MODULOW[$m] } }
+      if (("$($wa.Stan)" -eq "jest") -and (@("start", "wiadomosc") -contains "$($wa.Kiedy)")) { $wczytywane += $wa }
+    }
+    foreach ($wa in $pokazane) {
       $klucz = "$($wa.Kiedy)"
       if (-not $grupy.ContainsKey($klucz)) {
         # nieznany rodzaj "kiedy" nie znika - dostaje wlasna grupe
@@ -217,8 +253,16 @@ function Napelnij-Warstwy {
       elseif (($wa.Kiedy -eq "nieuzywane") -or ($wa.Stan -eq "nieaktywna") -or ($wa.Stan -eq "pusty")) { $it.ForeColor = $script:KolSzary }
       [void]$lv.Items.Add($it)
     }
-    $zd = Zdanie-Warstw $dw
+    $zd = Zdanie-Warstw ([pscustomobject]@{ Warstwy = $pokazane })
     $script:LWarstwy.ForeColor = $script:KolTekst
+    if ($schowane.Count -gt 0) {
+      $zd += " Bez warstw modułów spoza instalacji ($($modulySchowanych -join ', ')): $($schowane.Count)."
+    }
+    if ($wczytywane.Count -gt 0) {
+      $zd += " UWAGA: $($wczytywane.Count) $(Odmiana $wczytywane.Count 'warstwa modułu spoza instalacji nadal trafia' 'warstwy modułów spoza instalacji nadal trafiają' 'warstw modułów spoza instalacji nadal trafia') do rozmów: " +
+        (@($wczytywane | ForEach-Object { Po-Polsku "$($_.Nazwa)" }) -join ", ") + " - kosztują tokeny, choć modułu nie ma."
+      $script:LWarstwy.ForeColor = $script:KolUwaga
+    }
     if (@($dw.Uwagi).Count -gt 0) {
       $zd += " UWAGA: " + (@($dw.Uwagi) -join "; ")
       $script:LWarstwy.ForeColor = $script:KolUwaga

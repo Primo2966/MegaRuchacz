@@ -82,6 +82,14 @@
 #    z karty i z Szczegolow zniknely najdluzsze rozmowy z "!" i prog dlugiej
 #    rozmowy (razem z ostrzezeniem w przypomnieniu i strazniku); karta ma dwie
 #    kolumny, a workerzy z rola i projektem w linii.
+# 15. 02.10.2026 (P59d): instalator z wyborem modulow (Wiedza, Lore, Kierownik,
+#    Skille, Kopia; zawsze aplikacja przy zegarze z aktualizacjami). Okno i dozor
+#    ida za rejestrem instalacji (zasobnik\nadzorca\stan-instalacja.ps1): zakladka
+#    Skille, karta i przycisk czytania rozmow, linia kopii, sekcje Szczegolow
+#    i warstwy - tylko dla zainstalowanych modulow, bez dziur w ukladzie; dozor
+#    rusza nauke tylko z Wiedza, skille tylko ze Skille. Nieczytelny rejestr =
+#    pilny alarm i wszystko jak przy pelnej instalacji. Na dole przycisk
+#    "Zmień instalację" (instalator w trybie zmiany).
 #
 # PRZYCISKU [ODSWIEZ] NIE MA I NIE MA GO BYC. Istnial tylko dlatego, ze okno
 # nie odswiezalo sie samo - byl obejsciem braku, nie funkcja. Dzis okno liczy

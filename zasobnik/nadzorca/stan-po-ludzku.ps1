@@ -24,6 +24,9 @@
 # Plik jest zapisany w UTF-8 ZE ZNACZNIKIEM BOM - bez niego PowerShell 5.1 czyta
 # go jako ANSI i zamiast "koszt rozmow" wychodza krzaki. To bylo juz dwa razy.
 
+# Od P59d czesc zdan zalezy od zainstalowanych modulow ($inst = Stan-Instalacji,
+# Modul-Jest w stan-instalacja.ps1): Linie-Stanu, Zbierz-Informacje.
+
 # Odmiana przez liczbe. Bez niej okno pisze "1 fragmentow" i od razu wyglada
 # na zrobione byle jak - a ma byc tym, czemu uzytkownik ufa.
 function Odmiana([int]$n, [string]$jeden, [string]$kilka, [string]$wiele) {
@@ -257,12 +260,15 @@ function Alarm-Z-Rachunku($a, $o) {
 # bo alarmy ida takze na dymek - a informacja "to bylo jednorazowe" wyskakujaca
 # w zasobniku jak ostrzezenie bylaby dokladnie tym, na co uzytkownik sie
 # skarzyl 24.09.2026. W oknie stoja razem z alarmami, na zoltym tle.
-function Zbierz-Informacje($rachunek) {
+# $inst (P59d): bez modulu Wiedza informacje o koszcie nauki odpadaja (Temat-Nauki).
+function Zbierz-Informacje($rachunek, $inst = $null) {
   $lista = @()
   if (-not $rachunek) { return ,$lista }
+  $wiedza = Modul-Jest $inst "wiedza"
   $ocena = Ocena-Nauki $rachunek
   foreach ($a in (Alarmy-Rachunku $rachunek)) {
     if ($a.Waga -ne "info") { continue }
+    if ((-not $wiedza) -and (Temat-Nauki $a.Temat)) { continue }
     $lista += Alarm-Z-Rachunku $a $ocena
   }
   return ,$lista
@@ -532,16 +538,20 @@ function Postep-Przeliczania {
 
 # STAN JEDNYM RZUTEM OKA - kilka krotkich zdan zamiast akapitow. Zadnych nazw
 # plikow i zadnych sciezek: te sa pod [Szczegoly] i tam jest ich miejsce.
-function Linie-Stanu($wersja, $cykl, $przeliczanie) {
+# $inst (P59d): linie o czytaniu rozmow tylko z modulem Wiedza, o przeliczaniu
+# archiwum - z modulem Lore. Bez modulu linii nie ma wcale (a nie "nie wiem").
+function Linie-Stanu($wersja, $cykl, $przeliczanie, $inst = $null) {
   $linie = @()
 
   # Jedna linia i tylko wtedy, gdy postep naprawde odczytalismy - patrz
   # Postep-Przeliczania. Bez pliku albo bez podpietego formatu: nic.
-  if ($przeliczanie -and ($null -ne $przeliczanie.Zrobione) -and ($null -ne $przeliczanie.Wszystkie)) {
+  if ((Modul-Jest $inst "lore") -and $przeliczanie -and ($null -ne $przeliczanie.Zrobione) -and ($null -ne $przeliczanie.Wszystkie)) {
     $linie += "Przeliczam archiwum: $(Liczba-Ludzka $przeliczanie.Zrobione) z $(Liczba-Ludzka $przeliczanie.Wszystkie)."
   }
 
-  if ($cykl) {
+  if (-not (Modul-Jest $inst "wiedza")) {
+    # nauki z rozmow nie ma w instalacji - ani linii o niej, ani "nie wiem"
+  } elseif ($cykl) {
     if ($cykl.Pracuje) {
       $linie += "Czytanie rozmów: właśnie trwa."
     } elseif ($cykl.Data) {

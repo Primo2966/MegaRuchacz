@@ -29,6 +29,8 @@
 #   stan-po-ludzku.ps1  jezyk czlowieka: odmiana, daty, zdania, szacunek kosztu cyklu
 #   stan-skille.ps1     polecane skille: codzienne sprawdzenie, operacje, stan
 #   stan-kopia.ps1      kopia zapasowa na Dysk Google: stan, linia na Przeglad, alarm
+#   stan-instalacja.ps1 ktore moduly sa zainstalowane (rejestr instalacji), alarm przy
+#                       nieczytelnym rejestrze
 #   stan-zbieranie.ps1  Zbierz-Wszystko - jeden obiekt danych dla okna i dozoru
 # "Ten plik" w komentarzach modulow znaczy stan-nadzorcy.ps1 razem z modulami -
 # tak wczytuje go okno, osobne procesy krokow (nadzorca\licz-krok.ps1) i osobny
@@ -93,7 +95,7 @@ $script:NadzTenPlik       = $PSCommandPath
 if (-not $PSScriptRoot) { throw "stan-nadzorcy.ps1: nie wiem, gdzie leza moduly zasobnik\nadzorca\stan-*.ps1 (plik nie jest wczytany z dysku)" }
 $nadzKatalogModulow = Join-Path $PSScriptRoot "nadzorca"
 $script:NadzModuly = @{}
-foreach ($nadzModul in @("podstawy", "wersja", "cykl", "rachunek", "zuzycie", "koszt", "alarmy", "po-ludzku", "skille", "kopia", "zbieranie")) {
+foreach ($nadzModul in @("podstawy", "wersja", "cykl", "rachunek", "zuzycie", "koszt", "alarmy", "po-ludzku", "skille", "kopia", "instalacja", "zbieranie")) {
   $nadzPlikModulu = Join-Path $nadzKatalogModulow "stan-$nadzModul.ps1"
   try { . $nadzPlikModulu }
   catch { throw "stan-nadzorcy.ps1: nie da sie wczytac modulu $nadzPlikModulu ($($_.Exception.Message))" }

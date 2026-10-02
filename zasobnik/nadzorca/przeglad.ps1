@@ -3,7 +3,9 @@
 # "Ile tokenow naprawde zuzywasz" (Odmaluj-Koszt), otwarcie okna rozmowy z paskiem
 # (Odmaluj-Start), podtytul, karty problemow, nauka z rozmow (Odmaluj-Liczby),
 # stan jednym rzutem oka ze zmianami w pamieci (Odmaluj-Stan), przyciski na dole
-# (Odmaluj-Przyciski) i calosc (Odmaluj-Okno). Tresc (co pokazac) jest
+# (Odmaluj-Przyciski) i calosc (Odmaluj-Okno). Od P59d karty i linie modulow, ktorych
+# nie ma w rejestrze instalacji ($script:Instalacja), sa niewidoczne albo nie
+# powstaja - bez dziur w ukladzie. Tresc (co pokazac) jest
 # w przeglad-tresc.ps1. Wykres kosztu nauki z 30 dni stal tu do P35 - teraz jest
 # karta w Szczegolach (Panel-Wykresu w wykres.ps1).
 # Skad wolane: w-tle.ps1 (Wyrenderuj-Widok, Odswiez-Zuzycie), ladowanie.ps1
@@ -24,7 +26,7 @@ function Odmaluj-Werdykt {
   $r = $null; $c = $null
   if ($script:Dane) { $r = $script:Dane.Rachunek; $c = $script:Dane.Cykl }
   $w = $null
-  try { $w = Werdykt-Kosztu $script:Start $r $c $script:Zuzycie } catch { Zanotuj-Wywrotke "werdykt kosztu" $_ }
+  try { $w = Werdykt-Kosztu $script:Start $r $c $script:Zuzycie $script:Instalacja } catch { Zanotuj-Wywrotke "werdykt kosztu" $_ }
   $script:KartaWerdykt.BackColor = $script:TloKarty
   if (-not $w) {
     $script:KartaWerdykt.BackColor = $script:TloUwaga
@@ -447,6 +449,10 @@ function Kafelek-Liczby($t, $zu) {
 function Odmaluj-Liczby {
   if (-not $script:PanelLiczby -or $script:PanelLiczby.IsDisposed) { return }
   Wyczysc-Panel $script:PanelLiczby
+  # P59d: bez modulu Wiedza karty nauki nie ma wcale - niewidoczny panel nie zostawia
+  # w ukladzie ani dziury, ani odstepu (jak sekcja problemow bez problemow).
+  $script:PanelLiczby.Visible = (Modul-Jest $script:Instalacja "wiedza")
+  if (-not $script:PanelLiczby.Visible) { return }
   $r = $null; $c = $null
   if ($script:Dane) { $r = $script:Dane.Rachunek; $c = $script:Dane.Cykl }
   $t = $null
@@ -493,18 +499,21 @@ function Odmaluj-Stan {
   }
   $linie = @()
   if ($script:Dane) {
-    try { $linie = Linie-Stanu $script:Dane.Wersja $script:Dane.Cykl $script:Dane.Przeliczanie }
+    try { $linie = Linie-Stanu $script:Dane.Wersja $script:Dane.Cykl $script:Dane.Przeliczanie $script:Instalacja }
     catch { Zanotuj-Wywrotke "zlozenie linii stanu" $_ }
   }
   foreach ($l in $linie) { $script:PanelStan.Controls.Add((Wiersz-Stanu $l $script:KolTekst)) }
-  # Kopia zapasowa (P62): jedna linia, kolor z oceny (progi w stan-kopia.ps1).
-  if ($script:Dane) {
+  # Kopia zapasowa (P62): jedna linia, kolor z oceny (progi w stan-kopia.ps1). Tylko
+  # z modulem Kopia (P59d).
+  if ($script:Dane -and (Modul-Jest $script:Instalacja "kopia")) {
     try {
-      $kop = Ocena-Kopii $script:Dane.Kopia
+      $kop = Ocena-Kopii $script:Dane.Kopia $script:Instalacja
       $script:PanelStan.Controls.Add((Wiersz-Stanu $kop.Linia (Kolor-Wagi $kop.Waga)))
     } catch { Zanotuj-Wywrotke "linia kopii zapasowej" $_ }
   }
-  Dodaj-Zmiany-Pamieci
+  # Zmiany w pamieci pisze nauka z rozmow - bez modulu Wiedza linii nie ma (P59d).
+  if (Modul-Jest $script:Instalacja "wiedza") { Dodaj-Zmiany-Pamieci }
+  else { $script:PanelZmian = $null; $script:LinkZmian = $null }
 }
 
 # "Pamiec dzis: 2 zmiany" jedna linia, a obok odnosnik [pokaz zmiany], ktory
@@ -570,12 +579,23 @@ function Ustaw-Rozwiniecie-Zmian {
 
 function Odmaluj-Przyciski {
   if (-not $script:BCykl -or $script:BCykl.IsDisposed) { return }
-  $n = Napisy-Przyciskow $script:Dane $script:Zuzycie
+  $n = Napisy-Przyciskow $script:Dane $script:Zuzycie $script:Instalacja
   $script:BAktualizuj.Text = $n.Aktualizuj
   $script:LAktualizuj.Text = $n.AktualizujOpis
   $script:BCykl.Text       = $n.Cykl
   $script:LCykl.Text       = $n.CyklOpis
   $script:BCykl.Enabled    = $n.CyklWlaczony
+  # P59d: czytanie rozmow tylko z modulem Wiedza (Uloz-Pasek w okno.ps1), obok
+  # "Zmień instalację" - nieaktywny, gdy instalatora jeszcze nie ma albo juz jest otwarty.
+  Uloz-Pasek $n.CyklJest
+  if ($script:BInstalacja -and -not $script:BInstalacja.IsDisposed) {
+    $otwarty = Instalator-Otwarty
+    $script:BInstalacja.Text = $n.Instalacja
+    $script:BInstalacja.Enabled = $n.InstalacjaWlaczona -and -not $otwarty
+    if ($otwarty) { $script:LInstalacja.Text = "Instalator otwarty - zmiany pokażę po jego zamknięciu." }
+    elseif ($script:NapisInstalacji) { $script:LInstalacja.Text = $script:NapisInstalacji }
+    else { $script:LInstalacja.Text = $n.InstalacjaOpis }
+  }
 }
 
 # DOPASUJ-WYSOKOSC USUNIETE (P21, 30.09.2026). Dobieralo wysokosc okna pod tresc

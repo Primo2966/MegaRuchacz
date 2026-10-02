@@ -5,6 +5,8 @@
 # kosztu (Napisy-Przyciskow) i Przeglad jako tekst (Zbuduj-Przod, Skladniki-Mr,
 # Tokeny-Albo-Brak, Koszt-Po-Ludzku, Zdanie-Progu) oraz wykres kosztu nauki jako
 # tekst (Linie-Statystyki - od P35 wykres stoi w Szczegolach, tam go wola wydruk).
+# Od P59d sprawy, karty i przyciski modulow spoza rejestru instalacji ($d.Instalacja)
+# nie powstaja - w oknie i w wydruku tak samo.
 # Skad wolane: tryby -Raz i -Raport w nadzorca.ps1, karty w przeglad.ps1 (Odmaluj-*),
 # przyciski w okno.ps1, sekcje w szczegoly.ps1. Wczytuje go nadzorca.ps1 kropka
 # PRZED trybami bez GUI - tu sa same definicje, nic sie nie liczy.
@@ -48,7 +50,8 @@ function Zbierz-Problemy($d, $wywrotki, [string]$blad, $czasDanych) {
     foreach ($a in @($d.Informacje)) {
       $lista += Problem "info" (Bez-Przedrostka $a.Tytul) (Porada-Z-Alarmu $a) $a.Tresc
     }
-    if ((-not $d.Rachunek) -or (-not $d.Cykl)) {
+    # Bez modulu Wiedza stanu nauki nie czytamy wcale (P59d) - jego brak to nie dziura.
+    if ((-not $d.Rachunek) -or ((-not $d.Cykl) -and (Modul-Jest $d.Instalacja "wiedza"))) {
       $lista += Problem "uwaga" "Nie wszystko udało się odczytać" (
         "Część liczb w tym oknie może być niepełna, a alarmów w ogóle nie policzyłem. " +
         "Otwórz zakładkę Szczegóły - tam stoi, czego zabrakło.") ""
@@ -64,10 +67,12 @@ function Zbierz-Problemy($d, $wywrotki, [string]$blad, $czasDanych) {
   }
 
   # Skille (P18): nieudane albo dawno niewykonane codzienne sprawdzenie - sam plik
-  # znacznika, bez wolania skryptu.
-  try {
-    foreach ($p in (Problemy-Skilli)) { $lista += Problem $p.Waga $p.Tytul $p.Porada $p.Pelne }
-  } catch { Zanotuj-Wywrotke "odczyt znacznika skilli" $_ }
+  # znacznika, bez wolania skryptu. Tylko z modulem Skille (P59d).
+  if (Modul-Jest $(if ($d) { $d.Instalacja } else { $null }) "skille") {
+    try {
+      foreach ($p in (Problemy-Skilli)) { $lista += Problem $p.Waga $p.Tytul $p.Porada $p.Pelne }
+    } catch { Zanotuj-Wywrotke "odczyt znacznika skilli" $_ }
+  }
 
   # Czerwone przed zoltymi, zolte przed informacjami: pierwsza rzecz na ekranie
   # ma byc ta, ktora naprawde czegos wymaga, a nie ta, ktorej akurat nie wiemy.
@@ -115,14 +120,29 @@ function Ile-Wymaga-Uwagi($problemy) {
 # z calym dziennym zuzyciem ($zuzycie = Zuzycie-Dzienne) stoi w pytaniu o zgode.
 # Bez slowa "zalegle": czytanie i tak idzie samo raz dziennie, przycisk robi to
 # tylko wczesniej - i opis mowi to wprost.
-function Napisy-Przyciskow($d, $zuzycie = $null) {
+#
+# P59d: przycisk czytania rozmow jest tylko z modulem Wiedza (CyklJest), a obok stoi
+# "Zmień instalację" - otwiera instalator w trybie zmiany (instalator\okno.ps1), a gdy
+# instalatora jeszcze nie ma w repo, jest nieaktywny i mowi dlaczego. $inst = Stan-Instalacji
+# (pusty = wedlug $d.Instalacja).
+function Napisy-Przyciskow($d, $zuzycie = $null, $inst = $null) {
   $n = [pscustomobject]@{
     Aktualizuj     = "Sprawdź i pobierz nowszą wersję MegaRuchacza"
     AktualizujOpis = "Nie kosztuje nic. Zagląda na serwer po poprawki i nanosi je."
     Cykl           = "Przeczytaj teraz nowe rozmowy"
     CyklOpis       = "Nie musisz - MegaRuchacz robi to sam raz dziennie. Zapyta o zgodę."
     CyklWlaczony   = $true
+    CyklJest       = $true
     Szacunek       = $null
+    Instalacja         = "Zmień instalację"
+    InstalacjaOpis     = "Dodaj albo odłącz moduły. Nic nie kosztuje."
+    InstalacjaWlaczona = $true
+  }
+  if ((-not $inst) -and $d) { $inst = $d.Instalacja }
+  $n.CyklJest = Modul-Jest $inst "wiedza"
+  if (-not (Test-Path -LiteralPath (Join-Path $script:NadzZrodlo "instalator\okno.ps1") -PathType Leaf)) {
+    $n.InstalacjaWlaczona = $false
+    $n.InstalacjaOpis = "Nieaktywny - instalator w przygotowaniu."
   }
 
   if ($d -and $d.Wersja -and ($null -ne $d.Wersja.Nowsza) -and ($d.Wersja.Nowsza -gt 0)) {
@@ -186,15 +206,22 @@ function Skladniki-Mr($start, $o) {
 # w oknie. Ten wydruk jest jedynym sposobem sprawdzenia ukladu bez pulpitu.
 function Zbuduj-Przod($d, $problemy, $czas, $start, $zuzycie = $null, $koszt = $null) {
   $l = @()
-  $l += "MegaRuchacz - nadzorca                      [ Przegląd | Szczegóły | Warstwy pamięci ]   <- przełącznik widoków u góry okna"
+  # P59d: zakladki, karty i linie modulow, ktorych nie ma w instalacji, nie istnieja -
+  # tak samo w oknie i tutaj.
+  $inst = $null
+  if ($d) { $inst = $d.Instalacja }
+  $zakladki = "Przegląd | Szczegóły | Warstwy pamięci$(if (Modul-Jest $inst 'skille') { ' | Skille' })"
+  $l += "MegaRuchacz - nadzorca                      [ $zakladki ]   <- przełącznik widoków u góry okna"
   $stempel = "przed chwilą"
   if ($czas) { $stempel = $czas.ToString('yyyy-MM-dd HH:mm:ss') }
   $l += "liczby sprawdzone: $stempel  (okno odświeża je samo w tle co $Minut min; starsze niż dzisiejsze liczy od nowa przy otwarciu)"
+  $jest = Nazwy-Modulow $inst $true
+  $l += "zainstalowane moduły: $(if ($jest.Count -gt 0) { $jest -join ', ' } else { 'żaden (sama aplikacja przy zegarze z aktualizacjami)' })$(if ($inst -and $inst.Blad) { '  (REJESTR NIECZYTELNY - pokazuję wszystko)' })"
   $l += ""
 
   $l += "WERDYKT   (w oknie: pierwsza karta, duże zdanie - zielone: mało, czerwone: dużo, żółte: nie wiadomo)"
   $wd = $null
-  try { $wd = Werdykt-Kosztu $start $(if ($d) { $d.Rachunek } else { $null }) $(if ($d) { $d.Cykl } else { $null }) $zuzycie }
+  try { $wd = Werdykt-Kosztu $start $(if ($d) { $d.Rachunek } else { $null }) $(if ($d) { $d.Cykl } else { $null }) $zuzycie $inst }
   catch { Zanotuj-Wywrotke "werdykt do wydruku" $_ }
   if (-not $wd) {
     $l += "  NIE UDALO SIE ZLOZYC - szczegoly w dzienniku nadzorcy"
@@ -265,12 +292,15 @@ function Zbuduj-Przod($d, $problemy, $czas, $start, $zuzycie = $null, $koszt = $
   }
   $l += ""
 
-  $l += "NAUKA Z ROZMÓW   (w oknie: karta na całą szerokość pod otwarciem okna rozmowy)"
   $r = $null; $c = $null
   if ($d) { $r = $d.Rachunek; $c = $d.Cykl }
   $trzy = @()
-  try { $trzy = @(Liczba-Nauki $r $c) }
-  catch { Zanotuj-Wywrotke "koszt nauki do wydruku" $_; $l += "  NIE UDALO SIE ZLOZYC - szczegoly w dzienniku nadzorcy" }
+  # karta nauki tylko z modulem Wiedza (P59d) - bez niego nie ma jej w oknie wcale
+  if (Modul-Jest $inst "wiedza") {
+    $l += "NAUKA Z ROZMÓW   (w oknie: karta na całą szerokość pod otwarciem okna rozmowy)"
+    try { $trzy = @(Liczba-Nauki $r $c) }
+    catch { Zanotuj-Wywrotke "koszt nauki do wydruku" $_; $l += "  NIE UDALO SIE ZLOZYC - szczegoly w dzienniku nadzorcy" }
+  }
   foreach ($t in $trzy) {
     $l += "  | $($t.Naglowek)"
     if ($null -ne $t.Liczba) {
@@ -289,7 +319,7 @@ function Zbuduj-Przod($d, $problemy, $czas, $start, $zuzycie = $null, $koszt = $
     }
     $l += "  |   $($t.Opis)"
   }
-  $l += ""
+  if (Modul-Jest $inst "wiedza") { $l += "" }
   # Wykres kosztu nauki z 30 dni stoi od P35 w Szczegolach (karta "Koszt czytania
   # rozmow - ostatnie 30 dni") - w wydruku razem z nimi, w Zbuduj-Szczegoly.
 
@@ -297,17 +327,20 @@ function Zbuduj-Przod($d, $problemy, $czas, $start, $zuzycie = $null, $koszt = $
   if ((Ile-Wymaga-Uwagi $problemy) -eq 0) { $l += "  Wszystko gra - nic nie wymaga Twojej uwagi." }
   $linie = @()
   if ($d) {
-    try { $linie = Linie-Stanu $d.Wersja $d.Cykl $d.Przeliczanie }
+    try { $linie = Linie-Stanu $d.Wersja $d.Cykl $d.Przeliczanie $inst }
     catch { Zanotuj-Wywrotke "linie stanu do wydruku" $_; $l += "  NIE UDALO SIE ZLOZYC - szczegoly w dzienniku nadzorcy" }
   }
   foreach ($x in $linie) { $l += "  $x" }
-  if ($d) {
-    try { $kop = Ocena-Kopii $d.Kopia; $l += "  $($kop.Linia)$(if ($kop.Waga -eq 'pilne') { '  (czerwony napis)' } elseif ($kop.Waga -eq 'uwaga') { '  (żółty napis)' })" }
+  if ($d -and (Modul-Jest $inst "kopia")) {
+    try { $kop = Ocena-Kopii $d.Kopia $inst; $l += "  $($kop.Linia)$(if ($kop.Waga -eq 'pilne') { '  (czerwony napis)' } elseif ($kop.Waga -eq 'uwaga') { '  (żółty napis)' })" }
     catch { Zanotuj-Wywrotke "linia kopii zapasowej do wydruku" $_; $l += "  NIE UDALO SIE ZLOZYC LINII KOPII ZAPASOWEJ - szczegoly w dzienniku nadzorcy" }
   }
   $pm = $null
-  try { $pm = Opis-Zmian-Pamieci $(if ($d) { $d.Pamiec } else { $null }) }
-  catch { Zanotuj-Wywrotke "zmiany w pamieci do wydruku" $_; $l += "  NIE UDALO SIE ZLOZYC ZMIAN W PAMIECI - szczegoly w dzienniku nadzorcy" }
+  # zmiany w pamieci pisze nauka z rozmow - bez modulu Wiedza linii nie ma (P59d)
+  if (Modul-Jest $inst "wiedza") {
+    try { $pm = Opis-Zmian-Pamieci $(if ($d) { $d.Pamiec } else { $null }) }
+    catch { Zanotuj-Wywrotke "zmiany w pamieci do wydruku" $_; $l += "  NIE UDALO SIE ZLOZYC ZMIAN W PAMIECI - szczegoly w dzienniku nadzorcy" }
+  }
   if ($pm) {
     $l += "  $($pm.Linia)"
     if (@($pm.Zmiany).Count -gt 0) {
@@ -319,15 +352,19 @@ function Zbuduj-Przod($d, $problemy, $czas, $start, $zuzycie = $null, $koszt = $
   $l += ""
 
   $l += "PRZYCISKI W OKNIE - co się stanie po kliknięciu"
-  $n = Napisy-Przyciskow $d $zuzycie
+  $n = Napisy-Przyciskow $d $zuzycie $inst
   $l += "  [$($n.Aktualizuj)]"
   $l += "      $($n.AktualizujOpis)"
-  $wl = ""
-  if (-not $n.CyklWlaczony) { $wl = "  (przycisk nieaktywny)" }
-  $l += "  [$($n.Cykl)]$wl"
-  $l += "      $($n.CyklOpis)"
-  if ($n.Szacunek) { foreach ($z in $n.Szacunek.Podstawa) { $l += "      $z" } }
-  $l += "  [Przegląd] / [Szczegóły] / [Warstwy pamięci]  (przełącznik u góry)"
+  if ($n.CyklJest) {
+    $wl = ""
+    if (-not $n.CyklWlaczony) { $wl = "  (przycisk nieaktywny)" }
+    $l += "  [$($n.Cykl)]$wl"
+    $l += "      $($n.CyklOpis)"
+    if ($n.Szacunek) { foreach ($z in $n.Szacunek.Podstawa) { $l += "      $z" } }
+  }
+  $l += "  [$($n.Instalacja)]$(if (-not $n.InstalacjaWlaczona) { '  (przycisk nieaktywny)' })"
+  $l += "      $($n.InstalacjaOpis)"
+  $l += "  [$($zakladki -replace ' \| ', '] / [')]  (przełącznik u góry)"
   $l += "      Szczegóły i warstwy - z czego to się składa i gdzie to leży - zajmują miejsce przeglądu. Nic nie uruchamiają i nic nie kosztują."
   $l += "  [Zamknij okno]"
   $l += "      Okno znika, ikona w zasobniku zostaje i pilnuje dalej."

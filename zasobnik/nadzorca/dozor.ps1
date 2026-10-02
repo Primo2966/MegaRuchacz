@@ -1,7 +1,8 @@
 ﻿# zasobnik\nadzorca\dozor.ps1 - czesc zasobnik\nadzorca.ps1 (patrz BUDOWA
 # w jego naglowku). Dozor: jeden przebieg (Dozor - dane i decyzje naraz, tryb
-# -Raz), decyzje na gotowych danych (Dozor-Po-Danych: cykl wiedzy, skille, alarmy,
-# slad obecnosci), dozor co kwadrans w tle (Rusz-Dozor -> Po-Dozorze; kroki
+# -Raz), decyzje na gotowych danych (Dozor-Po-Danych: cykl wiedzy i skille - tylko
+# z ich modulem w rejestrze instalacji, alarmy, slad obecnosci), dozor co kwadrans
+# w tle (Rusz-Dozor -> Po-Dozorze; kroki
 # i watki sa w w-tle.ps1) i podpowiedz przy ikonie (Podpowiedz).
 # Skad wolane: tryb -Raz i zegar dozoru w nadzorca.ps1, Po-Kroku w w-tle.ps1
 # (Podpowiedz). Wczytuje go nadzorca.ps1 kropka PRZED trybami bez GUI - tu sa
@@ -28,9 +29,13 @@ function Dozor($pokazDymek, [bool]$zKolejka, [bool]$zSieci) {
 # licza sie w watku w tle (Rusz-Dozor), a decyzje zapadaja tu, w watku okna,
 # gdy dane przyjda - w tej samej kolejnosci co dotad.
 function Dozor-Po-Danych($d, $pokazDymek) {
+  # P59d: nauka tylko z modulem Wiedza, skille tylko z modulem Skille - decyduja
+  # Czy-Ruszac-Cykl i Czy-Sprawdzac-Skille na odczycie rejestru z tego samego przebiegu.
+  $inst = $null
+  if ($d) { $inst = $d.Instalacja }
   # Cykl wiedzy - to jest teraz GLOWNY wyzwalacz, niezalezny od hookow.
   try {
-    $czy = Czy-Ruszac-Cykl
+    $czy = Czy-Ruszac-Cykl $inst
     if ($czy.Ruszac) {
       Notuj "dozor: ruszam cykl wiedzy ($($czy.Powod))"
       $poszlo = Ruszaj-Cykl
@@ -47,7 +52,7 @@ function Dozor-Po-Danych($d, $pokazDymek) {
   # Polecane skille (P18) - raz na dobe sprawdzenie i pobranie nowszych wersji,
   # w tle i bez okna. Pierwszy przebieg na maszynie tylko spisuje, co jest.
   try {
-    $cs = Czy-Sprawdzac-Skille
+    $cs = Czy-Sprawdzac-Skille $inst
     if ($cs.Ruszac) {
       Notuj "dozor: sprawdzam skille ($($cs.Powod))"
       if (-not (Ruszaj-Skille)) { Zanotuj-Wywrotke "start codziennego sprawdzenia skilli" "Odpal-W-Tle nie wystartowal narzedzia\skille.ps1" }
@@ -92,6 +97,8 @@ function Po-Dozorze($k) {
   $script:Dane = $d
   $script:DaneCzas = [datetime]::Now
   $script:DaneBlad = $null
+  # P59d: instalacja mogla sie zmienic (przycisk "Zmień instalację") - zakladki za nia
+  try { if ($d) { Ustaw-Instalacje-Okna $d.Instalacja } } catch { Zanotuj-Wywrotke "zakladki wedlug rejestru instalacji (dozor)" $_ }
   Po-Kroku "dane"
   # P26: liczby "dzis" rosna w ciagu dnia - przy otwartym oknie odswiezaja sie razem
   # z dozorem (co kwadrans), tak jak obiecuje podtytul okna.
@@ -115,6 +122,8 @@ function Podpowiedz($d) {
   $a = ""
   if ($d -and (@($d.Alarmy).Count -gt 0)) { $a = " UWAGA x$(@($d.Alarmy).Count)" }
   $t = "MegaRuchacz ${w} - ${c}${a}"
+  # P59d: bez modulu Wiedza nie ma nauki, o ktorej mozna by cos powiedziec
+  if ($d -and -not (Modul-Jest $d.Instalacja "wiedza")) { $t = "MegaRuchacz ${w}${a}" }
   if ($t.Length -gt 63) { $t = $t.Substring(0, 63) }
   return $t
 }

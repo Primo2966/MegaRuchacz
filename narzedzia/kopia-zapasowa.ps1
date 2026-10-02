@@ -1,5 +1,18 @@
-# narzedzia\kopia-zapasowa.ps1 - dzienna kopia zapasowa C:\dev i plikow Claude'a
-# na Dysk Google (domyslnie G:\Moj dysk\<folder>\Backup).
+# narzedzia\kopia-zapasowa.ps1 - dzienna kopia zapasowa wybranych folderow i plikow
+# Claude'a (na komputerze biurowym: C:\dev i pliki Claude'a na Dysk Google).
+#
+# CO I DOKAD (P59d) - nic z tego nie jest zaszyte w kodzie:
+#   - z rejestru instalacji ~\.claude\mr\instalacja.json, pole "kopia"
+#     {zrodla:[...], cel:"...", wykluczenia:[{sciezka, powod, katalog}]} - wybor
+#     uzytkownika z instalatora (umowa: narzedzia\instalacja\stan.ps1);
+#   - BEZ rejestru (instalacja sprzed instalatora) - z pliku obok,
+#     kopia-zapasowa-domyslne.json: te same zrodla, cel i wykluczenia projektow, co
+#     dotad, wiec komputer biurowy kopiuje jak przed zmiana;
+#   - -Zrodla i -Cel podane wprost wygrywaja z jednym i drugim.
+# Rejestr jest, ale bez celu kopii = BLAD z powodem (nie zgadujemy celu cudzego
+# komputera z ustawien domyslnych); z celem, ale bez listy zrodel = pliki Claude'a
+# i Codeksa i UWAGA w dzienniku; rejestr nieczytelny = ustawienia domyslne i ALARM
+# w dzienniku i pliku stanu (kopia ma isc, a ktos ma sie dowiedziec).
 #
 # UKLAD KOPII - nic nigdy nie jest nadpisywane ani kasowane:
 #   Backup\pelna-RRRR-MM-DD\C\dev\...       pierwsza pelna kopia (sciezki jak na dysku C:)
@@ -24,6 +37,8 @@
 #   kopia-zapasowa.ps1 -ZSekretami     dolacza .env, klucze SSH, ~\.claude\sekrety (domyslnie NIE)
 #   kopia-zapasowa.ps1 -ZalozZadanie   zadanie MegaRuchaczKopia, codziennie o -Godzina (12:30)
 #   kopia-zapasowa.ps1 -UsunZadanie
+#   -KatalogDomowy <kat>               podmiana katalogu domowego (testy): rejestr, "~"
+#                                      w ustawieniach, plik stanu i indeks liczone od niego
 # Pliku logowania Claude'a (.credentials.json) i auth.json Codeksa NIE kopiujemy nigdy -
 # do odtworzenia pracy nie sa potrzebne, a daja dostep do konta.
 #
@@ -45,27 +60,20 @@ param(
   [string[]]$Zrodla = @(),
   [string]$PlikStanu = "",
   [string]$PlikIndeksu = "",
-  [string]$Data = ""
+  [string]$Data = "",
+  [string]$KatalogDomowy = $env:USERPROFILE
 )
 
 $ErrorActionPreference = "Stop"
 $NazwaZadania = "MegaRuchaczKopia"
-$H = $env:USERPROFILE
-# "Moj dysk" z o-kreskowanym budujemy ze znaku - plik zostaje czystym ASCII
-if (-not $Cel) { $Cel = "G:\M" + [char]0x00F3 + "j dysk\<folder>\Backup" }
+$H = $KatalogDomowy.TrimEnd('\')
 if (-not $PlikStanu) { $PlikStanu = "$H\.claude\mr\kopia-stan.txt" }
 if (-not $PlikIndeksu) { $PlikIndeksu = "$H\.claude\mr\kopia-indeks.tsv" }
 if (-not $Data) { $Data = Get-Date -Format "yyyy-MM-dd" }
-$Cel = $Cel.TrimEnd('\')
 
-# Kolejnosc ma znaczenie: najpierw pliki Claude'a (najwazniejsze), potem C:\dev.
-# Lore (serwer MCP 'lore') chodzi z C:\dev\claude-worker\lore - jest w C:\dev.
-# Projekt "projekt-d" lezy juz na Dysku Google - nie kopiujemy go drugi raz.
-# ~\.agents: tam prowadzi dowiazanie ~\.claude\skills\orchestration.
-if ($Zrodla.Count -eq 0) {
-  $Zrodla = @("$H\.claude", "$H\.claude.json", "$H\.codex", "$H\.config\opencode",
-              "$H\.agents", "$H\orca", "C:\dev")
-}
+# Zrodla, cel i wykluczenia projektow - z rejestru instalacji albo z pliku obok
+# (Ustal-Ustawienia nizej, przed startem). Pliki Claude'a i Codeksa (to MegaRuchacz wie
+# sam, gdzie leza) sa sprawdzane na zera inaczej niz reszta - patrz Do-Sprawdzenia.
 $KorzenieClaude = @("$H\.claude", "$H\.claude.json", "$H\.codex", "$H\.config\opencode", "$H\.agents")
 
 # Prog zer. Tekst w UTF-8/UTF-16/UTF-32 nigdy nie ma wiecej niz 3 bajty 0x00 pod
@@ -437,11 +445,11 @@ Regula '\\ms-playwright$' "przegladarki Playwrighta - odtwarzalne (npx playwrigh
 Regula '\\\.claude\\worktrees$' "kopie robocze agentow (git worktree) - tymczasowe, tresc jest w git" $true
 Regula '\.(tmp|temp|kopia-tmp)$' "plik tymczasowy" $false
 Regula '\\(~\$[^\\]*|Thumbs\.db)$' "plik techniczny Windows/Office" $false
-Regula '^C:\\dev\\tools\\(git|pgsql|node|gh)$' "program przenosny (Git, PostgreSQL+pgAdmin, Node, gh) - odtwarzalny z instalatora" $true
 Regula '\\node\\node\.exe$' "program przenosny (node.exe) - odtwarzalny" $false
 Regula '\\minio\.exe$' "program przenosny (minio.exe) - odtwarzalny" $false
-Regula '^C:\\dev\\projekt-e\\(bledy|nagrania)$' "nagrania diagnostyczne robota (ok. 680 MB zipow z bledow)" $true
-Regula '^C:\\dev\\projekt-f\\_tools\\cache$' "pamiec podreczna narzedzia" $true
+# Wykluczenia konkretnych folderow uzytkownika (np. programy przenosne w C:\dev\tools,
+# nagrania robota w jednym z projektow) NIE sa tu - przychodza z ustawien (rejestr albo
+# kopia-zapasowa-domyslne.json) i dochodza do tej listy w Ustal-Ustawienia nizej.
 
 # ~\.claude i ~\.codex: katalogi techniczne. Zostaja: CLAUDE.md, wiedza, skills,
 # agents, commands, mr, projects (transkrypty), file-history, settings, lore.db.
@@ -511,7 +519,8 @@ function Zapisz-Stan([string]$tresc) {
 
 $Python = $null
 function Znajdz-Pythona {
-  $kand = "C:\dev\claude-worker\lore\.venv\Scripts\python.exe"
+  # srodowisko Lore w repo, w ktorym lezy ten skrypt (narzedzia\..\lore\.venv)
+  $kand = Join-Path (Split-Path -Parent $PSScriptRoot) "lore\.venv\Scripts\python.exe"
   if (Test-Path -LiteralPath $kand) { return @($kand) }
   $uv = Get-Command uv.exe -ErrorAction SilentlyContinue
   if ($uv) { return @($uv.Source, "run", "--no-project", "python") }
@@ -553,6 +562,98 @@ function Kopiuj-Sqlite([string]$zrodlo, [string]$dst, [long]$czas) {
   }
 }
 
+# --- ustawienia: co kopiowac, dokad, czego nie (P59d) --------------------------
+# Skad - patrz naglowek. Umowa rejestru (narzedzia\instalacja\stan.ps1) wczytywana
+# kropka wewnatrz funkcji: rejestr czyta sie tym samym kodem, co u instalatora,
+# straznika i nadzorcy. "~" na poczatku sciezki = katalog domowy ($H).
+$PlikDomyslnych = Join-Path $PSScriptRoot "kopia-zapasowa-domyslne.json"
+
+function Rozwin-Sciezke([string]$p) {
+  $p = "$p".Trim()
+  if ($p -match '^~(\\|/|$)') { $p = $H + $p.Substring(1) }
+  return $p.TrimEnd('\')
+}
+
+function Czytaj-Json([string]$plik) {
+  $b = [IO.File]::ReadAllBytes($plik)
+  if ($b.Length -eq 0) { throw "plik $plik jest pusty" }
+  if ([Array]::IndexOf($b, [byte]0) -ge 0) { throw "plik $plik ma w srodku bajty 0x00 (uszkodzony zapis)" }
+  return ((New-Object Text.UTF8Encoding($false)).GetString($b).TrimStart([char]0xFEFF) | ConvertFrom-Json)
+}
+
+# Zwraca Skad (opis po ludzku), Zrodla, Cel, Wykluczenia, Alarm (rejestr nieczytelny),
+# Uwaga i Brak (rejestr bez ustawien kopii - wtedy Zrodla i Cel zostaja puste).
+# Rejestr z celem, ale bez listy zrodel: pliki Claude'a i Codeksa ($KorzenieClaude - to
+# MegaRuchacz wie sam, gdzie leza) i UWAGA w dzienniku; bez celu - Brak (nie zgadujemy).
+function Ustal-Ustawienia {
+  $u = [pscustomobject]@{ Skad = ""; Zrodla = @(); Cel = ""; Wykluczenia = @(); Alarm = ""; Uwaga = ""; Brak = "" }
+  $umowa = Join-Path $PSScriptRoot "instalacja\stan.ps1"
+  if (-not (Test-Path -LiteralPath $umowa)) { throw "nie ma umowy rejestru instalacji $umowa" }
+  . $umowa
+  $s = Czytaj-Instalacje $H
+  $rejestr = Sciezka-Instalacji $H
+  $k = $null
+  if ($s.zrodlo -eq "plik") {
+    $u.Skad = "rejestr instalacji $rejestr"
+    if (-not $s.kopia) { $u.Brak = "rejestr instalacji $rejestr nie ma ustawien kopii (pole kopia: zrodla i cel) - wybierz je w instalatorze"; return $u }
+    $k = $s.kopia
+  } else {
+    if (-not (Test-Path -LiteralPath $PlikDomyslnych)) { throw "nie ma ustawien domyslnych kopii $PlikDomyslnych (a rejestru instalacji $rejestr nie ma albo jest nieczytelny)" }
+    $k = Czytaj-Json $PlikDomyslnych
+    if ($s.blad) {
+      $u.Skad = "ustawienia domyslne $PlikDomyslnych (REJESTR INSTALACJI NIECZYTELNY)"
+      $u.Alarm = "ALARM rejestr instalacji nieczytelny ($($s.blad)) - zrodla, cel i wykluczenia kopii wziete z ustawien domyslnych $PlikDomyslnych"
+    } else {
+      $u.Skad = "ustawienia domyslne $PlikDomyslnych (nie ma rejestru instalacji $rejestr - instalacja sprzed instalatora)"
+    }
+  }
+  $u.Zrodla = @(@($k.zrodla) | Where-Object { "$_".Trim() } | ForEach-Object { Rozwin-Sciezke $_ })
+  if ($k.cel) { $u.Cel = Rozwin-Sciezke $k.cel }
+  if (($u.Zrodla.Count -eq 0) -and ($s.zrodlo -eq "plik")) {
+    $u.Zrodla = @($KorzenieClaude)
+    $u.Uwaga = "w rejestrze instalacji nie ma listy zrodel kopii (kopia.zrodla) - kopiuje pliki Claude'a i Codeksa: $($KorzenieClaude -join ', ')"
+  }
+  foreach ($w in @($k.wykluczenia)) {
+    if (-not $w -or -not "$($w.sciezka)".Trim()) { continue }
+    $powod = "$($w.powod)"
+    if (-not $powod) { $powod = "wykluczone w ustawieniach kopii" }
+    $u.Wykluczenia += [pscustomobject]@{ Sciezka = (Rozwin-Sciezke $w.sciezka); Powod = $powod; Katalog = $w.katalog }
+  }
+  if ($u.Zrodla.Count -eq 0) { $u.Brak = "w ustawieniach ($($u.Skad)) nie ma zrodel kopii" }
+  elseif (-not $u.Cel) { $u.Brak = "w ustawieniach ($($u.Skad)) nie ma celu kopii" }
+  return $u
+}
+
+# Bez ustawien nie ma kopii - ale nie po cichu: stan=BLAD z powodem (nadzorca go pokaze).
+function Bez-Ustawien([string]$powod) {
+  Write-Host "BLAD  kopia nie ruszyla: $powod" -ForegroundColor Red
+  if (-not $Proba) { Zapisz-Stan ("stan=BLAD`r`nostatnia=" + (Get-Date).ToString("yyyy-MM-dd HH:mm:ss") + "`r`nblad=$powod`r`n") }
+  exit 1
+}
+
+$Ustawienia = $null
+$bladUstawien = ""
+try { $Ustawienia = Ustal-Ustawienia } catch { $bladUstawien = $_.Exception.Message }
+$wprost = ($Zrodla.Count -gt 0) -and $Cel
+if (-not $Ustawienia) {
+  if (-not $wprost) { Bez-Ustawien "nie odczytalem ustawien kopii: $bladUstawien" }
+  $Ustawienia = [pscustomobject]@{ Skad = "-Zrodla i -Cel z wywolania (ustawien nie odczytalem: $bladUstawien)"; Zrodla = @(); Cel = ""; Wykluczenia = @(); Alarm = ""; Uwaga = ""; Brak = "" }
+}
+if ($Zrodla.Count -gt 0) { $Ustawienia.Skad = "-Zrodla z wywolania; reszta: " + $Ustawienia.Skad } else { $Zrodla = @($Ustawienia.Zrodla) }
+if ($Cel) { $Ustawienia.Skad = "-Cel z wywolania; " + $Ustawienia.Skad } else { $Cel = $Ustawienia.Cel }
+if (($Zrodla.Count -eq 0) -or (-not $Cel)) {
+  $pw = $Ustawienia.Brak
+  if (-not $pw) { $pw = "brak $(if ($Zrodla.Count -eq 0) { 'zrodel' } else { 'celu' }) kopii ($($Ustawienia.Skad))" }
+  Bez-Ustawien $pw
+}
+$Cel = $Cel.TrimEnd('\')
+# wykluczenia z ustawien - dokladnie te sciezki (bez wzorcow); bez "katalog" = katalog i plik
+foreach ($w in $Ustawienia.Wykluczenia) {
+  $wz = "^" + (E $w.Sciezka) + "$"
+  if ($null -eq $w.Katalog) { Regula $wz $w.Powod $true; Regula $wz $w.Powod $false }
+  else { Regula $wz $w.Powod ([bool]$w.Katalog) }
+}
+
 # --- start --------------------------------------------------------------------
 
 $t0 = Get-Date
@@ -566,6 +667,8 @@ $Alarmy = New-Object 'System.Collections.Generic.List[string]'
 $Bledy = New-Object 'System.Collections.Generic.List[string]'
 $Uwagi = New-Object 'System.Collections.Generic.List[string]'
 $WUzyciu = New-Object 'System.Collections.Generic.List[string]'
+if ($Ustawienia.Alarm) { $Alarmy.Add($Ustawienia.Alarm) }
+if ($Ustawienia.Uwaga -and ($Zrodla.Count -gt 0) -and -not ($Ustawienia.Skad -like "-Zrodla z wywolania*")) { $Uwagi.Add($Ustawienia.Uwaga) }
 
 try {
   if (-not $Proba) {
@@ -702,6 +805,10 @@ try {
 
   if ($Proba) {
     Write-Output "PROBA - nic nie zostalo skopiowane ani zapisane"
+    Write-Output ("ustawienia: " + $Ustawienia.Skad)
+    Write-Output ("zrodla: " + ($Zrodla -join "; "))
+    Write-Output ("cel: $Cel")
+    Write-Output ("wykluczenia z ustawien: " + $(if (@($Ustawienia.Wykluczenia).Count) { (@($Ustawienia.Wykluczenia | ForEach-Object { $_.Sciezka }) -join "; ") } else { "zadnych" }))
     foreach ($a in $Alarmy) { Write-Output $a }
     foreach ($b in $Bledy) { Write-Output "BLAD  $b" }
     Write-Output ("rodzaj: $rodzaj  ->  $Cel\$nazwa")
@@ -771,7 +878,8 @@ try {
   [IO.File]::AppendAllText("$Cel\dziennik.txt", $d.ToString(), (New-Object Text.UTF8Encoding($false)))
 
   $s = "stan=$stan`r`nostatnia=" + (Get-Date).ToString("yyyy-MM-dd HH:mm:ss") + "`r`nrodzaj=$rodzaj`r`ncel=$Przebieg`r`n" +
-       "plikow=$skopiowane`r`nmb=" + [Math]::Round($bajty / 1MB, 1) + "`r`nalarmy=$($Alarmy.Count)`r`nbledy=$($Bledy.Count)`r`nw_uzyciu=$($WUzyciu.Count)`r`n"
+       "plikow=$skopiowane`r`nmb=" + [Math]::Round($bajty / 1MB, 1) + "`r`nalarmy=$($Alarmy.Count)`r`nbledy=$($Bledy.Count)`r`nw_uzyciu=$($WUzyciu.Count)`r`n" +
+       "ustawienia=$($Ustawienia.Skad)`r`n"
   # alarmy ida zawsze w calosci; lista bledow skrocona do 20 - ostrzezenie PRZED nia
   foreach ($a in $Alarmy) { $s += "$a`r`n" }
   if ($Bledy.Count -gt 20) { $s += "UWAGA lista bledow skrocona: ponizej 20 z $($Bledy.Count), pelna w $Cel\dziennik.txt`r`n" }

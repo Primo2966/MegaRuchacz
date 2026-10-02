@@ -200,7 +200,10 @@ function Zdanie-Wiadomosci($start) {
 # przebiegu koszt-pamieci.ps1 -Dane (udzial.mr, udzial.start, udzial.prog_tokeny),
 # wiec werdykt i alarm nie moga sie rozjechac. Stan "licze" to tylko chwila przed
 # pierwszym pomiarem po otwarciu okna, nie werdykt.
-function Werdykt-Kosztu($start, $rachunek, $cykl, $zuzycie = $null) {
+# P59d ($inst = Stan-Instalacji): bez modulow, ktore dopisuja tekst do rozmow (Wiedza,
+# Lore, Kierownik), zero w rachunku nie jest "nie wiem", tylko odpowiedzia - zolte
+# "nie wiadomo" przy samej bazie byloby falszywym alarmem.
+function Werdykt-Kosztu($start, $rachunek, $cykl, $zuzycie = $null, $inst = $null) {
   $w = [pscustomobject]@{ Stan = "licze"; Zdanie = ""; Wyjasnienie = ""; Nauka = ""; Prog = $null; Proc = "" }
   if ($null -eq $start) {
     $w.Zdanie = "Liczę, ile kosztuje MegaRuchacz - to potrwa kilka sekund..."
@@ -241,6 +244,13 @@ function Werdykt-Kosztu($start, $rachunek, $cykl, $zuzycie = $null) {
   # Zero za start to nie "za darmo", tylko "nie bylo czego policzyc" (brak CLAUDE.md,
   # plik sie nie czyta, nie ma w nim niczego od MegaRuchacza) - tak mowi sam rachunek.
   if (($null -eq $mr) -or ($null -eq $mrS) -or ($mrS -le 0)) {
+    $doklejaja = @(@("wiedza", "lore", "kierownik") | Where-Object { Modul-Jest $inst $_ })
+    if ($inst -and -not $inst.Blad -and ($doklejaja.Count -eq 0) -and (($null -eq $mr) -or ($mr -le 0))) {
+      $w.Stan = "malo"
+      $w.Zdanie = "MegaRuchacz nic nie dokłada do otwarcia okna rozmowy."
+      $w.Wyjasnienie = "Nie masz zainstalowanych modułów, które dopisują tekst do rozmów (Wiedza, Lore, Kierownik) - pracują tylko aplikacja przy zegarze i aktualizacje$(if (Modul-Jest $inst 'skille') { ', opieka nad skillami' })$(if (Modul-Jest $inst 'kopia') { ', kopia zapasowa' })."
+      return $w
+    }
     $w.Stan = "nie wiadomo"
     $w.Zdanie = "Nie wiadomo, czy MegaRuchacz kosztuje dużo, czy mało."
     $w.Wyjasnienie = ("Rachunek nie zmierzył, ile MegaRuchacz dokłada przy otwarciu okna rozmowy - nie znalazł ani jego zasad, ani wiedzy wczytywanej na starcie " +

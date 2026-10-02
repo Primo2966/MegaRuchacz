@@ -49,8 +49,12 @@ function Wywrotki-Straznika {
 # Cztery sprawy ze zlecenia plus piata: wlasne potkniecia nadzorcy z poprzedniego
 # przebiegu. Zwraca komplet alarmow BEZ patrzenia na "raz na dobe" - o tym
 # decyduje ten, kto je pokazuje.
-function Zbierz-Alarmy($cykl, $rachunek) {
+# $inst = Stan-Instalacji (P59d): alarmy modulow, ktorych nie ma w instalacji, nie
+# powstaja - bez modulu Wiedza nie ma nauki, ktora moglaby stac ($cykl jest wtedy
+# pusty), bez modulu Kopia nie ma kopii, ktora moglaby byc stara.
+function Zbierz-Alarmy($cykl, $rachunek, $inst = $null) {
   $alarmy = @()
+  $wiedza = Modul-Jest $inst "wiedza"
 
   # TRESC ALARMU PISZEMY PO POLSKU Z OGONKAMI I BEZ ZARGONU, bo trafia prosto
   # na wierzch okna, do sekcji "co wymaga uwagi". Zdania z komendami i sciezkami
@@ -58,8 +62,11 @@ function Zbierz-Alarmy($cykl, $rachunek) {
   # i tak zostaje w szczegolach i w dzienniku, wiec nic nie ginie.
 
   # 1. Nauka z rozmow stoi. Prog: doba - taki jest jej rytm pracy.
-  $godzin = Godzin-Od-Cyklu $cykl
-  if ($null -eq $godzin) {
+  $godzin = $null
+  if ($cykl) { $godzin = Godzin-Od-Cyklu $cykl }
+  if (-not ($wiedza -and $cykl)) {
+    # nauki nie ma w instalacji - nie ma czego alarmowac
+  } elseif ($null -eq $godzin) {
     $alarmy += Alarm "cykl" "MegaRuchacz: nauka z rozmów nie przeszła ani razu" (
       "Nie ma zapisu ani jednego zakończonego przebiegu, więc MegaRuchacz niczego się jeszcze nie nauczył z Twoich rozmów. " +
       "Kliknij ikonę MegaRuchacza i użyj przycisku [Przeczytaj teraz nowe rozmowy] - pokaże koszt i zapyta o zgodę. " +
@@ -97,6 +104,8 @@ function Zbierz-Alarmy($cykl, $rachunek) {
   $czerwonych = 0
   foreach ($a in (Alarmy-Rachunku $rachunek)) {
     if ($a.Waga -eq "info") { continue }
+    # koszt nauki z rozmow bez modulu Wiedza: stare pliki kosztu, nauka nie chodzi (P59d)
+    if ((-not $wiedza) -and (Temat-Nauki $a.Temat)) { continue }
     if ($a.Waga -eq "pilne") { $czerwonych++ }
     $alarmy += Alarm-Z-Rachunku $a $ocena
   }
@@ -131,11 +140,13 @@ function Zbierz-Alarmy($cykl, $rachunek) {
   $zera = Alarm-Wyzerowanej-Pamieci
   if ($zera) { $alarmy += $zera }
   # 6. Kopia zapasowa na Dysk Google stara albo z pominietymi uszkodzonymi plikami (P62) -
-  # progi z uzasadnieniem w stan-kopia.ps1.
-  try {
-    $kop = Alarm-Kopii
-    if ($kop) { $alarmy += $kop }
-  } catch { Zanotuj-Wywrotke "alarm kopii zapasowej" $_ }
+  # progi z uzasadnieniem w stan-kopia.ps1. Tylko z modulem Kopia (P59d).
+  if (Modul-Jest $inst "kopia") {
+    try {
+      $kop = Alarm-Kopii $inst
+      if ($kop) { $alarmy += $kop }
+    } catch { Zanotuj-Wywrotke "alarm kopii zapasowej" $_ }
+  }
 
   return ,$alarmy
 }

@@ -139,8 +139,16 @@ function Opis-Cyklu($c, $o = $null) {
 # ktorego w ogole nie bylo), do tego zaden przebieg nie pracuje w tej chwili.
 # Pusta kolejka jest jedynym powodem, zeby nie ruszac - kolejki, ktorej nie
 # umiemy odczytac, nie udajemy i cykl idzie, bo sam powie, co mu przeszkadza.
-function Czy-Ruszac-Cykl {
+# P59d: tylko z modulem Wiedza w rejestrze instalacji ($inst = Stan-Instalacji;
+# nieczytelny rejestr = wszystko wlaczone, wiec cykl idzie jak dotad). Do tej pory
+# jedynym warunkiem "modul jest" byl lore\pyproject.toml - plik w repo, po kazdym
+# klonie obecny, wiec bez nauki w instalacji cykl ruszalby codziennie i padal.
+function Czy-Ruszac-Cykl($inst = $null) {
   $w = [pscustomobject]@{ Ruszac = $false; Powod = "" }
+  if (-not (Modul-Jest $inst "wiedza")) {
+    $w.Powod = "modul Wiedza nie jest zainstalowany (rejestr instalacji) - nauka z rozmow nie chodzi"
+    return $w
+  }
   $skrypt = Join-Path $script:NadzZrodlo "narzedzia\cykl-dzienny.ps1"
   if (-not (Test-Path $skrypt)) {
     $w.Powod = "nie ma ${skrypt}"

@@ -134,12 +134,27 @@ function Ile-Plikow([int]$n) { return "$(Liczba-Ludzka $n) $(Odmiana $n 'plik' '
 # Linia na Przeglad, jej waga (""/"szary"/"uwaga"/"pilne") i - gdy jest o czym alarmowac -
 # tytul, porada i pelna tresc alarmu. Kolejnosc spraw: uszkodzone pliki, stara kopia,
 # inne alarmy kopii, przebieg przerwany, bledy; na wierzch idzie pierwsza, w tresci wszystkie.
-function Ocena-Kopii($k) {
+# $inst = Stan-Instalacji (P59d): kopia WLACZONA w rejestrze instalacji, ktora nie
+# przeszla ani razu, to nie "nie jest ustawiona" - po dwoch dobach od zapisu wyboru
+# to alarm (zwykle nie powstalo zadanie Harmonogramu), wczesniej zolta linia.
+function Ocena-Kopii($k, $inst = $null) {
   $o = [pscustomobject]@{ Linia = ""; Waga = ""; Alarm = $false; AlarmWaga = ""; Tytul = ""; Porada = ""; Tresc = "" }
   if (-not $k) { $o.Linia = "Kopia zapasowa: nie wiem, nie udało się odczytać jej stanu."; $o.Waga = "uwaga"; return $o }
   if (-not $k.Jest -and -not $k.OstatniaUdana) {
-    # Na komputerze bez kopii (np. domowym) to nie usterka - bez alarmu.
-    $o.Linia = "Kopia zapasowa: nie jest ustawiona na tym komputerze."; $o.Waga = "szary"; return $o
+    $wybrana = $inst -and ("$($inst.Zrodlo)" -eq "plik") -and (Modul-Jest $inst "kopia")
+    if (-not $wybrana) {
+      # Na komputerze bez kopii (np. domowym) to nie usterka - bez alarmu.
+      $o.Linia = "Kopia zapasowa: nie jest ustawiona na tym komputerze."; $o.Waga = "szary"; return $o
+    }
+    $od = Data-Lub-Nic $inst.Data
+    if ($od -and ((([datetime]::Now) - $od).TotalHours -gt $GODZIN_KOPIA_STARA)) {
+      $o.Linia = "Kopia zapasowa: ALARM - wybrana w instalacji $(Kiedy-Ludzko $od), a nie przeszła jeszcze ani razu."; $o.Waga = "pilne"
+      $o.Alarm = $true; $o.AlarmWaga = "pilne"; $o.Tytul = "MegaRuchacz: kopia zapasowa nie ruszyła ani razu"
+      $o.Porada = "Kopia zapasowa jest włączona od ponad dwóch dób, a nie przeszła ani razu - zwykle znaczy to, że nie powstało jej zadanie Harmonogramu. Kliknij `„Zmień instalację`” i zapisz wybór jeszcze raz; polecenie do sprawdzenia jest w zakładce Szczegóły."
+      $o.Tresc = "Rejestr instalacji ($($inst.Plik), zapisany $($inst.Data)) ma kopie wlaczona, a nie ma ani pliku stanu $($k.Plik), ani indeksu $($k.Indeks); prog $GODZIN_KOPIA_STARA h. Sprawdzenie bez kopiowania: powershell -ExecutionPolicy Bypass -File `"$($script:NadzZrodlo)\narzedzia\kopia-zapasowa.ps1`" -Proba"
+      return $o
+    }
+    $o.Linia = "Kopia zapasowa: włączona, pierwsza kopia jeszcze nie przeszła - ruszy sama o zwykłej porze."; $o.Waga = "uwaga"; return $o
   }
   $teraz = [datetime]::Now
   $udana = $(if ($k.OstatniaUdana) { "ostatnia udana $(Kiedy-Ludzko $k.OstatniaUdana)" } else { "ani jednej udanej kopii" })
@@ -225,17 +240,23 @@ function Ocena-Kopii($k) {
 }
 
 # Alarm do Zbierz-Alarmy (temat "kopia" - jeden dymek na dobe) albo $null.
-function Alarm-Kopii {
-  $o = Ocena-Kopii (Stan-Kopii)
+function Alarm-Kopii($inst = $null) {
+  $o = Ocena-Kopii (Stan-Kopii) $inst
   if (-not $o.Alarm) { return $null }
   return (Alarm "kopia" $o.Tytul $o.Tresc $o.AlarmWaga $o.Porada)
 }
 
-# Wiersze do Szczegolow: wszystko, co wiadomo, z wagami.
-function Opis-Kopii($k) {
+# Wiersze do Szczegolow: wszystko, co wiadomo, z wagami. Z rejestru instalacji (P59d)
+# takze to, co kopia ma kopiowac i dokad - wybor uzytkownika z instalatora.
+function Opis-Kopii($k, $inst = $null) {
   $w = @()
-  $o = Ocena-Kopii $k
+  $o = Ocena-Kopii $k $inst
   $w += Wiersz "Stan" ($o.Linia -replace '^Kopia zapasowa:\s*', '') $o.Waga
+  if ($inst -and $inst.Kopia) {
+    $zr = @($inst.Kopia.zrodla | Where-Object { $_ })
+    $w += Wiersz "Co kopiuje (rejestr)" $(if ($zr.Count -gt 0) { $zr -join "; " } else { "nie wiem - w rejestrze instalacji nie ma listy źródeł" }) $(if ($zr.Count -gt 0) { "szary" } else { "uwaga" })
+    $w += Wiersz "Dokąd (rejestr)" $(if ($inst.Kopia.cel) { "$($inst.Kopia.cel)" } else { "nie wiem - w rejestrze instalacji nie ma celu kopii" }) $(if ($inst.Kopia.cel) { "szary" } else { "uwaga" })
+  }
   if (-not $k) { return ,$w }
   if ($k.Jest -or $k.OstatniaUdana) {
     $w += Wiersz "Ostatnia udana kopia" $(if ($k.OstatniaUdana) { "$($k.OstatniaUdana.ToString('yyyy-MM-dd HH:mm')) ($(Kiedy-Ludzko $k.OstatniaUdana))" } else { "nie było ani jednej" }) $(if ($o.Waga -eq "pilne" -and -not $k.OstatniaUdana) { "pilne" } else { "" })

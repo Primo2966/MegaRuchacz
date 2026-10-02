@@ -37,8 +37,14 @@ function Proces-Zyje($pidTekst) {
   return [bool](Get-Process -Id $n -ErrorAction SilentlyContinue)
 }
 
-function Czy-Sprawdzac-Skille {
+# P59d: tylko z modulem Skille w rejestrze instalacji ($inst = Stan-Instalacji;
+# nieczytelny rejestr = wszystko wlaczone).
+function Czy-Sprawdzac-Skille($inst = $null) {
   $w = [pscustomobject]@{ Ruszac = $false; Powod = "" }
+  if (-not (Modul-Jest $inst "skille")) {
+    $w.Powod = "modul Skille nie jest zainstalowany (rejestr instalacji)"
+    return $w
+  }
   $skrypt = Skrypt-Skilli
   if (-not (Test-Path -LiteralPath $skrypt)) { $w.Powod = "nie ma $skrypt"; return $w }
   $dzis = Get-Date -Format 'yyyy-MM-dd'

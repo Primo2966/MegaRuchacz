@@ -79,6 +79,17 @@ $script:BAktualizuj    = $null
 $script:LAktualizuj    = $null
 $script:BCykl          = $null
 $script:LCykl          = $null
+$script:BInstalacja    = $null   # "Zmień instalację" (P59d) - instalator w trybie zmiany
+$script:LInstalacja    = $null
+$script:LZamknij       = $null
+$script:Przelacznik    = $null   # panel przelacznika zakladek - wezszy, gdy nie ma zakladki Skille
+# Zainstalowane moduly (P59d, Stan-Instalacji w stan-instalacja.ps1): czytane przy budowie
+# okna, potem z kazdym krokiem "dane" i po zamknieciu instalatora. Od nich zalezy, ktore
+# zakladki, karty i linie sa w oknie.
+$script:Instalacja     = $null
+$script:ProcesInstalatora = $null   # instalator uruchomiony z okna - drugi naraz nie rusza
+$script:ZegarInstalatora  = $null
+$script:NapisInstalacji   = ""      # odpowiedz na klikniecie pod przyciskiem (tryb probny, blad startu)
 $script:PanelZmian     = $null   # linie zmian w pamieci, schowane pod "pokaz zmiany"
 $script:LinkZmian      = $null
 # Rozwiniecie listy zmian przezywa przeliczenie okna - inaczej lista zwijalaby

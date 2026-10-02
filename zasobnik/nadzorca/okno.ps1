@@ -1,10 +1,14 @@
 ﻿# zasobnik\nadzorca\okno.ps1 - czesc zasobnik\nadzorca.ps1 (patrz BUDOWA
 # w jego naglowku). Budowa okna: Pokaz-Okno sklada formularz (naglowek
 # z przelacznikiem, panele czterech zakladek, ekran ladowania, przyciski z pytaniem
-# o zgode, zdarzenia) i pokazuje go; Pokaz-Widok przelacza zakladki.
+# o zgode, zdarzenia) i pokazuje go; Pokaz-Widok przelacza zakladki. Od P59d takze
+# zakladki i pasek wedlug rejestru instalacji (Uloz-Przelacznik, Uloz-Pasek,
+# Ustaw-Instalacje-Okna) i przycisk "Zmień instalację" (Zmien-Instalacje,
+# Po-Instalatorze, Instalator-Otwarty).
 # Skad wolane: menu i klikniecie ikony w nadzorca.ps1 (Pokaz-Okno), przelacznik
-# zakladek (Pokaz-Widok). Wczytuje go nadzorca.ps1 kropka po zamku jednej kopii,
-# jako OSTATNI modul okna - tu sa same definicje.
+# zakladek (Pokaz-Widok), dozor.ps1 i w-tle.ps1 (Ustaw-Instalacje-Okna po danych),
+# przeglad.ps1 (Uloz-Pasek, Instalator-Otwarty). Wczytuje go nadzorca.ps1 kropka po
+# zamku jednej kopii, jako OSTATNI modul okna - tu sa same definicje.
 
 # Przelaczenie widoku. Szczegoly napelniaja sie przy wejsciu - chyba ze stoi
 # w nich odpowiedz na klikniecie (SzczegolyZajete), ktorej nie wolno podmienic.
@@ -13,6 +17,8 @@
 # proba liczy sie od nowa przy nastepnym wejsciu, zamiast zostawiac stary blad.
 function Pokaz-Widok([string]$nazwa) {
   if (-not $script:Okno -or $script:Okno.IsDisposed) { return }
+  # bez modulu Skille nie ma tej zakladki (P59d) - wejscie do niej konczy sie na Przegladzie
+  if (($nazwa -eq "skille") -and -not (Modul-Jest $script:Instalacja "skille")) { $nazwa = "przeglad" }
   $script:Widok = $nazwa
   $szcz = ($nazwa -eq "szczegoly")
   $warst = ($nazwa -eq "warstwy")
@@ -29,6 +35,135 @@ function Pokaz-Widok([string]$nazwa) {
   Wejdz-Do-Widoku $nazwa
 }
 
+# --- instalacja: zakladki wedlug rejestru i przycisk "Zmień instalację" (P59d) -------
+# Ktore zakladki i karty sa w oknie, mowi rejestr instalacji ($script:Instalacja,
+# Stan-Instalacji w stan-instalacja.ps1). Odczyt jest tani (jeden maly plik), wiec okno
+# czyta go samo przy budowie, a potem bierze swiezy z kazdym krokiem "dane" (i z dozoru)
+# - po zmianie instalacji okno ustawia sie samo, bez restartu nadzorcy.
+
+# Przelacznik zakladek: bez modulu Skille panel jest wezszy o jej przycisk i dalej
+# przylega do prawej krawedzi - zadnej pustej dziury po zakladce, ktorej nie ma.
+function Uloz-Przelacznik {
+  $p = $script:Przelacznik
+  if (-not $p -or $p.IsDisposed) { return }
+  $skil = Modul-Jest $script:Instalacja "skille"
+  $szer = $(if ($skil) { 530 } else { 426 })
+  $script:BSkille.Visible = $skil
+  $p.Size = New-Object System.Drawing.Size($szer, 38)
+  $p.Location = New-Object System.Drawing.Point(($script:SzerOkna - $script:Margines - $szer), 10)
+}
+
+# Pasek przyciskow: cztery kolumny (aktualizacja, czytanie rozmow, zmiana instalacji,
+# zamkniecie). Bez modulu Wiedza kolumna czytania rozmow ma 0% i jest niewidoczna -
+# reszta rozsuwa sie na cala szerokosc. Szerokosc opisow pod przyciskami idzie za
+# kolumna, inaczej opis wyjechalby poza swoja kolumne albo zawijal sie bez potrzeby.
+# Procenty: przy 1240 px okna kolumny maja 403/403/189/189 px - opisy mieszcza sie
+# w dwoch liniach (zmierzone TextRenderer), czyli pasek nie jest wyzszy niz dotad.
+function Uloz-Pasek([bool]$zCyklem) {
+  $p = $script:Pasek
+  if (-not $p -or $p.IsDisposed -or ($p.ColumnStyles.Count -lt 4)) { return }
+  $proc = $(if ($zCyklem) { @(34, 34, 16, 16) } else { @(50, 0, 25, 25) })
+  # (po procentach, nie po Visible - Visible przycisku w niepokazanym jeszcze oknie to $false)
+  if (($p.ColumnStyles[0].Width -eq $proc[0]) -and ($p.ColumnStyles[1].Width -eq $proc[1])) { return }
+  $p.SuspendLayout()
+  try {
+    $wnetrze = $script:SzerOkna - 2 * $script:Margines
+    $opisy = @($script:LAktualizuj, $script:LCykl, $script:LInstalacja, $script:LZamknij)
+    for ($i = 0; $i -lt 4; $i++) {
+      $p.ColumnStyles[$i].Width = $proc[$i]
+      if ($opisy[$i] -and ($proc[$i] -gt 0)) { $opisy[$i].MaximumSize = New-Object System.Drawing.Size(([int]($wnetrze * $proc[$i] / 100) - 24), 0) }
+    }
+    $script:BCykl.Visible = $zCyklem
+    $script:LCykl.Visible = $zCyklem
+  } finally { $p.ResumeLayout($true) }
+}
+
+function Instalator-Otwarty {
+  $pr = $script:ProcesInstalatora
+  if (-not $pr) { return $false }
+  try { return (-not $pr.HasExited) } catch { return $false }
+}
+
+# Nowy odczyt rejestru (z kroku "dane", z dozoru albo po zamknieciu instalatora).
+# Starszy niz ten, ktory okno juz ma (dozor policzony przed zmiana), nie wygrywa.
+# Gdy zestaw modulow sie zmienil: przelacznik, pasek i wszystkie zakladki od nowa.
+function Ustaw-Instalacje-Okna($inst) {
+  if (-not $inst) { return }
+  $stara = $script:Instalacja
+  if ($stara -and $stara.Czas -and $inst.Czas -and ($inst.Czas -lt $stara.Czas)) { return }
+  $script:Instalacja = $inst
+  if ($stara -and (Moduly-Rowne $stara $inst)) { return }
+  Notuj "okno: zainstalowane moduly - $((Nazwy-Modulow $inst $true) -join ', ')$(if ($inst.Blad) { ' (rejestr nieczytelny: ' + $inst.Blad + ')' })"
+  foreach ($w in @($script:DoOdmalowania.Keys)) { $script:DoOdmalowania[$w] = $true }
+  if (-not $script:Okno -or $script:Okno.IsDisposed) { return }
+  Uloz-Przelacznik
+  if (($script:Widok -eq "skille") -and -not (Modul-Jest $inst "skille")) { Pokaz-Widok "przeglad" }
+}
+
+# "Zmień instalację": instalator w trybie zmiany - instalator\okno.ps1 -Tryb zmiana (to
+# samo, co instaluj.bat w tym trybie, bez okna konsoli po drodze). Osobny proces bez
+# konsoli (CreateNoWindow, bez -WindowStyle Hidden: ukryte okno startowe przeszloby na
+# pierwsze okno instalatora - patrz Wymus-Pokazanie w wyglad.ps1). Nic nie kosztuje,
+# wiec bez pytania; drugi instalator naraz nie rusza. Tryb probny niczego nie uruchamia.
+function Zmien-Instalacje {
+  $plik = Join-Path $script:NadzZrodlo "instalator\okno.ps1"
+  if (-not (Test-Path -LiteralPath $plik -PathType Leaf)) {
+    $script:NapisInstalacji = "Nieaktywny - instalator w przygotowaniu."
+    Odmaluj-Przyciski
+    return
+  }
+  if (Instalator-Otwarty) { Odmaluj-Przyciski; return }
+  if ($script:NadzProba) {
+    $script:NapisInstalacji = "Tryb próbny - instalatora nie uruchamiam."
+    Odmaluj-Przyciski
+    return
+  }
+  try {
+    $psi = New-Object System.Diagnostics.ProcessStartInfo
+    $psi.FileName = Join-Path $env:SystemRoot "System32\WindowsPowerShell\v1.0\powershell.exe"
+    # -Zrodlo i -KatalogDomowy jak u nadzorcy: instalator zmienia te instalacje, ktora to okno
+    # pokazuje (w tescie z podstawionym domem - podstawiony dom, nie prawdziwy)
+    $psi.Arguments = '-NoProfile -ExecutionPolicy Bypass -File "' + $plik + '" -Tryb zmiana -Zrodlo "' + $script:NadzZrodlo + '" -KatalogDomowy "' + $script:NadzDom + '"'
+    $psi.WorkingDirectory = $script:NadzZrodlo
+    $psi.UseShellExecute = $false
+    $psi.CreateNoWindow = $true
+    $script:ProcesInstalatora = [System.Diagnostics.Process]::Start($psi)
+    $script:NapisInstalacji = ""
+    Notuj "okno: uruchomiony instalator w trybie zmiany (pid $($script:ProcesInstalatora.Id))"
+  } catch {
+    Zanotuj-Wywrotke "uruchomienie instalatora" $_
+    $script:ProcesInstalatora = $null
+    $script:NapisInstalacji = "Nie udało się uruchomić instalatora: $($_.Exception.Message)"
+  }
+  Odmaluj-Przyciski
+  if (-not $script:ProcesInstalatora) { return }
+  if (-not $script:ZegarInstalatora) {
+    $script:ZegarInstalatora = New-Object System.Windows.Forms.Timer
+    $script:ZegarInstalatora.Interval = 2000
+    $script:ZegarInstalatora.Add_Tick({ try { Po-Instalatorze } catch { $script:ZegarInstalatora.Stop(); Zanotuj-Wywrotke "zegar instalatora" $_ } })
+  }
+  $script:ZegarInstalatora.Start()
+}
+
+# Co 2 s, dopoki instalator jest otwarty. Po zamknieciu: rejestr od nowa (zakladki od
+# razu), potem liczby w tle - zmienione moduly zmieniaja tez to, co sie liczy.
+function Po-Instalatorze {
+  if (Instalator-Otwarty) { return }
+  $script:ZegarInstalatora.Stop()
+  $kod = $null
+  try { $kod = $script:ProcesInstalatora.ExitCode } catch { $kod = $null }
+  Notuj "okno: instalator zamkniety (kod $kod) - czytam rejestr instalacji od nowa"
+  try { $script:ProcesInstalatora.Dispose() } catch { Notuj "nie dalo sie zwolnic procesu instalatora: $($_.Exception.Message)" }
+  $script:ProcesInstalatora = $null
+  # kod inny niz 0 (3 = okno instalatora nie wstalo) - pod przyciskiem, nie tylko w dzienniku
+  if (($null -ne $kod) -and ($kod -ne 0)) { $script:NapisInstalacji = "Instalator zakończył się błędem (kod $kod) - powód podaje on sam w swoim okienku i dzienniku." }
+  try { Ustaw-Instalacje-Okna (Stan-Instalacji) } catch { Zanotuj-Wywrotke "rejestr instalacji po instalatorze" $_ }
+  if ($script:Okno -and -not $script:Okno.IsDisposed) {
+    Odmaluj-Przyciski
+    [void](Przelicz-W-Tle)
+  }
+}
+
 # --- budowa okna -------------------------------------------------------------
 
 function Pokaz-Okno {
@@ -39,6 +174,9 @@ function Pokaz-Okno {
     Wejdz-Do-Widoku $script:Widok
     return
   }
+
+  # P59d: rejestr instalacji przed budowa - od niego zalezy przelacznik i pasek.
+  try { Ustaw-Instalacje-Okna (Stan-Instalacji) } catch { Zanotuj-Wywrotke "odczyt rejestru instalacji przy budowie okna" $_ }
 
   $f = New-Object System.Windows.Forms.Form
   $f.Text = "MegaRuchacz"
@@ -70,13 +208,15 @@ function Pokaz-Okno {
   $script:Pasek.Dock = [System.Windows.Forms.DockStyle]::Bottom
   $script:Pasek.AutoSize = $true
   $script:Pasek.AutoSizeMode = [System.Windows.Forms.AutoSizeMode]::GrowAndShrink
-  $script:Pasek.ColumnCount = 3
+  # P59d: czwarta kolumna "Zmień instalację"; procenty i szerokosci opisow ustawia
+  # Uloz-Pasek (wyzej) - takze bez modulu Wiedza, gdy kolumna czytania rozmow znika.
+  $script:Pasek.ColumnCount = 4
   $script:Pasek.RowCount = 2
   $script:Pasek.Padding = New-Object System.Windows.Forms.Padding($script:Margines, 14, $script:Margines, 14)
   $script:Pasek.BackColor = $script:TloPaska
-  $script:Pasek.ColumnStyles.Add((New-Object System.Windows.Forms.ColumnStyle([System.Windows.Forms.SizeType]::Percent, 39))) | Out-Null
-  $script:Pasek.ColumnStyles.Add((New-Object System.Windows.Forms.ColumnStyle([System.Windows.Forms.SizeType]::Percent, 39))) | Out-Null
-  $script:Pasek.ColumnStyles.Add((New-Object System.Windows.Forms.ColumnStyle([System.Windows.Forms.SizeType]::Percent, 22))) | Out-Null
+  foreach ($proc in @(34, 34, 16, 16)) {
+    $script:Pasek.ColumnStyles.Add((New-Object System.Windows.Forms.ColumnStyle([System.Windows.Forms.SizeType]::Percent, $proc))) | Out-Null
+  }
   $script:Pasek.RowStyles.Add((New-Object System.Windows.Forms.RowStyle([System.Windows.Forms.SizeType]::Absolute, 38))) | Out-Null
   $script:Pasek.RowStyles.Add((New-Object System.Windows.Forms.RowStyle([System.Windows.Forms.SizeType]::AutoSize))) | Out-Null
   # cienka kreska nad paskiem - oddziela przyciski od tresci bez ciezkiej ramki
@@ -84,18 +224,23 @@ function Pokaz-Okno {
 
   $script:BAktualizuj = Nowy-Przycisk "Sprawdź i pobierz nowszą wersję MegaRuchacza"
   $script:BCykl       = Nowy-Przycisk "Przeczytaj teraz nowe rozmowy"
+  $script:BInstalacja = Nowy-Przycisk "Zmień instalację"
   $bZamknij           = Nowy-Przycisk "Zamknij okno"
-  $szerOpisu = [int]($script:SzerOkna * 0.39) - 24
-  $script:LAktualizuj = Etykieta-Zawijana "" $script:CzMala $script:KolSzary $szerOpisu
-  $script:LCykl       = Etykieta-Zawijana "" $script:CzMala $script:KolSzary $szerOpisu
-  $lZamknij           = Etykieta-Zawijana "Ikona w zasobniku zostaje i pilnuje dalej." $script:CzMala $script:KolSzary 160
+  $wnetrzePaska = $script:SzerOkna - 2 * $script:Margines
+  $script:LAktualizuj = Etykieta-Zawijana "" $script:CzMala $script:KolSzary ([int]($wnetrzePaska * 0.34) - 24)
+  $script:LCykl       = Etykieta-Zawijana "" $script:CzMala $script:KolSzary ([int]($wnetrzePaska * 0.34) - 24)
+  $script:LInstalacja = Etykieta-Zawijana "" $script:CzMala $script:KolSzary ([int]($wnetrzePaska * 0.16) - 24)
+  $script:LZamknij    = Etykieta-Zawijana "Ikona w zasobniku zostaje i pilnuje dalej." $script:CzMala $script:KolSzary ([int]($wnetrzePaska * 0.16) - 24)
+  $script:LInstalacja.UseMnemonic = $false
 
   $script:Pasek.Controls.Add($script:BAktualizuj, 0, 0)
   $script:Pasek.Controls.Add($script:BCykl, 1, 0)
-  $script:Pasek.Controls.Add($bZamknij, 2, 0)
+  $script:Pasek.Controls.Add($script:BInstalacja, 2, 0)
+  $script:Pasek.Controls.Add($bZamknij, 3, 0)
   $script:Pasek.Controls.Add($script:LAktualizuj, 0, 1)
   $script:Pasek.Controls.Add($script:LCykl, 1, 1)
-  $script:Pasek.Controls.Add($lZamknij, 2, 1)
+  $script:Pasek.Controls.Add($script:LInstalacja, 2, 1)
+  $script:Pasek.Controls.Add($script:LZamknij, 3, 1)
 
   # Naglowek: tytul i podtytul po lewej, przelacznik widokow po prawej.
   $script:Naglowek = New-Object System.Windows.Forms.Panel
@@ -109,10 +254,12 @@ function Pokaz-Okno {
   # Przelacznik trzech widokow na linii tytulu, po prawej; podtytul biegnie pod
   # nim na cala szerokosc.
   # P18: czwarty przycisk "Skille" - panel szerszy o 104 px (100 px przycisku + 4 odstepu).
+  # P59d: bez modulu Skille panel wezszy o te 104 px (Uloz-Przelacznik).
   $przel = New-Object System.Windows.Forms.Panel
   $przel.Size = New-Object System.Drawing.Size(530, 38)
   $przel.Location = New-Object System.Drawing.Point(($script:SzerOkna - $script:Margines - 530), 10)
   $przel.BackColor = $script:TloPrzel
+  $script:Przelacznik = $przel
   $script:BPrzeglad  = Przycisk-Przelacznika "Przegląd" 3 124
   $script:BSzczegoly = Przycisk-Przelacznika "Szczegóły" 131 124
   $script:BWarstwy   = Przycisk-Przelacznika "Warstwy pamięci" 259 164
@@ -121,6 +268,7 @@ function Pokaz-Okno {
   $przel.Controls.Add($script:BSzczegoly)
   $przel.Controls.Add($script:BWarstwy)
   $przel.Controls.Add($script:BSkille)
+  Uloz-Przelacznik
   $script:Naglowek.Controls.Add($lTytul)
   $script:Naglowek.Controls.Add($script:LPodtytul)
   $script:Naglowek.Controls.Add($przel)
@@ -417,6 +565,10 @@ function Pokaz-Okno {
     $script:KartaStart = $null; $script:KartaWerdykt = $null; $script:PodgladInfo = $null; $script:KartaKoszt = $null
     $script:Pasek = $null; $script:BAktualizuj = $null; $script:LAktualizuj = $null
     $script:BCykl = $null; $script:LCykl = $null
+    # instalator moze dalej byc otwarty - jego proces i zegar zostaja (Po-Instalatorze
+    # przeczyta rejestr takze bez okna); znika tylko odpowiedz na klikniecie
+    $script:BInstalacja = $null; $script:LInstalacja = $null; $script:LZamknij = $null; $script:Przelacznik = $null
+    $script:NapisInstalacji = ""
     $script:PanelZmian = $null; $script:LinkZmian = $null
     $script:BWarstwy = $null; $script:WidokWarstwy = $null; $script:LWarstwy = $null
     $script:ListaWarstw = $null; $script:PodgladWarstwy = $null
@@ -632,6 +784,11 @@ function Pokaz-Okno {
         "Nie udało się", [System.Windows.Forms.MessageBoxButtons]::OK,
         [System.Windows.Forms.MessageBoxIcon]::Error) | Out-Null
     }
+  })
+
+  # P59d: instalator w trybie zmiany - nic nie kosztuje, wiec bez pytania (Zmien-Instalacje).
+  $script:BInstalacja.Add_Click({
+    try { Zmien-Instalacje } catch { Zanotuj-Wywrotke "przycisk Zmien instalacje" $_ }
   })
 
   $bZamknij.Add_Click({ $script:Okno.Close() })

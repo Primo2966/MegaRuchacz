@@ -5,7 +5,9 @@
 # jako tekst dla wydruku -Raport (Zbuduj-Szczegoly, Tabela-Na-Tekst), ogonki
 # w tekstach z koszt-pamieci.ps1 (Po-Polsku, $SLOWA_Z_OGONKAMI) i wstawienie kart
 # do zakladki (Napelnij-Szczegoly, Pokaz-Karty-Szczegolow). Same karty rysuje
-# Karta-Sekcji w karty.ps1.
+# Karta-Sekcji w karty.ps1. Od P59d sekcje modulow spoza rejestru instalacji
+# ($d.Instalacja: nauka z rozmow, kopia zapasowa) nie powstaja, a "Nadzorca i gdzie co
+# leży" mowi, co jest zainstalowane (Opis-Instalacji).
 # Skad wolane: tryb -Raport w nadzorca.ps1 (Zbuduj-Szczegoly), w-tle.ps1
 # (Napelnij-Szczegoly po kroku), okno.ps1, warstwy.ps1 (Po-Polsku). Wczytuje go
 # nadzorca.ps1 kropka PRZED trybami bez GUI - poza stala $SLOWA_Z_OGONKAMI same
@@ -196,13 +198,18 @@ function Sekcja-Kosztu($koszt, $zuzycie) {
 
 function Sekcje-Szczegolow($d, $wywrotkiNadzorcy, $rozbicie, $start, $koszt = $null, $zuzycie = $null) {
   $lista = @()
+  # P59d: sekcje modulow, ktorych nie ma w instalacji (nauka z rozmow, kopia zapasowa),
+  # nie powstaja - jak karty na Przegladzie.
+  $inst = $null
+  if ($d) { $inst = $d.Instalacja }
+  $wiedza = Modul-Jest $inst "wiedza"
 
   # 1. Co wymaga uwagi - pelna tresc, razem z komendami, ktorych nie ma na wierzchu.
   $s = Nowa-Sekcja "Co wymaga uwagi - pełna treść" "To samo, co karty na górze Przeglądu, ale w całości: z nazwami plików i komendami."
   $alarmy = @()
   if ($d) { $alarmy = @($d.Alarmy) + @($d.Informacje) }
   if ($alarmy.Count -eq 0) {
-    if ($d -and $d.Cykl -and $d.Rachunek) { Dodaj-Tekst $s "Nic nie wymaga uwagi." "dobrze" }
+    if ($d -and $d.Rachunek -and ($d.Cykl -or -not $wiedza)) { Dodaj-Tekst $s "Nic nie wymaga uwagi." "dobrze" }
     else { Dodaj-Tekst $s "Nie wiadomo - brakuje danych, więc alarmów nie policzyłem." "uwaga" }
   } else {
     foreach ($a in $alarmy) {
@@ -288,11 +295,13 @@ function Sekcje-Szczegolow($d, $wywrotkiNadzorcy, $rozbicie, $start, $koszt = $n
   else { Dodaj-Tekst $s "Jeszcze nie policzone." "szary" }
   $lista += $s
 
+  # 4-6. Nauka z rozmow, jej koszt i zmiany w pamieci - na liste tylko z modulem
+  # Wiedza (P59d; "if ($wiedza) { $lista += $s }" przy kazdej z tych sekcji).
   # 4. Nauka z rozmow.
   $s = Nowa-Sekcja "Nauka z rozmów" "Raz dziennie MegaRuchacz czyta Twoje rozmowy i wyciąga z nich fakty do pamięci. To jedyne miejsce, gdzie naprawdę woła model."
   if ($d -and $d.Cykl) { Dodaj-Wiersze $s (Opis-Cyklu $d.Cykl $o) }
   else { Dodaj-Tekst $s "Nie udało się odczytać - szczegóły w dzienniku nadzorcy." "uwaga" }
-  $lista += $s
+  if ($wiedza) { $lista += $s }
 
   # 5. Wykres kosztu nauki z 30 dni z liczbami obok (P35, 30.09.2026: do tego dnia
   # stal na Przegladzie - ten przestal sie miescic bez przewijania). Karta nizej
@@ -305,7 +314,7 @@ function Sekcje-Szczegolow($d, $wywrotkiNadzorcy, $rozbicie, $start, $koszt = $n
   $s = Nowa-Sekcja "Koszt czytania rozmów - ostatnie 30 dni" "Ile tokenów kosztowała nauka z Twoich rozmów każdego dnia. Te same dni w liczbach i to, skąd są - w karcie niżej."
   if ($st) { Dodaj-Wykres $s $st }
   else { Dodaj-Tekst $s "Nie udało się złożyć - szczegóły w dzienniku nadzorcy." "uwaga" }
-  $lista += $s
+  if ($wiedza) { $lista += $s }
 
   # 5a. Historia kosztu nauki - te same dni i sumy, co na wykresie, plus zrodlo.
   $s = Nowa-Sekcja "Koszt nauki dzień po dniu" "Liczby, z których rysuje się wykres wyżej."
@@ -339,7 +348,7 @@ function Sekcje-Szczegolow($d, $wywrotkiNadzorcy, $rozbicie, $start, $koszt = $n
   } else {
     Dodaj-Tekst $s "Nie udało się złożyć - szczegóły w dzienniku nadzorcy." "uwaga"
   }
-  $lista += $s
+  if ($wiedza) { $lista += $s }
 
   # 6. Zmiany w pamieci - razem z komenda cofania, ktora na wierzchu jest zdaniem.
   $s = Nowa-Sekcja "Zmiany w pamięci" "Co ostatnia nauka dopisała albo zmieniła w wiedzy o Tobie i o firmie."
@@ -355,17 +364,28 @@ function Sekcje-Szczegolow($d, $wywrotkiNadzorcy, $rozbicie, $start, $koszt = $n
   } else {
     Dodaj-Tekst $s "Nie udało się odczytać - szczegóły w dzienniku nadzorcy." "uwaga"
   }
-  if ($d -and $d.Przeliczanie -and $d.Przeliczanie.Plik) {
+  if ($wiedza) { $lista += $s }
+  # przeliczanie archiwum to Lore - bez Wiedzy (karty wyzej nie ma) stoi w osobnej karcie,
+  # ale tylko wtedy, gdy przeliczanie naprawde trwa (sam plik po skonczonym nic nie mowi)
+  $przel = $d -and $d.Przeliczanie -and $d.Przeliczanie.Plik
+  if ((-not $wiedza) -and $przel -and ($null -eq $d.Przeliczanie.Zrobione)) { $przel = $false }
+  if ($przel -and -not $wiedza) {
+    $s = Nowa-Sekcja "Przeliczanie archiwum rozmów" "Lore przelicza archiwum rozmów na nowy model wyszukiwania."
+    $lista += $s
+  }
+  if ($przel) {
     Dodaj-Wiersz $s "Przeliczanie archiwum" "jest plik $($d.Przeliczanie.Plik)"
     if ($d.Przeliczanie.Powod) { Dodaj-Wiersz $s "" "$($d.Przeliczanie.Powod)" "szary" }
   }
-  $lista += $s
 
   # 6a. Kopia zapasowa na Dysk Google (P62) - na Przegladzie jedna linia, tu reszta.
-  $s = Nowa-Sekcja "Kopia zapasowa na Dysk Google" "Codzienna kopia C:\dev i plików Claude'a (narzedzia\kopia-zapasowa.ps1, zadanie Harmonogramu MegaRuchaczKopia). Pliki z samymi zerami nie trafiają do kopii - ich zdrowe wersje zostają w starszej."
-  try { Dodaj-Wiersze $s (Opis-Kopii $(if ($d) { $d.Kopia } else { $null })) }
-  catch { Zanotuj-Wywrotke "kopia zapasowa do szczegolow" $_; Dodaj-Tekst $s "Nie udało się złożyć - szczegóły w dzienniku nadzorcy." "uwaga" }
-  $lista += $s
+  # Tylko z modulem Kopia (P59d).
+  if (Modul-Jest $inst "kopia") {
+    $s = Nowa-Sekcja "Kopia zapasowa na Dysk Google" "Codzienna kopia C:\dev i plików Claude'a (narzedzia\kopia-zapasowa.ps1, zadanie Harmonogramu MegaRuchaczKopia). Pliki z samymi zerami nie trafiają do kopii - ich zdrowe wersje zostają w starszej."
+    try { Dodaj-Wiersze $s (Opis-Kopii $(if ($d) { $d.Kopia } else { $null }) $inst) }
+    catch { Zanotuj-Wywrotke "kopia zapasowa do szczegolow" $_; Dodaj-Tekst $s "Nie udało się złożyć - szczegóły w dzienniku nadzorcy." "uwaga" }
+    $lista += $s
+  }
 
   # 7. Wersja.
   $s = Nowa-Sekcja "Wersja MegaRuchacza" "Czy na serwerze czeka coś nowszego. Pobiera to przycisk na dole okna - za darmo."
@@ -384,6 +404,9 @@ function Sekcje-Szczegolow($d, $wywrotkiNadzorcy, $rozbicie, $start, $koszt = $n
   } else {
     Dodaj-Wiersz $s "Wywrotki" "żadnych od ostatniego startu"
   }
+  # P59d: co jest zainstalowane i skad to wiadomo (rejestr instalacji)
+  try { Dodaj-Wiersze $s (Opis-Instalacji $inst) }
+  catch { Zanotuj-Wywrotke "zainstalowane moduly do szczegolow" $_; Dodaj-Wiersz $s "Moduły" "nie udało się złożyć - szczegóły w dzienniku nadzorcy" "uwaga" }
   Dodaj-Wiersz $s "Dziennik nadzorcy" "$(Join-Path $KatalogDomowy '.claude\.megaruchacz-zasobnik.log')" "szary"
   Dodaj-Wiersz $s "Narzędzie" "$Zrodlo" "szary"
   Dodaj-Wiersz $s "Katalog domowy" "$KatalogDomowy" "szary"
