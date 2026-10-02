@@ -326,7 +326,9 @@ public static class KopiaIO {
     SafeFileHandle hs = CreateFileW(L(src), 0x80000000, 7, IntPtr.Zero, 3, 0x08000000, IntPtr.Zero);
     if (hs.IsInvalid) {
       int e = Marshal.GetLastWin32Error();
-      return (e == 32 || e == 33) ? "W_UZYCIU" : ("BLAD:otwarcie zrodla (blad Win32 " + e + ")");
+      if (e == 32 || e == 33) return "W_UZYCIU";
+      if (e == 2 || e == 3) return "ZNIKNAL";   // usuniety miedzy listowaniem a kopia
+      return "BLAD:otwarcie zrodla (blad Win32 " + e + ")";
     }
     string tmp = null; SafeFileHandle hd = null; FileStream ws = null;
     try {
@@ -680,6 +682,9 @@ try {
       $Alarmy.Add("ALARM WYZEROWANY PLIK - NIE skopiowany (zdrowa wersja zostaje w starszej kopii): $($k.Sciezka) - $($wynik.Substring(5))")
     } elseif ($wynik -eq "W_UZYCIU") {
       $WUzyciu.Add($k.Sciezka)
+    } elseif ($wynik -eq "ZNIKNAL") {
+      # np. agent sprzatnal swoj git worktree w trakcie kopii - to nie blad kopii
+      $Uwagi.Add("zniknal w trakcie kopii (usuniety u zrodla): $($k.Sciezka)")
     } elseif ($wynik -eq "ISTNIEJE") {
       $Bledy.Add("w kopii juz jest $dst - nie nadpisuje")
     } else {
