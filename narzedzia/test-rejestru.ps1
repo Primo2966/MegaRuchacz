@@ -69,6 +69,7 @@ function Hooki([string]$plik) {
         if ($c -match '[\\/]\.orca[\\/]') { $cudze += "$z|$c"; continue }
         if ($c -like "*straznik-zasad.ps1*") { $nasze += "$z/straznik" }
         elseif ($c -like "*orchestrator-reminder.json*") { $nasze += "$z/przypomnienie" }
+        elseif ($c -like "*narzedzia/terminy.js*") { $nasze += "$z/terminy" }
         elseif ($c -match 'mr-log\.js') { $nasze += "$z/rejestr" }
         else { $cudze += "$z|$c" }
       }
@@ -232,7 +233,7 @@ function Sprawdz-Dom([string]$co, [string]$dom, $ocz, [bool]$migracja) {
     Sprawdz "${co}: kopii dla opencode nie ma (kierownik wylaczony)" (-not (Test-Path -LiteralPath $oc))
   }
   $h = Hooki (Join-Path $dom ".claude\settings.json")
-  $chciane = @("SessionStart/straznik")
+  $chciane = @("SessionStart/straznik", "SessionStart/terminy")
   if ($ocz.kierownik -or $ocz.lore -or $ocz.wiedza) { $chciane += "UserPromptSubmit/przypomnienie" }
   if ($ocz.kierownik) { $chciane += @("SubagentStart/rejestr", "SubagentStop/rejestr") }
   $chciane = @($chciane | Sort-Object)

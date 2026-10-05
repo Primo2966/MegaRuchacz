@@ -1,7 +1,7 @@
 ﻿# zasobnik\nadzorca\dozor.ps1 - czesc zasobnik\nadzorca.ps1 (patrz BUDOWA
 # w jego naglowku). Dozor: jeden przebieg (Dozor - dane i decyzje naraz, tryb
 # -Raz), decyzje na gotowych danych (Dozor-Po-Danych: cykl wiedzy i skille - tylko
-# z ich modulem w rejestrze instalacji, alarmy, slad obecnosci), dozor co kwadrans
+# z ich modulem w rejestrze instalacji, przypomnienia z terminem, alarmy, slad obecnosci), dozor co kwadrans
 # w tle (Rusz-Dozor -> Po-Dozorze; kroki
 # i watki sa w w-tle.ps1) i podpowiedz przy ikonie (Podpowiedz).
 # Skad wolane: tryb -Raz i zegar dozoru w nadzorca.ps1, Po-Kroku w w-tle.ps1
@@ -60,6 +60,18 @@ function Dozor-Po-Danych($d, $pokazDymek) {
       Notuj "dozor: skilli nie sprawdzam - $($cs.Powod)"
     }
   } catch { Zanotuj-Wywrotke "decyzja o sprawdzeniu skilli" $_ }
+
+  # Przypomnienia z terminem (2026-10-05) - przy starcie i co godzine 8-20; baza, bez
+  # modulu w rejestrze. Co uruchomic i co pokazac, rozstrzyga zasobnik\terminy.ps1.
+  try {
+    $ct = Czy-Sprawdzac-Terminy
+    if ($ct.Ruszac) {
+      Notuj "dozor: sprawdzam przypomnienia z terminem ($($ct.Powod))"
+      if (-not (Ruszaj-Terminy)) { Zanotuj-Wywrotke "start sprawdzenia przypomnien" "Odpal-W-Tle nie wystartowal zasobnik\terminy.ps1" }
+    } else {
+      Notuj "dozor: przypomnien nie sprawdzam - $($ct.Powod)"
+    }
+  } catch { Zanotuj-Wywrotke "decyzja o sprawdzeniu przypomnien" $_ }
 
   # Alarmy - jeden na sprawe na dobe, zeby nie uczyly ignorowania.
   foreach ($a in @($d.Alarmy)) {

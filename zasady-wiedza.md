@@ -57,3 +57,10 @@ idzie do `wiedza/historia-zmian.md`. Nie pytaj użytkownika o zatwierdzanie fakt
 
 **„Cofnij <id>"** → `uv --directory "{{ZRODLO}}\lore" run python -m lore.verify --cofnij <id>`
 (lista: `--zmiany`).
+
+**Obiecujesz sprawdzić coś później albo sprawa ma termin → załóż przypomnienie**, nie
+zapisuj tego jako ⏰ w plikach pamięci:
+`node "{{ZRODLO}}\narzedzia\terminy.js" dodaj <RRRR-MM-DD|"za N dni"> <katalog projektu> "<co zrobić>" ["<jak sprawdzić>"]`.
+W dniu terminu MegaRuchacz sam otworzy Claude Code z tym zadaniem; gdy potrzebny człowiek
+(np. kliknięcie w Seller Central), dodaj `--tylko-przypomnij`. Też: `lista`, `zrobione <id>`,
+`przesun <id> <kiedy>`.

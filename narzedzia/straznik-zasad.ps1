@@ -1287,6 +1287,7 @@ function Rodzaj-Hooka($h) {
   if ($p -like "*straznik-zasad.ps1*")         { return "straznik" }
   if ($p -like "*megaruchacz-sesja.json*")     { return "zasady" }
   if ($p -like "*orchestrator-reminder.json*") { return "przypomnienie" }
+  if ($p -match 'narzedzia[\\/]terminy\.js') { return "terminy" }     # przypomnienia z terminem (2026-10-05)
   if ($p -match 'mr-log\.js(?![A-Za-z0-9])')  { return "rejestr" }   # mr-log.js i megaruchacz-mr-log.js
   return $null
 }
@@ -1410,10 +1411,18 @@ function Wzory-Hookow-Globalnych($zrodlo, $domClaude) {
   $straznik = 'powershell -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "' + $r +
               '/narzedzia/straznik-zasad.ps1" -Zrodlo "' + $r + '" -Projekt "$CLAUDE_PROJECT_DIR" || true'
   $przypomnienie = 'node "' + $r + '/narzedzia/przypomnienie.js" "' + $przyp + '" || cat "' + $przyp + '"'
+  $terminy = 'node "' + $r + '/narzedzia/terminy.js" start || true'
   $wzory = @()
   if ((Rodzaje-Hookow-Wylaczone) -notcontains "straznik") {
     $wzory += [pscustomobject]@{ zdarzenie = "SessionStart"; rodzaj = "straznik"
       hook = [pscustomobject]@{ type = "command"; command = $straznik; shell = "bash"; timeout = 15; statusMessage = "MegaRuchacz: straznik zasad" } }
+  }
+  # Przypomnienia z terminem (narzedzia\terminy.js start) - baza, jak straznik: zalegle sprawy
+  # do kontekstu na starcie okna, bez zaleglych pusto. Osobny hook node'a, a nie linia straznika,
+  # bo tresc przypomnien ma polskie litery, a wyjscie PowerShella 5.1 idzie w stronie kodowej konsoli.
+  if ((Rodzaje-Hookow-Wylaczone) -notcontains "terminy") {
+    $wzory += [pscustomobject]@{ zdarzenie = "SessionStart"; rodzaj = "terminy"
+      hook = [pscustomobject]@{ type = "command"; command = $terminy; shell = "bash"; timeout = 5; statusMessage = "MegaRuchacz: przypomnienia z terminem" } }
   }
   if ((Rodzaje-Hookow-Wylaczone) -notcontains "przypomnienie") {
     $wzory += [pscustomobject]@{ zdarzenie = "UserPromptSubmit"; rodzaj = "przypomnienie"
@@ -1436,7 +1445,7 @@ function Rodzaje-Hookow-Wylaczone {
   $w = @()
   if ((Modul-Wylaczony "kierownik") -and (Modul-Wylaczony "wiedza") -and (Modul-Wylaczony "lore")) { $w += "przypomnienie" }
   if (Modul-Wylaczony "kierownik") { $w += "rejestr" }
-  if (Baza-Usunieta) { $w += "straznik" }
+  if (Baza-Usunieta) { $w += @("straznik", "terminy") }
   return $w
 }
 
