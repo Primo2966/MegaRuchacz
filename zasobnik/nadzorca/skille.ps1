@@ -5,6 +5,10 @@
 # (Rusz-Operacje-Skilli, Sprawdz-Operacje-Skilli - zegar na operacja.txt).
 # Skille spoza bazy (P49, Skille-Spoza): grupy "Twoje wlasne" (przyciski paczki),
 # "poza opieka" i "zrodlo nieznane" - wiersze z nazwa "__spoza:<folder>".
+# Od 2026-10-06 lista ma dwie czesci (Naglowek-Czesci): WBUDOWANE (zrodla z flaga Wbudowane,
+# same sie aktualizuja; przycisk "Zainstaluj" przy niezainstalowanych) i INNE WYKRYTE (reszta
+# zrodel z bazy z przyciskiem "Sprawdz aktualizacje" + skille spoza bazy). Adresy zrodel to
+# klikalne linki (Link-Zrodla); operacje na calym zrodle - Operacja-Na-Zrodle (-ZeZrodla).
 # Dane daje Stan-Skilli (stan-nadzorcy.ps1 -> narzedzia\skille.ps1).
 # Skad wolane: w-tle.ps1 (Wyrenderuj-Widok -> Napelnij-Skille) i okno.ps1
 # (przyciski). Wczytuje go nadzorca.ps1 kropka po zamku jednej kopii - poza stala
@@ -15,7 +19,69 @@
 # tutaj jest tylko wyglad i przyciski. Przyciski NIE czekaja na koniec operacji: skrypt
 # idzie w tle bez okna, a zegar co 2 s zaglada do operacja.txt i odmalowuje zakladke.
 
-$ZDANIE_BEZPIECZENSTWA = "Skille to instrukcje od zewnętrznych autorów. Aktualizują się same raz dziennie, wyłącznie z listy zaufanych źródeł poniżej - każda zmiana jest zapisana i da się ją cofnąć."
+$ZDANIE_BEZPIECZENSTWA = "Skille to instrukcje od zewnętrznych autorów. Same, raz dziennie, aktualizują się wyłącznie skille wbudowane w MegaRuchacza (zaufane źródła z górnej części listy); inne wykryte aktualizujesz ręcznie. Każda zmiana jest zapisana i da się ją cofnąć."
+
+# ------------------------------------------------- wbudowane i inne, linki (2026-10-06)
+# Uzytkownik: wbudowane w MegaRuchacza = szesc zrodel z flaga Wbudowane w bazie; tylko one
+# aktualizuja sie same. Wszystko inne wykryte - z KLIKALNYM linkiem do zrodla (albo
+# "zrodlo nieznane") i aktualizacja wylacznie z przycisku.
+
+# Skill z bazy ze zrodla spoza wbudowanych. Brak pola (stary JSON) = jak dotad, wbudowany.
+function Czy-Inny($s) { return ($null -ne $s.wbudowane) -and (-not [bool]$s.wbudowane) }
+
+function Adres-Krotko([string]$a) {
+  $t = $a.Trim() -replace '^https?://', '' -replace '\.git$', ''
+  return $t.TrimEnd('/')
+}
+
+# Link otwiera przegladarke uzytkownika - tylko https (adres z bazy, ale baze mozna podmienic).
+function Otworz-Adres([string]$a) {
+  if ($a -notmatch '^https://[^\s"]+$') { Notuj "skille: link '$a' to nie adres https - nie otwieram"; return }
+  Start-Process $a
+}
+
+function Link-Zrodla([string]$adres, $czcionka, [int]$szer) {
+  $l = New-Object System.Windows.Forms.LinkLabel
+  $l.AutoSize = $true
+  $l.Font = $czcionka
+  $l.BackColor = [System.Drawing.Color]::Transparent
+  $l.UseMnemonic = $false
+  $l.Text = Adres-Krotko $adres
+  $l.Tag = $adres
+  if ($szer -gt 0) { $l.MaximumSize = New-Object System.Drawing.Size($szer, 0) }
+  $l.Margin = New-Object System.Windows.Forms.Padding(0, 0, 0, 2)
+  $l.Add_LinkClicked({ param($nadawca, $e) try { Otworz-Adres "$($nadawca.Tag)" } catch { Zanotuj-Wywrotke "link do zrodla skilli" $_ } })
+  return $l
+}
+
+# Wiersz "Zrodlo" po prawej: etykieta jak w Wiersz-Dwukolumnowy, wartosc - link albo tekst.
+function Wiersz-Zrodla([string]$etykieta, [string]$adres, [string]$tekst, [int]$szer, [int]$szerEtykiety) {
+  if (-not $adres) { return (Wiersz-Dwukolumnowy $etykieta $tekst $script:KolSzary $szer $szerEtykiety) }
+  $w = Poziomy
+  $w.Margin = New-Object System.Windows.Forms.Padding(0, 0, 0, 5)
+  $e = Etykieta-Zawijana $etykieta $script:CzZwykla $script:KolSzary ($szerEtykiety - 12)
+  $e.MinimumSize = New-Object System.Drawing.Size($szerEtykiety, 0)
+  $e.UseMnemonic = $false
+  $w.Controls.Add($e)
+  $p = Pionowy 0
+  if ($tekst) { $t = Etykieta-Zawijana $tekst $script:CzZwykla $script:KolSzary ($szer - $szerEtykiety); $t.UseMnemonic = $false; $p.Controls.Add($t) }
+  $p.Controls.Add((Link-Zrodla $adres $script:CzZwykla ($szer - $szerEtykiety)))
+  $w.Controls.Add($p)
+  return $w
+}
+
+# Przycisk w naglowku zrodla: instalacja brakujacych (wbudowane) albo reczna aktualizacja
+# (inne). Operacja dotyczy calego zrodla - skille.ps1 -ZeZrodla <id>.
+function Operacja-Na-Zrodle([string]$tryb, [string]$zrodlo) {
+  if ($script:NadzProba) { return "tryb próbny - przyciski skilli niczego nie uruchamiają" }
+  if ($zrodlo -notmatch '^[\w-]+$') { return "nieprawidłowy identyfikator źródła: $zrodlo" }
+  $a = "-Tryb $tryb -ZeZrodla $zrodlo"
+  if (Odpal-Skille $a) {
+    Notuj "skille: z okna ruszyla operacja $a"
+    return ""
+  }
+  return "nie udało się uruchomić narzedzia\skille.ps1 w tle - szczegóły w dzienniku nadzorcy"
+}
 
 function Data-Krotko([string]$t) {
   $d = Data-Lub-Nic $t
@@ -55,7 +121,10 @@ function Napis-Skilla($s) {
   }
   switch ("$($s.stan)") {
     "zgodny"    { return @("aktualny", $script:KolDobrze) }
-    "starszy"   { if ($wstrzymany) { return @("cofnięty - nie aktualizuję sam", $script:KolSzary) }; return @("czeka nowsza wersja", $script:KolUwaga) }
+    "starszy"   {
+      if ($wstrzymany) { return @("cofnięty - nie aktualizuję sam", $script:KolSzary) }
+      if (Czy-Inny $s) { return @("nowsza wersja - zaktualizuj ręcznie", $script:KolUwaga) }
+      return @("czeka nowsza wersja", $script:KolUwaga) }
     "zmieniony" { return @("zmieniony ręcznie - nie ruszam", $script:KolUwaga) }
     "brak"      { return @("nie zainstalowany", $script:KolSzary) }
     "nieznany"  { return @("jeszcze nie sprawdzony", $script:KolSzary) }
@@ -69,6 +138,7 @@ function Zdanie-Stanu-Skilla($s) {
     "zgodny"    { return "Masz najnowszą wersję od autora." }
     "starszy"   {
       if ($wstrzymany) { return "Masz starszą wersję, bo cofnąłeś ostatnią aktualizację. Sam jej nie ponowię - kliknij `„Aktualizuj teraz`”, gdy zechcesz." }
+      if (Czy-Inny $s) { return "Masz starszą wersję od autora. To źródło nie jest częścią MegaRuchacza, więc sam jej nie podmienię - kliknij `„Aktualizuj teraz`” (z kopią starej wersji)." }
       return "Masz starszą wersję od autora. Nowsza podmieni się sama przy najbliższym codziennym sprawdzeniu (z kopią starej) - albo kliknij `„Aktualizuj teraz`”." }
     "zmieniony" { return "Ktoś zmienił ten skill ręcznie - jego treść nie pasuje do żadnej wersji autora. Nie nadpisuję go sam. `„Aktualizuj teraz`” zapyta o zgodę, a Twoja wersja trafi do kopii." }
     "brak"      { return "Nie masz go zainstalowanego." }
@@ -129,6 +199,13 @@ function Wiersz-Skilla($s, [int]$szer) {
     $c.Tag = "$($s.nazwa)"
     $c.Add_Click({ param($nadawca, $e) try { Wybierz-Skill "$($nadawca.Tag)" } catch { Zanotuj-Wywrotke "wybor skilla" $_ } })
   }
+  # Spoza bazy ze znanym adresem zrodla - klikalny link pod opisem (klik w link nie wybiera wiersza)
+  if ($s.spoza -and $s.adres) {
+    $t.RowCount = 3
+    $lk = Link-Zrodla "$($s.adres)" $script:CzMala ($szer - 50)
+    $t.Controls.Add($lk, 0, 2)
+    $t.SetColumnSpan($lk, 2)
+  }
   # cienka kreska pod wierszem
   $t.Add_Paint({ param($nadawca, $e) try { $e.Graphics.DrawLine($script:PioroRamki, 32, $nadawca.Height - 1, $nadawca.Width - 12, $nadawca.Height - 1) } catch { if (-not $script:RamkaZawiodla) { $script:RamkaZawiodla = $true; Zanotuj-Wywrotke "kreska pod skillem" $_ } } })
   return $t
@@ -160,23 +237,47 @@ function Grupa-Zrodla($z) {
   $g = [pscustomobject]@{
     Id = "$($z.id)"; Tytul = "$($z.nazwa)"; Opis = "$($z.opis)"; Liczby = ""; Napis = ""; KolorNapisu = $script:KolSzary
     Znacznik = $null; Blad = ""; Uwaga = ""; Rozwijalny = $true
+    Adres = "$($z.adres)"; Pominiete = ""; Przycisk = $null
   }
+  $wbud = -not ((Czy-Inny $z))
   if ($z.rodzaj -ne "skille") {
     $g.Rozwijalny = $false; $g.Uwaga = "$($z.uwaga)"; $g.Napis = "nic do instalowania"
     return $g
   }
+  $g.Uwaga = "$($z.uwaga)"
   $l = Liczby-Grupy $z
-  $cz = @("$($l.Ile) $(Odmiana $l.Ile 'skill' 'skille' 'skilli')", "masz $($l.Masz)", "nowsza wersja: $($l.Starsze)", "problem: $($l.Problem)")
+  # do zainstalowania: skille, ktorych nie masz (bez usunietych przez autora - tych sie nie da)
+  $brak = @(@($z.skille) | Where-Object { $_.stan -eq "brak" }).Count
+  if ($wbud) {
+    $cz = @($(if ($l.Masz -eq 0) { "NIE ZAINSTALOWANE ($($l.Ile) $(Odmiana $l.Ile 'skill' 'skille' 'skilli'))" } else { "zainstalowane $($l.Masz) z $($l.Ile)" }), "nowsza wersja: $($l.Starsze)", "problem: $($l.Problem)")
+    if ($brak -gt 0) {
+      $g.Przycisk = [pscustomobject]@{ Tryb = "instaluj"; Zrodlo = $g.Id
+        Tekst = $(if ($l.Masz -eq 0) { "Zainstaluj" } else { "Zainstaluj brakujące ($brak)" })
+        Opis = "Instaluję $(if ($l.Masz -eq 0) { 'wszystkie skille' } else { "brakujące skille ($brak)" }) ze źródła $($g.Tytul)" }
+    }
+  } else {
+    $cz = @("$($l.Ile) $(Odmiana $l.Ile 'skill' 'skille' 'skilli')", "masz $($l.Masz)", "nowsza wersja: $($l.Starsze)", "problem: $($l.Problem)")
+    $g.Przycisk = [pscustomobject]@{ Tryb = "aktualizuj"; Zrodlo = $g.Id; Tekst = "Sprawdź aktualizacje"
+      Opis = "Sprawdzam źródło $($g.Tytul) i pobieram nowsze wersje skilli, które masz (ręczna aktualizacja)" }
+  }
   if ($l.Zmienione -gt 0) { $cz += "zmienione ręcznie: $($l.Zmienione)" }
   if ($l.Usuniete -gt 0) { $cz += "autor usunął: $($l.Usuniete)" }
   $g.Liczby = $cz -join "   ·   "
+  # Zrodlo, z ktorego bierzemy tylko czesc (open-design): ile pominieto i dlaczego
+  if ($z.pominiete) {
+    $ile = [int]$z.pominiete.ile
+    $g.Pominiete = $(if ($ile -ge 0) { "pominięte: $ile - $($z.pominiete.opis)" } else { "pominięte: policzę przy pierwszym sprawdzeniu źródła - $($z.pominiete.opis)" })
+  }
   if ($z.blad) {
     $g.Blad = "Nie udało się pobrać ($(Data-Krotko $z.sprawdzono)): $($z.blad)"
     $g.Napis = "błąd pobrania"; $g.KolorNapisu = $script:KolPilne; $g.Znacznik = $script:KolPilne
   } elseif ($l.Problem -gt 0) {
     $g.Napis = "problem: $($l.Problem)"; $g.KolorNapisu = $script:KolPilne; $g.Znacznik = $script:KolPilne
   } elseif ($l.Starsze -gt 0) {
-    $g.Napis = "nowsza wersja: $($l.Starsze)"; $g.KolorNapisu = $script:KolUwaga; $g.Znacznik = $script:KolUwaga
+    $g.Napis = $(if ($wbud) { "nowsza wersja: $($l.Starsze)" } else { "nowsza wersja: $($l.Starsze) - ręcznie" })
+    $g.KolorNapisu = $script:KolUwaga; $g.Znacznik = $script:KolUwaga
+  } elseif ($wbud -and $l.Masz -eq 0) {
+    $g.Napis = "NIE ZAINSTALOWANE"; $g.KolorNapisu = $script:KolTekst
   } else {
     $g.Napis = "w porządku"
   }
@@ -208,18 +309,41 @@ function Naglowek-Grupy($g, [int]$szer) {
   $t.Controls.Add($ls, 1, 0)
   $wiersz = 1
   $wciecie = $(if ($g.Rozwijalny) { 20 } else { 0 })
-  foreach ($para in @(@($g.Opis, $script:KolSzary), @($g.Liczby, $script:KolTekst), @($g.Blad, $script:KolPilne), @($g.Uwaga, $script:KolUwaga))) {
+  # pod tytulem: klikalny adres zrodla, potem opis, liczby, pominiete, blad, uwaga, przycisk
+  $wiersze = New-Object System.Collections.Generic.List[object]
+  if ($g.Adres) { $wiersze.Add((Link-Zrodla "$($g.Adres)" $script:CzMala ($szer - 50))) }
+  foreach ($para in @(@($g.Opis, $script:KolSzary), @($g.Liczby, $script:KolTekst), @($g.Pominiete, $script:KolSzary), @($g.Blad, $script:KolPilne), @($g.Uwaga, $script:KolUwaga))) {
     if (-not $para[0]) { continue }
     $l = Etykieta-Zawijana $para[0] $script:CzMala $para[1] ($szer - 50)
     $l.UseMnemonic = $false
-    $l.Margin = New-Object System.Windows.Forms.Padding($wciecie, 2, 0, 0)
+    $wiersze.Add($l)
+  }
+  if ($g.Przycisk) {
+    $b = New-Object System.Windows.Forms.Button
+    $b.Text = "$($g.Przycisk.Tekst)"
+    $b.Font = $script:CzMala
+    $b.FlatStyle = [System.Windows.Forms.FlatStyle]::System
+    $b.AutoSize = $true
+    $b.AutoSizeMode = [System.Windows.Forms.AutoSizeMode]::GrowAndShrink
+    $b.UseMnemonic = $false
+    $b.Tag = $g.Przycisk
+    $b.Enabled = -not [bool]$script:SkilleOperacjaOd
+    $b.Add_Click({ param($nadawca, $e)
+      try { $p = $nadawca.Tag; Rusz-Operacje-Skilli "$($p.Tryb)" "" $false "$($p.Opis)" "$($p.Zrodlo)" }
+      catch { Zanotuj-Wywrotke "przycisk zrodla skilli" $_ } })
+    $script:PrzyciskiZrodel += $b
+    $wiersze.Add($b)
+  }
+  foreach ($l in $wiersze) {
+    $l.Margin = New-Object System.Windows.Forms.Padding($wciecie, $(if ($l -is [System.Windows.Forms.Button]) { 6 } else { 2 }), 0, 0)
     if ($wiersz -ge $t.RowCount) { $t.RowCount = $wiersz + 1 }
     $t.Controls.Add($l, 0, $wiersz)
     $t.SetColumnSpan($l, 2)
     $wiersz++
   }
   if ($g.Rozwijalny) {
-    foreach ($c in @($t) + @($t.Controls)) {
+    # link i przycisk maja wlasne dzialanie - ich klikniecie nie zwija grupy
+    foreach ($c in @($t) + @($t.Controls | Where-Object { -not ($_ -is [System.Windows.Forms.LinkLabel]) -and -not ($_ -is [System.Windows.Forms.ButtonBase]) })) {
       $c.Tag = $g.Id
       $c.Add_Click({ param($nadawca, $e) try { Przelacz-Grupe "$($nadawca.Tag)" } catch { Zanotuj-Wywrotke "rozwiniecie grupy skilli" $_ } })
     }
@@ -242,6 +366,18 @@ function Naglowek-Grupy($g, [int]$szer) {
     Zrodlo = $null; Skille = @(); Wiersze = (New-Object System.Collections.Generic.List[object]); Zbudowane = $false
   }
   return $t
+}
+
+# Naglowek czesci listy (wbudowane / inne wykryte) - sam napis, nie grupa: nie zwija sie.
+function Naglowek-Czesci([string]$tytul, [string]$dopisek, [int]$szer) {
+  $p = Pionowy $szer
+  $p.MaximumSize = New-Object System.Drawing.Size($szer, 0)
+  $p.Padding = New-Object System.Windows.Forms.Padding(6, 14, 12, 6)
+  $p.BackColor = $script:TloKarty
+  $l = Etykieta-Zawijana "$tytul - $dopisek" $script:CzMalaGruba $script:KolSzary ($szer - 30)
+  $l.UseMnemonic = $false
+  $p.Controls.Add($l)
+  return $p
 }
 
 # strzalka: rozwinieta w dol, zwinieta w prawo (znaki z Unicode, zeby nie zalezaly od kodowania pliku)
@@ -346,7 +482,7 @@ function Skille-Spoza($d) {
       $opis = "$($x.opis)"
       if (-not $opis) { $opis = $(if ($x.opisAutora) { "Opis autora (po angielsku): $($x.opisAutora)" } else { "Brak opisu - w katalogu nie ma pliku SKILL.md z opisem." }) }
       $wynik[$k] = [pscustomobject]@{
-        spoza = $true; nazwa = "__spoza:$k"; folder = $k; rodzaj = $rodzaj; opis = $opis; skad = "$($x.skad)"; uwaga = "$($x.uwaga)"
+        spoza = $true; nazwa = "__spoza:$k"; folder = $k; rodzaj = $rodzaj; opis = $opis; skad = "$($x.skad)"; uwaga = "$($x.uwaga)"; adres = "$($x.adres)"
         robocza = $false; cele = @(); miejsca = @(); dowiazanie = $false
       }
     }
@@ -362,12 +498,34 @@ function Skille-Spoza($d) {
 function Zdanie-Skilli($d) {
   $l = $d.liczniki
   $t = ""
-  $t += "W bazie $($l.wBazie) $(Odmiana $l.wBazie 'skill' 'skille' 'skilli') - aktualne: $($l.zgodne), czeka nowsza wersja: $($l.starsze), zmienione ręcznie: $($l.zmienione), niezainstalowane: $($l.brak)."
+  if ($null -ne $l.wbudSkilli) {
+    # osobno wbudowane (same sie aktualizuja) i inne wykryte (tylko recznie)
+    $wbudBrak = [int]$l.wbudSkilli - [int]$l.wbudZainstalowane
+    $t += "Wbudowane w MegaRuchacza (same się aktualizują): zainstalowane $($l.wbudZainstalowane) z $($l.wbudSkilli) $(Odmiana $l.wbudSkilli 'skilla' 'skilli' 'skilli') ($($l.wbudZrodel) $(Odmiana $l.wbudZrodel 'źródło' 'źródła' 'źródeł'))"
+    if ($wbudBrak -gt 0) { $t += ", niezainstalowane: $wbudBrak" }
+    if ($l.wbudStarsze -gt 0) { $t += ", czeka nowsza wersja: $($l.wbudStarsze)" }
+    $t += "."
+    $sp = @(Skille-Spoza $d)
+    $czInne = @()
+    if ($l.inneZrodel -gt 0) { $czInne += "$($l.inneZainstalowane) $(Odmiana $l.inneZainstalowane 'skill' 'skille' 'skilli') z $($l.inneZrodel) $(Odmiana $l.inneZrodel 'źródła' 'źródeł' 'źródeł') z bazy" }
+    $ileInne = @($sp | Where-Object { $_.rodzaj -eq "inne" }).Count
+    if ($ileInne -gt 0) { $czInne += "poza opieką: $ileInne" }
+    if ($l.wlasne -gt 0) { $czInne += "Twoje własne: $($l.wlasne)" }
+    if ($l.nieznane -gt 0) { $czInne += "o nieznanym źródle: $($l.nieznane)" }
+    if ($czInne.Count -gt 0) {
+      $t += " Inne wykryte (aktualizujesz ręcznie): " + ($czInne -join ", ")
+      if ($l.inneStarsze -gt 0) { $t += "; nowsza wersja czeka w $($l.inneStarsze)" }
+      $t += "."
+    }
+    if ($l.zmienione -gt 0) { $t += " Zmienione ręcznie: $($l.zmienione)." }
+  } else {
+    $t += "W bazie $($l.wBazie) $(Odmiana $l.wBazie 'skill' 'skille' 'skilli') - aktualne: $($l.zgodne), czeka nowsza wersja: $($l.starsze), zmienione ręcznie: $($l.zmienione), niezainstalowane: $($l.brak)."
+    if ($l.wlasne -gt 0) { $t += " Twoje własne: $($l.wlasne)." }
+    if ($l.nieznane -gt 0) { $t += " O nieznanym źródle: $($l.nieznane)." }
+  }
   if ($l.usuniete -gt 0) { $t += " Autor usunął: $($l.usuniete)." }
   if ($l.dzisZaktualizowane -gt 0) { $t += " Dziś pobrano nowe wersje: $($l.dzisZaktualizowane)." }
   if ($l.bledy -gt 0) { $t += " Nie udało się sprawdzić: $($l.bledy)." }
-  if ($l.wlasne -gt 0) { $t += " Twoje własne: $($l.wlasne)." }
-  if ($l.nieznane -gt 0) { $t += " O nieznanym źródle: $($l.nieznane)." }
   $zn = $d.znacznik
   if ($zn -and $zn.dzien) {
     $t += " Codzienne sprawdzenie: $($zn.start)"
@@ -400,6 +558,7 @@ function Napelnij-Skille([bool]$tylkoLista = $false) {
     $script:NaglowkiGrup = @{}
     $script:ZnacznikiGrup = @{}
     $script:GrupyListy = @{}
+    $script:PrzyciskiZrodel = @()
     Wyczysc-Panel $wnetrze
     if ($ds.Powod -or -not $ds.Dane) {
       $script:LSkille.ForeColor = $script:KolPilne
@@ -413,19 +572,32 @@ function Napelnij-Skille([bool]$tylkoLista = $false) {
     $d = $ds.Dane
     # wiersze dokladane jeden po drugim - uklad liczony raz, na koncu (rozwiniecie grupy ~2x szybciej)
     $szer = [math]::Max(300, $lista.ClientSize.Width - [System.Windows.Forms.SystemInformation]::VerticalScrollBarWidth - 2)
-    foreach ($z in @($d.zrodla)) {
+    # Dwie czesci listy (2026-10-06): na gorze zrodla wbudowane w MegaRuchacza, pod nimi
+    # wszystko inne wykryte - zrodla z bazy bez flagi Wbudowane i skille spoza bazy.
+    $wbudZ = @(@($d.zrodla) | Where-Object { -not (Czy-Inny $_) })
+    $inneZ = @(@($d.zrodla) | Where-Object { Czy-Inny $_ })
+    $spoza = @(Skille-Spoza $d)
+    if ($wbudZ.Count -gt 0) { $wnetrze.Controls.Add((Naglowek-Czesci "WBUDOWANE W MEGARUCHACZA" "aktualizują się same raz dziennie" $szer)) }
+    $czescInne = $false
+    foreach ($z in @($wbudZ + $inneZ)) {
+      if ((Czy-Inny $z) -and -not $czescInne) {
+        $wnetrze.Controls.Add((Naglowek-Czesci "INNE WYKRYTE" "nie są częścią MegaRuchacza - aktualizujesz je ręcznie" $szer))
+        $czescInne = $true
+      }
       $g = Grupa-Zrodla $z
       $wnetrze.Controls.Add((Naglowek-Grupy $g $szer))
       $script:GrupyListy[$g.Id].Zrodlo = $z
       if (-not ($g.Rozwijalny -and $script:GrupySkilli[$g.Id])) { continue }
       foreach ($w in (Wiersze-Grupy $script:GrupyListy[$g.Id])) { $wnetrze.Controls.Add($w) }
     }
+    if (($spoza.Count -gt 0) -and -not $czescInne) {
+      $wnetrze.Controls.Add((Naglowek-Czesci "INNE WYKRYTE" "nie są częścią MegaRuchacza - aktualizujesz je ręcznie" $szer))
+    }
     # Spoza bazy (P49): trzy grupy - Twoje wlasne (z przyciskiem paczki), znane zrodla
     # poza opieka i zrodlo nieznane. Kazdy skill to klikalny wiersz jak w zrodlach.
-    $spoza = @(Skille-Spoza $d)
     $grupySpoza = @(
       @{ Id = "__wlasne"; Rodzaj = "wlasny"; Tytul = "Twoje własne skille"; Opis = "Powstały w Twoich rozmowach. MegaRuchacz ich nie zmienia - możesz je spakować i przekazać innym (kliknij skill)." }
-      @{ Id = "__inne"; Rodzaj = "inne"; Tytul = "Z innych źródeł, poza opieką MegaRuchacza"; Opis = "Wiadomo, skąd są, ale aktualizuje je inne narzędzie - MegaRuchacz ich nie rusza." }
+      @{ Id = "__inne"; Rodzaj = "inne"; Tytul = "Z innych źródeł, poza opieką MegaRuchacza"; Opis = "Wiadomo, skąd są (link przy skillu), ale aktualizuje je inne narzędzie - MegaRuchacz ich nie rusza." }
       @{ Id = "__nieznane"; Rodzaj = "nieznane"; Tytul = "Źródło nieznane"; Opis = "Nie pasują do żadnego znanego źródła ani do Twoich rozmów. MegaRuchacz ich nie sprawdza i nie rusza." }
     )
     foreach ($gs in $grupySpoza) {
@@ -469,7 +641,8 @@ function Pokaz-Przeglad-Skilli {
   $l.Add("Kliknij grupę po lewej, żeby ją rozwinąć, a potem skill - zobaczysz, co robi, jaką masz wersję i co się zmieniło przy ostatniej aktualizacji. Grupa z czerwonym paskiem ma problem, z bursztynowym - nowszą wersję do pobrania.")
   $l.Add("")
   $l.Add("Jak to działa:")
-  $l.Add("- Raz dziennie MegaRuchacz sam sprawdza źródła i pobiera nowsze wersje skilli, które masz pod opieką.")
+  $l.Add("- Raz dziennie MegaRuchacz sam pobiera nowsze wersje skilli WBUDOWANYCH (górna część listy), które masz pod opieką. Gdy któregoś źródła nie masz wcale, przy jego nazwie jest przycisk `„Zainstaluj`”.")
+  $l.Add("- Skille z innych wykrytych źródeł (dolna część listy) nie są częścią MegaRuchacza - sam ich nie aktualizuje. Robisz to ręcznie: `„Sprawdź aktualizacje`” przy źródle albo `„Aktualizuj teraz`” przy skillu. Link przy źródle prowadzi do jego repozytorium.")
   $l.Add("- Gdy pobranie się nie uda, próbuje jeszcze 5 razy (po 5 s, 15 s, 30 s, 1 min i 2 min). Błąd pokazuje dopiero wtedy, gdy wszystkie próby zawiodą.")
   $l.Add("- Gdy autor przeniesie skill w swoim repozytorium, MegaRuchacz sam go znajdzie. Gdy autor skill usunie, Twoja kopia zostaje i działa dalej.")
   $l.Add("- Przed każdą podmianą robi kopię starej wersji. `„Cofnij ostatnią aktualizację`” przywraca ją co do bajtu.")
@@ -484,7 +657,7 @@ function Pokaz-Przeglad-Skilli {
   } else { $l.Add("Codziennego sprawdzenia jeszcze nie było - ruszy samo w ciągu kwadransa.") }
   $op = $d.operacja
   if ($op -and $op.tryb -and $op.tryb -ne "codziennie") {
-    $l.Add("Ostatnia operacja z przycisku: $($op.tryb) $($op.skill) - $($op.start), wynik: $($op.wynik).")
+    $l.Add("Ostatnia operacja z przycisku: $($op.tryb) $($op.skill)$(if ($op.zrodlo) { 'źródło ' + $op.zrodlo }) - $($op.start), wynik: $($op.wynik).")
     if ($op.powod) { $l.Add("Powód: $($op.powod)") }
   }
   $l.Add("")
@@ -519,6 +692,8 @@ function Pokaz-Info-Skilla($para) {
       $info.Controls.Add((Wiersz-Dwukolumnowy "Rodzaj" $ns[0] $ns[1] $szer $e))
       $skad = $(if ($s.skad) { "$($s.skad)" } elseif ($s.rodzaj -eq "nieznane") { "Nie wiadomo - nie pasuje do żadnego źródła z bazy ani do Twoich rozmów, w których powstawały skille." } else { "" })
       if ($skad) { $info.Controls.Add((Wiersz-Dwukolumnowy "Skąd jest" $skad $script:KolTekst $szer $e)) }
+      if ($s.adres) { $info.Controls.Add((Wiersz-Zrodla "Źródło" "$($s.adres)" "" $szer $e)) }
+      elseif ($s.rodzaj -eq "nieznane") { $info.Controls.Add((Wiersz-Dwukolumnowy "Źródło" "źródło nieznane" $script:KolUwaga $szer $e)) }
       if ($s.uwaga) { $info.Controls.Add((Wiersz-Dwukolumnowy "Uwaga" "$($s.uwaga)" $script:KolUwaga $szer $e)) }
       $info.Controls.Add((Wiersz-Dwukolumnowy "Gdzie leży" (@($s.miejsca) -join "`r`n") $script:KolSzary $szer $e))
       Ustaw-Przyciski-Skilla $s
@@ -539,7 +714,9 @@ function Pokaz-Info-Skilla($para) {
     }
     if ($s.najnowszy) { $info.Controls.Add((Wiersz-Dwukolumnowy "Najnowsza" (Wersja-Krotko $s.najnowszy.commit $s.najnowszy.data) $script:KolTekst $szer $e)) }
     if ($s.sprawdzono) { $info.Controls.Add((Wiersz-Dwukolumnowy "Sprawdzone" "$($s.sprawdzono)" $script:KolTekst $szer $e)) }
-    $info.Controls.Add((Wiersz-Dwukolumnowy "Źródło" "$($z.nazwa) - $($z.adres)" $script:KolSzary $szer $e))
+    $info.Controls.Add((Wiersz-Zrodla "Źródło" "$($z.adres)" "$($z.nazwa)" $szer $e))
+    $akt = $(if (Czy-Inny $s) { "Tylko ręcznie (`„Aktualizuj teraz`” albo `„Sprawdź aktualizacje`” przy źródle) - to źródło nie jest częścią MegaRuchacza." } else { "Sama, raz dziennie - źródło wbudowane w MegaRuchacza." })
+    $info.Controls.Add((Wiersz-Dwukolumnowy "Aktualizacja" $akt $script:KolSzary $szer $e))
     Ustaw-Przyciski-Skilla $s
   } finally { $info.ResumeLayout($true) }
 }
@@ -547,6 +724,7 @@ function Pokaz-Info-Skilla($para) {
 function Ustaw-Przyciski-Skilla($s) {
   $pracuje = [bool]$script:SkilleOperacjaOd
   $script:BSkilleTeraz.Enabled = -not $pracuje
+  foreach ($b in @($script:PrzyciskiZrodel)) { if ($b -and -not $b.IsDisposed) { $b.Enabled = -not $pracuje } }
   $script:SkillePrzyciski.Visible = [bool]$s
   if (-not $s) { return }
   # Spoza bazy (P49): zadnych operacji ze zrodla; Twoj wlasny ma dwa przyciski paczki.
@@ -616,7 +794,7 @@ function Podglad-Skilla($s) {
   }
   if ((-not $zm) -and ($s.stan -eq "brak")) {
     $gdzie = (@($script:DaneSkilli.Dane.cele | Where-Object { $_.jest }) | ForEach-Object { "$($_.nazwa)" }) -join " i "
-    $l.Add("Nie masz go jeszcze. `„Zainstaluj`” wgra najnowszą wersję od autora dla: $gdzie. Od tej chwili będzie się sam aktualizował raz dziennie.")
+    $l.Add("Nie masz go jeszcze. `„Zainstaluj`” wgra najnowszą wersję od autora dla: $gdzie. $(if (Czy-Inny $s) { 'To źródło nie jest częścią MegaRuchacza - nowsze wersje pobierzesz ręcznie.' } else { 'Od tej chwili będzie się sam aktualizował raz dziennie.' })")
   } elseif ((-not $zm) -and ($s.stan -eq "zmieniony")) {
     $l.Add("Nie aktualizuję go sam, bo Twoja wersja różni się od każdej wersji autora - aktualizacja skasowałaby Twoje zmiany.")
   } elseif (-not $zm) {
@@ -664,8 +842,9 @@ function Wybierz-Skill([string]$nazwa) {
 
 # Klikniecie przycisku: start w tle, zegar co 2 s. Koniec rozpoznajemy po operacja.txt
 # z poczatkiem nie wczesniejszym niz klikniecie i wynikiem innym niz "pracuje".
-function Rusz-Operacje-Skilli([string]$tryb, [string]$skill, [bool]$wymus, [string]$opis) {
-  $powod = Operacja-Na-Skillach $tryb $skill $wymus
+# $zrodlo - operacja na calym zrodle (-ZeZrodla, przycisk w naglowku grupy).
+function Rusz-Operacje-Skilli([string]$tryb, [string]$skill, [bool]$wymus, [string]$opis, [string]$zrodlo = "") {
+  $powod = $(if ($zrodlo) { Operacja-Na-Zrodle $tryb $zrodlo } else { Operacja-Na-Skillach $tryb $skill $wymus })
   if ($powod) {
     $script:SkillePodglad.Text = "NIE UDAŁO SIĘ URUCHOMIĆ: $powod"
     return

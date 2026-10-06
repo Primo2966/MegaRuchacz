@@ -42,6 +42,13 @@
 #    zrodla z zerami w .git (bylo: wyzerowany .git\index, "index file corrupt") jest
 #    klonowana od nowa, a z kopii zrodla z zerami w plikach skilla nic nie wgrywamy.
 #    Rozpoznanie zer wspolne z cyklem i kopia zapasowa: zapis-trwaly.ps1 (Uszkodzenie-Zerami).
+# 9. Wbudowane i inne (decyzja uzytkownika 2026-10-06). Sama aktualizuje sie WYLACZNIE
+#    szostka zrodel oznaczonych w bazie Wbudowane = $true - to one sa czescia MegaRuchacza.
+#    Zrodla bez tej flagi (np. vibecode, obsidian) baza tylko rozpoznaje: codzienny przebieg
+#    i "aktualizuj" bez -Skill/-ZeZrodla ich skilli NIE ruszaja (wydruk mowi, ile czeka);
+#    aktualizuje je tylko jawne -Skill <nazwa> albo -ZeZrodla <id> (przycisk w zakladce).
+#    Zrodlo z polem Pominiete (open-design) daje tylko czesc swoich katalogow - ile pominieto,
+#    liczy Szukaj-Przenosin z tego samego "ls-tree" i zapisuje w stanie zrodla.
 #
 # GDZIE CZYTAJA SKILLE (rozpoznanie 2026-09-29, raport .megaruchacz\raporty\P18.md):
 #   Claude Code - ~\.claude\skills\<nazwa>\SKILL.md            -> cel "claude" (zawsze)
@@ -387,13 +394,15 @@ function Wczytaj-Katalog {
     if (-not $z.Id -or -not $z.Adres) { throw "wpis źródła w bazie bez Id albo Adres: $($z.Nazwa)" }
     $rodzaj = "skille"; if ($z.Rodzaj) { $rodzaj = "$($z.Rodzaj)" }
     $galaz = "main"; if ($z.Galaz) { $galaz = "$($z.Galaz)" }
+    # Wbudowane = czesc MegaRuchacza, aktualizuje sie samo (zasada 9); brak flagi = tylko recznie
+    $wbud = [bool]$z.Wbudowane
     $sk = @()
     foreach ($s in @($z.Skille)) {
       $sc = "$($z.Sciezka)/$($s.Nazwa)".TrimStart('/'); if ($s.Sciezka) { $sc = "$($s.Sciezka)" }
       $fo = "$($s.Nazwa)"; if ($s.Folder) { $fo = "$($s.Folder)" }
       $sk += [pscustomobject]@{
         Nazwa = "$($s.Nazwa)"; Sciezka = $sc.Trim('/'); Folder = $fo; Opis = "$($s.Opis)"
-        Robocza = [bool]$s.Robocza; Zrodlo = "$($z.Id)"
+        Robocza = [bool]$s.Robocza; Zrodlo = "$($z.Id)"; Wbudowane = $wbud
         NazwaWRepo = (($sc.Trim('/')) -split '/')[-1]
         # P20: sciezka z bazy (Sciezka moze zmienic Zastosuj-Przenosiny/Szukaj-Przenosin),
         # autor usunal skill, skill przeniesiony w kilka miejsc naraz (nie zgaduje ktore)
@@ -403,6 +412,7 @@ function Wczytaj-Katalog {
     $zrodla += [pscustomobject]@{
       Id = "$($z.Id)"; Nazwa = "$($z.Nazwa)"; Adres = "$($z.Adres)"; Galaz = $galaz
       Sciezka = "$($z.Sciezka)"; Opis = "$($z.Opis)"; Rodzaj = $rodzaj; Uwaga = "$($z.Uwaga)"; Skille = $sk
+      Wbudowane = $wbud; Pominiete = "$($z.Pominiete)"
     }
   }
   # P49: skille spoza zrodel, o ktorych wiadomo, skad sa (Wlasne = uzytkownika, Inne =
@@ -412,7 +422,7 @@ function Wczytaj-Katalog {
     foreach ($w in @($k[$para[0]])) {
       if ($null -eq $w) { continue }
       if (-not $w.Folder) { throw "wpis w liście $($para[0]) bazy bez Folder" }
-      $o = [pscustomobject]@{ Folder = "$($w.Folder)"; Opis = "$($w.Opis)"; Skad = "$($w.Skad)"; Uwaga = "$($w.Uwaga)"; Rodzaj = $para[1] }
+      $o = [pscustomobject]@{ Folder = "$($w.Folder)"; Opis = "$($w.Opis)"; Skad = "$($w.Skad)"; Uwaga = "$($w.Uwaga)"; Rodzaj = $para[1]; Adres = "$($w.Adres)" }
       if ($para[0] -eq "Wlasne") { $script:Wlasne += $o } else { $script:Inne += $o }
     }
   }
@@ -436,7 +446,7 @@ function Wczytaj-Katalog {
           continue
         }
         if (@($script:Wlasne | Where-Object { $_.Folder -eq "$($w.folder)" }).Count) { continue }
-        $script:Wlasne += [pscustomobject]@{ Folder = "$($w.folder)"; Opis = "$($w.opis)"; Skad = "$($w.skad)"; Uwaga = "$($w.uwaga)"; Rodzaj = "wlasny" }
+        $script:Wlasne += [pscustomobject]@{ Folder = "$($w.folder)"; Opis = "$($w.opis)"; Skad = "$($w.skad)"; Uwaga = "$($w.uwaga)"; Rodzaj = "wlasny"; Adres = "" }
       }
     }
   }
@@ -693,6 +703,15 @@ function Szukaj-Przenosin($z, [string]$kat, $stan, [string]$commit) {
   }
   $teraz = Teraz
   $krotko = $(if ($commit) { $commit.Substring(0, [math]::Min(7, $commit.Length)) } else { "?" })
+  # Zrodlo z polem Pominiete (zasada 9): ile katalogow <Sciezka>/<x>/SKILL.md NIE bierzemy.
+  # Liczone tu, z tego samego ls-tree - zakladka pokazuje te liczbe z data commita.
+  $pre = "$($z.Sciezka)".Trim('/')
+  if ($z.Pominiete -and $pre) {
+    $nasze = @{}; foreach ($sk in $z.Skille) { $nasze[$sk.SciezkaWBazie] = $true; $nasze[$sk.Sciezka] = $true }
+    $ile = @($zSkillem.Keys | Where-Object { $_.StartsWith($pre + "/") -and ($_.Substring($pre.Length + 1) -notmatch '/') -and -not $nasze.ContainsKey($_) }).Count
+    if (-not $stan.zrodla.ContainsKey($z.Id)) { $stan.zrodla[$z.Id] = @{} }
+    $stan.zrodla[$z.Id].pominiete = @{ ile = $ile; commit = $commit; kiedy = $teraz }
+  }
   foreach ($sk in $z.Skille) {
     $x = Stan-Skilla $stan $sk
     $sk.Usuniety = $false; $sk.Niepewny = $false
@@ -1296,6 +1315,26 @@ function Aktualizuj-Skill($stan, $sk, $cele, $ctx, [bool]$jawnie, [bool]$wymus) 
   return $zrobione
 }
 
+# Zasada 9: z wybranych skilli tylko te ze zrodel wbudowanych. Pozostale NIE sa ruszane -
+# ale nie po cichu: wydruk (i dziennik) mowi, ile z nich ma nowsza wersje do recznej aktualizacji.
+function Tylko-Wbudowane($stan, $wybrane) {
+  $wbud = @($wybrane | Where-Object { $_.Wbudowane })
+  $czeka = @()
+  foreach ($sk in @($wybrane | Where-Object { -not $_.Wbudowane })) {
+    $x = $stan.skille[$sk.Nazwa]
+    if ($null -eq $x -or $null -eq $x.cele) { continue }
+    foreach ($c in @($x.cele.Keys)) {
+      $zp = $x.cele[$c]
+      if ($zp -and $zp.opieka -and $zp.stan -eq "starszy") { $czeka += "$($sk.Folder) ($($sk.Zrodlo))"; break }
+    }
+  }
+  if ($czeka.Count -gt 0) {
+    Pisz "  Nowsza wersja czeka w $($czeka.Count) $(Odmien $czeka.Count 'skillu' 'skillach' 'skillach') spoza MegaRuchacza - tych sam nie aktualizuję, tylko przyciskiem w zakładce Skille: $(($czeka | Select-Object -First 8) -join ', ')$(if ($czeka.Count -gt 8) { ', ...' })."
+    Dziennik "pominiety" "" "nowsza wersja w $($czeka.Count) skillach ze zrodel spoza wbudowanych - bez aktualizacji (tylko recznie): $($czeka -join ', ')"
+  }
+  return ,$wbud
+}
+
 function Instaluj-Skill($stan, $sk, $cele, $ctx, [bool]$wymus) {
   $x = Stan-Skilla $stan $sk
   $k = $ctx[$sk.Zrodlo]
@@ -1647,11 +1686,18 @@ function Stan-Dla-Okna($stan, $zrodla, $cele) {
   $wynikZ = @()
   $znane = @{}
   $licz = [ordered]@{ wBazie = 0; zgodne = 0; starsze = 0; zmienione = 0; brak = 0; usuniete = 0; bledy = 0; dzisZaktualizowane = 0 }
+  # Zasada 9: osobno wbudowane (czesc MegaRuchacza) i inne zrodla z bazy - ile skilli,
+  # ile zainstalowanych, ile czeka nowsza wersja (u innych: do recznej aktualizacji).
+  $licz["wbudZrodel"] = 0; $licz["wbudSkilli"] = 0; $licz["wbudZainstalowane"] = 0; $licz["wbudStarsze"] = 0
+  $licz["inneZrodel"] = 0; $licz["inneSkilli"] = 0; $licz["inneZainstalowane"] = 0; $licz["inneStarsze"] = 0
   foreach ($z in $zrodla) {
     $zs = Na-Slownik $stan.zrodla[$z.Id]
+    $grupa = $(if ($z.Wbudowane) { "wbud" } else { "inne" })
+    $licz["$($grupa)Zrodel"]++
     $lista = @()
     foreach ($sk in $z.Skille) {
       $licz.wBazie++
+      $licz["$($grupa)Skilli"]++
       $znane[$sk.Folder] = $true
       $x = $stan.skille[$sk.Nazwa]
       $wc = @()
@@ -1692,6 +1738,8 @@ function Stan-Dla-Okna($stan, $zrodla, $cele) {
       $dzisAkt = $false
       if ($x -and $x.zmiana -and "$($x.zmiana.kiedy)".StartsWith($dzis) -and (@("cofniecie", "usuniecie") -notcontains $x.zmiana.rodzaj)) { $dzisAkt = $true }
       switch ($zbiorczy) { "zgodny" { $licz.zgodne++ } "starszy" { $licz.starsze++ } "zmieniony" { $licz.zmienione++ } "brak" { $licz.brak++ } "usuniety" { $licz.usuniete++ } default { } }
+      if ($zainstalowany) { $licz["$($grupa)Zainstalowane"]++ }
+      if ($zbiorczy -eq "starszy") { $licz["$($grupa)Starsze"]++ }
       if ($x -and $x.blad) { $licz.bledy++ }
       if ($dzisAkt) { $licz.dzisZaktualizowane++ }
       # Miejsca, w ktorych skilla brakuje, choc gdzie indziej jest (np. jest dla
@@ -1700,7 +1748,7 @@ function Stan-Dla-Okna($stan, $zrodla, $cele) {
       if ($zbiorczy -ne "brak" -and -not $sk.Usuniety) { $brakujeW = @($wc | Where-Object { $_.stan -eq "brak" } | ForEach-Object { $_.nazwa }) }
       $lista += [pscustomobject]@{
         nazwa = $sk.Nazwa; folder = $sk.Folder; opis = $sk.Opis; robocza = $sk.Robocza; sciezka = $sk.Sciezka
-        zainstalowany = $zainstalowany
+        wbudowane = [bool]$sk.Wbudowane; zainstalowany = $zainstalowany
         usuniety = $(if ($sk.Usuniety -and $x -and $x.usuniety) { [pscustomobject]$x.usuniety } elseif ($sk.Usuniety) { [pscustomobject]@{ od = ""; sciezka = $sk.Sciezka; commit = "" } } else { $null })
         przeniesiony = $(if ($x -and $x.przeniesiony -and "$($x.przeniesiony.na)" -eq $sk.Sciezka) { [pscustomobject]$x.przeniesiony } else { $null })
         wyzerowany = (@($wc | Where-Object { $_.wyzerowany }).Count -gt 0)
@@ -1711,8 +1759,17 @@ function Stan-Dla-Okna($stan, $zrodla, $cele) {
         zmiana = $(if ($x -and $x.zmiana) { [pscustomobject]$x.zmiana } else { $null })
       }
     }
+    # pominiete: $null = zrodlo bierze wszystko albo jeszcze nie policzone (brak sprawdzenia)
+    $pom = $null
+    if ($z.Pominiete -and $zs.pominiete) {
+      $pz = $zs.pominiete
+      $pom = [pscustomobject]@{ ile = [int]$pz.ile; commit = "$($pz.commit)"; kiedy = "$($pz.kiedy)"; opis = $z.Pominiete }
+    } elseif ($z.Pominiete) {
+      $pom = [pscustomobject]@{ ile = -1; commit = ""; kiedy = ""; opis = $z.Pominiete }
+    }
     $wynikZ += [pscustomobject]@{
       id = $z.Id; nazwa = $z.Nazwa; opis = $z.Opis; rodzaj = $z.Rodzaj; uwaga = $z.Uwaga; adres = $z.Adres; galaz = $z.Galaz
+      wbudowane = [bool]$z.Wbudowane; pominiete = $pom
       commit = "$($zs.commit)"; data = "$($zs.data)"; sprawdzono = "$($zs.sprawdzono)"; pobrano = "$($zs.pobrano)"
       blad = "$($zs.blad)"; bladOd = "$($zs.bladOd)"; skille = $lista
     }
@@ -1726,12 +1783,12 @@ function Stan-Dla-Okna($stan, $zrodla, $cele) {
     foreach ($d in @(Get-ChildItem -LiteralPath $c.Katalog -Directory -Force | Where-Object { -not $_.Name.StartsWith('.') })) {
       if ($znane.ContainsKey($d.Name)) { continue }
       $w = @($script:Wlasne + $script:Inne | Where-Object { $_.Folder -eq $d.Name }) | Select-Object -First 1
-      $rodzaj = "nieznane"; $opis = ""; $skad = ""; $uwaga = ""; $opisAutora = ""
-      if ($w) { $rodzaj = $w.Rodzaj; $opis = $w.Opis; $skad = $w.Skad; $uwaga = $w.Uwaga }
+      $rodzaj = "nieznane"; $opis = ""; $skad = ""; $uwaga = ""; $opisAutora = ""; $adres = ""
+      if ($w) { $rodzaj = $w.Rodzaj; $opis = $w.Opis; $skad = $w.Skad; $uwaga = $w.Uwaga; $adres = "$($w.Adres)" }
       else { $opisAutora = Opis-Z-SkillMd (Join-Path $d.FullName "SKILL.md") }
       $dowiazanie = [bool]($d.Attributes -band [System.IO.FileAttributes]::ReparsePoint)
       $spoza += [pscustomobject]@{
-        folder = $d.Name; cel = $c.Id; rodzaj = $rodzaj; opis = $opis; skad = $skad; uwaga = $uwaga
+        folder = $d.Name; cel = $c.Id; rodzaj = $rodzaj; opis = $opis; skad = $skad; uwaga = $uwaga; adres = $adres
         opisAutora = $opisAutora; sciezka = $d.FullName; dowiazanie = $dowiazanie
       }
     }
@@ -1776,10 +1833,12 @@ if ($Tryb -eq "stan") {
     else {
       $l = $o.liczniki
       Write-Output "Skilli w bazie: $($l.wBazie); aktualne: $($l.zgodne); starsze: $($l.starsze); zmienione ręcznie: $($l.zmienione); niezainstalowane: $($l.brak); usunięte przez autora: $($l.usuniete); z błędem: $($l.bledy)"
+      Write-Output "Wbudowane w MegaRuchacza (aktualizują się same): źródeł $($l.wbudZrodel), skilli $($l.wbudSkilli), zainstalowanych $($l.wbudZainstalowane). Inne źródła z bazy (tylko ręcznie): źródeł $($l.inneZrodel), skilli $($l.inneSkilli), zainstalowanych $($l.inneZainstalowane), czeka nowsza wersja $($l.inneStarsze)."
       Write-Output "Ostatnie sprawdzenie: $($o.sprawdzono); przejęto pod opiekę: $($o.przejeto)"
       foreach ($z in $o.zrodla) {
         Write-Output ""
-        Write-Output "== $($z.nazwa) [$($z.id)] $(if ($z.blad) { 'BŁĄD: ' + $z.blad })"
+        Write-Output "== $($z.nazwa) [$($z.id)] $(if ($z.wbudowane) { '[wbudowane]' } else { '[inne - aktualizacja ręczna]' }) $($z.adres) $(if ($z.blad) { 'BŁĄD: ' + $z.blad })"
+        if ($z.pominiete) { Write-Output "   pominięte: $(if ($z.pominiete.ile -ge 0) { $z.pominiete.ile } else { 'jeszcze nie policzone' }) - $($z.pominiete.opis)" }
         foreach ($s in $z.skille) {
           $gdzie = (@($s.cele | Where-Object { $_.stan -ne 'brak' } | ForEach-Object { "$($_.id):$($_.stan)" }) -join ' ')
           Write-Output ("  {0,-32} {1,-10} {2}{3}" -f $s.folder, $s.stan, $gdzie, $(if ($s.blad) { "  [BŁĄD: " + $s.blad + "]" } else { "" }))
@@ -1790,7 +1849,7 @@ if ($Tryb -eq "stan") {
         $nazwyRodz = @{ wlasny = "Twoje własne"; inne = "Z innych źródeł, poza opieką"; nieznane = "Źródło nieznane" }
         foreach ($r in @("wlasny", "inne", "nieznane")) {
           $te = @($o.spozaBazy | Where-Object { $_.rodzaj -eq $r })
-          if ($te.Count) { Write-Output ("Spoza bazy - $($nazwyRodz[$r]): " + (($te | ForEach-Object { "$($_.folder) ($($_.cel))" }) -join ", ")) }
+          if ($te.Count) { Write-Output ("Spoza bazy - $($nazwyRodz[$r]): " + (($te | ForEach-Object { "$($_.folder) ($($_.cel)$(if ($_.adres) { ', ' + $_.adres }))" }) -join ", ")) }
         }
       }
     }
@@ -1873,7 +1932,9 @@ try {
     }
     "aktualizuj" {
       $jawnie = [bool]($Skill -or $ZeZrodla)
-      foreach ($sk in $wybrane) { $zmian += Aktualizuj-Skill $stan $sk $cele $ctx $jawnie ([bool]$Wymus); Zapisz-Stan $stan }
+      # bez -Skill/-ZeZrodla ("Sprawdz teraz") tylko wbudowane - inne wylacznie jawnie (zasada 9)
+      $doAkt = $(if ($jawnie) { $wybrane } else { Tylko-Wbudowane $stan $wybrane })
+      foreach ($sk in $doAkt) { $zmian += Aktualizuj-Skill $stan $sk $cele $ctx $jawnie ([bool]$Wymus); Zapisz-Stan $stan }
     }
     "cofnij" {
       foreach ($sk in $wybrane) { $zmian += Cofnij-Skill $stan $sk $cele; Zapisz-Stan $stan }
@@ -1887,7 +1948,8 @@ try {
         Pisz "Pierwszy przebieg na tym komputerze: tylko spisuję, co jest. Nowsze wersje pobiorę od następnego codziennego sprawdzenia."
         Dziennik "spis" "" "pierwszy przebieg - przejecie pod opieke bez zmian w plikach"
       } else {
-        foreach ($sk in $wybrane) { $zmian += Aktualizuj-Skill $stan $sk $cele $ctx $false $false; Zapisz-Stan $stan }
+        # sam aktualizuje wylacznie wbudowane w MegaRuchacza (zasada 9)
+        foreach ($sk in (Tylko-Wbudowane $stan $wybrane)) { $zmian += Aktualizuj-Skill $stan $sk $cele $ctx $false $false; Zapisz-Stan $stan }
       }
     }
   }

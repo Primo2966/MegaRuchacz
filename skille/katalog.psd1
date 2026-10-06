@@ -13,6 +13,16 @@
 #   Opis     - jedno zdanie po polsku, dla laika: co to za zestaw
 #   Rodzaj   - 'skille' (domyslnie) albo 'aplikacja' = w repo nie ma skilli do
 #              zainstalowania; zrodlo jest tylko pokazywane z wyjasnieniem (Uwaga)
+#   Wbudowane - $true = zrodlo jest CZESCIA MegaRuchacza (decyzja uzytkownika 2026-10-06:
+#              dokladnie szesc - superpowers, impeccable, taste-skill, ponytail, mattpocock,
+#              open-design). Tylko skille z tych zrodel aktualizuja sie same raz dziennie.
+#              Zrodlo bez tej flagi jest w bazie po to, zeby je rozpoznac i pokazac z linkiem;
+#              jego skille aktualizuje sie wylacznie recznie (przycisk w zakladce albo
+#              -Tryb aktualizuj -Skill/-ZeZrodla), nigdy w codziennym przebiegu.
+#   Pominiete - (opcjonalnie) zrodlo, z ktorego bierzemy tylko CZESC katalogow spod Sciezka:
+#              jedno zdanie, dlaczego reszta jest pominieta. Ile ich jest, liczy narzedzie
+#              przy kazdym sprawdzeniu (katalogi <Sciezka>/<x>/SKILL.md spoza listy Skille).
+#   Uwaga    - (opcjonalnie) wyjasnienie pokazywane w naglowku grupy
 #   Skille   - lista @{ Nazwa; Opis } - Nazwa to katalog skilla w repo; opis po polsku
 #              w kilku slowach, pisany z tresci SKILL.md, nie z nazwy.
 #              Opcjonalnie: Sciezka (pelna sciezka w repo, gdy skill lezy gdzie indziej
@@ -27,6 +37,7 @@
     @{
       Id      = 'superpowers'
       Nazwa   = 'Superpowers (Jesse Vincent)'
+      Wbudowane = $true
       Adres   = 'https://github.com/obra/superpowers'
       Galaz   = 'main'
       Sciezka = 'skills'
@@ -52,6 +63,7 @@
     @{
       Id      = 'impeccable'
       Nazwa   = 'Impeccable (Paul Bakaus)'
+      Wbudowane = $true
       Adres   = 'https://github.com/pbakaus/impeccable'
       Galaz   = 'main'
       Sciezka = 'plugin/skills'
@@ -63,6 +75,7 @@
     @{
       Id      = 'taste-skill'
       Nazwa   = 'Taste Skill (Leonxlnx)'
+      Wbudowane = $true
       Adres   = 'https://github.com/Leonxlnx/taste-skill'
       Galaz   = 'main'
       Sciezka = 'skills'
@@ -86,6 +99,7 @@
     @{
       Id      = 'ponytail'
       Nazwa   = 'Ponytail (Dietrich Gebert)'
+      Wbudowane = $true
       Adres   = 'https://github.com/DietrichGebert/ponytail'
       Galaz   = 'main'
       Sciezka = 'skills'
@@ -102,6 +116,7 @@
     @{
       Id      = 'mattpocock'
       Nazwa   = 'Skille Matta Pococka'
+      Wbudowane = $true
       Adres   = 'https://github.com/mattpocock/skills'
       Galaz   = 'main'
       Sciezka = 'skills'
@@ -145,6 +160,40 @@
         @{ Nazwa = 'to-questionnaire';              Sciezka = 'skills/productivity/to-questionnaire';             Opis = 'Zamienia pytanie, na które sam nie odpowiesz, w ankietę dla osoby, która zna odpowiedź.' }
         @{ Nazwa = 'wait-what';                     Sciezka = 'skills/productivity/wait-what';                    Opis = 'Gdy odpowiedź była niezrozumiała: każe agentowi wytłumaczyć to jeszcze raz, prościej i z kontekstem.' }
         @{ Nazwa = 'writing-for-agents';            Sciezka = 'skills/productivity/writing-for-agents';           Opis = 'Zasady pisania dokumentów dla agentów: skille, AGENTS.md, CLAUDE.md.' }
+      )
+    }
+    @{
+      Id        = 'open-design'
+      Nazwa     = 'OpenDesign (nexu-io)'
+      Wbudowane = $true
+      Adres     = 'https://github.com/nexu-io/open-design'
+      Galaz     = 'main'
+      Sciezka   = 'skills'
+      Opis      = 'Skille do projektowania z aplikacji OpenDesign - tylko te, które działają samodzielnie w Claude Code i Codeksie: animacje (GSAP), dopracowanie wyglądu, przeglądy, zasady wyglądu.'
+      Pominiete = 'odsyłają gdzie indziej albo działają tylko w aplikacji OpenDesign - nie instaluję ich'
+      Uwaga     = 'Stan z 06.10.2026 (commit 53231d4): ze 163 skilli w repozytorium bierzemy 21, które działają same. Pominięte: 85 to tylko odsyłacze do cudzych repozytoriów (opis i link, bez treści), 13 to kopie skilli z Taste Skill (są w bazie z tamtego źródła), 24 to szablony ich generatora html-anything, a 20 działa wyłącznie w aplikacji OpenDesign (jej serwer „od”, podgląd i narzędzia wewnętrzne).'
+      Skille    = @(
+        @{ Nazwa = 'chat-motion-overlay';       Opis = 'Z zapisu albo zrzutu rozmowy na czacie robi animowaną nakładkę wideo z dymkami (Remotion), np. z przezroczystym tłem do montażu.' }
+        @{ Nazwa = 'design-brief';              Opis = 'Zamienia zlecenie projektowe zapisane w ustalonym formacie (I-Lang) w konkretną specyfikację: kolory, czcionki, układ, nastrój, gęstość.' }
+        @{ Nazwa = 'emil-design-eng';           Opis = 'Filozofia dopracowania interfejsu Emila Kowalskiego: drobne detale, animacje i komponenty, po których program dobrze się używa.' }
+        @{ Nazwa = 'emilkowalski-motion';       Opis = 'Na gotowym interfejsie dodaje stonowane mikroanimacje i przejścia między stanami, wzorem Emila Kowalskiego.' }
+        @{ Nazwa = 'export-download-debugging'; Opis = 'Szuka przyczyny, gdy eksport lub pobieranie pliku w przeglądarce albo aplikacji Electron daje pusty plik (0 KB) albo nic.' }
+        @{ Nazwa = 'frontend-design';           Opis = 'Wyrazisty, dopracowany wygląd stron, paneli i ekranów aplikacji - skill Anthropic w wersji przerobionej przez OpenDesign.' }
+        @{ Nazwa = 'gsap-core';                 Opis = 'Animacje na stronach biblioteką GSAP - podstawy: ruch elementów, płynność, opóźnienia, dopasowanie do ekranu i do osób, które wyłączyły animacje.' }
+        @{ Nazwa = 'gsap-frameworks';           Opis = 'GSAP w aplikacjach Vue, Svelte i podobnych: kiedy uruchomić animację i jak po niej posprzątać.' }
+        @{ Nazwa = 'gsap-performance';          Opis = 'Płynne animacje GSAP bez szarpania: co przyspiesza, a co spowalnia przeglądarkę.' }
+        @{ Nazwa = 'gsap-plugins';              Opis = 'Dodatki GSAP: przewijanie do miejsca, przeciąganie, animacja tekstu i kształtów SVG, własne krzywe ruchu.' }
+        @{ Nazwa = 'gsap-react';                Opis = 'GSAP w aplikacjach React i Next.js: właściwe podpięcie animacji i sprzątanie po niej.' }
+        @{ Nazwa = 'gsap-scrolltrigger';        Opis = 'Animacje sterowane przewijaniem strony: przypinanie sekcji, efekt głębi (paralaksa), ruch zależny od przewinięcia.' }
+        @{ Nazwa = 'gsap-timeline';             Opis = 'Układanie wielu animacji GSAP na osi czasu: co po czym, a co równocześnie.' }
+        @{ Nazwa = 'gsap-utils';                Opis = 'Pomocnicze funkcje GSAP do liczb i list: przycinanie, przeliczanie zakresów, losowanie, przyciąganie do siatki.' }
+        @{ Nazwa = 'hatch-pet';                 Opis = 'Tworzy animowanego zwierzaka dla Codeksa: arkusz klatek z obrazka, sprawdzenie i spakowanie (potrzebny generator obrazów w Codeksie).' }
+        @{ Nazwa = 'impeccable-design-polish';  Opis = 'Szlif gotowej strony w duchu Impeccable: przegląd, usunięcie „wyglądu z AI”, poprawki tekstu, ruchu i dostępności.' }
+        @{ Nazwa = 'pptx-html-fidelity-audit';  Opis = 'Porównuje prezentację PowerPoint wyeksportowaną z HTML z oryginałem, wyłapuje rozjazdy (ucięte treści, stopki, style) i eksportuje poprawnie.' }
+        @{ Nazwa = 'reference-design-contract'; Opis = 'Z luźnych inspiracji (zrzuty, linki, „ma wyglądać jak to”) robi plik zasad wyglądu DESIGN.md i instrukcję do wdrożenia.' }
+        @{ Nazwa = 'review-animations';         Opis = 'Surowy przegląd animacji w kodzie: płynność, czas trwania, wydajność, dostępność - domyślnie wytyka błędy.' }
+        @{ Nazwa = 'web-design-guidelines';     Opis = 'Sprawdza kod interfejsu z wytycznymi zespołu Vercel: układ, typografia, kolory, ruch, dostępność.' }
+        @{ Nazwa = 'writing-guidelines';        Opis = 'Sprawdza dokumentację i teksty z podręcznikiem pisania zespołu Vercel: styl, ton, przejrzystość.' }
       )
     }
     @{
@@ -213,13 +262,14 @@
   #            spakowac do przekazania (narzedzia\skille.ps1 -Tryb spakuj).
   #   Inne   - znane zrodlo, ale poza opieka MegaRuchacza (Uwaga mowi dlaczego).
   # Kazdy inny katalog spoza bazy zakladka oznacza "zrodlo nieznane" - bez zgadywania.
-  # Pola: Folder (nazwa katalogu u uzytkownika), Opis (po polsku, dla laika), Skad, Uwaga.
+  # Pola: Folder (nazwa katalogu u uzytkownika), Opis (po polsku, dla laika), Skad, Uwaga,
+# opcjonalnie Adres (https - zakladka pokazuje go jako klikalny link do zrodla).
   # Wlasne skille konkretnego uzytkownika (z nazwami jego komputerow i projektow) NIE stoja tutaj -
   # repo jest publiczne (P67). Dochodza z pola skille.wlasne w ~\.claude\mr\lokalne.json tego komputera
   # (te same pola: folder, opis, skad); narzedzia\skille.ps1 dokleja je do tej listy.
   Wlasne = @()
   Inne = @(
-    @{ Folder = 'orchestration'; Opis = 'Koordynacja wielu agentów w aplikacji Orca: wiadomości, zadania, czekanie na wyniki.'; Skad = 'Repozytorium stablyai/orca (aplikacja Orca), wgrany 09.09.2026 narzędziem „skills” (npx skills).'; Uwaga = 'Aktualizuje go narzędzie „skills” albo Orca, nie MegaRuchacz - to dowiązanie do katalogu ~\.agents\skills, wspólnego z Codeksem.' }
+    @{ Folder = 'orchestration'; Opis = 'Koordynacja wielu agentów w aplikacji Orca: wiadomości, zadania, czekanie na wyniki.'; Skad = 'Repozytorium stablyai/orca (aplikacja Orca), wgrany 09.09.2026 narzędziem „skills” (npx skills).'; Uwaga = 'Aktualizuje go narzędzie „skills” albo Orca, nie MegaRuchacz - to dowiązanie do katalogu ~\.agents\skills, wspólnego z Codeksem.'; Adres = 'https://github.com/stablyai/orca' }
     @{ Folder = 'synced';        Opis = 'Skille z Twojego konta claude.ai (np. pdf, xlsx), w podkatalogu.'; Skad = 'Kopia z konta claude.ai, którą dogrywa i odświeża sam Claude Code.'; Uwaga = 'Nie ruszać ręcznie - Claude Code nadpisuje ten katalog przy każdej synchronizacji.' }
   )
 }

@@ -166,7 +166,7 @@ function Przygotuj-Kopie {
   New-Item -ItemType Directory -Force -Path $T, $Bin, $TmpKrotki, (Join-Path $T "localappdata"), (Join-Path $T "appdata") | Out-Null
   Git-Cicho @("clone", "--quiet", "--no-hardlinks", $RepoPrawdziwe, $Repo)
   # to, co sie testuje: niezapisane w gicie pliki z zakresu instalatora i Lore
-  $zakres = @("narzedzia/instalacja/", "narzedzia/instaluj-lore.ps1", "lore/lore/", "lore/tests/")
+  $zakres = @("narzedzia/instalacja/", "narzedzia/instaluj-lore.ps1", "lore/lore/", "lore/tests/", "narzedzia/skille.ps1", "skille/")
   $zmiany = @(& git -C $RepoPrawdziwe status --porcelain --untracked-files=all 2>$null)
   foreach ($l in $zmiany) {
     $sc = $l.Substring(3).Trim('"')
@@ -643,6 +643,72 @@ function Scenariusz-Skille {
   $dom3 = Dom "skille-bez-gita"
   $r = Modul "skille" "Instaluj" $dom3 @("-KatalogSkilli", $kat) @{ PATH = "$Bin;$KatUv;$Systemowe" }
   Sprawdz "skille: brak gita = odmowa, brakuje git" (($r.Kod -eq 1) -and (@($r.W.brakuje) -contains "git") -and -not (Rejestr $dom3)) $r.Tekst
+  Scenariusz-Skille-Wbudowane
+}
+
+# Zrodlo skilli do testu: repo git z katalogami skills/<nazwa>/SKILL.md (tresc "<nazwa> <wersja>").
+function Zrodlo-Testowe([string]$nazwa, [string[]]$skille, [string]$wersja) {
+  $src = Join-Path $T $nazwa
+  foreach ($s in $skille) {
+    New-Item -ItemType Directory -Force -Path (Join-Path $src "skills\$s") | Out-Null
+    [System.IO.File]::WriteAllText((Join-Path $src "skills\$s\SKILL.md"), "---`nname: $s`ndescription: skill testowy`n---`n# $s $wersja`n")
+  }
+  if (-not (Test-Path (Join-Path $src ".git"))) {
+    Git-Cicho @("-C", $src, "init", "-q", "-b", "main")
+    Git-Cicho @("-C", $src, "config", "core.autocrlf", "false")
+    Git-Cicho @("-C", $src, "config", "uploadpack.allowFilter", "true")
+  }
+  Git-Cicho @("-C", $src, "add", "-A")
+  Git-Cicho @("-C", $src, "-c", "user.name=test", "-c", "user.email=test@test", "commit", "-q", "-m", $wersja)
+  return $src
+}
+
+# Wbudowane i inne (2026-10-06): codzienny przebieg i "aktualizuj" bez wskazania ruszaja WYLACZNIE
+# zrodla z flaga Wbudowane. Proba negatywna: skill z niewbudowanego zrodla w stanie "starszy" zostaje
+# nietkniety co do bajtu; kontrola pozytywna w tym samym przebiegu: wbudowany dostaje nowa wersje
+# (bez niej "nietkniety" mogloby znaczyc, ze przebieg w ogole nic nie aktualizowal). Reczne
+# -ZeZrodla dziala takze dla niewbudowanego. Silnik: narzedzia\skille.ps1 z kopii repo.
+function Scenariusz-Skille-Wbudowane {
+  $srcW = Zrodlo-Testowe "zrodlo-wbud" @("wbud-skill", "stub-pominiety", "drugi-pominiety") "v1"
+  $srcI = Zrodlo-Testowe "zrodlo-inne" @("obcy-skill") "v1"
+  $kat = Join-Path $T "katalog-wbud.psd1"
+  $aW = "file:///" + $srcW.Replace('\', '/'); $aI = "file:///" + $srcI.Replace('\', '/')
+  [System.IO.File]::WriteAllText($kat, ("@{`r`n  Wersja = 1`r`n  Zrodla = @(`r`n" +
+    "    @{ Id = 'wbud'; Nazwa = 'Wbud'; Wbudowane = `$true; Adres = '$aW'; Galaz = 'main'; Sciezka = 'skills'; Opis = 'wbudowane'; Pominiete = 'odsylaja gdzie indziej'; Skille = @( @{ Nazwa = 'wbud-skill'; Opis = 'a' } ) }`r`n" +
+    "    @{ Id = 'inne'; Nazwa = 'Inne'; Adres = '$aI'; Galaz = 'main'; Sciezka = 'skills'; Opis = 'spoza'; Skille = @( @{ Nazwa = 'obcy-skill'; Opis = 'b' } ) }`r`n" +
+    "  )`r`n}`r`n"), (New-Object System.Text.UTF8Encoding($true)))
+  $dom = Dom "skille-wbud"
+  foreach ($p in @(@($srcW, "wbud-skill"), @($srcI, "obcy-skill"))) {
+    Copy-Item -LiteralPath (Join-Path $p[0] "skills\$($p[1])") -Destination (Join-Path $dom ".claude\skills\$($p[1])") -Recurse -Force
+  }
+  $silnik = Join-Path $Repo "narzedzia\skille.ps1"
+  $wsp = @("-KatalogDomowy", $dom, "-Katalog", $kat, "-Przerwy", "0")
+  # Git z samym mingw64\bin w PATH pada przy klonie file:// z filtrem (kod -1073741819, sprawdzone
+  # 2026-10-06) - potrzebuje usr\bin swojej instalacji, tak jak ma go w PATH prawdziwy nadzorca.
+  $usr = Join-Path (Split-Path -Parent (Split-Path -Parent $KatGit)) "usr\bin"
+  $sciezka = "$Bin;$KatUv;$KatGit;$(if (Test-Path $usr) { $usr + ';' })$Systemowe"
+  $srod = Srodowisko $dom @{ PATH = $sciezka }
+  $plikW = Join-Path $dom ".claude\skills\wbud-skill\SKILL.md"
+  $plikI = Join-Path $dom ".claude\skills\obcy-skill\SKILL.md"
+  $r = Uruchom $silnik (@("-Tryb", "codziennie") + $wsp) $srod
+  Sprawdz "skille wbudowane: pierwszy codzienny przebieg tylko spisuje (oba skille pod opieka)" (($r.Kod -eq 0) -and ($r.Tekst -match "Pierwszy przebieg")) $r.Tekst
+  [void](Zrodlo-Testowe "zrodlo-wbud" @("wbud-skill") "v2")
+  [void](Zrodlo-Testowe "zrodlo-inne" @("obcy-skill") "v2")
+  $przedI = [System.IO.File]::ReadAllBytes($plikI)
+  $r = Uruchom $silnik (@("-Tryb", "codziennie", "-Wymus") + $wsp) $srod
+  $poI = [System.IO.File]::ReadAllBytes($plikI)
+  Sprawdz "skille wbudowane: codziennie aktualizuje wbudowany (kontrola pozytywna: wbud-skill v2)" (($r.Kod -eq 0) -and ([System.IO.File]::ReadAllText($plikW) -match "wbud-skill v2")) $r.Tekst
+  Sprawdz "skille wbudowane: PROBA NEGATYWNA - codziennie NIE rusza skilla z niewbudowanego zrodla w stanie starszy (co do bajtu)" ([Convert]::ToBase64String($przedI) -eq [Convert]::ToBase64String($poI)) ([System.IO.File]::ReadAllText($plikI) + " | " + $r.Tekst)
+  Sprawdz "skille wbudowane: wydruk mowi, ze nowsza wersja czeka w skillu spoza MegaRuchacza" ($r.Tekst -match "obcy-skill \(inne\)") $r.Tekst
+  $r = Uruchom $silnik (@("-Tryb", "stan", "-Json") + $wsp) $srod
+  $j = $null; try { $j = ($r.Tekst -split "`nSTDERR:")[0].Trim() | ConvertFrom-Json } catch { $j = $null }
+  $zw = $(if ($j) { @($j.zrodla) | Where-Object { $_.id -eq "wbud" } }); $zi = $(if ($j) { @($j.zrodla) | Where-Object { $_.id -eq "inne" } })
+  $obcy = $(if ($zi) { @($zi.skille) | Where-Object { $_.nazwa -eq "obcy-skill" } })
+  Sprawdz "skille wbudowane: stan dla okna - flaga wbudowane, obcy-skill 'starszy', pominiete = 2 (katalogi spoza listy)" (($null -ne $zw) -and ($zw.wbudowane -eq $true) -and ($zi.wbudowane -eq $false) -and ($obcy.stan -eq "starszy") -and ($obcy.wbudowane -eq $false) -and ($zw.pominiete.ile -eq 2) -and ($j.liczniki.inneStarsze -eq 1) -and ($j.liczniki.wbudZainstalowane -eq 1)) $r.Tekst
+  $r = Uruchom $silnik (@("-Tryb", "aktualizuj") + $wsp) $srod
+  Sprawdz "skille wbudowane: PROBA NEGATYWNA - aktualizuj bez wskazania (Sprawdz teraz) tez nie rusza niewbudowanego" (($r.Kod -eq 0) -and ([Convert]::ToBase64String([System.IO.File]::ReadAllBytes($plikI)) -eq [Convert]::ToBase64String($przedI))) $r.Tekst
+  $r = Uruchom $silnik (@("-Tryb", "aktualizuj", "-ZeZrodla", "inne") + $wsp) $srod
+  Sprawdz "skille wbudowane: reczne aktualizuj -ZeZrodla inne aktualizuje niewbudowany (obcy-skill v2)" (($r.Kod -eq 0) -and ([System.IO.File]::ReadAllText($plikI) -match "obcy-skill v2")) $r.Tekst
 }
 
 function Scenariusz-Kopia {
