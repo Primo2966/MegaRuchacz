@@ -4,12 +4,16 @@
 # Co robi:
 #   - sprawdza gita (skille.ps1 pobiera zrodla czesciowym klonem) i baze polecanych skilli
 #     (skille\katalog.psd1)
-#   - przejecie pod opieke: skille.ps1 -Tryb wykryj - pobiera zrodla, porownuje i spisuje skille,
-#     ktore juz masz (pierwszy przebieg niczego nie podmienia). Nieudane pobranie to UWAGA, nie
-#     odmowa: codzienne sprawdzenie w nadzorcy sprobuje jeszcze raz
+#   - przejecie pod opieke i skille wbudowane: skille.ps1 -Tryb instaluj -Wbudowane - pobiera zrodla,
+#     porownuje i spisuje skille, ktore juz masz (niczego nie podmienia), a skille wbudowane
+#     w MegaRuchacza wgrywa tam, gdzie ich brakuje - dla KAZDEGO narzedzia AI, ktore jest na
+#     komputerze (Claude Code: ~\.claude\skills, Codex: ~\.agents\skills; OpenCode czyta te katalogi
+#     sam i nie dostaje wlasnej kopii - zasady w skille.ps1 Cele-Instalacji). Narzedzie, ktore
+#     pojawi sie pozniej, dostanie je przy codziennym sprawdzeniu. Nieudane pobranie to UWAGA, nie
+#     odmowa: codzienne sprawdzenie w nadzorcy sprobuje jeszcze raz. Zadnego narzedzia AI = UWAGA
 #   - wlacza modul w rejestrze - z niego nadzorca wie, ze ma codziennie sprawdzac skille
 # Pojedyncze skille instaluje sie z zakladki "Skille" w oknie nadzorcy (skille.ps1 -Tryb instaluj).
-# Usun: wylacza modul (koniec codziennych sprawdzen). Skille w ~\.claude\skills zostaja ZAWSZE -
+# Usun: wylacza modul (koniec codziennych sprawdzen). Skille w ~\.claude\skills i ~\.agents\skills zostaja ZAWSZE -
 #   to Twoje pliki, takze z -UsunDane. -UsunDane usuwa stan opieki ~\.claude\mr\skille\ (kopie
 #   zrodel, kopie zapasowe skilli, dziennik) i wypisuje skille wgrane przez MegaRuchacza.
 #
@@ -110,14 +114,18 @@ try {
       else { New-Item -ItemType Directory -Force -Path $Skille | Out-Null; Krok "zalozony katalog skilli $Skille" }
     }
     if ($Proba) {
-      Plan "przejecie pod opieke: skille.ps1 -Tryb wykryj (pobiera zrodla z GitHuba, spisuje skille, ktore juz masz; niczego nie podmienia)"
+      Plan "przejecie pod opieke i skille wbudowane: skille.ps1 -Tryb instaluj -Wbudowane (pobiera zrodla z GitHuba, spisuje skille, ktore juz masz, i wgrywa brakujace wbudowane dla kazdego narzedzia AI, ktore tu jest; niczego nie podmienia)"
     } else {
-      Krok "przejmuje skille pod opieke - pobieram zrodla polecanych skilli (pierwszy raz to kilka minut)"
-      $w = Uruchom-Skrypt $Silnik @("-Tryb", "wykryj", "-KatalogDomowy", $KatalogDomowy, "-Katalog", $KatalogSkilli, "-Przerwy", "3,10") 1800
+      Krok "przejmuje skille pod opieke i wgrywam brakujace wbudowane - pobieram zrodla polecanych skilli (pierwszy raz to kilka minut)"
+      $w = Uruchom-Skrypt $Silnik @("-Tryb", "instaluj", "-Wbudowane", "-KatalogDomowy", $KatalogDomowy, "-Katalog", $KatalogSkilli, "-Przerwy", "3,10") 1800
+      # "Gdzie wgrywam: ..." - jedna linia bez polskich liter (skille.ps1 Linia-Gdzie)
+      $gdzie = @($w.Tekst -split "`r?`n" | Where-Object { $_ -match '^\s*Gdzie wgrywam:' } | Select-Object -First 1)
+      if ($gdzie.Count -and ($gdzie[0] -match 'BRAK')) { Ostrzezenie $gdzie[0].Trim() }
+      elseif ($gdzie.Count) { Krok $gdzie[0].Trim() }
       if ($w.Kod -eq 2) { Zakoncz $false "skille.ps1 odrzucil wywolanie: $(Sedno $w.Tekst)" }
-      elseif ($w.Kod -eq 3) { Ostrzezenie "inne sprawdzenie skilli wlasnie pracuje - przejecie dokonczy ono albo codzienne sprawdzenie w nadzorcy" }
-      elseif ($w.Kod -ne 0) { Ostrzezenie "przejecie pod opieke nie udalo sie w calosci: $(Sedno $w.Tekst) - codzienne sprawdzenie sprobuje jeszcze raz" }
-      else { Krok "skille przejete pod opieke - stan: $PlikStanu" }
+      elseif ($w.Kod -eq 3) { Ostrzezenie "inne sprawdzenie skilli wlasnie pracuje - przejecie i skille wbudowane dokonczy codzienne sprawdzenie w nadzorcy" }
+      elseif ($w.Kod -ne 0) { Ostrzezenie "przejecie pod opieke albo wgranie skilli wbudowanych nie udalo sie w calosci: $(Sedno $w.Tekst) - codzienne sprawdzenie sprobuje jeszcze raz" }
+      else { Krok "skille przejete pod opieke, wbudowane wgrane tam, gdzie ich brakowalo - stan: $PlikStanu" }
     }
     Zapisz-Modul "skille" $true $KatalogDomowy
     $ok = Po-Zmianie-Rejestru $Zrodlo $KatalogDomowy
@@ -133,7 +141,7 @@ try {
   $wgrane = @(Wgrane-Przez-Nas)
   Zapisz-Modul "skille" $false $KatalogDomowy
   $ok = Po-Zmianie-Rejestru $Zrodlo $KatalogDomowy
-  Krok "skille w $Skille zostaja - to Twoje pliki (codzienne sprawdzenie nowych wersji wylaczone)"
+  Krok "skille w $Skille i $(Join-Path $KatalogDomowy '.agents\skills') zostaja - to Twoje pliki (codzienne sprawdzenie nowych wersji wylaczone)"
   if ($wgrane.Count -gt 0) { Krok "wgrane przez MegaRuchacza (usuniesz je recznie, jesli niepotrzebne): $($wgrane -join ', ')" }
   if ($UsunDane) {
     if (-not (Usun-Katalog-Danych $KatStanu "stan opieki nad skillami (kopie zrodel, kopie zapasowe skilli, dziennik)")) { $ok = $false }

@@ -487,8 +487,13 @@ function Skille-Spoza($d) {
       }
     }
     $w = $wynik[$k]
-    $nazwaCelu = "$($x.cel)"
-    foreach ($c in @($d.cele)) { if ($c.id -eq $x.cel) { $nazwaCelu = "$($c.nazwa)" } }
+    # nazwaCelu niesie kazdy katalog (takze ~\.config\opencode\skills, ktory nie jest celem);
+    # stary JSON bez tego pola - nazwa z listy celow
+    $nazwaCelu = "$($x.nazwaCelu)"
+    if (-not $nazwaCelu) {
+      $nazwaCelu = "$($x.cel)"
+      foreach ($c in @($d.cele)) { if ($c.id -eq $x.cel) { $nazwaCelu = "$($c.nazwa)" } }
+    }
     $w.miejsca += "$nazwaCelu - $($x.sciezka)$(if ($x.dowiazanie) { ' (dowiązanie)' })"
     if ($x.dowiazanie) { $w.dowiazanie = $true }
   }
@@ -647,7 +652,16 @@ function Pokaz-Przeglad-Skilli {
   $l.Add("- Gdy autor przeniesie skill w swoim repozytorium, MegaRuchacz sam go znajdzie. Gdy autor skill usunie, Twoja kopia zostaje i działa dalej.")
   $l.Add("- Przed każdą podmianą robi kopię starej wersji. `„Cofnij ostatnią aktualizację`” przywraca ją co do bajtu.")
   $l.Add("- Skilla zmienionego ręcznie nie nadpisuje nigdy sam.")
-  $l.Add("- Gdzie instaluje: " + ((@($d.cele | Where-Object { $_.jest }) | ForEach-Object { "$($_.nazwa) ($($_.katalog))" }) -join "; ") + ". opencode czyta te same katalogi.")
+  $gdzieJest = @($d.cele | Where-Object { $_.jest })
+  if ($gdzieJest.Count -eq 0) {
+    $l.Add("- Gdzie instaluje: nigdzie - nie widzę na tym komputerze Claude Code, Codeksa ani OpenCode. Skille wbudowane wgram, gdy któreś się pojawi.")
+  } else {
+    $l.Add("- Gdzie instaluje: " + ((@($gdzieJest) | ForEach-Object { "$($_.nazwa) ($($_.katalog))" }) -join "; ") + ".")
+  }
+  if (@($d.narzedzia | Where-Object { $_.id -eq "opencode" -and $_.jest }).Count -gt 0) {
+    $l.Add("- OpenCode nie dostaje osobnej kopii: sam czyta katalogi Claude Code i Codeksa (oraz swój ~\.config\opencode\skills). Gdy masz i Claude Code, i Codeksa, widzi ten sam skill dwa razy i zapisuje to w swoim dzienniku jako ostrzeżenie - obie kopie są te same i aktualizują się razem.")
+  }
+  foreach ($u in @($d.uwagi)) { if ($u) { $l.Add("- $u") } }
   $zn = $d.znacznik
   $l.Add("")
   if ($zn -and $zn.dzien) {

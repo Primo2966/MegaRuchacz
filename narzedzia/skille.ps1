@@ -55,9 +55,13 @@
 #   Codex 0.157 - ~\.agents\skills\<nazwa>\SKILL.md (zakres USER; sprawdzone
 #                 "codex debug prompt-input": korzen r0 = C:/Users/.../.agents/skills)
 #                                                               -> cel "codex" (gdy jest Codex)
-#   opencode    - czyta ~\.claude\skills i ~\.agents\skills sam (docs opencode.ai/docs/skills),
-#                 wiec nie ma osobnego celu - dubel nazwy konczy sie u niego wpisem
-#                 "duplicate skill name" w jego dzienniku, nie bledem.
+#   OpenCode    - czyta sam ~\.claude\skills, ~\.agents\skills i ~\.config\opencode\skills
+#                 (docs opencode.ai/docs/skills). Sprawdzone 2026-10-06 na 1.18.33 ("opencode
+#                 debug skill" na sztucznym domu): ta sama nazwa w dwoch katalogach = WARN
+#                 "duplicate skill name" w jego dzienniku, skill dziala, a wygrywa katalog
+#                 czytany POZNIEJ (kolejnosc: .claude, .agents, .config\opencode).
+#                 Dlatego OpenCode nie ma wlasnego celu ani wlasnej kopii - Cele-Instalacji.
+#   Ktore narzedzie jest na komputerze: Narzedzia-Obecne (rejestr instalacji + slady).
 #
 # STAN (poza repo): ~\.claude\mr\skille\
 #   stan.json        - co pod opieka, z jakiego zrodla i commita, kiedy sprawdzone
@@ -72,6 +76,9 @@
 #     -Tryb stan         (domyslnie) stan z dysku, bez sieci i bez gita; -Json dla okna
 #     -Tryb wykryj       pobiera zrodla, porownuje, przejmuje istniejace kopie pod opieke
 #     -Tryb instaluj     -Skill <nazwa> albo -ZeZrodla <id>: wgrywa tam, gdzie brakuje
+#                        -Wbudowane: wszystkie skille wbudowane, TYLKO tam, gdzie ich brakuje
+#                        (instalacja modulu; nic istniejacego nie podmienia). Od tej chwili
+#                        codzienny przebieg dogrywa je takze dla narzedzia AI, ktore pojawi sie pozniej
 #     -Tryb aktualizuj   [-Skill <nazwa>] [-ZeZrodla <id>]: nowsze wersje skilli pod opieka
 #     -Tryb cofnij       -Skill <nazwa>: przywraca kopie sprzed ostatniej aktualizacji
 #     -Tryb usun         -Skill <nazwa>: kasuje u uzytkownika skill, ktory AUTOR usunal
@@ -105,6 +112,7 @@ param(
   [switch]$BezSieci,
   [string]$Przerwy = "5,15,30,60,120",
   [switch]$Wymus,
+  [switch]$Wbudowane,
   [switch]$Json
 )
 
@@ -453,20 +461,83 @@ function Wczytaj-Katalog {
   return ,$zrodla
 }
 
-# Gdzie wgrywamy. Claude Code zawsze; Codex tylko gdy jest na maszynie (katalog
-# ustawien Codeksa albo katalog Codeksa w Orce) - na komputerze bez Codeksa nie
-# zakladamy ~\.agents\skills z niczego.
+# Ktore narzedzia AI sa na komputerze (2026-10-06: uzytkownik moze miec dowolny zestaw).
+# Jest = rejestr instalacji mowi true (narzedzia.<id>, zapisuje go instalator) ALBO widac je
+# teraz: polecenie w PATH albo slad, ktory zaklada SAMO narzedzie - te same slady co lista
+# Narzedzia-AI w kierownik-cele.ps1 (katalog .claude nic nie dowodzi, zaklada go tez
+# MegaRuchacz). Rejestr sam nie wystarcza, bo to zdjecie z dnia instalacji - narzedzie
+# zainstalowane pozniej widac po sladach. Nieczytelny rejestr = UWAGA w wydruku, nie cisza.
+$NARZEDZIA_AI = @(
+  [pscustomobject]@{ Id = "claude";   Nazwa = "Claude Code"; Polecenie = "claude";   Slady = @(".claude.json", ".claude\history.jsonl") },
+  [pscustomobject]@{ Id = "codex";    Nazwa = "Codex";       Polecenie = "codex";    Slady = @(".codex", "AppData\Roaming\orca\codex-runtime-home") },
+  [pscustomobject]@{ Id = "opencode"; Nazwa = "OpenCode";    Polecenie = "opencode"; Slady = @(".config\opencode") }
+)
+function Narzedzia-Obecne {
+  $rej = $null
+  $umowa = Join-Path $PSScriptRoot "instalacja\stan.ps1"
+  if (Test-Path -LiteralPath $umowa) {
+    . $umowa
+    $r = Czytaj-Instalacje $Dom
+    if ($r.blad) { Pisz "UWAGA: rejestr instalacji ($(Sciezka-Instalacji $Dom)) nieczytelny: $($r.blad) - narzędzia AI rozpoznaję tylko po śladach na dysku." }
+    elseif ($r.narzedzia) { $rej = $r.narzedzia }
+  }
+  $wynik = [ordered]@{}
+  foreach ($n in $NARZEDZIA_AI) {
+    $dowody = @()
+    if ($rej -and ($rej.PSObject.Properties.Name -contains $n.Id) -and $rej.($n.Id) -eq $true) { $dowody += "rejestr instalacji" }
+    if (Get-Command $n.Polecenie -CommandType Application -ErrorAction SilentlyContinue | Select-Object -First 1) { $dowody += "polecenie $($n.Polecenie)" }
+    foreach ($s in $n.Slady) { if (Test-Path -LiteralPath (Join-Path $Dom $s)) { $dowody += $s } }
+    $wynik[$n.Id] = [pscustomobject]@{ Id = $n.Id; Nazwa = $n.Nazwa; Jest = ($dowody.Count -gt 0); Dowod = ($dowody -join ", ") }
+  }
+  return $wynik
+}
+
+# Gdzie wgrywamy - cel to KATALOG, a nie narzedzie (Id zostaja "claude" i "codex", bo pod
+# nimi stoi stan.json). OpenCode czyta oba katalogi i ~\.config\opencode\skills sam, a przy
+# dublu nazwy wygrywa u niego katalog czytany pozniej (naglowek), wiec nie dostaje wlasnej
+# kopii - obsluguje go katalog, ktory i tak jest:
+#   ~\.claude\skills  (cel "claude") - gdy jest Claude Code ALBO OpenCode bez Codeksa
+#   ~\.agents\skills  (cel "codex")  - gdy jest Codex (OpenCode czyta go wtedy razem z Codeksem)
+# Zestawy: tylko Claude / tylko Codex / tylko OpenCode / Claude+OpenCode / Codex+OpenCode -
+# kazdy skill w JEDNYM katalogu czytanym przez OpenCode. Claude+Codex(+OpenCode) - dwa katalogi,
+# bo kazde z nich czyta tylko swoj; OpenCode widzi wtedy dwie TE SAME wersje (oba cele sa pod
+# opieka i aktualizuja sie razem) i wpisuje do dziennika ostrzezenie - innej drogi nie ma.
+# Na komputerze bez Codeksa nie zakladamy ~\.agents\skills z niczego, bez zadnego narzedzia -
+# niczego. Nazwa celu = narzedzia, ktore go czytaja (do okna i dziennika).
+# TylkoOpenCode: cel jest tylko dla OpenCode - skill, ktory OpenCode juz widzi z innego swojego
+# katalogu (InneOpenCode), nie dostaje tu drugiej kopii (Instaluj-Skill).
 function Cele-Instalacji {
-  $c = @([pscustomobject]@{ Id = "claude"; Nazwa = "Claude Code"; Katalog = (Join-Path $Dom ".claude\skills"); Jest = $true })
-  $jestCodex = (Test-Path -LiteralPath (Join-Path $Dom ".codex")) -or
-               (Test-Path -LiteralPath (Join-Path $Dom "AppData\Roaming\orca\codex-runtime-home"))
-  $c += [pscustomobject]@{ Id = "codex"; Nazwa = "Codex"; Katalog = (Join-Path $Dom ".agents\skills"); Jest = $jestCodex }
-  return ,$c
+  $n = $script:Narzedzia
+  $jestClaude = $n["claude"].Jest; $jestCodex = $n["codex"].Jest; $jestOpen = $n["opencode"].Jest
+  $kClaude = Join-Path $Dom ".claude\skills"; $kAgents = Join-Path $Dom ".agents\skills"; $kOpen = Join-Path $Dom ".config\opencode\skills"
+  $dlaClaude = @(); if ($jestClaude) { $dlaClaude += "Claude Code" }; if ($jestOpen) { $dlaClaude += "OpenCode" }
+  $dlaAgents = @(); if ($jestCodex) { $dlaAgents += "Codex" }; if ($jestOpen) { $dlaAgents += "OpenCode" }
+  $celClaude = $jestClaude -or ($jestOpen -and -not $jestCodex)
+  $wynik = @(
+    [pscustomobject]@{ Id = "claude"; Nazwa = $(if ($dlaClaude.Count) { $dlaClaude -join " i " } else { "Claude Code" }); Katalog = $kClaude; Jest = $celClaude
+                       Dla = $dlaClaude; TylkoOpenCode = ($celClaude -and -not $jestClaude); InneOpenCode = @($kAgents, $kOpen) },
+    [pscustomobject]@{ Id = "codex"; Nazwa = $(if ($dlaAgents.Count) { $dlaAgents -join " i " } else { "Codex" }); Katalog = $kAgents; Jest = $jestCodex
+                       Dla = $dlaAgents; TylkoOpenCode = $false; InneOpenCode = @($kClaude, $kOpen) }
+  )
+  return ,$wynik
+}
+
+# Wszystkie katalogi skilli, ktore czyta ktores z obecnych narzedzi - do pokazania skilli spoza
+# bazy (takze z ~\.config\opencode\skills, do ktorego nic nie wgrywamy).
+function Katalogi-Skilli($cele) {
+  $n = $script:Narzedzia
+  $k = @()
+  foreach ($c in $cele) { if (@($c.Dla).Count -gt 0) { $k += [pscustomobject]@{ Id = $c.Id; Nazwa = $c.Nazwa; Katalog = $c.Katalog } } }
+  if ($n["opencode"].Jest) { $k += [pscustomobject]@{ Id = "opencode"; Nazwa = "OpenCode"; Katalog = (Join-Path $Dom ".config\opencode\skills") } }
+  return ,$k
 }
 
 # -------------------------------------------------------------------- stan
 
-function Nowy-Stan { return @{ wersja = 1; przejeto = ""; sprawdzono = ""; zrodla = @{}; skille = @{} } }
+# wbudowane: $null = skilli wbudowanych nikt jeszcze nie wgrywal w calosci (stara instalacja -
+# codzienny przebieg niczego sam nie dogrywa); inaczej od kiedy i do ktorych celow wgrano je
+# wszystkie (Dograj-Wbudowane). Cel spoza listy = narzedzie, ktore pojawilo sie pozniej.
+function Nowy-Stan { return @{ wersja = 1; przejeto = ""; sprawdzono = ""; zrodla = @{}; skille = @{}; wbudowane = $null } }
 
 function Wczytaj-Stan {
   if (-not (Test-Path -LiteralPath $PlikStanu)) { return (Nowy-Stan) }
@@ -474,6 +545,7 @@ function Wczytaj-Stan {
   $j = $raw | ConvertFrom-Json
   $s = Nowy-Stan
   $s.przejeto = "$($j.przejeto)"; $s.sprawdzono = "$($j.sprawdzono)"
+  if ($j.wbudowane) { $s.wbudowane = @{ od = "$($j.wbudowane.od)"; cele = @(@($j.wbudowane.cele) | Where-Object { $_ } | ForEach-Object { "$_" }) } }
   foreach ($p in @($j.zrodla.PSObject.Properties)) { $s.zrodla[$p.Name] = Na-Slownik $p.Value }
   foreach ($p in @($j.skille.PSObject.Properties)) {
     $sk = Na-Slownik $p.Value
@@ -1335,7 +1407,9 @@ function Tylko-Wbudowane($stan, $wybrane) {
   return ,$wbud
 }
 
-function Instaluj-Skill($stan, $sk, $cele, $ctx, [bool]$wymus) {
+# $zAktualizacja = $false (wgrywanie wbudowanych): tylko tam, gdzie skilla brakuje - to, co juz
+# jest, zostaje, jak bylo (podmiany robi codzienny przebieg wedlug swoich zasad).
+function Instaluj-Skill($stan, $sk, $cele, $ctx, [bool]$wymus, [bool]$zAktualizacja = $true) {
   $x = Stan-Skilla $stan $sk
   $k = $ctx[$sk.Zrodlo]
   if ($sk.Usuniety) { Pisz "  $($sk.Folder): autor usunął go ze swojego repo - nie ma czego instalować."; return 0 }
@@ -1349,6 +1423,15 @@ function Instaluj-Skill($stan, $sk, $cele, $ctx, [bool]$wymus) {
       Pisz "  $($sk.Folder) ($($c.Nazwa)): katalog już jest, choć go nie znam - nie ruszam."
       continue
     }
+    # Cel tylko dla OpenCode, a OpenCode juz widzi ten skill z innego swojego katalogu - druga
+    # kopia bylaby dublem nazwy (i nieaktualna kopia moglaby przykryc nasza).
+    if ($c.TylkoOpenCode) {
+      $widzi = @($c.InneOpenCode | Where-Object { Test-Path -LiteralPath (Join-Path $_ $sk.Folder) }) | Select-Object -First 1
+      if ($widzi) {
+        Pisz "  $($sk.Folder) ($($c.Nazwa)): OpenCode widzi go już z $widzi - drugiej kopii nie wgrywam."
+        continue
+      }
+    }
     $skad = Join-Path $k.Katalog ($sk.Sciezka -replace '/', '\')
     try { Wgraj-Wersje $skad (Join-Path $c.Katalog $sk.Folder) $x.najnowszy.pliki }
     catch { Blad $sk.Nazwa "$($c.Nazwa): instalacja się nie udała: $($_.Exception.Message)"; continue }
@@ -1358,8 +1441,40 @@ function Instaluj-Skill($stan, $sk, $cele, $ctx, [bool]$wymus) {
     $zrobione++
   }
   # Tam, gdzie juz byl w starszej wersji - "Zainstaluj" doprowadza go do najnowszej.
-  $zrobione += Aktualizuj-Skill $stan $sk $cele $ctx $true $wymus
+  if ($zAktualizacja) { $zrobione += Aktualizuj-Skill $stan $sk $cele $ctx $true $wymus }
   return $zrobione
+}
+
+# Skille wbudowane (zasada 9) w kazdym obecnym narzedziu AI, tylko tam, gdzie ich brakuje.
+# $wszedzie = instalacja modulu (-Tryb instaluj -Wbudowane): kazdy cel, ktory jest. Inaczej
+# (codzienny przebieg, "Sprawdz teraz") tylko cele, w ktorych jeszcze ich nie wgrywalismy -
+# czyli narzedzie, ktore pojawilo sie po instalacji. Skilla, ktory uzytkownik sam skasowal
+# w celu juz obsluzonym, nie wgrywamy z powrotem. Cel trafia na liste obsluzonych dopiero, gdy
+# przeszedl bez bledu - inaczej jutro proba jeszcze raz.
+function Dograj-Wbudowane($stan, $skille, $cele, $ctx, [bool]$wszedzie) {
+  if (-not $stan.wbudowane) { $stan.wbudowane = @{ od = (Teraz); cele = @() } }
+  $obsl = @($stan.wbudowane.cele)
+  $zrobione = 0
+  foreach ($c in @($cele | Where-Object { $_.Jest })) {
+    if (-not $wszedzie -and ($obsl -contains $c.Id)) { continue }
+    if (-not $wszedzie) { Pisz "Nowe miejsce dla skilli wbudowanych: $($c.Nazwa) ($($c.Katalog)) - wgrywam te, których tam brakuje." }
+    $bledyPrzed = $script:Bledy
+    foreach ($sk in $skille) { $zrobione += Instaluj-Skill $stan $sk @($c) $ctx $false $false }
+    if (($script:Bledy -eq $bledyPrzed) -and ($obsl -notcontains $c.Id)) {
+      $obsl += $c.Id
+      Dziennik "wbudowane" "" "$($c.Nazwa) ($($c.Katalog)): skille wbudowane wgrane tam, gdzie ich brakowalo"
+    }
+  }
+  $stan.wbudowane.cele = @($obsl)
+  return $zrobione
+}
+
+# Jedna linia o tym, gdzie trafiaja skille - BEZ polskich liter: modul instalacji czyta ja
+# z wydruku procesu potomnego (strona kodowa konsoli) i przekazuje dalej.
+function Linia-Gdzie($cele) {
+  $j = @($cele | Where-Object { $_.Jest })
+  if ($j.Count -eq 0) { return "Gdzie wgrywam: BRAK - nie widze Claude Code, Codeksa ani OpenCode; skille wbudowane dogra codzienne sprawdzenie, gdy ktores sie pojawi" }
+  return "Gdzie wgrywam: " + (@($j | ForEach-Object { "$($_.Nazwa) ($($_.Katalog))" }) -join "; ")
 }
 
 function Cofnij-Skill($stan, $sk, $cele) {
@@ -1777,9 +1892,11 @@ function Stan-Dla-Okna($stan, $zrodla, $cele) {
   # Spoza bazy (P49): rodzaj "wlasny" / "inne" z list w bazie, kazdy inny = "nieznane".
   # Opis autora z SKILL.md tylko dla nieznanych - zeby bylo wiadomo, co to w ogole jest.
   $spoza = @()
+  # Przegladamy kazdy katalog, ktory czyta ktores z obecnych narzedzi - takze ~\.agents\skills
+  # pod samym OpenCode i ~\.config\opencode\skills, do ktorych nic nie wgrywamy (Katalogi-Skilli).
   $licz["wlasne"] = 0; $licz["nieznane"] = 0
-  foreach ($c in $cele) {
-    if (-not $c.Jest -or -not (Test-Path -LiteralPath $c.Katalog)) { continue }
+  foreach ($c in (Katalogi-Skilli $cele)) {
+    if (-not (Test-Path -LiteralPath $c.Katalog)) { continue }
     foreach ($d in @(Get-ChildItem -LiteralPath $c.Katalog -Directory -Force | Where-Object { -not $_.Name.StartsWith('.') })) {
       if ($znane.ContainsKey($d.Name)) { continue }
       $w = @($script:Wlasne + $script:Inne | Where-Object { $_.Folder -eq $d.Name }) | Select-Object -First 1
@@ -1788,7 +1905,7 @@ function Stan-Dla-Okna($stan, $zrodla, $cele) {
       else { $opisAutora = Opis-Z-SkillMd (Join-Path $d.FullName "SKILL.md") }
       $dowiazanie = [bool]($d.Attributes -band [System.IO.FileAttributes]::ReparsePoint)
       $spoza += [pscustomobject]@{
-        folder = $d.Name; cel = $c.Id; rodzaj = $rodzaj; opis = $opis; skad = $skad; uwaga = $uwaga; adres = $adres
+        folder = $d.Name; cel = $c.Id; nazwaCelu = $c.Nazwa; rodzaj = $rodzaj; opis = $opis; skad = $skad; uwaga = $uwaga; adres = $adres
         opisAutora = $opisAutora; sciezka = $d.FullName; dowiazanie = $dowiazanie
       }
     }
@@ -1798,7 +1915,10 @@ function Stan-Dla-Okna($stan, $zrodla, $cele) {
   return [pscustomobject]@{
     wygenerowano = (Teraz); dom = $Dom; katalog = $Katalog; stanPlik = $PlikStanu; dziennik = $PlikDzien; kopie = $KatKopii
     przejeto = "$($stan.przejeto)"; sprawdzono = "$($stan.sprawdzono)"
-    cele = @($cele | ForEach-Object { [pscustomobject]@{ id = $_.Id; nazwa = $_.Nazwa; katalog = $_.Katalog; jest = $_.Jest } })
+    cele = @($cele | ForEach-Object { [pscustomobject]@{ id = $_.Id; nazwa = $_.Nazwa; katalog = $_.Katalog; jest = $_.Jest; dla = @($_.Dla); tylkoOpenCode = [bool]$_.TylkoOpenCode } })
+    narzedzia = @($script:Narzedzia.Values | ForEach-Object { [pscustomobject]@{ id = $_.Id; nazwa = $_.Nazwa; jest = $_.Jest; dowod = $_.Dowod } })
+    uwagi = @($script:Wydruk | Where-Object { $_.StartsWith("UWAGA") })
+    wbudowaneWszedzie = $(if ($stan.wbudowane) { [pscustomobject]@{ od = "$($stan.wbudowane.od)"; cele = @($stan.wbudowane.cele) } } else { $null })
     znacznik = [pscustomobject](Klucze-Z-Pliku $PlikZnacz)
     operacja = [pscustomobject](Klucze-Z-Pliku $PlikOper)
     liczniki = [pscustomobject]$licz
@@ -1822,7 +1942,13 @@ catch {
   else { Write-Output "BŁĄD: nie udało się wczytać bazy skilli: $($_.Exception.Message)" }
   exit 1
 }
+$script:Narzedzia = Narzedzia-Obecne
 $cele = Cele-Instalacji
+
+if ($Wbudowane -and ($Tryb -ne "instaluj" -or $Skill -or $ZeZrodla)) {
+  Write-Output "BŁĄD: -Wbudowane działa tylko z -Tryb instaluj, bez -Skill i -ZeZrodla"
+  exit 2
+}
 
 if ($Tryb -eq "stan") {
   try {
@@ -1835,6 +1961,9 @@ if ($Tryb -eq "stan") {
       Write-Output "Skilli w bazie: $($l.wBazie); aktualne: $($l.zgodne); starsze: $($l.starsze); zmienione ręcznie: $($l.zmienione); niezainstalowane: $($l.brak); usunięte przez autora: $($l.usuniete); z błędem: $($l.bledy)"
       Write-Output "Wbudowane w MegaRuchacza (aktualizują się same): źródeł $($l.wbudZrodel), skilli $($l.wbudSkilli), zainstalowanych $($l.wbudZainstalowane). Inne źródła z bazy (tylko ręcznie): źródeł $($l.inneZrodel), skilli $($l.inneSkilli), zainstalowanych $($l.inneZainstalowane), czeka nowsza wersja $($l.inneStarsze)."
       Write-Output "Ostatnie sprawdzenie: $($o.sprawdzono); przejęto pod opiekę: $($o.przejeto)"
+      Write-Output ("Narzędzia AI: " + (@($o.narzedzia | ForEach-Object { "$($_.nazwa) - $(if ($_.jest) { 'jest (' + $_.dowod + ')' } else { 'nie ma' })" }) -join "; "))
+      Write-Output (Linia-Gdzie $cele)
+      foreach ($u in @($o.uwagi)) { Write-Output $u }
       foreach ($z in $o.zrodla) {
         Write-Output ""
         Write-Output "== $($z.nazwa) [$($z.id)] $(if ($z.wbudowane) { '[wbudowane]' } else { '[inne - aktualizacja ręczna]' }) $($z.adres) $(if ($z.blad) { 'BŁĄD: ' + $z.blad })"
@@ -1861,8 +1990,8 @@ if ($Tryb -eq "stan") {
   }
 }
 
-if ((@("instaluj", "cofnij", "usun", "spakuj") -contains $Tryb) -and -not $Skill -and -not ($Tryb -eq "instaluj" -and $ZeZrodla)) {
-  Write-Output "BŁĄD: tryb $Tryb wymaga -Skill <nazwa>$(if ($Tryb -eq 'instaluj') { ' albo -ZeZrodla <id>' })$(if ($Tryb -eq 'spakuj') { ' albo -Skill * (wszystkie własne)' })"
+if ((@("instaluj", "cofnij", "usun", "spakuj") -contains $Tryb) -and -not $Skill -and -not ($Tryb -eq "instaluj" -and ($ZeZrodla -or $Wbudowane))) {
+  Write-Output "BŁĄD: tryb $Tryb wymaga -Skill <nazwa>$(if ($Tryb -eq 'instaluj') { ', -ZeZrodla <id> albo -Wbudowane' })$(if ($Tryb -eq 'spakuj') { ' albo -Skill * (wszystkie własne)' })"
   exit 2
 }
 
@@ -1873,6 +2002,7 @@ foreach ($z in $(if ($Tryb -eq "spakuj") { @() } else { $zrodla })) {
   foreach ($sk in $z.Skille) {
     if ($Skill -and ($sk.Nazwa -ne $Skill) -and ($sk.Folder -ne $Skill)) { continue }
     if ($ZeZrodla -and ($z.Id -ne $ZeZrodla)) { continue }
+    if ($Wbudowane -and -not $z.Wbudowane) { continue }
     $wybrane += $sk
   }
 }
@@ -1928,13 +2058,20 @@ try {
   switch ($Tryb) {
     "wykryj" { }
     "instaluj" {
-      foreach ($sk in $wybrane) { $zmian += Instaluj-Skill $stan $sk $cele $ctx ([bool]$Wymus); Zapisz-Stan $stan }
+      if ($Wbudowane) {
+        Pisz (Linia-Gdzie $cele)
+        $zmian += Dograj-Wbudowane $stan $wybrane $cele $ctx $true
+      } else {
+        foreach ($sk in $wybrane) { $zmian += Instaluj-Skill $stan $sk $cele $ctx ([bool]$Wymus); Zapisz-Stan $stan }
+      }
     }
     "aktualizuj" {
       $jawnie = [bool]($Skill -or $ZeZrodla)
       # bez -Skill/-ZeZrodla ("Sprawdz teraz") tylko wbudowane - inne wylacznie jawnie (zasada 9)
       $doAkt = $(if ($jawnie) { $wybrane } else { Tylko-Wbudowane $stan $wybrane })
       foreach ($sk in $doAkt) { $zmian += Aktualizuj-Skill $stan $sk $cele $ctx $jawnie ([bool]$Wymus); Zapisz-Stan $stan }
+      # narzedzie AI, ktore pojawilo sie po instalacji, dostaje wbudowane (tylko po instalacji modulu)
+      if (-not $jawnie -and $stan.wbudowane) { $zmian += Dograj-Wbudowane $stan @($wybrane | Where-Object { $_.Wbudowane }) $cele $ctx $false }
     }
     "cofnij" {
       foreach ($sk in $wybrane) { $zmian += Cofnij-Skill $stan $sk $cele; Zapisz-Stan $stan }
@@ -1950,6 +2087,7 @@ try {
       } else {
         # sam aktualizuje wylacznie wbudowane w MegaRuchacza (zasada 9)
         foreach ($sk in (Tylko-Wbudowane $stan $wybrane)) { $zmian += Aktualizuj-Skill $stan $sk $cele $ctx $false $false; Zapisz-Stan $stan }
+        if ($stan.wbudowane) { $zmian += Dograj-Wbudowane $stan @($wybrane | Where-Object { $_.Wbudowane }) $cele $ctx $false }
       }
     }
   }

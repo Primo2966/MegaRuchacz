@@ -644,6 +644,7 @@ function Scenariusz-Skille {
   $r = Modul "skille" "Instaluj" $dom3 @("-KatalogSkilli", $kat) @{ PATH = "$Bin;$KatUv;$Systemowe" }
   Sprawdz "skille: brak gita = odmowa, brakuje git" (($r.Kod -eq 1) -and (@($r.W.brakuje) -contains "git") -and -not (Rejestr $dom3)) $r.Tekst
   Scenariusz-Skille-Wbudowane
+  Scenariusz-Skille-Cele
 }
 
 # Zrodlo skilli do testu: repo git z katalogami skills/<nazwa>/SKILL.md (tresc "<nazwa> <wersja>").
@@ -709,6 +710,99 @@ function Scenariusz-Skille-Wbudowane {
   Sprawdz "skille wbudowane: PROBA NEGATYWNA - aktualizuj bez wskazania (Sprawdz teraz) tez nie rusza niewbudowanego" (($r.Kod -eq 0) -and ([Convert]::ToBase64String([System.IO.File]::ReadAllBytes($plikI)) -eq [Convert]::ToBase64String($przedI))) $r.Tekst
   $r = Uruchom $silnik (@("-Tryb", "aktualizuj", "-ZeZrodla", "inne") + $wsp) $srod
   Sprawdz "skille wbudowane: reczne aktualizuj -ZeZrodla inne aktualizuje niewbudowany (obcy-skill v2)" (($r.Kod -eq 0) -and ([System.IO.File]::ReadAllText($plikI) -match "obcy-skill v2")) $r.Tekst
+}
+
+# Skille wbudowane w kazdym obecnym narzedziu AI (2026-10-06). Narzedzia rozpoznaje skille.ps1 po
+# sladach w domu (.claude.json, .codex, .config\opencode) - w PATH testu nie ma tu atrap claude/codex.
+# Cele: Claude Code ~\.claude\skills, Codex ~\.agents\skills; OpenCode czyta oba i ~\.config\opencode\skills
+# sam, wiec nie dostaje wlasnej kopii (tylko OpenCode = ~\.claude\skills). Domy: tylko Codex (potem
+# dochodzi Claude Code - codzienny przebieg dogrywa), tylko OpenCode (z proba dubla), wszystkie trzy
+# (aktualizacja w obu celach, proba negatywna: niewbudowany w ~\.agents\skills nietkniety, stan okna).
+function Scenariusz-Skille-Cele {
+  $srcW = Zrodlo-Testowe "zrodlo-cele-w" @("wbud-a", "wbud-d") "v1"
+  $srcI = Zrodlo-Testowe "zrodlo-cele-i" @("obcy-b") "v1"
+  $kat = Join-Path $T "katalog-cele.psd1"
+  $aW = "file:///" + $srcW.Replace('\', '/'); $aI = "file:///" + $srcI.Replace('\', '/')
+  [System.IO.File]::WriteAllText($kat, ("@{`r`n  Wersja = 1`r`n  Zrodla = @(`r`n" +
+    "    @{ Id = 'cw'; Nazwa = 'CW'; Wbudowane = `$true; Adres = '$aW'; Galaz = 'main'; Sciezka = 'skills'; Opis = 'wbudowane'; Skille = @( @{ Nazwa = 'wbud-a'; Opis = 'a' }, @{ Nazwa = 'wbud-d'; Opis = 'd' } ) }`r`n" +
+    "    @{ Id = 'ci'; Nazwa = 'CI'; Adres = '$aI'; Galaz = 'main'; Sciezka = 'skills'; Opis = 'spoza'; Skille = @( @{ Nazwa = 'obcy-b'; Opis = 'b' } ) }`r`n" +
+    "  )`r`n}`r`n"), (New-Object System.Text.UTF8Encoding($true)))
+  # PATH bez atrap claude/codex (w $Bin), z node (hooki) i z usr\bin gita (klon file:// z filtrem)
+  $binBezAi = Join-Path $T "bin-bez-ai"
+  if (-not (Test-Path $binBezAi)) {
+    New-Item -ItemType Directory -Force -Path $binBezAi | Out-Null
+    if (Test-Path (Join-Path $Bin "node.exe")) { New-Item -ItemType HardLink -Path (Join-Path $binBezAi "node.exe") -Target (Join-Path $Bin "node.exe") | Out-Null }
+  }
+  $usr = Join-Path (Split-Path -Parent (Split-Path -Parent $KatGit)) "usr\bin"
+  $sciezka = "$binBezAi;$KatUv;$KatGit;$(if (Test-Path $usr) { $usr + ';' })$Systemowe"
+  $silnik = Join-Path $Repo "narzedzia\skille.ps1"
+  $katOC = @(".claude\skills", ".agents\skills", ".config\opencode\skills")
+  $jest = { param($d, $w) Test-Path -LiteralPath (Join-Path $d $w) }
+  # ile katalogow czytanych przez OpenCode ma skill o tej nazwie (1 = bez dubla)
+  $ileOC = { param($d, $n) @($katOC | Where-Object { Test-Path -LiteralPath (Join-Path $d "$_\$n") }).Count }
+
+  # --- tylko Codex
+  $domX = Dom "skille-codex"
+  New-Item -ItemType Directory -Force -Path (Join-Path $domX ".codex") | Out-Null
+  $r = Modul "skille" "Instaluj" $domX @("-KatalogSkilli", $kat) @{ PATH = $sciezka }
+  $ok = ($r.Kod -eq 0) -and (& $jest $domX ".agents\skills\wbud-a\SKILL.md") -and (& $jest $domX ".agents\skills\wbud-d\SKILL.md") -and
+        -not (& $jest $domX ".claude\skills\wbud-a") -and -not (& $jest $domX ".config\opencode") -and -not (& $jest $domX ".agents\skills\obcy-b") -and
+        (($r.Kroki -join " | ") -match "Gdzie wgrywam: Codex \(")
+  Sprawdz "skille cele (tylko Codex): Instaluj wgrywa wbudowane do ~\.agents\skills, nie do ~\.claude\skills; niewbudowanego nie wgrywa" $ok $r.Tekst
+  Remove-Item -LiteralPath (Join-Path $domX ".agents\skills\wbud-d") -Recurse -Force   # uzytkownik sam skasowal
+  [System.IO.File]::WriteAllText((Join-Path $domX ".claude.json"), "{}")             # pojawia sie Claude Code
+  $r = Uruchom $silnik @("-Tryb", "codziennie", "-Wymus", "-KatalogDomowy", $domX, "-Katalog", $kat, "-Przerwy", "0") (Srodowisko $domX @{ PATH = $sciezka })
+  Sprawdz "skille cele: codzienny przebieg dogrywa wbudowane dla narzedzia, ktore pojawilo sie pozniej (Claude Code)" (($r.Kod -eq 0) -and (& $jest $domX ".claude\skills\wbud-a\SKILL.md") -and (& $jest $domX ".claude\skills\wbud-d\SKILL.md")) $r.Tekst
+  Sprawdz "skille cele: PROBA NEGATYWNA - skilla skasowanego przez uzytkownika w obsluzonym juz celu (Codex) nie wgrywa z powrotem" (-not (& $jest $domX ".agents\skills\wbud-d")) $r.Tekst
+
+  # --- tylko OpenCode; wbud-d lezy juz w ~\.agents\skills (OpenCode go widzi)
+  $domO = Dom "skille-opencode"
+  New-Item -ItemType Directory -Force -Path (Join-Path $domO ".config\opencode") | Out-Null
+  New-Item -ItemType Directory -Force -Path (Join-Path $domO ".agents\skills") | Out-Null
+  Copy-Item -LiteralPath (Join-Path $srcW "skills\wbud-d") -Destination (Join-Path $domO ".agents\skills\wbud-d") -Recurse -Force
+  $r = Modul "skille" "Instaluj" $domO @("-KatalogSkilli", $kat) @{ PATH = $sciezka }
+  $log = Join-Path $domO ".claude\mr\skille\operacja.log"
+  $wydruk = $(if (Test-Path $log) { [System.IO.File]::ReadAllText($log) } else { "" })
+  $ok = ($r.Kod -eq 0) -and (& $jest $domO ".claude\skills\wbud-a\SKILL.md") -and ((& $ileOC $domO "wbud-a") -eq 1) -and
+        -not (& $jest $domO ".config\opencode\skills") -and (($r.Kroki -join " | ") -match "Gdzie wgrywam: OpenCode \(")
+  Sprawdz "skille cele (tylko OpenCode): wbudowane w ~\.claude\skills (OpenCode czyta go sam), bez wlasnej kopii w ~\.config\opencode\skills" $ok ($r.Tekst + " | " + $wydruk)
+  Sprawdz "skille cele (tylko OpenCode): PROBA NEGATYWNA dubla - wbud-d, ktory OpenCode widzi z ~\.agents\skills, nie dostaje drugiej kopii" ((-not (& $jest $domO ".claude\skills\wbud-d")) -and ((& $ileOC $domO "wbud-d") -eq 1) -and ($wydruk -match "drugiej kopii nie wgrywam")) $wydruk
+
+  # --- wszystkie trzy; w ~\.agents\skills juz sa: niewbudowany obcy-b v1 i cudzy skill, w ~\.config\opencode\skills - skill OpenCode
+  $domW = Dom "skille-wszystkie"
+  [System.IO.File]::WriteAllText((Join-Path $domW ".claude.json"), "{}")
+  foreach ($k in @(".codex", ".agents\skills\cudzy-x", ".config\opencode\skills\oc-x")) { New-Item -ItemType Directory -Force -Path (Join-Path $domW $k) | Out-Null }
+  [System.IO.File]::WriteAllText((Join-Path $domW ".agents\skills\cudzy-x\SKILL.md"), "---`nname: cudzy-x`ndescription: cudzy skill`n---`n")
+  [System.IO.File]::WriteAllText((Join-Path $domW ".config\opencode\skills\oc-x\SKILL.md"), "---`nname: oc-x`ndescription: skill OpenCode`n---`n")
+  Copy-Item -LiteralPath (Join-Path $srcI "skills\obcy-b") -Destination (Join-Path $domW ".agents\skills\obcy-b") -Recurse -Force
+  $r = Modul "skille" "Instaluj" $domW @("-KatalogSkilli", $kat) @{ PATH = $sciezka }
+  $ok = ($r.Kod -eq 0) -and (& $jest $domW ".claude\skills\wbud-a\SKILL.md") -and (& $jest $domW ".agents\skills\wbud-a\SKILL.md") -and (& $jest $domW ".agents\skills\wbud-d\SKILL.md") -and
+        -not (& $jest $domW ".config\opencode\skills\wbud-a") -and -not (& $jest $domW ".claude\skills\obcy-b") -and
+        (($r.Kroki -join " | ") -match "Gdzie wgrywam: Claude Code i OpenCode \(.*\); Codex i OpenCode \(")
+  Sprawdz "skille cele (wszystkie trzy): wbudowane w ~\.claude\skills i ~\.agents\skills, nic w ~\.config\opencode\skills; niewbudowanego nie doklada" $ok $r.Tekst
+  [void](Zrodlo-Testowe "zrodlo-cele-w" @("wbud-a", "wbud-d") "v2")
+  [void](Zrodlo-Testowe "zrodlo-cele-i" @("obcy-b") "v2")
+  $plikB = Join-Path $domW ".agents\skills\obcy-b\SKILL.md"
+  $przedB = [Convert]::ToBase64String([System.IO.File]::ReadAllBytes($plikB))
+  $r = Uruchom $silnik @("-Tryb", "codziennie", "-Wymus", "-KatalogDomowy", $domW, "-Katalog", $kat, "-Przerwy", "0") (Srodowisko $domW @{ PATH = $sciezka })
+  $v2 = { param($w) $p = Join-Path $domW $w; (Test-Path $p) -and ([System.IO.File]::ReadAllText($p) -match "wbud-a v2") }
+  Sprawdz "skille cele (wszystkie trzy): codziennie aktualizuje wbudowany w obu celach (wbud-a v2 w ~\.claude\skills i ~\.agents\skills)" (($r.Kod -eq 0) -and (& $v2 ".claude\skills\wbud-a\SKILL.md") -and (& $v2 ".agents\skills\wbud-a\SKILL.md")) $r.Tekst
+  Sprawdz "skille cele: PROBA NEGATYWNA - niewbudowany obcy-b w ~\.agents\skills (starszy) nietkniety co do bajtu przez codzienny przebieg" ($przedB -eq [Convert]::ToBase64String([System.IO.File]::ReadAllBytes($plikB))) ([System.IO.File]::ReadAllText($plikB) + " | " + $r.Tekst)
+  $r = Uruchom $silnik @("-Tryb", "stan", "-Json", "-KatalogDomowy", $domW, "-Katalog", $kat) (Srodowisko $domW @{ PATH = $sciezka })
+  $j = $null; try { $j = ($r.Tekst -split "`nSTDERR:")[0].Trim() | ConvertFrom-Json } catch { $j = $null }
+  $ok = $false
+  if ($j) {
+    $cc = @($j.cele | Where-Object { $_.id -eq "claude" }); $cx = @($j.cele | Where-Object { $_.id -eq "codex" })
+    $obcy = @(@($j.zrodla | Where-Object { $_.id -eq "ci" }).skille | Where-Object { $_.nazwa -eq "obcy-b" })
+    $obcyX = @(if ($obcy.Count) { $obcy[0].cele | Where-Object { $_.id -eq "codex" } })   # @(): pscustomobject w PS 5.1 nie ma .Count
+    $sx = @($j.spozaBazy | Where-Object { $_.folder -eq "cudzy-x" }); $so = @($j.spozaBazy | Where-Object { $_.folder -eq "oc-x" })
+    $ok = ($cc.Count -eq 1) -and $cc[0].jest -and ($cc[0].nazwa -eq "Claude Code i OpenCode") -and ($cx.Count -eq 1) -and $cx[0].jest -and ($cx[0].nazwa -eq "Codex i OpenCode") -and
+          ($obcyX.Count -eq 1) -and ($obcyX[0].stan -eq "starszy") -and
+          ($sx.Count -eq 1) -and ($sx[0].rodzaj -eq "nieznane") -and ($sx[0].cel -eq "codex") -and
+          ($so.Count -eq 1) -and ($so[0].rodzaj -eq "nieznane") -and ($so[0].cel -eq "opencode") -and ($so[0].nazwaCelu -eq "OpenCode") -and
+          (@($j.narzedzia | Where-Object { $_.jest }).Count -eq 3)
+  }
+  Sprawdz "skille cele: stan dla okna - oba cele z nazwami czytajacych narzedzi, obcy-b w celu Codeksa 'starszy', spoza bazy z ~\.agents\skills i ~\.config\opencode\skills pokazane jako nieznane" $ok $r.Tekst
 }
 
 function Scenariusz-Kopia {
