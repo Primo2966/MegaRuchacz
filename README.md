@@ -518,7 +518,7 @@ hook `SessionStart`, którego opencode nie ma.
 
 | Co | Na maszynie z samym opencode |
 |---|---|
-| zasady globalne | **działa** — opencode czyta `~/.claude/CLAUDE.md` (zgodność z Claude Code) |
+| zasady globalne | **działa** — opencode czyta własny `~/.config/opencode/AGENTS.md`, który zakłada MegaRuchacz |
 | aktualizacja narzędzia | **dzieje się sama** — wtyczka woła strażnika w tle przy każdym starcie opencode |
 | pilnowanie, czy zasady nie zniknęły | **też działa** — ten sam strażnik wpisuje skasowany blok z powrotem |
 | `pamiec` (Lore) | **działa** — instalator rejestruje serwer MCP w `opencode.json`; indeks czyta jednak na razie tylko rozmowy Claude Code i Codeksa |
@@ -528,8 +528,18 @@ hook `SessionStart`, którego opencode nie ma.
 
 **Uwaga o zasadach globalnych.** opencode bierze zasady domowe z `~/.claude/CLAUDE.md`
 tylko dopóki nie ma `~/.config/opencode/AGENTS.md`. Gdy ten drugi plik powstanie,
-wygrywa — i `~/.claude/CLAUDE.md` przestaje być czytany. Instalator celowo go nie
-zakłada, żeby nie zgubić tego, co już masz w `CLAUDE.md`.
+wygrywa — i `~/.claude/CLAUDE.md` przestaje być czytany. Dlatego MegaRuchacz zakłada
+go od razu z treścią `CLAUDE.md` (bez bloku kierownika, który dostaje wersję dla
+opencode) — nic, co opencode dotąd widział, nie ginie. Od tej chwili to osobny plik,
+a nie kopia: ma własne bloki zasad i własną sekcję „Co wiem”, do której automat
+dopisuje te same fakty co do `CLAUDE.md`.
+
+**Jedna wiedza w każdym narzędziu.** Pusta sekcja „Co wiem” (same nagłówki) w pliku
+Claude Code, Codeksa albo opencode dostaje treść z pliku, w którym tej wiedzy jest
+najwięcej. Sekcji z wpisami MegaRuchacz nigdy nie nadpisuje — gdy w różnych plikach
+stoi co innego (np. ręczny dopis tylko w `CLAUDE.md`), mówi o tym przy starcie okna
+i czeka, aż wyrównasz je ręcznie. Zasiew, który nie zmieściłby się w limicie Codeksa
+(32 KiB), jest odmawiany z ostrzeżeniem w pierwszej linii.
 
 **Gdy `AGENTS.md` jest śledzony w gicie**, instalator go nie rusza (tak samo jak
 pod Codeksem). Pod Codeksem zasady ratuje wtedy hook `SessionStart`; pod opencode
@@ -596,8 +606,9 @@ To znany dług, nie przeoczenie.
 
 ### Gdzie co leży — jedna tabela
 
-„Plik instrukcji" to `~\.claude\CLAUDE.md` (Claude Code, opencode) i `~\.codex\AGENTS.md`
-(Codex), sekcja `## Co wiem` — poza blokiem instalatora. Automat pisze do każdego z nich, który jest na maszynie.
+„Plik instrukcji" to `~\.claude\CLAUDE.md` (Claude Code), `~\.codex\AGENTS.md` (Codex)
+i `~\.config\opencode\AGENTS.md` (opencode), sekcja `## Co wiem` — poza blokiem instalatora.
+Automat pisze do każdego z nich, który jest na maszynie; wiedza ma być w nich ta sama.
 
 | Gdzie | Co tam jest | Kto wpisuje | Kiedy trafia do AI | Wygasa? |
 |---|---|---|---|---|

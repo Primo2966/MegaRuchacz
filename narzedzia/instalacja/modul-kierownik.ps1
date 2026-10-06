@@ -3,8 +3,10 @@
 #
 # Co zaklada - wszystko przez narzedzia\instaluj-globalnie.ps1 (jeden kod dla instalacji
 # recznej i dla okna instalatora):
-#   - blok <!-- MegaRuchacz:kierownik --> w ~\.claude\CLAUDE.md (wariant Claude Code albo
-#     opencode/Codex) i w ~\.codex\AGENTS.md, kopie dla opencode
+#   - blok <!-- MegaRuchacz:kierownik --> w pliku instrukcji kazdego obecnego narzedzia AI (lista:
+#     narzedzia\kierownik-cele.ps1 Narzedzia-AI): ~\.claude\CLAUDE.md (wariant Claude Code albo
+#     opencode/Codex), ~\.codex\AGENTS.md i ~\.config\opencode\AGENTS.md (wariant opencode/Codex) -
+#     kazdy plik samodzielny, z wlasna sekcja "Co wiem" (do 0.27 opencode dostawal kopie CLAUDE.md)
 #   - role w ~\.claude\agents (piec, poznawane po znaczniku kierownik-template), w opencode i -
 #     gdy w rejestrze jest narzedzia.codex = true albo MegaRuchacz juz je tam zalozyl - w Codeksie
 #   - rejestr pracy: ~\.claude\megaruchacz-mr-log.js + hooki SubagentStart/Stop, ladunek

@@ -7,7 +7,8 @@
 #   ~/.config/opencode/AGENTS.md  OpenCode    - wariant opencode/Codex
 #
 # Kazdy plik jest SAMODZIELNY: bloki zasad (lore, wiedza, kierownik) i wlasna sekcja "## Co wiem",
-# do ktorej cykl wiedzy (lore\lore\verify.py INSTRUCTION_PATHS) dopisuje fakty. Do 0.27 plik
+# do ktorej cykl wiedzy (lore\lore\verify.py INSTRUCTION_PATHS) dopisuje fakty - ta sama wiedza
+# w kazdym pliku (pusta sekcja zasiewana z najbogatszej, rozjazd meldowany: Zrodlo-Co-Wiem). Do 0.27 plik
 # opencode byl kopia CLAUDE.md odswiezana przez straznika (pierwsza linia
 # <!-- MegaRuchacz:kopia-dla-opencode ...); taka kopie zamieniamy na samodzielny plik, zdejmujac
 # sama linie naglowka - tresc (z "Co wiem") zostaje (Tekst-Startowy).
@@ -171,6 +172,167 @@ function Z-Szkieletem-Co-Wiem([string]$stary) {
   return ($cialo + $nl + $nl + $szkielet.TrimEnd() + $nl)
 }
 
+# ------------------------------------------------------------ ta sama wiedza w kazdym CLI
+# "Co wiem" ma byc ta sama we wszystkich narzedziach AI na maszynie. Biurowa 06.10: AGENTS.md
+# Codeksa dostal pusty szkielet obok ~8000 znakow wiedzy w CLAUDE.md - Codex nie wiedzial nic.
+# Regula:
+#   - sekcja pusta (same naglowki, zero wpisow) - zasiewamy ja trescia sekcji z NAJBOGATSZEGO pliku
+#     z listy (Zrodlo-Co-Wiem, Zasiej-Co-Wiem); zasiew ponad limit narzedzia - odmowa (sam zasiew,
+#     reszta pliku idzie), powod w pierwszej linii;
+#   - sekcji z wpisami nie nadpisujemy nigdy. Rozne sekcje w roznych plikach (np. reczny dopis tylko
+#     do CLAUDE.md) - meldunek (Rozjazd-Co-Wiem), bez scalania: co jest czyje, rozstrzyga czlowiek.
+# Granice sekcji jak lore\lore\verify.py section_bounds: od "## Co wiem" do nastepnego "## " albo
+# znacznika MegaRuchacza.
+
+# @(indeks naglowka, indeks pierwszej linii za sekcja) albo $null, gdy sekcji nie ma.
+function Granice-Co-Wiem([string[]]$linie) {
+  $od = -1
+  for ($i = 0; $i -lt $linie.Count; $i++) { if ($linie[$i].Trim().StartsWith($NAGLOWEK_CO_WIEM)) { $od = $i; break } }
+  if ($od -lt 0) { return $null }
+  for ($j = $od + 1; $j -lt $linie.Count; $j++) {
+    $t = $linie[$j].Trim()
+    if ($t.StartsWith("## ") -or $t.StartsWith($ZNACZNIK_MEGARUCHACZA)) { return @($od, $j) }
+  }
+  return @($od, $linie.Count)
+}
+
+# Linie tresci sekcji (bez linii "## Co wiem"); $null, gdy sekcji nie ma. Wynik to JEDNA tablica
+# (przecinek): bierz go przypisaniem, nie w @() - inaczej tablica w tablicy (to samo w Wpisy-Co-Wiem).
+function Cialo-Co-Wiem([string]$tekst) {
+  $linie = @("$tekst" -split "`r?`n")
+  $g = Granice-Co-Wiem $linie
+  if ($null -eq $g) { return $null }
+  if ($g[1] - $g[0] -le 1) { return ,@() }
+  return ,@($linie[($g[0] + 1)..($g[1] - 1)])
+}
+
+# Wpisy sekcji: niepuste linie, ktore nie sa naglowkami podsekcji.
+function Wpisy-Co-Wiem([string]$tekst) {
+  $c = Cialo-Co-Wiem $tekst
+  if ($null -eq $c) { return ,@() }
+  return ,@($c | ForEach-Object { $_.Trim() } | Where-Object { $_ -and -not $_.StartsWith("#") })
+}
+
+# Sekcja jest, a nie ma w niej ani jednego wpisu (same naglowki podsekcji i puste linie).
+function Pusta-Co-Wiem([string]$tekst) {
+  if (-not (Ma-Co-Wiem $tekst)) { return $false }
+  $wp = Wpisy-Co-Wiem $tekst
+  return ($wp.Count -eq 0)
+}
+
+# Sekcja "Co wiem" kazdego pliku z listy, ktory lezy na dysku: Id, Nazwa, Plik (~/...), Sciezka,
+# Cialo ($null = sekcji nie ma), Wpisy, Znakow (suma dlugosci wpisow), Blad (plik nieczytelny albo
+# z bajtami 0x00 - nie jest ani zrodlem, ani wzorem; Rozjazd-Co-Wiem go melduje).
+function Sekcje-Co-Wiem([string]$dom) {
+  $wynik = @()
+  foreach ($n in (Narzedzia-AI)) {
+    $p = Join-Path $dom $n.Plik
+    if (-not (Test-Path -LiteralPath $p -PathType Leaf)) { continue }
+    $w = [pscustomobject]@{ Id = $n.Id; Nazwa = $n.Nazwa; Plik = "~/" + ($n.Plik -replace '\\', '/'); Sciezka = $p
+                            Cialo = $null; Wpisy = @(); Znakow = 0; Blad = $null }
+    try {
+      $t = Czytaj-Utf8 $p
+      if ($t.IndexOf([char]0) -ge 0) { throw "ma bajty 0x00 (uszkodzony zapis)" }
+      $c = Cialo-Co-Wiem $t
+      if ($null -ne $c) {
+        $w.Cialo = @($c)
+        $w.Wpisy = Wpisy-Co-Wiem $t
+        foreach ($x in $w.Wpisy) { $w.Znakow += $x.Length }
+      }
+    } catch { $w.Blad = $_.Exception.Message }
+    $wynik += $w
+  }
+  return ,$wynik
+}
+
+# Najbogatsza sekcja z wpisami (najwiecej znakow we wpisach; remis - kolejnosc listy) - wpis
+# z Sekcje-Co-Wiem albo $null, gdy nigdzie nie ma sekcji z wpisami.
+function Zrodlo-Co-Wiem([string]$dom) {
+  $naj = $null
+  foreach ($s in (Sekcje-Co-Wiem $dom)) {
+    if ($s.Blad -or $s.Wpisy.Count -eq 0) { continue }
+    if (($null -eq $naj) -or ($s.Znakow -gt $naj.Znakow)) { $naj = $s }
+  }
+  return $naj
+}
+
+# Tekst z pusta sekcja "Co wiem" zastapiona trescia sekcji $zrodlo (wpis z Zrodlo-Co-Wiem); $null,
+# gdy nie ma czego siac (sekcji nie ma, ma wpisy, brak zrodla). Linia "## Co wiem" i reszta pliku
+# zostaja co do bajtu; konce linii jak w pliku docelowym.
+function Z-Zasiewem-Co-Wiem([string]$stary, $zrodlo) {
+  if (($null -eq $zrodlo) -or ($null -eq $zrodlo.Cialo) -or -not (Pusta-Co-Wiem $stary)) { return $null }
+  $nl = if ($stary.Contains("`r`n")) { "`r`n" } elseif ($stary.Contains("`n")) { "`n" } else { "`r`n" }
+  $linie = @($stary -split "`r?`n")
+  $g = Granice-Co-Wiem $linie
+  $cialo = @($zrodlo.Cialo)
+  $a = 0; $b = $cialo.Count - 1
+  while (($a -le $b) -and -not $cialo[$a].Trim()) { $a++ }
+  while (($b -ge $a) -and -not $cialo[$b].Trim()) { $b-- }
+  if ($a -gt $b) { return $null }
+  $nowe = @($linie | Select-Object -First ($g[0] + 1)) + @("") + @($cialo[$a..$b]) + @("")
+  $po = @($linie | Select-Object -Skip $g[1])
+  # sekcja na koncu pliku konczy go jednym koncem linii; inaczej pusta linia przed tym, co za nia
+  if ($po.Count -gt 0) { $nowe += $po }
+  return ($nowe -join $nl)
+}
+
+# Zasiew na gotowym tekscie pliku narzedzia $n, z sufitem ($stary = plik na dysku, do Ponad-Limit):
+#   .Tekst   tekst z zasiewem albo $tekst bez zmian
+#   .Zasiew  opis zasiewu do meldunku albo $null
+#   .Odmowa  powod, dla ktorego zasiewu NIE ma - przekroczylby limit narzedzia - albo $null.
+#            Tylko sam zasiew odpada: reszta pliku (bloki zasad) miesci sie i idzie.
+function Zasiej-Co-Wiem($n, [string]$stary, [string]$tekst, $zrodlo) {
+  $w = [pscustomobject]@{ Tekst = $tekst; Zasiew = $null; Odmowa = $null }
+  if (($null -eq $zrodlo) -or -not $tekst) { return $w }
+  $z = Z-Zasiewem-Co-Wiem $tekst $zrodlo
+  if ($null -eq $z) { return $w }
+  if (-not (Ponad-Limit $n $stary $z)) {
+    $w.Tekst = $z
+    $w.Zasiew = "pusta sekcja 'Co wiem' zasiana trescia z $($zrodlo.Plik) ($($zrodlo.Wpisy.Count) wpisow)"
+  } elseif (-not (Ponad-Limit $n $stary $tekst)) {
+    # gdy i bez zasiewu jest za duzo, caly zapis odmawia Ponad-Limit - drugi powod bylby szumem
+    $ile = (New-Object System.Text.UTF8Encoding($false)).GetByteCount($z)
+    $w.Odmowa = ("zasiew sekcji 'Co wiem' trescia z $($zrodlo.Plik) dalby $($n.Plik) $ile B, a $($n.Nazwa) czyta najwyzej " +
+                 "$($n.Limit) B - NIE zasialem, sekcja zostaje pusta (reszta pliku zapisana). Skroc 'Co wiem' w " +
+                 "$($zrodlo.Plik) (np. zestawienia do wiedza\) i uruchom ponownie.")
+  }
+  return $w
+}
+
+# Meldunek, gdy sekcje z wpisami w roznych plikach sie roznia, albo $null (jedna wiedza wszedzie).
+# Linie porownujemy jako zbiory (wpisy i naglowki podsekcji; kolejnosc i puste linie sie nie licza)
+# z najbogatsza sekcja. Pustych i brakujacych sekcji nie porownujemy - te zaklada i zasiewa
+# wpisz-zasady.ps1. Plik nieczytelny tez jest w meldunku: cisza znaczylaby "zgodne".
+function Rozjazd-Co-Wiem([string]$dom) {
+  $sekcje = Sekcje-Co-Wiem $dom
+  $czesci = @($sekcje | Where-Object { $_.Blad } | ForEach-Object { "$($_.Plik) nie porownalem ($($_.Blad))" })
+  $pelne = @($sekcje | Where-Object { (-not $_.Blad) -and $_.Wpisy.Count -gt 0 })
+  if ($pelne.Count -ge 2) {
+    $wzor = $pelne[0]
+    foreach ($s in $pelne) { if ($s.Znakow -gt $wzor.Znakow) { $wzor = $s } }
+    $lw = @($wzor.Cialo | ForEach-Object { $_.Trim() } | Where-Object { $_ })
+    foreach ($s in $pelne) {
+      if ($s.Sciezka -eq $wzor.Sciezka) { continue }
+      $ls = @($s.Cialo | ForEach-Object { $_.Trim() } | Where-Object { $_ })
+      $brak = @($lw | Where-Object { $ls -cnotcontains $_ })
+      $nadmiar = @($ls | Where-Object { $lw -cnotcontains $_ })
+      if (($brak.Count + $nadmiar.Count) -eq 0) { continue }
+      $o = @()
+      if ($brak.Count -gt 0) { $o += "brakuje $($brak.Count) linii z $($wzor.Plik) (np. '$(Skrot-Linii $brak[0])')" }
+      if ($nadmiar.Count -gt 0) { $o += "jest $($nadmiar.Count) linii, ktorych w $($wzor.Plik) nie ma (np. '$(Skrot-Linii $nadmiar[0])')" }
+      $czesci += "w $($s.Plik) " + ($o -join ", a ")
+    }
+  }
+  if ($czesci.Count -eq 0) { return $null }
+  return ("sekcja 'Co wiem' nie jest ta sama we wszystkich narzedziach AI: " + ($czesci -join "; ") +
+          ". Nie scalam sam - przenies brakujace wpisy recznie, tak zeby kazde CLI wiedzialo to samo.")
+}
+
+function Skrot-Linii([string]$l) {
+  if ($l.Length -le 60) { return $l }
+  return $l.Substring(0, 57) + "..."
+}
+
 # ------------------------------------------------------------ sufit pliku
 # Sufit nie ucina - sufit krzyczy: zapis, po ktorym plik urosnie ponad to, co narzedzie wczyta,
 # jest odmawiany (koniec pliku - nasze bloki - i tak by przepadl). Zwraca powod odmowy albo $null.
@@ -196,6 +358,23 @@ function Zloz-Plik-Narzedzia($start, $tresci, [string[]]$zdejmij = @(), [bool]$s
     if ($null -ne $s) { $t = $s }
   }
   return $t
+}
+
+# Plik narzedzia do zapisu - wspolne dla wpisz-zasady.ps1 i straznika (ten sam wynik: straznik nie
+# widzi roznicy tam, gdzie wpisz-zasady nic by nie zrobil): Zloz-Plik-Narzedzia, z $szkielet zasiew
+# pustej sekcji "Co wiem" z $zrodlo (Zrodlo-Co-Wiem) i sufit. $stary = plik na dysku.
+#   .Nowy  tekst do zapisu     .Zasiew  opis zasiewu albo $null
+#   .OdmowaZasiewu  powod odmowy samego zasiewu (Zasiej-Co-Wiem) albo $null
+#   .Limit          powod odmowy CALEGO zapisu (Ponad-Limit) albo $null
+function Plan-Pliku-Narzedzia($n, $start, [string]$stary, $tresci, [string[]]$zdejmij = @(), [bool]$szkielet = $false, $zrodlo = $null) {
+  $t = Zloz-Plik-Narzedzia $start $tresci $zdejmij $szkielet
+  $w = [pscustomobject]@{ Nowy = $t; Zasiew = $null; OdmowaZasiewu = $null; Limit = $null }
+  if ($szkielet) {
+    $z = Zasiej-Co-Wiem $n $stary $t $zrodlo
+    $w.Nowy = $z.Tekst; $w.Zasiew = $z.Zasiew; $w.OdmowaZasiewu = $z.Odmowa
+  }
+  $w.Limit = Ponad-Limit $n $stary $w.Nowy
+  return $w
 }
 
 # ------------------------------------------------------------ blok zasad kierownika

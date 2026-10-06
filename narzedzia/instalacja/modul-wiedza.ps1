@@ -11,7 +11,9 @@
 #   - szkielet sekcji "## Co wiem" (O uzytkowniku / O firmie / Nad czym pracuje / Jak pracuje /
 #     Biezace / Dane referencyjne - puste) w pliku KAZDEGO obecnego narzedzia, ktory jej nie ma; istniejacej
 #     nie rusza. Bez niej weryfikacja niczego do tego pliku nie zapisze (verify.py pisze do kazdego pliku
-#     z ta sekcja). Plik, ktorego narzedzie jeszcze nie ma, zaczyna sie od Tekst-Startowy (OpenCode - od
+#     z ta sekcja). Sekcja pusta (zakladana albo zastana) dostaje tresc najbogatszej sekcji z plikow
+#     narzedzi (kierownik-cele.ps1 Zrodlo-Co-Wiem) - ta sama wiedza w kazdym CLI; sekcji z wpisami nie
+#     nadpisuje, rozne sekcje = UWAGA (bez scalania). Plik, ktorego narzedzie jeszcze nie ma, zaczyna sie od Tekst-Startowy (OpenCode - od
 #     tresci CLAUDE.md, ktory czytal dotad). Zapis ponad limit narzedzia (Codex 32 KiB) = odmowa z UWAGA.
 #     Zadnego narzedzia AI = UWAGA (fakty czekaja w wiedza\kandydaci.md), nie odmowa.
 #     Stoi nad PIERWSZYM znacznikiem <!-- MegaRuchacz: (bloki lore, wiedza, kierownik): lore\lore\verify.py
@@ -192,9 +194,15 @@ try {
 
     # 2. szkielet "Co wiem" - w pliku kazdego narzedzia AI, ktore tu jest
     if ($plany.Count -eq 0) { Ostrzezenie "nie widze zadnego narzedzia AI (Claude Code, Codex, OpenCode) - sekcji '$Naglowek' nie ma gdzie zalozyc; fakty poczekaja w wiedza\kandydaci.md, a szkielet dolozy straznik, gdy narzedzie sie pojawi" }
+    # Pusta sekcja (zakladana albo zastana) - z trescia najbogatszej sekcji z plikow narzedzi.
+    $zrodloCw = Zrodlo-Co-Wiem $KatalogDomowy
     foreach ($pl in $plany) {
       $plik = $pl.N.Sciezka
       $nowy = Z-Szkieletem-Co-Wiem $pl.Start.Tekst
+      $baza = if ($null -ne $nowy) { $nowy } else { $pl.Start.Tekst }
+      $zs = Zasiej-Co-Wiem $pl.N $pl.NaDysku $baza $zrodloCw
+      if ($zs.Odmowa) { Ostrzezenie "ODMOWA ZAPISU ($($pl.N.Nazwa)): $($zs.Odmowa)" }
+      if ($zs.Zasiew) { $nowy = $zs.Tekst }
       if ($null -eq $nowy) {
         if ($pl.Start.Tekst -ceq $pl.NaDysku) { Krok "sekcja '$Naglowek' juz jest w $plik - zostawiam jak jest" }
         else { Krok "sekcja '$Naglowek' w $plik przyjdzie z poczatkiem pliku ($($pl.Start.Opis)) - zapisze go krok zasad" }
@@ -202,7 +210,10 @@ try {
       }
       $sufit = Ponad-Limit $pl.N $pl.NaDysku $nowy
       if ($sufit) { Ostrzezenie "ODMOWA ZAPISU szkieletu '$Naglowek' ($($pl.N.Nazwa)): $sufit"; continue }
-      if ($Proba) { Plan "dopisalbym pusty szkielet sekcji '$Naglowek' do $plik (nad blokiem zasad MegaRuchacza)"; continue }
+      if ($Proba) {
+        if ($zs.Zasiew) { Plan "w ${plik}: $($zs.Zasiew)" } else { Plan "dopisalbym pusty szkielet sekcji '$Naglowek' do $plik (nad blokiem zasad MegaRuchacza)" }
+        continue
+      }
       if (Test-Path -LiteralPath $plik) {
         $kopia = "$plik.bak-" + (Get-Date -Format "yyyyMMdd-HHmmss")
         Kopiuj-Trwale $plik $kopia
@@ -210,8 +221,14 @@ try {
       New-Item -ItemType Directory -Force -Path (Split-Path -Parent $plik) | Out-Null
       Zapisz-Trwale $plik $nowy $Utf8
       if (-not (Ma-Co-Wiem (Czytaj-Plik $plik))) { Zakoncz $false "zapisalem $plik, ale sekcji '$Naglowek' w nim nie widze" }
-      Krok "w $plik ($($pl.N.Nazwa)) jest pusty szkielet sekcji '$Naglowek' (O uzytkowniku, O firmie, Nad czym pracuje, Jak pracuje, Biezace, Dane referencyjne)"
+      if ($zs.Zasiew) {
+        if (Pusta-Co-Wiem (Czytaj-Plik $plik)) { Zakoncz $false "zapisalem $plik, ale sekcja '$Naglowek' jest w nim nadal pusta (zasiew nie wszedl)" }
+        Krok "w $plik ($($pl.N.Nazwa)): $($zs.Zasiew)"
+      }
+      else { Krok "w $plik ($($pl.N.Nazwa)) jest pusty szkielet sekcji '$Naglowek' (O uzytkowniku, O firmie, Nad czym pracuje, Jak pracuje, Biezace, Dane referencyjne)" }
     }
+    $rozjazd = Rozjazd-Co-Wiem $KatalogDomowy
+    if ($rozjazd) { Ostrzezenie $rozjazd }
 
     # 3. katalog wiedzy i kopie dzienne
     if (Test-Path -LiteralPath $Wiedza) { Krok "katalog wiedzy jest: $Wiedza" }

@@ -163,11 +163,25 @@ function Kopiuj-Trwale([string]$skad, [string]$dokad) {
   try { (Get-Item -LiteralPath $dokad).LastWriteTime = (Get-Item -LiteralPath $skad).LastWriteTime } catch { }   # data w nazwie mowi kiedy; mtime to grzecznosc
 }
 
-# Pliki pamieci jednej maszyny: instrukcje narzedzi AI i pliki tekstowe z wiedza\
-# (tylko z wierzchu - kopie\ to juz kopie). Sciezki, ktorych nie ma, pomijamy.
+# Pliki instrukcji narzedzi AI (wzgledem domu) - z JEDNEJ listy (kierownik-cele.ps1 Narzedzia-AI), zeby
+# czwarte CLI dopisane tam samo trafilo do kopii dziennych i alarmu o zerach. Wolajacy, ktory listy nie
+# dolaczyl (kopie-dzienne, cykl-dzienny), dostaje ja tu - kropka w zasiegu tej funkcji, bez zasmiecania
+# jego zakresu. Starsza kopia narzedzia bez listy: trzy pliki jak dotad.
+function Pliki-Instrukcji-Narzedzi {
+  if (-not (Get-Command Narzedzia-AI -ErrorAction SilentlyContinue)) {
+    $plikListy = Join-Path $PSScriptRoot "kierownik-cele.ps1"
+    if (Test-Path -LiteralPath $plikListy) { . $plikListy }
+  }
+  if (Get-Command Narzedzia-AI -ErrorAction SilentlyContinue) { return ,@(Narzedzia-AI | ForEach-Object { $_.Plik }) }
+  return ,@(".claude\CLAUDE.md", ".codex\AGENTS.md", ".config\opencode\AGENTS.md")
+}
+
+# Pliki pamieci jednej maszyny: pliki instrukcji KAZDEGO narzedzia AI z listy, ktore leza na dysku
+# (takze narzedzia, ktorego juz nie widac - kopia i alarm o zerach niczego nie psuja), i pliki
+# tekstowe z wiedza\ (tylko z wierzchu - kopie\ to juz kopie). Sciezki, ktorych nie ma, pomijamy.
 function Pliki-Pamieci([string]$dom) {
   $lista = @()
-  foreach ($w in @(".claude\CLAUDE.md", ".codex\AGENTS.md", ".config\opencode\AGENTS.md")) {
+  foreach ($w in (Pliki-Instrukcji-Narzedzi)) {
     $p = Join-Path $dom $w
     if (Test-Path -LiteralPath $p -PathType Leaf) { $lista += $p }
   }

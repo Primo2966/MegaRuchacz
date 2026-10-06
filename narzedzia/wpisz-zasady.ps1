@@ -11,10 +11,14 @@
 # nad nim i reszta pliku zostaja co do bajtu.
 # Przy wlaczonym module wiedza kazdy plik dostaje tez pusty szkielet sekcji "## Co wiem", jesli
 # jej nie ma (cykl wiedzy pisze fakty do kazdego pliku z ta sekcja); istniejacej nie ruszamy.
+# Sekcja pusta (same naglowki - zakladana teraz albo zastana) dostaje tresc "Co wiem" z najbogatszego
+# pliku z listy (kierownik-cele.ps1 Zrodlo-Co-Wiem) - wiedza ma byc ta sama w kazdym CLI. Sekcji
+# z wpisami nie nadpisujemy; rozne sekcje w roznych plikach = UWAGA na koncu, bez scalania.
 # Plik, ktorego narzedzie jeszcze nie ma, zaczyna sie od Tekst-Startowy: OpenCode - od tresci
 # CLAUDE.md, ktory czytal dotad zamiast wlasnego; stara kopia dla opencode traci linie naglowka.
 # Plik, ktory po zapisie przekroczylby limit narzedzia (Codex: 32 KiB), NIE jest zapisywany -
-# ostrzezenie stoi w PIERWSZEJ linii wyjscia, kod 1.
+# ostrzezenie stoi w PIERWSZEJ linii wyjscia, kod 1. Tak samo zasiew "Co wiem" ponad limit - wtedy
+# odpada sam zasiew (sekcja zostaje pusta), a reszta pliku jest zapisywana.
 #
 # Uzycie:
 #   powershell -File C:\dev\claude-worker\narzedzia\wpisz-zasady.ps1
@@ -89,7 +93,7 @@ function Kopia-Zapasowa($sciezka) {
 # Odczyt kontrolny po zapisie - najczestsza cicha wpadka na Windowsie to rozsypane polskie
 # znaki, wiec porownujemy to, co wyszlo, z tym, co mialo wejsc: kazdy blok, ktory ma stac,
 # stoi co do znaku, a po blokach zdjetych nie zostal ani jeden znacznik.
-function Sprawdz-Zapis($plik, $nazwa, $bloki, $zdjete, [bool]$szkielet) {
+function Sprawdz-Zapis($plik, $nazwa, $bloki, $zdjete, [bool]$szkielet, [bool]$zasiew = $false) {
   try { $sprawdzony = Czytaj $plik }
   catch {
     Write-Host "BLAD  $nazwa - po zapisie $plik nie daje sie odczytac jako UTF-8" -ForegroundColor Red
@@ -122,6 +126,11 @@ function Sprawdz-Zapis($plik, $nazwa, $bloki, $zdjete, [bool]$szkielet) {
     $script:Bledy++
     return $false
   }
+  if ($zasiew -and (Pusta-Co-Wiem $sprawdzony)) {
+    Write-Host "BLAD  $nazwa - po zapisie sekcja '## Co wiem' w $plik jest nadal pusta (zasiew nie wszedl)" -ForegroundColor Red
+    $script:Bledy++
+    return $false
+  }
   return $true
 }
 
@@ -149,10 +158,12 @@ function Ktore-Bloki($obecne) {
 }
 
 # Plan dla jednego narzedzia - bez zapisu. .Blad (powod, dla ktorego pliku nie ruszamy) albo .Nowy
-# (tekst do zapisu; rowny .Stary = nic do zrobienia). .Limit - powod odmowy z sufitu albo $null.
+# (tekst do zapisu; rowny .Stary = nic do zrobienia). .Limit - powod odmowy z sufitu albo $null,
+# .OdmowaZasiewu - powod, dla ktorego pusta "Co wiem" nie dostala tresci (sufit), albo $null.
 function Planuj-Plik($n) {
   $p = [pscustomobject]@{ N = $n; Nazwa = $n.Nazwa; Plik = $n.Sciezka; Istnieje = $false; Stary = ""; Nowy = ""; Co = ""
-                          Tresci = [ordered]@{}; Zdjac = @(); Szkielet = $false; Blad = $null; Limit = $null; Start = $null }
+                          Tresci = [ordered]@{}; Zdjac = @(); Szkielet = $false; Blad = $null; Limit = $null; Start = $null
+                          Zasiew = $null; OdmowaZasiewu = $null }
   $p.Istnieje = Test-Path -LiteralPath $n.Sciezka -PathType Leaf
   if ($p.Istnieje -and (Ma-Zera $n.Sciezka)) {
     $p.Blad = Opis-Wyzerowanych (Wyzerowane-Pliki-Z @($n.Sciezka)) $KatalogDomowy $Zrodlo
@@ -179,14 +190,18 @@ function Planuj-Plik($n) {
   $p.Zdjac = @($plan.Zdjac)
   foreach ($b in (Bloki-Zasad)) { if ($chciane -contains $b) { $p.Tresci[$b] = $script:Tresci[$b] } }
   $p.Szkielet = $script:Szkielet
-  $p.Nowy = Zloz-Plik-Narzedzia $start $p.Tresci $p.Zdjac $p.Szkielet
+  $pp = Plan-Pliku-Narzedzia $n $start $p.Stary $p.Tresci $p.Zdjac $p.Szkielet $script:ZrodloCoWiem
+  $p.Nowy = $pp.Nowy
+  $p.Zasiew = $pp.Zasiew
+  $p.OdmowaZasiewu = $pp.OdmowaZasiewu
   if ($p.Nowy -ceq $p.Stary) { return $p }
   $opisy = @(Roznice-Zasad $start.Tekst $p.Tresci $p.Zdjac)
   if ($p.Szkielet -and -not (Ma-Co-Wiem $start.Tekst)) { $opisy += "szkielet sekcji '## Co wiem'" }
+  if ($p.Zasiew) { $opisy += $p.Zasiew }
   if ($start.Opis) { $opisy = @($start.Opis) + $opisy }
   $p.Co = $opisy -join "; "
   if (-not $p.Istnieje) { $p.Co = "zakladam plik ($($p.Co))" }
-  $p.Limit = Ponad-Limit $n $p.Stary $p.Nowy
+  $p.Limit = $pp.Limit
   return $p
 }
 
@@ -198,6 +213,7 @@ function Wykonaj-Plan($p) {
     $script:Raport += "$nazwa : $($p.Co)"
     return
   }
+  if ($p.OdmowaZasiewu) { $script:Raport += "$nazwa : ODMOWA ZASIEWU 'Co wiem' - ponad limit" }
   if ($p.Nowy -ceq $p.Stary) {
     if ($p.Istnieje) { Write-Host "--  $nazwa - bloki zasad juz sa aktualne: $plik" }
     else { Write-Host "--  $nazwa - nie ma pliku $plik i nie ma czego do niego wpisac" }
@@ -227,7 +243,7 @@ function Wykonaj-Plan($p) {
   $bloki = @($p.Tresci.Keys | ForEach-Object { Tekst-Bloku-Zasad $_ $p.Tresci[$_] $nl })
   # stary wspolny blok po zlozeniu nie zostaje nigdy - zamieniony albo zdjety
   $zdjete = @($p.Zdjac | Where-Object { -not $p.Tresci.Contains($_) }) + @("stary")
-  if (-not (Sprawdz-Zapis $plik $nazwa $bloki $zdjete $p.Szkielet)) { return }
+  if (-not (Sprawdz-Zapis $plik $nazwa $bloki $zdjete $p.Szkielet ([bool]$p.Zasiew))) { return }
 
   Write-Host "OK  $nazwa - $($p.Co): $plik"
   $wpis = "$nazwa : $($p.Co)"
@@ -269,6 +285,9 @@ if (($Blok.Count -eq 0) -and -not $Usun) {
 }
 # Szkielet "Co wiem" idzie tylko w przebiegu wedlug rejestru, przy wlaczonym module wiedza.
 $script:Szkielet = ($Blok.Count -eq 0) -and (-not $Usun) -and ($script:Chciane.Nazwy -contains "wiedza")
+# Skad tresc dla pustych sekcji "Co wiem": najbogatsza sekcja z plikow narzedzi, przed zapisem.
+$script:ZrodloCoWiem = $null
+if ($script:Szkielet) { $script:ZrodloCoWiem = Zrodlo-Co-Wiem $KatalogDomowy }
 
 # Tresci ze zrodla - potrzebne zawsze poza pelnym -Usun (przy -Usun -Blok stary blok zamienia
 # sie na bloki, ktore maja zostac, wiec ich tresc tez musi byc pod reka).
@@ -292,12 +311,17 @@ foreach ($c in $Cele) {
   try { $Plany += Planuj-Plik $c }
   catch {
     $Plany += [pscustomobject]@{ N = $c; Nazwa = $c.Nazwa; Plik = $c.Sciezka; Istnieje = $false; Stary = ""; Nowy = ""; Co = "NIETKNIETY - wyjatek"
-                                 Tresci = [ordered]@{}; Zdjac = @(); Szkielet = $false; Blad = $_.Exception.Message; Limit = $null; Start = $null }
+                                 Tresci = [ordered]@{}; Zdjac = @(); Szkielet = $false; Blad = $_.Exception.Message; Limit = $null; Start = $null
+                                 Zasiew = $null; OdmowaZasiewu = $null }
   }
 }
 
 foreach ($p in @($Plany | Where-Object { $_.Limit -and -not $_.Blad -and ($_.Nowy -cne $_.Stary) })) {
   Write-Host "BLAD  ODMOWA ZAPISU ($($p.Nazwa)): $($p.Limit)" -ForegroundColor Red
+  $script:Bledy++
+}
+foreach ($p in @($Plany | Where-Object { $_.OdmowaZasiewu -and -not $_.Blad -and -not $_.Limit })) {
+  Write-Host "BLAD  ODMOWA ZAPISU ($($p.Nazwa)): $($p.OdmowaZasiewu)" -ForegroundColor Red
   $script:Bledy++
 }
 foreach ($l in $script:Naglowek) { if ($l.K) { Write-Host $l.T -ForegroundColor $l.K } else { Write-Host $l.T } }
@@ -316,6 +340,16 @@ foreach ($p in $Plany) {
   catch {
     Write-Host "BLAD  $($p.Nazwa) - $($_.Exception.Message)" -ForegroundColor Red
     $script:Bledy++
+  }
+}
+
+# Po zapisie: czy "Co wiem" jest wszedzie ta sama. Roznica to meldunek, nie blad - scala czlowiek.
+if ($script:Szkielet) {
+  $rozjazd = $null
+  try { $rozjazd = Rozjazd-Co-Wiem $KatalogDomowy } catch { $rozjazd = "nie umiem porownac sekcji 'Co wiem' ($($_.Exception.Message))" }
+  if ($rozjazd) {
+    Write-Host "UWAGA  $rozjazd" -ForegroundColor Yellow
+    $script:Raport += "Co wiem : rozni sie miedzy narzedziami - UWAGA wyzej"
   }
 }
 

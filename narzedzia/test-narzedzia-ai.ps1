@@ -5,8 +5,13 @@
 # (opencode czyta wtedy tylko swoj plik - zasady ani zdublowane, ani zgubione), stara kopia CLAUDE.md
 # dla opencode (do 0.27) zamieniona na samodzielny plik, wlasny plik opencode uzytkownika, istniejaca
 # sekcja "Co wiem" nietknieta, instalator globalny, wtyczka opencode bez podwojnego ladowania.
+# Ta sama wiedza w kazdym CLI: pusta "Co wiem" (zakladana i zastana) zasiana trescia najbogatszej
+# sekcji, niepusta nietknieta, rozne sekcje = meldunek (wpisz-zasady i straznik), Pliki-Pamieci
+# (zapis-trwaly.ps1) z listy narzedzi - takze czwartego.
 # Proby negatywne: plik, ktory przekroczylby limit Codeksa (32 KiB) - odmowa zapisu z ostrzezeniem
-# w PIERWSZEJ linii, plik co do bajtu, bez kopii (a ten sam plik ponizej limitu - zapisany).
+# w PIERWSZEJ linii, plik co do bajtu, bez kopii (a ten sam plik ponizej limitu - zapisany); zasiew
+# "Co wiem" ponad limit - odmowa w PIERWSZEJ linii, sekcja pusta, reszta pliku zapisana (a mniejszy
+# zasiew - przechodzi).
 #
 # Wszystko w kopii w %TEMP%: katalogi domowe, projekt, katalog zrodlowy (bez .git). Procesy potomne
 # dostaja PATH bez claude/codex/opencode (wykrywanie ma widziec tylko to, co test polozyl w domu)
@@ -72,6 +77,13 @@ function Skrot([string]$p) { if (-not (Test-Path -LiteralPath $p)) { return "bra
 function Ile([string]$t, [string]$co) { if ($null -eq $t) { return 0 }; return ([regex]::Matches($t, [regex]::Escape($co))).Count }
 function Ile-Bak([string]$dom) { return @(Get-ChildItem -LiteralPath $dom -Recurse -File -Force -Filter "*.bak-*").Count }
 function Pierwsza([string]$t) { return (($t -split "`r?`n") | Where-Object { $_.Trim() } | Select-Object -First 1) }
+# Sekcja "Co wiem" jako niepuste linie (porownanie tresci) i plik z wycietym cialem sekcji (reszta pliku
+# co do znaku) - granice z kierownik-cele.ps1, dolaczonego nizej.
+function Linie-Sekcji([string]$t) { $c = Cialo-Co-Wiem $t; return (@($c) | ForEach-Object { $_.Trim() } | Where-Object { $_ }) -join "|" }
+function Poza-Sekcja([string]$t) {
+  $l = @($t -split "`r?`n"); $g = Granice-Co-Wiem $l
+  return ((@($l | Select-Object -First ($g[0] + 1)) + @("@@ sekcja @@") + @($l | Select-Object -Skip $g[1])) -join "`n")
+}
 function Odcisk([string]$dom) { return (@(".claude\CLAUDE.md", ".codex\AGENTS.md", ".config\opencode\AGENTS.md") | ForEach-Object { Skrot (Join-Path $dom $_) }) -join ";" }
 
 $WSZYSTKO = '{"wersja":1,"moduly":{"wiedza":true,"lore":true,"kierownik":true,"skille":false,"kopia":false},"kopia":null,"narzedzia":null,"data":"2026-10-06 10:00:00"}'
@@ -159,7 +171,9 @@ try {
   Sprawdz "wszystkie trzy: CLAUDE.md - notatka i fakt na miejscu" ($cm.Contains($notatka) -and $cm.Contains($fakt))
   Sprawdz "wszystkie trzy: OpenCode (czyta TYLKO swoj plik) ma notatke i fakt z CLAUDE.md - nic nie zgubione" ($oc.Contains($notatka) -and $oc.Contains($fakt)) $oc
   Sprawdz "wszystkie trzy: OpenCode - notatka i fakt po jednym razie (nic zdublowane)" (((Ile $oc $notatka) -eq 1) -and ((Ile $oc $fakt) -eq 1))
-  Sprawdz "wszystkie trzy: Codex dostal pusty szkielet, a nie cudzy fakt" (-not $cx.Contains($fakt))
+  Sprawdz "wszystkie trzy: Codex dostal 'Co wiem' z CLAUDE.md (fakt raz), a nie tekst spoza sekcji" (((Ile $cx $fakt) -eq 1) -and -not $cx.Contains($notatka)) $cx
+  $w = Wpisz $dom
+  Sprawdz "wszystkie trzy: ta sama wiedza wszedzie - bez meldunku o rozjezdzie" ($w.Tekst -notmatch "nie jest ta sama") $w.Tekst
 
   # ------------------------------------------------------------ zadne
   $dom = Nowy-Dom "zadne" @()
@@ -229,6 +243,97 @@ try {
   $cx = Czytaj (Join-Path $dom ".codex\AGENTS.md")
   Sprawdz-Plik "sufit - plik ponizej limitu" $cx "opencode"
   Sprawdz "sufit - plik ponizej limitu: po zapisie nadal ponizej 32 KiB" ((Get-Item (Join-Path $dom ".codex\AGENTS.md")).Length -le 32768)
+
+  # ------------------------------------------------------------ ta sama wiedza: zastany pusty szkielet
+  # Jak na biurowej 06.10: AGENTS.md Codeksa z samym szkieletem, CLAUDE.md z pelna wiedza. Straznik przy
+  # starcie okna (sam -Dopasuj) zasiewa sekcje Codeksa trescia z CLAUDE.md; reszta pliku co do znaku.
+  $wiedzaCm = ("## Co wiem`r`n`r`n### O u${ZZ}ytkowniku`r`n`r`n- Sprzedaje na Amazonie i eBayu.`r`n`r`n### O firmie`r`n`r`n" +
+               "- Marka testowa, zapachy z numerami.`r`n`r`n$BIEZACE`r`n`r`n- [2026-10-05] Fakt biezacy z CLAUDE.md.`r`n`r`n" +
+               "### Dane referencyjne`r`n`r`n- wiedza/test.md - odsylacz.`r`n")
+  $dom = Nowy-Dom "zasiew" @("codex")
+  [void](Zainstaluj "zasiew - przygotowanie (Codex z pustym szkieletem)" $dom)
+  $pCx = Join-Path $dom ".codex\AGENTS.md"; $pCm = Join-Path $dom ".claude\CLAUDE.md"
+  $cx0 = Czytaj $pCx
+  Sprawdz "zasiew: przygotowanie - Codex ma pusty szkielet 'Co wiem'" (Pusta-Co-Wiem $cx0)
+  Zapisz (Join-Path $dom ".claude.json") "{}"
+  Zapisz $pCm ("# Ustalenia globalne`r`n`r`n" + $wiedzaCm)
+  $d = Dopasuj $dom
+  $cx = Czytaj $pCx; $cm = Czytaj $pCm
+  Sprawdz "zasiew: straznik -Dopasuj kod 0, melduje pusta sekcje i zasiew" (($d.Kod -eq 0) -and ($d.Tekst -match "pusta sekcja 'Co wiem'") -and ($d.Tekst -match "poprawione")) $d.Tekst
+  Sprawdz "zasiew: sekcja Codeksa = sekcja CLAUDE.md (linia w linie)" ((-not (Pusta-Co-Wiem $cx)) -and ((Linie-Sekcji $cx) -ceq (Linie-Sekcji $cm))) $cx
+  Sprawdz "zasiew: reszta pliku Codeksa (nad sekcja i bloki pod nia) co do znaku" ((Poza-Sekcja $cx) -ceq (Poza-Sekcja $cx0))
+  Sprawdz-Plik "zasiew - Codex po zasiewie" $cx "opencode"
+  $odc = Odcisk $dom; $bak = Ile-Bak $dom
+  $d2 = Dopasuj $dom; $w2 = Wpisz $dom
+  Sprawdz "zasiew: drugi straznik i wpisz-zasady nic nie zmieniaja, bez meldunku o rozjezdzie" (($d2.Kod -eq 0) -and ($w2.Kod -eq 0) -and ((Odcisk $dom) -eq $odc) -and ((Ile-Bak $dom) -eq $bak) -and ($d2.Tekst + $w2.Tekst) -notmatch "nie jest ta sama") ($d2.Tekst + " | " + $w2.Tekst)
+
+  # ------------------------------------------------------------ ta sama wiedza: niepusta nietknieta, roznica = meldunek
+  # Reczny dopis tylko do CLAUDE.md (zapis w stalej) i wpis tylko w Codeksie: niczego nie nadpisujemy
+  # i nie scalamy, ale mowimy o tym - w wpisz-zasady i przy starcie okna.
+  $dom = Nowy-Dom "rozjazd" @("claude", "codex")
+  $pCx = Join-Path $dom ".codex\AGENTS.md"; $pCm = Join-Path $dom ".claude\CLAUDE.md"
+  Zapisz $pCm ("# Ustalenia globalne`r`n`r`n" + $wiedzaCm)
+  [void](Zainstaluj "rozjazd - przygotowanie" $dom)
+  Sprawdz "rozjazd: przygotowanie - Codex zalozony z ta sama wiedza" ((Linie-Sekcji (Czytaj $pCx)) -ceq (Linie-Sekcji (Czytaj $pCm)))
+  Zapisz $pCm ((Czytaj $pCm).Replace("- Marka testowa, zapachy z numerami.", "- Marka testowa, zapachy z numerami.`r`n- Reczny dopis tylko w CLAUDE.md."))
+  Zapisz $pCx ((Czytaj $pCx).Replace("- [2026-10-05] Fakt biezacy z CLAUDE.md.", "- [2026-10-05] Fakt biezacy z CLAUDE.md.`r`n- [2026-10-06] Wpis tylko w Codeksie."))
+  $odc = Odcisk $dom; $bak = Ile-Bak $dom
+  $w = Wpisz $dom; $d = Dopasuj $dom
+  Sprawdz "rozjazd: wpisz-zasady i straznik kod 0, oba pliki co do bajtu (nic nadpisane ani scalone)" (($w.Kod -eq 0) -and ($d.Kod -eq 0) -and ((Odcisk $dom) -eq $odc) -and ((Ile-Bak $dom) -eq $bak)) ($w.Tekst + " | " + $d.Tekst)
+  Sprawdz "rozjazd: wpisz-zasady melduje (UWAGA) - czego brakuje i czego nie ma w drugim pliku" (($w.Tekst -match "UWAGA\s+sekcja 'Co wiem' nie jest ta sama") -and ($w.Tekst -match "brakuje 1 linii") -and ($w.Tekst -match "jest 1 linii, ktorych w ~/.codex/AGENTS.md nie ma") -and ($w.Tekst -match "Reczny dopis")) $w.Tekst
+  Sprawdz "rozjazd: straznik melduje przy starcie okna" ($d.Tekst -match "MegaRuchacz: sekcja 'Co wiem' nie jest ta sama") $d.Tekst
+
+  # ------------------------------------------------------------ Pliki-Pamieci (zapis-trwaly.ps1) z listy narzedzi
+  # Kopie dzienne i alarm o zerach biora pliki z Pliki-Pamieci. Wolajacy bez listy (kopie-dzienne) - lista
+  # dolaczana przez zapis-trwaly sam; czwarte CLI dopisane do listy - jego plik tez.
+  $dom = Nowy-Dom "pamiec" @("claude", "codex", "opencode")
+  [void](Zainstaluj "Pliki-Pamieci - przygotowanie" $dom)
+  $skrypt = Join-Path $T "pliki-pamieci.ps1"
+  Zapisz $skrypt ('param([string]$zr, [string]$dom)' + "`r`n" + '. (Join-Path $zr "narzedzia\zapis-trwaly.ps1")' + "`r`n" + 'foreach ($p in (Pliki-Pamieci $dom)) { "PLIK " + $p }' + "`r`n")
+  $trzy = @(".claude\CLAUDE.md", ".codex\AGENTS.md", ".config\opencode\AGENTS.md" | ForEach-Object { "PLIK " + (Join-Path $dom $_) })
+  $r = Odpal $dom $skrypt @($Z, $dom)
+  Sprawdz "Pliki-Pamieci: pliki instrukcji wszystkich trzech narzedzi" (($r.Kod -eq 0) -and (@($trzy | Where-Object { -not $r.Tekst.Contains($_) }).Count -eq 0)) $r.Tekst
+  $Z4 = Join-Path $T "zrodlo-czwarte"
+  New-Item -ItemType Directory -Force -Path (Join-Path $Z4 "narzedzia") | Out-Null
+  Copy-Item (Join-Path $Z "narzedzia\zapis-trwaly.ps1") (Join-Path $Z4 "narzedzia\zapis-trwaly.ps1")
+  $kc = Czytaj (Join-Path $Z "narzedzia\kierownik-cele.ps1")
+  $kc4 = $kc.Replace('Limit = 0;     Zapas = "claude" }', ('Limit = 0;     Zapas = "claude" },' + "`r`n" +
+         '    [pscustomobject]@{ Id = "czwarte"; Nazwa = "Czwarte"; Plik = ".czwarte\AGENTS.md"; Polecenie = "czwarte"; Slady = @(".czwarte"); Wariant = "opencode"; Limit = 0; Zapas = $null }'))
+  Zapisz (Join-Path $Z4 "narzedzia\kierownik-cele.ps1") $kc4
+  Zapisz (Join-Path $dom ".czwarte\AGENTS.md") "# czwarte`r`n"
+  $r4 = Odpal $dom $skrypt @($Z4, $dom)
+  Sprawdz "Pliki-Pamieci: czwarte CLI dopisane do listy - jego plik tez (i trzy pozostale)" (($kc4 -cne $kc) -and ($r4.Kod -eq 0) -and $r4.Tekst.Contains("PLIK " + (Join-Path $dom ".czwarte\AGENTS.md")) -and (@($trzy | Where-Object { -not $r4.Tekst.Contains($_) }).Count -eq 0)) $r4.Tekst
+
+  # ------------------------------------------------------------ proba negatywna: zasiew ponad sufit Codeksa
+  # Wiedza w CLAUDE.md wieksza niz to, co zostalo do 32 KiB w AGENTS.md Codeksa: zasiewu NIE ma, powod
+  # w PIERWSZEJ linii (wpisz-zasady i straznik), sekcja zostaje pusta, a reszta pliku (zdjety blok lore)
+  # i tak jest zapisana. Mniejsza wiedza na tej samej sciezce przechodzi - to sufit blokuje.
+  $dom = Nowy-Dom "sufit-zasiew" @("codex")
+  [void](Zainstaluj "sufit zasiewu - przygotowanie (Codex z pustym szkieletem)" $dom)
+  $pCx = Join-Path $dom ".codex\AGENTS.md"; $pCm = Join-Path $dom ".claude\CLAUDE.md"
+  $cx0 = Czytaj $pCx
+  $ileWpisow = [int][Math]::Ceiling((32768 - $Utf8.GetByteCount($cx0) + 2000) / 60)
+  $wpisy = (1..$ileWpisow | ForEach-Object { "- [2026-10-01] Wpis wiedzy numer {0:D5} do wypelnienia sekcji." -f $_ }) -join "`r`n"
+  Zapisz (Join-Path $dom ".claude.json") "{}"
+  Zapisz $pCm ("# Ustalenia globalne`r`n`r`n## Co wiem`r`n`r`n$BIEZACE`r`n`r`n$wpisy`r`n")
+  $iL = $cx0.IndexOf($KL); $kL = "<!-- MegaRuchacz:lore:koniec -->"; $jL = $cx0.IndexOf($kL) + $kL.Length
+  Zapisz $pCx ($cx0.Substring(0, $iL) + $cx0.Substring($jL).TrimStart("`r", "`n"))
+  Sprawdz "sufit zasiewu: przygotowanie - Codex bez bloku lore, z pusta sekcja; wiedza ponad limit" (((Ile (Czytaj $pCx) $KL) -eq 0) -and (Pusta-Co-Wiem (Czytaj $pCx)) -and ($Utf8.GetByteCount($cx0 + $wpisy) -gt 32768)) "$ileWpisow wpisow"
+  $w = Wpisz $dom
+  $cx = Czytaj $pCx
+  Sprawdz "sufit zasiewu: wpisz-zasady kod 1" ($w.Kod -eq 1) $w.Tekst
+  Sprawdz "sufit zasiewu: ostrzezenie w PIERWSZEJ linii wyjscia (odmowa, zasiew, limit)" ((Pierwsza $w.Tekst) -match "^BLAD\s+ODMOWA ZAPISU \(Codex\):.*zasiew.*32768 B.*NIE zasialem") (Pierwsza $w.Tekst)
+  Sprawdz "sufit zasiewu: sekcja Codeksa nadal pusta, plik ponizej 32 KiB" ((Pusta-Co-Wiem $cx) -and ((Get-Item $pCx).Length -le 32768)) "$((Get-Item $pCx).Length) B"
+  Sprawdz "sufit zasiewu: reszta pliku zapisana - blok lore wrocil (odpada sam zasiew)" ((Ile $cx $KL) -eq 1)
+  $przed = Skrot $pCx
+  $d = Dopasuj $dom
+  Sprawdz "sufit zasiewu: straznik -Dopasuj kod 1, UWAGA z odmowa zasiewu w PIERWSZEJ linii" (($d.Kod -eq 1) -and ((Pierwsza $d.Tekst) -match "^MegaRuchacz: UWAGA - ODMOWA ZAPISU \(Codex\):.*zasiew")) $d.Tekst
+  Sprawdz "sufit zasiewu: straznik nie ruszyl pliku Codeksa" ((Skrot $pCx) -eq $przed)
+  $wpisyMale = (1..20 | ForEach-Object { "- [2026-10-01] Wpis wiedzy numer {0:D5} do wypelnienia sekcji." -f $_ }) -join "`r`n"
+  Zapisz $pCm ("# Ustalenia globalne`r`n`r`n## Co wiem`r`n`r`n$BIEZACE`r`n`r`n$wpisyMale`r`n")
+  $w = Wpisz $dom
+  $cx = Czytaj $pCx
+  Sprawdz "sufit zasiewu - mniejsza wiedza: kod 0, Codex zasiany, ponizej 32 KiB" (($w.Kod -eq 0) -and $cx.Contains("numer 00020") -and -not $cx.Contains("numer 00021") -and ((Get-Item $pCx).Length -le 32768)) $w.Tekst
 
   # ------------------------------------------------------------ instalator globalny: opencode i wszystkie trzy
   foreach ($k in @(@{ n = "oc"; t = @("opencode") }, @{ n = "trzy"; t = @("claude", "codex", "opencode") })) {

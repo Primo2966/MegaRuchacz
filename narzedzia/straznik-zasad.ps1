@@ -2228,7 +2228,8 @@ function Przewin-Zrodlo($cyt) {
 # Claude Code ~\.claude\CLAUDE.md, Codex ~\.codex\AGENTS.md, OpenCode ~\.config\opencode\AGENTS.md),
 # ktore tu jest. Codex i OpenCode wczytuja swoj plik sami, bez zadnego hooka - to jedyna droga zasad
 # na maszynie bez Claude Code. Zapisuje wpisz-zasady.ps1 (wszystkie pliki naraz), tu tylko
-# sprawdzamy, czy bloki (i przy module wiedza szkielet "Co wiem") nadal tam siedza i sa swieze.
+# sprawdzamy, czy bloki (i przy module wiedza szkielet "Co wiem") nadal tam siedza i sa swieze, czy
+# pusta "Co wiem" dostala juz tresc z najbogatszego pliku (zasiew) i czy wiedza jest wszedzie ta sama.
 function Cele-Zasad {
   $cele = @()
   if (-not (Get-Command Cele-Narzedzi -ErrorAction SilentlyContinue)) {
@@ -2268,6 +2269,11 @@ function Pilnuj-Zasad {
   if ($chciane.Zdejmuj) { $zdejmij = @(Bloki-Zasad | Where-Object { $chciane.Nazwy -notcontains $_ }) }
   # Szkielet "Co wiem" w kazdym pliku przy wlaczonym module wiedza - ta sama regula co w wpisz-zasady.ps1.
   $szkielet = ($chciane.Nazwy -contains "wiedza") -and [bool](Get-Command Zloz-Plik-Narzedzia -ErrorAction SilentlyContinue)
+  # Zasiew pustej "Co wiem" trescia najbogatszej sekcji - ten sam plan co w wpisz-zasady.ps1
+  # (Plan-Pliku-Narzedzia); starsza kopia kierownik-cele.ps1 go nie ma - wtedy jak dotad.
+  $maPlan = [bool](Get-Command Plan-Pliku-Narzedzia -ErrorAction SilentlyContinue)
+  $zrodloCw = $null
+  if ($szkielet -and $maPlan) { $zrodloCw = Zrodlo-Co-Wiem $KatalogDomowy }
   $cele = Cele-Zasad
   if ($cele.Count -eq 0) {
     Notuj "zasady pamieci: nie widze zadnego narzedzia AI (Claude Code, Codex, OpenCode) - nie ma gdzie ich pilnowac"
@@ -2286,13 +2292,25 @@ function Pilnuj-Zasad {
     try {
       # Plik narzedzia zaczyna sie tak samo jak w wpisz-zasady.ps1 (Tekst-Startowy): OpenCode bez
       # wlasnego pliku - od tresci CLAUDE.md, stara kopia dla opencode - bez linii naglowka.
-      if ($c.n) { $start = Tekst-Startowy $c.n $KatalogDomowy; $oczekiwany = Zloz-Plik-Narzedzia $start $tresci $zdejmij $szkielet }
+      $odmowaZasiewu = $null
+      if ($c.n -and $maPlan) {
+        $start = Tekst-Startowy $c.n $KatalogDomowy
+        $pl = Plan-Pliku-Narzedzia $c.n $start $tekst $tresci $zdejmij $szkielet $zrodloCw
+        $oczekiwany = $pl.Nowy; $odmowaZasiewu = $pl.OdmowaZasiewu
+      }
+      elseif ($c.n) { $start = Tekst-Startowy $c.n $KatalogDomowy; $oczekiwany = Zloz-Plik-Narzedzia $start $tresci $zdejmij $szkielet }
       else { $oczekiwany = Zloz-Plik-Zasad $tekst $tresci $zdejmij }
     }
     catch { Mow "MegaRuchacz: zasady pamieci w $($c.plik): $($_.Exception.Message) - nie ruszam, popraw znaczniki recznie."; $script:Niepowodzenia++; continue }
-    if ($oczekiwany -ceq $tekst) { continue }
+    if ($oczekiwany -ceq $tekst) {
+      # Plik zgodny, ale pusta "Co wiem" nie dostala tresci, bo ta przekroczylaby limit narzedzia -
+      # sufit krzyczy przy kazdym przebiegu (gdy plik idzie do naprawy, powod poda wpisz-zasady).
+      if ($odmowaZasiewu) { Mow "MegaRuchacz: UWAGA - ODMOWA ZAPISU ($($c.nazwa)): $odmowaZasiewu"; $script:Niepowodzenia++ }
+      continue
+    }
     $opisy = @(Roznice-Zasad $start.Tekst $tresci $zdejmij)
     if ($szkielet -and -not (Ma-Co-Wiem $start.Tekst)) { $opisy += "brakowalo szkieletu 'Co wiem'" }
+    elseif ($maPlan -and $szkielet -and $zrodloCw -and (Pusta-Co-Wiem $start.Tekst)) { $opisy += "pusta sekcja 'Co wiem' (tresc jest w $($zrodloCw.Plik))" }
     if ($start.Opis) { $opisy = @($start.Opis) + $opisy }
     $doNaprawy += [ordered]@{ nazwa = $c.nazwa; plik = $c.plik; opis = ($opisy -join ", "); n = $c.n }
   }
@@ -2301,6 +2319,7 @@ function Pilnuj-Zasad {
     Usun-Klucze $plikStanu @("zrodlo", "blok", "blok.codex")
     Notuj ("zasady pamieci: aktualne (" + (($cele | ForEach-Object { $_.nazwa }) -join ", ") + ")")
     Pilnuj-Limitu $cele
+    if ($szkielet -and $maPlan) { Zglos-Rozjazd-Co-Wiem }
     return
   }
 
@@ -2331,7 +2350,8 @@ function Pilnuj-Zasad {
     try { if (Test-Path -LiteralPath $c.plik) { $tekst = [System.IO.File]::ReadAllText($c.plik, (New-Object System.Text.UTF8Encoding($false, $true))) } }
     catch { $nadal += $c.nazwa; continue }
     try {
-      $ocz = if ($c.n) { Zloz-Plik-Narzedzia (Tekst-Startowy $c.n $KatalogDomowy) $tresci $zdejmij $szkielet } else { Zloz-Plik-Zasad $tekst $tresci $zdejmij }
+      $ocz = if ($c.n -and $maPlan) { (Plan-Pliku-Narzedzia $c.n (Tekst-Startowy $c.n $KatalogDomowy) $tekst $tresci $zdejmij $szkielet $zrodloCw).Nowy }
+             elseif ($c.n) { Zloz-Plik-Narzedzia (Tekst-Startowy $c.n $KatalogDomowy) $tresci $zdejmij $szkielet } else { Zloz-Plik-Zasad $tekst $tresci $zdejmij }
       if ($ocz -cne $tekst) { $nadal += $c.nazwa }
     }
     catch { $nadal += $c.nazwa }
@@ -2348,6 +2368,15 @@ function Pilnuj-Zasad {
     Mow "MegaRuchacz: zasady pamieci ($opis), a poprawka nie wyszla (kod ${kod}${ogon}) - uruchom $wpisz recznie."
     $script:Niepowodzenia++
   }
+  if ($szkielet -and $maPlan) { Zglos-Rozjazd-Co-Wiem }
+}
+
+# "Co wiem" ma byc ta sama w kazdym CLI. Rozne sekcje (np. reczny dopis tylko do CLAUDE.md) - jedna
+# linia przy kazdym przebiegu, dopoki ktos ich nie wyrowna. Bez scalania: co jest czyje, wie czlowiek.
+function Zglos-Rozjazd-Co-Wiem {
+  $r = $null
+  try { $r = Rozjazd-Co-Wiem $KatalogDomowy } catch { $r = "nie umiem porownac sekcji 'Co wiem' w plikach narzedzi AI ($($_.Exception.Message))" }
+  if ($r) { Mow "MegaRuchacz: $r" }
 }
 
 # ------------------------------------------------ 1b. blok zasad kierownika
