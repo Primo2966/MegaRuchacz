@@ -1,7 +1,11 @@
 # narzedzia\koszt\otwarcie.ps1 - czesc narzedzia\koszt-pamieci.ps1 (patrz BUDOWA
 # w jego naglowku). Pomiar calego otwarcia sesji Claude Code z transkryptow
-# (Pomiar-Otwarcia) i tryb -Start, ktory oddaje ten pomiar jako JSON (Tryb-Start) -
-# czyta go okno nadzorcy (zasobnik\stan-nadzorcy.ps1, Pomiar-Startu).
+# (Pomiar-Otwarcia), od 06.10.2026 (P71) takze Codeksa: otwarcie i zuzycie dzienne
+# z ~\.codex\sessions (Pomiar-Otwarcia-Codex, Zuzycie-Codex), wybor czytnika dla
+# narzedzia z listy $NARZEDZIA_AI (Pomiar-Narzedzia) - i tryb -Start, ktory oddaje
+# pomiar glownego narzedzia jako JSON (Tryb-Start) - czyta go okno nadzorcy
+# (zasobnik\stan-nadzorcy.ps1, Pomiar-Startu). Etap-Ocena (alarmy.ps1) wola
+# Pomiar-Narzedzia dla kazdego narzedzia; liczby ida do -Dane (klucze narz.N.*).
 # Skad wolane: Tryb-Start - koszt-pamieci.ps1 kropka (exit 0 daje on);
 # Pomiar-Otwarcia bez workerow - etap Etap-Ocena (alarmy.ps1), jako calosc do
 # procentu MegaRuchacza w otwarciu sesji (tylko do pokazania - prog jest w tokenach).
@@ -26,6 +30,48 @@
 # Ten sam pomiar (same sesje, bez workerow) daje procent MegaRuchacza w otwarciu
 # sesji - do pokazania; o alarmie decyduje prog w tokenach ($AlarmCzesciOtwarcia,
 # od 30.09.2026) - patrz Rachunek-Narzedzia.
+# Codex (od 06.10.2026) - Pomiar-Codeksa nizej, ten sam ksztalt wyniku; ktorym
+# czytnikiem mierzyc narzedzie z listy $NARZEDZIA_AI (pomiar.ps1), mowi Pomiar-Narzedzia.
+
+# Ile ostatnich rozmow do mediany otwarcia (kazde narzedzie tak samo). 10, bo zestaw
+# narzedzi (serwery MCP) zmienia sie co kilka tygodni, a starsze rozmowy mierzylyby
+# inna konfiguracje niz dzisiejsza.
+$OtwarcieSesji = 10
+# Ile pelnych dni sredniej zuzycia Codeksa - tyle samo, co srednia Claude Code w oknie
+# ($DNI_ZUZYCIA w zasobnik\nadzorca\stan-zuzycie.ps1), zeby obie liczby staly obok siebie uczciwie.
+$DniZuzyciaCodeksa = 7
+
+# Czytnik JSON (System.Web.Extensions). $null = nie da sie go zaladowac; powod idzie
+# do $blad, a wolajacy mowi go zamiast pomiaru.
+function Czytnik-Json([ref]$blad) {
+  try {
+    Add-Type -AssemblyName System.Web.Extensions -ErrorAction Stop
+    $s = New-Object System.Web.Script.Serialization.JavaScriptSerializer
+    $s.MaxJsonLength = [int]::MaxValue
+    return $s
+  } catch { $blad.Value = $_.Exception.Message; return $null }
+}
+
+function Mediana-Liczb($liczby) {
+  $s = @($liczby | Sort-Object)
+  if ($s.Count -eq 0) { return $null }
+  $p = [int][math]::Floor($s.Count / 2)
+  if ($s.Count % 2 -eq 1) { return [long]$s[$p] }
+  return [long][math]::Round(([double]$s[$p - 1] + [double]$s[$p]) / 2)
+}
+
+# Lista zmierzonych otwarc ($lista: obiekty z BezWiadomosci) -> Liczba, Mediana, Min, Max w $w.
+function Podsumuj-Otwarcia($w, $lista) {
+  $w.Lista = @($lista)
+  $w.Liczba = @($lista).Count
+  if ($w.Liczba -gt 0) {
+    $liczby = @($lista | ForEach-Object { $_.BezWiadomosci })
+    $w.Mediana = Mediana-Liczb $liczby
+    $w.Min = [long](($liczby | Measure-Object -Minimum).Minimum)
+    $w.Max = [long](($liczby | Measure-Object -Maximum).Maximum)
+  }
+}
+
 function Pomiar-Otwarcia([bool]$zWorkerami) {
   $katTranskryptow = Join-Path $katKlaudii "projects"
   # ta sama lista co $RoleClaude w narzedzia\instaluj-globalnie.ps1
@@ -33,15 +79,12 @@ function Pomiar-Otwarcia([bool]$zWorkerami) {
   # Ile ostatnich sesji / workerow do mediany i z jakiego okresu. 10 sesji i 14 dni,
   # bo zestaw narzedzi (serwery MCP) zmienia sie co kilka tygodni, a starsze sesje
   # mierzylyby inna konfiguracje niz dzisiejsza. Workerow jest wiecej - 20.
-  $ileSesji = 10; $ileWorkerow = 20; $dniWstecz = 14
+  # Okno 14 dni to $DniUzywania (pomiar.ps1) - te same dni mowia, ktorego narzedzia uzywasz.
+  $ileSesji = $OtwarcieSesji; $ileWorkerow = 20; $dniWstecz = $DniUzywania
   $odKiedy = (Get-Date).AddDays(-$dniWstecz)
 
-  $serializer = $null
-  try {
-    Add-Type -AssemblyName System.Web.Extensions -ErrorAction Stop
-    $serializer = New-Object System.Web.Script.Serialization.JavaScriptSerializer
-    $serializer.MaxJsonLength = [int]::MaxValue
-  } catch { $serializer = $null; $bladParsera = $_.Exception.Message }
+  $bladParsera = ""
+  $serializer = Czytnik-Json ([ref]$bladParsera)
 
   function Tekst-Wiadomosci($tresc) {
     # tresc wiadomosci uzytkownika: napis albo lista blokow {type:text,text:...}
@@ -99,16 +142,8 @@ function Pomiar-Otwarcia([bool]$zWorkerami) {
     } finally { if ($czytnik) { $czytnik.Dispose() } }
   }
 
-  function Mediana($liczby) {
-    $s = @($liczby | Sort-Object)
-    if ($s.Count -eq 0) { return $null }
-    $p = [int][math]::Floor($s.Count / 2)
-    if ($s.Count % 2 -eq 1) { return [long]$s[$p] }
-    return [long][math]::Round(([double]$s[$p - 1] + [double]$s[$p]) / 2)
-  }
-
   function Pomiar($kandydaci, $ile, $czyWorker) {
-    $w = [pscustomobject]@{ Liczba = 0; Mediana = $null; Min = $null; Max = $null; Powod = ""; Pominiete = 0; Bledy = @(); Lista = @() }
+    $w = [pscustomobject]@{ Liczba = 0; Mediana = $null; Min = $null; Max = $null; Powod = ""; Pominiete = 0; Bledy = @(); Lista = @(); Narzedzie = "Claude Code" }
     $lista = @()
     foreach ($pl in $kandydaci) {
       if ($lista.Count -ge $ile) { break }
@@ -130,14 +165,7 @@ function Pomiar-Otwarcia([bool]$zWorkerami) {
         ZnakiWiadomosci = $p.ZnakiWiadomosci; BezWiadomosci = $p.BezWiadomosci
       }
     }
-    $w.Lista = @($lista)
-    $w.Liczba = $lista.Count
-    if ($lista.Count -gt 0) {
-      $liczby = @($lista | ForEach-Object { $_.BezWiadomosci })
-      $w.Mediana = Mediana $liczby
-      $w.Min = [long](($liczby | Measure-Object -Minimum).Minimum)
-      $w.Max = [long](($liczby | Measure-Object -Maximum).Maximum)
-    }
+    Podsumuj-Otwarcia $w $lista
     return $w
   }
 
@@ -188,12 +216,274 @@ function Pomiar-Otwarcia([bool]$zWorkerami) {
   return $wynikS
 }
 
+# --- Codex: transkrypty <dom>\.codex\sessions\RRRR\MM\DD\rollout-*.jsonl -------
+# Jedna linia = jeden zapis {"timestamp", "type", "payload"} (ten sam ksztalt czyta
+# lore\lore\index.py, _read_codex_record). Liczby tokenow niesie zapis "event_msg"
+# z payload.type "token_count": payload.info.last_token_usage (ostatnie wywolanie
+# modelu) i payload.info.total_token_usage (narastajaco od poczatku rozmowy), kazde
+# z polami input_tokens (CALE wejscie - cached_input_tokens to jego czesc czytana
+# z pamieci podrecznej), output_tokens i total_tokens = wejscie + wyjscie. info bywa
+# null (zdarzenie z samymi limitami) - takie pomijamy. Wiadomosci uzytkownika: zapis
+# "response_item", payload.type "message", role "user", bloki "input_text"; te
+# zaczynajace sie od "<" albo "# AGENTS.md" dokleja sam Codex (instrukcje, opis
+# srodowiska) - to czesc otwarcia, nie Twoja wiadomosc.
+# ROZNICA WOBEC CLAUDE CODE: input_tokens Codeksa juz zawiera odczyt z pamieci
+# podrecznej, wiec "caly kontekst" to samo input_tokens (u Claude Code trzeba bylo
+# sumowac trzy pola), a zuzycie to total_tokens - te same tokeny, ktore Claude Code
+# liczy jako wejscie + bufor + wyjscie.
+
+# Pierwsze wywolanie modelu w rozmowie Codeksa: rozmiar kontekstu i Twoja wiadomosc
+# przed nim. Czyta tylko poczatek pliku. $null = w pliku nie ma liczb tokenow.
+function Pierwsza-Odpowiedz-Codex($plik, $serializer) {
+  $czytnik = $null
+  try {
+    $czytnik = New-Object System.IO.StreamReader($plik, [System.Text.Encoding]::UTF8)
+    $znakiUzytkownika = 0
+    $model = ""
+    $projekt = ""
+    $nr = 0
+    while ((-not $czytnik.EndOfStream) -and ($nr -lt 3000)) {
+      $linia = $czytnik.ReadLine(); $nr++
+      if (-not $linia) { continue }
+      $tokeny = $linia.Contains('token_count')
+      $wiad = $linia.Contains('input_text')
+      $kontekst = $linia.Contains('turn_context') -or $linia.Contains('session_meta')
+      if (-not ($tokeny -or $wiad -or $kontekst)) { continue }
+      $o = $null
+      try { $o = $serializer.DeserializeObject($linia) } catch { continue }
+      if (-not ($o -is [System.Collections.IDictionary])) { continue }
+      $p = $o["payload"]
+      if (-not ($p -is [System.Collections.IDictionary])) { continue }
+      $typ = "" + $o["type"]
+      if ($typ -eq "turn_context") { if ($p["model"]) { $model = "" + $p["model"] }; continue }
+      # katalog rozmowy -> nazwa projektu do tabeli w Szczegolach (jak u Claude Code)
+      if ($typ -eq "session_meta") { if ($p["cwd"]) { $projekt = [System.IO.Path]::GetFileName(("" + $p["cwd"]).TrimEnd('\', '/')) }; continue }
+      if (($typ -eq "response_item") -and (("" + $p["type"]) -eq "message") -and (("" + $p["role"]) -eq "user")) {
+        $n = 0
+        foreach ($b in @($p["content"])) {
+          if (-not ($b -is [System.Collections.IDictionary]) -or (("" + $b["type"]) -ne "input_text")) { continue }
+          $t = ("" + $b["text"]).TrimStart()
+          if ($t.StartsWith("<") -or $t.StartsWith("# AGENTS.md")) { continue }
+          $n += $t.Length
+        }
+        if ($n -gt 0) { $znakiUzytkownika = $n }
+        continue
+      }
+      if (($typ -ne "event_msg") -or (("" + $p["type"]) -ne "token_count")) { continue }
+      $info = $p["info"]
+      if (-not ($info -is [System.Collections.IDictionary])) { continue }
+      $ost = $info["last_token_usage"]
+      if (-not ($ost -is [System.Collections.IDictionary])) { continue }
+      $razem = [long]0
+      if ($ost.ContainsKey("input_tokens")) { $razem = [long]$ost["input_tokens"] }
+      if ($razem -le 0) { continue }
+      $bezW = $razem - [long](Tokeny $znakiUzytkownika)
+      return [pscustomobject]@{
+        Kiedy = ("" + $o["timestamp"]); Model = $model; Kontekst = $razem; Projekt = $projekt
+        ZnakiWiadomosci = $znakiUzytkownika; BezWiadomosci = [long][math]::Max(0, $bezW)
+      }
+    }
+    return $null
+  } finally { if ($czytnik) { $czytnik.Dispose() } }
+}
+
+# Otwarcie okna rozmowy Codeksa - mediana z ostatnich rozmow, ten sam ksztalt co
+# Sesje w Pomiar-Otwarcia. Brak katalogu i brak liczb to Powod, nigdy zero.
+function Pomiar-Otwarcia-Codex($n, $serializer) {
+  $w = [pscustomobject]@{ Liczba = 0; Mediana = $null; Min = $null; Max = $null; Powod = ""; Pominiete = 0; Bledy = @(); Lista = @(); Narzedzie = $n.Nazwa }
+  if (-not (Test-Path -LiteralPath $n.KatRozmow -PathType Container)) {
+    $w.Powod = "nie ma katalogu z rozmowami $($n.Nazwa) ($($n.KatRozmow))"
+    return $w
+  }
+  $pliki = @(Pliki-Rozmow $n ((Get-Date).AddDays(-$DniUzywania)))
+  $lista = @()
+  foreach ($pl in $pliki) {
+    if ($lista.Count -ge $OtwarcieSesji) { break }
+    $p = $null
+    try { $p = Pierwsza-Odpowiedz-Codex $pl.FullName $serializer }
+    catch { $w.Bledy += "nie odczytalem $($pl.FullName) ($($_.Exception.Message))"; continue }
+    if ($null -eq $p) { $w.Pominiete++; continue }
+    # Plik zaczyna sie od projektu (jak u Claude Code: <projekt>\<rozmowa>) - tabela
+    # w Szczegolach bierze z niego pierwszy czlon; bez projektu zostaje data RRRR\MM\DD.
+    $wzgl = $pl.FullName.Substring($n.KatRozmow.Length).TrimStart('\')
+    if ($p.Projekt) { $wzgl = "$($p.Projekt)\$($pl.Name)" }
+    $lista += [pscustomobject]@{
+      Plik = $wzgl; Rola = ""
+      Kiedy = $p.Kiedy; Model = $p.Model; Kontekst = $p.Kontekst
+      ZnakiWiadomosci = $p.ZnakiWiadomosci; BezWiadomosci = $p.BezWiadomosci
+    }
+  }
+  Podsumuj-Otwarcia $w $lista
+  if ($w.Liczba -eq 0) {
+    $w.Powod = "w $($n.KatRozmow) nie ma ani jednej rozmowy z ostatnich $DniUzywania dni z liczba tokenow ($($pliki.Count) plikow przejrzanych)"
+  }
+  return $w
+}
+
+# Zuzycie tokenow w rozmowach z Codeksem: dzis i srednio dziennie z $DniZuzyciaCodeksa
+# PELNYCH dni (bez dzisiejszego; suma dzielona przez liczbe dni - takze tych bez rozmow,
+# tak samo jak srednia Claude Code w oknie). Z kazdego zdarzenia token_count bierzemy
+# PRZYROST total_tokens wzgledem poprzedniego w tym samym pliku - zdarzenie powtorzone
+# z ta sama suma daje zero, wiec nic sie nie liczy dwa razy. Spadek sumy (rozmowa
+# wznowiona od zera) = bierzemy last_token_usage. Dzien wedlug lokalnej daty pola
+# timestamp (UTC). Linie z tekstem "token_count" wyciaga Select-String (szybko),
+# a dopiero te parsujemy.
+function Zuzycie-Codex($n, $serializer) {
+  $dzis = [datetime]::Today
+  $od = $dzis.AddDays(-$DniZuzyciaCodeksa)
+  $z = [pscustomobject]@{
+    Dzis = $null; Srednia = $null; Dni = $DniZuzyciaCodeksa; DniZRozmowami = 0
+    Od = $od.ToString("yyyy-MM-dd"); Do = $dzis.AddDays(-1).ToString("yyyy-MM-dd")
+    Pliki = 0; Zdarzenia = 0; Bufor = $null; Powod = ""; Bledy = @()
+  }
+  if (-not (Test-Path -LiteralPath $n.KatRozmow -PathType Container)) {
+    $z.Powod = "nie ma katalogu z rozmowami $($n.Nazwa) ($($n.KatRozmow))"
+    return $z
+  }
+  $pliki = @(Pliki-Rozmow $n $od)
+  $z.Pliki = $pliki.Count
+  # Brak plikow z tych dni = naprawde nic (katalog przejrzany), nie "nie wiem".
+  $z.Dzis = [long]0; $z.Srednia = [long]0
+  if ($pliki.Count -eq 0) { return $z }
+  $dni = @{}; $bufor = [long]0; $suma = [long]0
+  $bl = @()
+  $trafienia = @(Select-String -LiteralPath @($pliki | ForEach-Object { $_.FullName }) -Pattern 'token_count' -SimpleMatch -ErrorAction SilentlyContinue -ErrorVariable +bl)
+  foreach ($b in @($bl)) { $z.Bledy += "nie odczytalem pliku rozmowy ($b)" }
+  $poprz = @{}
+  foreach ($t in $trafienia) {
+    $o = $null
+    try { $o = $serializer.DeserializeObject($t.Line) } catch { continue }
+    if (-not ($o -is [System.Collections.IDictionary]) -or (("" + $o["type"]) -ne "event_msg")) { continue }
+    $p = $o["payload"]
+    if (-not ($p -is [System.Collections.IDictionary]) -or (("" + $p["type"]) -ne "token_count")) { continue }
+    $info = $p["info"]
+    if (-not ($info -is [System.Collections.IDictionary])) { continue }
+    $cal = $info["total_token_usage"]; $ost = $info["last_token_usage"]
+    if (-not ($cal -is [System.Collections.IDictionary])) { continue }
+    $kiedy = [datetime]::MinValue
+    if (-not [datetime]::TryParse(("" + $o["timestamp"]), [Globalization.CultureInfo]::InvariantCulture,
+                                  [Globalization.DateTimeStyles]::RoundtripKind, [ref]$kiedy)) { continue }
+    $z.Zdarzenia++
+    $teraz = [long]$cal["total_tokens"]; $terazBuf = [long]$cal["cached_input_tokens"]
+    $byl = $poprz[$t.Path]
+    if ($null -eq $byl) { $byl = @([long]0, [long]0) }
+    $przyrost = $teraz - $byl[0]; $przyrostBuf = $terazBuf - $byl[1]
+    if ($przyrost -lt 0) {
+      $przyrost = [long]0; $przyrostBuf = [long]0
+      if ($ost -is [System.Collections.IDictionary]) { $przyrost = [long]$ost["total_tokens"]; $przyrostBuf = [long]$ost["cached_input_tokens"] }
+    }
+    $poprz[$t.Path] = @($teraz, $terazBuf)
+    $dzien = $kiedy.ToLocalTime().Date
+    if ($dzien -lt $od) { continue }
+    $k = $dzien.ToString("yyyy-MM-dd")
+    if (-not $dni.ContainsKey($k)) { $dni[$k] = [long]0 }
+    $dni[$k] += $przyrost
+    if ($dzien -lt $dzis) { $suma += $przyrost; $bufor += [math]::Max([long]0, $przyrostBuf) }
+  }
+  if ($z.Zdarzenia -eq 0) {
+    $z.Dzis = $null; $z.Srednia = $null
+    $z.Powod = "w $($pliki.Count) plikach rozmow $($n.Nazwa) z ostatnich $DniZuzyciaCodeksa dni nie znalazlem ani jednej liczby tokenow (zdarzenie token_count)"
+    if ($z.Bledy.Count -gt 0) { $z.Powod += "; $($z.Bledy[0])" }
+    return $z
+  }
+  $kDzis = $dzis.ToString("yyyy-MM-dd")
+  if ($dni.ContainsKey($kDzis)) { $z.Dzis = [long]$dni[$kDzis] }
+  $z.DniZRozmowami = @($dni.Keys | Where-Object { ($_ -ne $kDzis) -and ($dni[$_] -gt 0) }).Count
+  $z.Srednia = [long][math]::Round($suma / [double]$DniZuzyciaCodeksa)
+  $z.Bufor = [long][math]::Round($bufor / [double]$DniZuzyciaCodeksa)
+  return $z
+}
+
+# Pomiar JEDNEGO narzedzia z listy $NARZEDZIA_AI - wybor czytnika po polu Format.
+# Nowe narzedzie z tym samym formatem nie potrzebuje tu nic; nowy format to nowa
+# galaz tutaj, a bez niej okno mowi wprost, ze tych rozmow jeszcze nie umiemy czytac.
+# Wynik: Otwarcie (ksztalt Sesje z Pomiar-Otwarcia) z Powod, Workerzy (tylko Claude
+# Code), Zuzycie (Dzis, Srednia ... albo $null, gdy liczy je ktos inny - ZuzycieWOknie:
+# Claude Code liczy okno nadzorcy, zasobnik\nadzorca\stan-zuzycie.ps1) i Blad, gdy
+# pomiar sie wywrocil.
+function Pomiar-Narzedzia($n, [bool]$zWorkerami, [bool]$zZuzyciem) {
+  $p = [pscustomobject]@{
+    Klucz = $n.Klucz; Nazwa = $n.Nazwa; Uzywane = [bool]$n.Uzywane; Ostatnio = ""
+    Katalog = $n.KatRozmow; Metoda = ""; Powod = ""; Otwarcie = $null; Workerzy = $null
+    Zuzycie = $null; ZuzycieWOknie = $false; Blad = ""
+  }
+  if ($n.Ostatnio) { $p.Ostatnio = $n.Ostatnio.ToString("yyyy-MM-dd HH:mm") }
+  try {
+    switch ($n.Format) {
+      "claude" {
+        $o = Pomiar-Otwarcia $zWorkerami
+        $p.Otwarcie = $o.Sesje; $p.Workerzy = $o.Workerzy; $p.Powod = $o.Powod
+        $p.Katalog = $o.Katalog; $p.Metoda = $o.Metoda; $p.ZuzycieWOknie = $true
+      }
+      "codex" {
+        $bladParsera = ""
+        $ser = Czytnik-Json ([ref]$bladParsera)
+        $p.Metoda = ("pierwsze wywolanie modelu w kazdej rozmowie Codeksa: input_tokens z payload.info.last_token_usage " +
+                     "(zdarzenie token_count; zawiera tez odczyt z pamieci podrecznej), minus Twoja wiadomosc (znaki / $ZnakiNaToken); " +
+                     "mediana z ostatnich rozmow")
+        if (-not $ser) {
+          $p.Powod = "nie zaladowal sie czytnik JSON (System.Web.Extensions): $bladParsera"
+        } else {
+          $p.Otwarcie = Pomiar-Otwarcia-Codex $n $ser
+          $p.Powod = $p.Otwarcie.Powod
+          if ($zZuzyciem) { $p.Zuzycie = Zuzycie-Codex $n $ser }
+        }
+        $p.Workerzy = [pscustomobject]@{ Liczba = 0; Mediana = $null; Min = $null; Max = $null
+          Powod = "start workera mierze tylko w Claude Code"; Pominiete = 0; Bledy = @(); Lista = @() }
+      }
+      default {
+        $p.Powod = "nie umiem jeszcze odczytac rozmow $($n.Nazwa) - MegaRuchacz nie ma czytnika ich zapisu"
+      }
+    }
+  } catch {
+    $p.Blad = "pomiar $($n.Nazwa) sie wywrocil ($($_.Exception.Message))"
+    if (-not $p.Powod) { $p.Powod = $p.Blad }
+  }
+  return $p
+}
+
 # Tryb-Start - JSON z pomiarem otwarcia sesji (same znaki ASCII); exit 0 daje koszt-pamieci.ps1.
 # Wola go koszt-pamieci.ps1 KROPKA (". Tryb-Start"), wiec biegnie w zasiegu skryptu
 # glownego: zmienne i funkcje, ktore tu powstaja, widzi dalszy przebieg - tak samo,
 # jak gdy ten kod stal w koszt-pamieci.ps1 wprost.
+# Pola na wierzchu (Sesje, Workerzy, Powod, MegaRuchacz*) mowia o GLOWNYM narzedziu tej
+# maszyny ($narzDomyslne - tego, ktorego uzywasz; z samym Codeksem to Codex), zeby okno
+# nadzorcy pokazywalo otwarcie, ktore naprawde placisz. Sesje.Narzedzie i Narzedzie
+# mowia, czyje to liczby. Narzedzia - pomiar kazdego narzedzia z listy osobno.
 function Tryb-Start {
-  $json = (Pomiar-Otwarcia $true) | ConvertTo-Json -Depth 6 -Compress
+  $wynikS = Pomiar-Otwarcia $true
+  $pomiary = @()
+  foreach ($n in @($narzedzia)) {
+    if ($n.Format -eq "claude") {
+      $pomiary += [pscustomobject]@{ Klucz = $n.Klucz; Nazwa = $n.Nazwa; Uzywane = [bool]$n.Uzywane
+        Ostatnio = $(if ($n.Ostatnio) { $n.Ostatnio.ToString("yyyy-MM-dd HH:mm") } else { "" })
+        Powod = $wynikS.Powod; Otwarcie = $wynikS.Sesje; MegaRuchacz = [long]($tokSesja + $tokWiadomosc) }
+    } else {
+      $pn = Pomiar-Narzedzia $n $false $false
+      $pomiary += [pscustomobject]@{ Klucz = $pn.Klucz; Nazwa = $pn.Nazwa; Uzywane = $pn.Uzywane; Ostatnio = $pn.Ostatnio
+        Powod = $pn.Powod; Otwarcie = $pn.Otwarcie; MegaRuchacz = [long]($tokSesjaCx + $tokWiadomoscCx); Pomiar = $pn }
+    }
+  }
+  $glowne = "Claude Code"
+  if ($narzDomyslne -eq "Codex") {
+    $cx = @($pomiary | Where-Object { $_.Klucz -eq "codex" }) | Select-Object -First 1
+    if ($cx) {
+      $glowne = "Codex"
+      $wynikS.Katalog = $cx.Pomiar.Katalog
+      $wynikS.Metoda = $cx.Pomiar.Metoda
+      $wynikS.Powod = $cx.Powod
+      $wynikS.Sesje = $cx.Otwarcie
+      $wynikS.Workerzy = $cx.Pomiar.Workerzy
+      $wynikS.MegaRuchaczSesja = [long]($tokSesjaCx + $tokWiadomoscCx)
+      $wynikS.MegaRuchaczStart = [long]$tokSesjaCx
+      $wynikS.MegaRuchaczWiadomosc = [long]$tokWiadomoscCx
+      $wynikS.MegaRuchaczWorker = $null
+    }
+  }
+  foreach ($x in $pomiary) { if ($x.PSObject.Properties["Pomiar"]) { $x.PSObject.Properties.Remove("Pomiar") } }
+  $wynikS | Add-Member -NotePropertyName Narzedzie -NotePropertyValue $glowne
+  $wynikS | Add-Member -NotePropertyName Narzedzia -NotePropertyValue @($pomiary)
+  $json = $wynikS | ConvertTo-Json -Depth 6 -Compress
   $json = [regex]::Replace($json, '[^\x00-\x7F]', { param($m) '\u{0:x4}' -f [int][char]$m.Value })
   Write-Output $json
 }

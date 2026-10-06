@@ -163,9 +163,16 @@ function Etap-Kubelki {
   # jest na maszynie (jego linie pokazuje hook Claude Code i nadzorca). Maszyna
   # z samym Codeksem dostaje domyslnie rachunek Codeksa - inaczej jego ladunek
   # hooka pokazywalby liczby plikow, ktorych Codex nie czyta.
+  # Przed tym - narzedzie, ktorego naprawde UZYWASZ (rozmowa w ostatnich $DniUzywania
+  # dniach, pomiar.ps1): na komputerze z samym Codeksem ~\.claude.json potrafi lezec
+  # po jednym uruchomieniu Claude Code i rachunek mowil wtedy o narzedziu, ktorego nikt
+  # tu nie uzywa.
   $narzDomyslne = $Narzedzie
   if (-not $narzDomyslne) {
-    if ($jestClaude -or (-not $jestCodex)) { $narzDomyslne = "Claude" } else { $narzDomyslne = "Codex" }
+    $uzCc = Narzedzie-Po-Kluczu "claude"; $uzCx = Narzedzie-Po-Kluczu "codex"
+    if ($uzCc -and $uzCc.Uzywane) { $narzDomyslne = "Claude" }
+    elseif ($uzCx -and $uzCx.Uzywane -and $jestCodex) { $narzDomyslne = "Codex" }
+    elseif ($jestClaude -or (-not $jestCodex)) { $narzDomyslne = "Claude" } else { $narzDomyslne = "Codex" }
   }
 }
 

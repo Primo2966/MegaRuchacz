@@ -56,6 +56,59 @@ function Tryb-Dane {
   Para "udzial.sesji"     $rDom.Sesji
   Para "udzial.prog_tokeny" $AlarmCzesciOtwarcia
   Para "udzial.powod"     $rDom.PowodCalosci
+
+  # Narzedzia AI tej maszyny (lista $NARZEDZIA_AI, pomiar.ps1), kazde osobno: czy go
+  # uzywasz (narz.N.uzywane - od tego zalezy, czy brak czegos jest usterka, czy "nie
+  # dotyczy"), czy w jego pliku instrukcji stoi sekcja "## Co wiem", otwarcie okna
+  # rozmowy (mediana tokenow) i zuzycie dzienne. Okno sklada z tego zdanie "Na tym
+  # komputerze: ...", sprawy wymagajace uwagi i liczby Codeksa obok Claude Code.
+  # narz.N.zuzycie_w_oknie = 1: zuzycie tego narzedzia liczy samo okno (Claude Code,
+  # zasobnik\nadzorca\stan-zuzycie.ps1) - tu go nie ma i to nie jest brak.
+  # Brak liczby to pusta wartosc z powodem obok, nigdy zero.
+  $nrN = 0
+  foreach ($n in @($narzedzia)) {
+    $nrN++
+    $pom = $null
+    if ($pomiaryNarzedzi) { $pom = $pomiaryNarzedzi[$n.Klucz] }
+    $mrN = $null
+    if ($n.Narz -eq "Codex") { $mrN = $rCx.Mr } elseif ($n.Narz -eq "Claude") { $mrN = $rCc.Mr }
+    Para "narz.$nrN.klucz"           $n.Klucz
+    Para "narz.$nrN.nazwa"           $n.Nazwa
+    Para "narz.$nrN.uzywane"         ([int][bool]$n.Uzywane)
+    Para "narz.$nrN.ostatnio"        $(if ($n.Ostatnio) { $n.Ostatnio.ToString("yyyy-MM-dd HH:mm") } else { "" })
+    Para "narz.$nrN.instrukcje"      $n.Instrukcje
+    Para "narz.$nrN.instrukcje_jest" ([int][bool]$n.InstrukcjeJest)
+    Para "narz.$nrN.cowiem"          ([int][bool]($n.Warstwy -and $n.Warstwy.MaSekcje))
+    Para "narz.$nrN.mr"              $mrN
+    if ($pom) {
+      $ot = $pom.Otwarcie
+      Para "narz.$nrN.otwarcie"       $(if ($ot -and ($null -ne $ot.Mediana)) { $ot.Mediana } else { "" })
+      Para "narz.$nrN.otwarcie_sesji" $(if ($ot) { $ot.Liczba } else { "" })
+      Para "narz.$nrN.otwarcie_powod" $pom.Powod
+      Para "narz.$nrN.zuzycie_w_oknie" ([int][bool]$pom.ZuzycieWOknie)
+      $zu = $pom.Zuzycie
+      if ($zu) {
+        Para "narz.$nrN.dzis"            $zu.Dzis
+        Para "narz.$nrN.srednia"         $zu.Srednia
+        Para "narz.$nrN.zuzycie_dni"     $zu.Dni
+        Para "narz.$nrN.zuzycie_dni_z_rozmowami" $zu.DniZRozmowami
+        Para "narz.$nrN.zuzycie_od"      $zu.Od
+        Para "narz.$nrN.zuzycie_do"      $zu.Do
+        Para "narz.$nrN.zuzycie_bufor"   $zu.Bufor
+        Para "narz.$nrN.zuzycie_pliki"   $zu.Pliki
+        Para "narz.$nrN.zuzycie_powod"   $zu.Powod
+      } elseif (-not $pom.ZuzycieWOknie) {
+        Para "narz.$nrN.zuzycie_powod"   $(if ($pom.Powod) { $pom.Powod } else { "zuzycia w tym trybie nie licze" })
+      }
+    }
+  }
+  Para "narzedzia" $nrN
+  Para "narzedzia.uzywane" (Nazwy-Narzedzi @($narzedzia | Where-Object { $_.Uzywane }))
+  # Gdzie stoi sekcja "## Co wiem" - w pliku instrukcji ktoregokolwiek narzedzia.
+  # Pusta lista przy wlaczonym module Wiedza = pamiec o Tobie nie trafia do zadnego.
+  Para "cowiem.gdzie"      (@($narzedzia | Where-Object { $_.Warstwy -and $_.Warstwy.MaSekcje } | ForEach-Object { $_.Instrukcje }) -join "; ")
+  Para "cowiem.sprawdzone" (@($narzedzia | ForEach-Object { $_.Instrukcje }) -join "; ")
+  Para "cowiem.wiedza_wylaczona" ([int][bool]$script:WiedzaWylaczona)
   $nr = 0
   foreach ($a in (@($rDom.Alarmy) + @($alarmyInnego) + @($alarmy) + @($informacje) + @($informacjeInnego))) {
     $nr++

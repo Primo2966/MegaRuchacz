@@ -54,17 +54,29 @@ function Tryb-Warstwy {
     return $s
   }
 
-  function Warstwa($id, $nazwa, $sciezka, $kiedy, $trwalosc, $ktoPisze, $opis, $rodzaj = "plik", $rodzic = "") {
+  function Warstwa($id, $nazwa, $sciezka, $kiedy, $trwalosc, $ktoPisze, $opis, $rodzaj = "plik", $rodzic = "", $narz = "") {
     # Kiedy: start / wiadomosc / zadanie / nieuzywane. Trwalosc: stala / tymczasowa
     # (albo mieszana - plik, ktory dzieli sie na podwarstwy obu rodzajow).
     # Rodzaj: plik / ladunek (JSON hooka - Tresc to to, co naprawde leci do modelu) /
     # podwarstwa (kawalek pliku - Tresc to ten kawalek) / katalog / baza / doklejka.
+    # Narzedzie: klucz z $NARZEDZIA_AI, gdy warstwa trafia TYLKO do tego narzedzia
+    # (pusty = do kazdego / niczyja). Brak takiej warstwy przy narzedziu, ktorego tu nie
+    # uzywasz, to stan "nie-dotyczy" (szary), nie "brak" (czerwony) - patrz koniec listy.
     return [pscustomobject]@{
       Id = $id; Nazwa = $nazwa; Sciezka = "$sciezka"; Kiedy = $kiedy; Trwalosc = $trwalosc
       KtoPisze = $ktoPisze; Opis = $opis; Rodzaj = $rodzaj; Rodzic = $rodzic
       Istnieje = $false; Stan = "brak"; Brak = ""; Znaki = $null; Tokeny = $null
       Bajty = $null; Zmieniony = $null; Limit = $null; Tresc = $null; Pliki = @()
+      Narzedzie = $narz; NarzedzieNazwa = ""
     }
+  }
+
+  # Gdzie jeszcze stoi sekcja "## Co wiem" - zdanie do braku sekcji w jednym pliku,
+  # zeby "brak" mowil tez, gdzie ta sekcja jest (albo ze nie ma jej nigdzie).
+  function Gdzie-Indziej-Co-Wiem($bezPliku) {
+    $inne = @($narzedzia | Where-Object { $_.Warstwy -and $_.Warstwy.MaSekcje -and ((Klucz-Sciezki $_.Instrukcje) -ne (Klucz-Sciezki $bezPliku)) })
+    if ($inne.Count -eq 0) { return " - i nie ma jej w zadnym innym pliku instrukcji ($((@($narzedzia | ForEach-Object { $_.Instrukcje })) -join ', '))" }
+    return " - sekcja jest w: " + ((@($inne | ForEach-Object { "$($_.Instrukcje) (czyta $($_.Nazwa))" })) -join ", ")
   }
 
   function Z-Pliku($wa, [bool]$czytaj = $true) {
@@ -88,12 +100,13 @@ function Tryb-Warstwy {
   $plikClaudeProj = Join-Path $katProjektu "CLAUDE.md"
   $lista += Z-Pliku (Warstwa "claude-projekt" "CLAUDE.md projektu" $plikClaudeProj "start" "stala" `
     "czlowiek recznie + git (repozytorium projektu)" `
-    "Claude Code wczytuje go sam na starcie kazdej sesji w projekcie $katProjektu")
+    "Claude Code wczytuje go sam na starcie kazdej sesji w projekcie $katProjektu" "plik" "" "claude")
   $juz[(Klucz-Sciezki $plikClaudeProj)] = $true
 
   $wGlob = Z-Pliku (Warstwa "claude-globalny" "CLAUDE.md globalny (caly plik)" $plikClaude "start" "mieszana" `
     "czlowiek recznie + automaty (straznik-zasad.ps1, cykl wiedzy)" `
-    "Claude Code wczytuje go sam na starcie KAZDEJ sesji, w kazdym projekcie na tej maszynie. Dzieli sie na podwarstwy ponizej - kazda da sie obejrzec osobno.")
+    "Claude Code wczytuje go sam na starcie KAZDEJ sesji, w kazdym projekcie na tej maszynie. Dzieli sie na podwarstwy ponizej - kazda da sie obejrzec osobno." `
+    "plik" "" "claude")
   $lista += $wGlob
   $juz[(Klucz-Sciezki $plikClaude)] = $true
 
@@ -110,18 +123,18 @@ function Tryb-Warstwy {
     @{ Krotka = "warstwa stala"; Id = "claude-globalny-stala"; Nazwa = "Co wiem - czesc stala"; Trwalosc = "stala"
        Kto = "czlowiek recznie + narzedzia\aktualizuj-wiedze.ps1 (awans z Biezace)"; Tekst = $w.StalaTekst
        Opis = "nie wygasa; prog ostrzegawczy $ProgStalej znakow"
-       BrakSekcji = "w $plikClaude nie ma sekcji '## Co wiem'" },
+       BrakSekcji = "w $plikClaude nie ma sekcji '## Co wiem'$(Gdzie-Indziej-Co-Wiem $plikClaude)" },
     @{ Krotka = "warstwa biezaca"; Id = "claude-globalny-biezace"; Nazwa = "Co wiem - Biezace"; Trwalosc = "tymczasowa"
        Kto = "narzedzia\wyciagnij-fakty.ps1 + aktualizuj-wiedze.ps1 (cykl dzienny)"; Tekst = $w.BiezacaTekst
        Opis = "$uwagaBiez; wpis starszy niz $DniWaznosci dni jest podejrzany"
-       BrakSekcji = "w sekcji '## Co wiem' nie ma podsekcji '### Biezace'" })
+       BrakSekcji = $(if ($w.MaSekcje) { "w sekcji '## Co wiem' nie ma podsekcji '### Biezace'" } else { "w $plikClaude nie ma sekcji '## Co wiem'$(Gdzie-Indziej-Co-Wiem $plikClaude)" }) })
   # Od P59a zasady pamieci to bloki nazwane lore i wiedza (petla nizej) - wiersz starego wspolnego
   # bloku pokazujemy tylko wtedy, gdy ten jeszcze stoi albo gdy nie ma zadnego z nowych (wtedy "brak").
   $saNoweBloki = (@($w.Bloki | Where-Object { $_.Nazwa -in @("lore", "wiedza") }).Count -gt 0)
   foreach ($pw in $podwarstwy) {
     if (($pw.Id -eq "claude-globalny-blok") -and $saNoweBloki -and ($w.Blok.Znaki -le 0)) { continue }
     $poz = @($kubSesja | Where-Object { ($_.Krotka -eq $pw.Krotka) -and ($_.Skad -eq $plikClaude) }) | Select-Object -First 1
-    $sub = Warstwa $pw.Id $pw.Nazwa $plikClaude "start" $pw.Trwalosc $pw.Kto $pw.Opis "podwarstwa" "claude-globalny"
+    $sub = Warstwa $pw.Id $pw.Nazwa $plikClaude "start" $pw.Trwalosc $pw.Kto $pw.Opis "podwarstwa" "claude-globalny" "claude"
     $sub.Istnieje = $wGlob.Istnieje; $sub.Bajty = $wGlob.Bajty; $sub.Zmieniony = $wGlob.Zmieniony
     if ($poz) {
       $sub.Stan = "jest"; $sub.Znaki = $poz.Znaki; $sub.Tokeny = $poz.Tokeny; $sub.Tresc = $pw.Tekst
@@ -141,7 +154,7 @@ function Tryb-Warstwy {
     elseif ($b.Nazwa -in @("lore", "wiedza")) { $kto = "automat Pilnuj-Zasad w narzedzia\straznik-zasad.ps1 (zrodlo: zasady-$($b.Nazwa).md, modul $($b.Nazwa) instalatora)" }
     $sub = Warstwa ("claude-globalny-blok-" + $b.Nazwa) "blok zasad MegaRuchacza: $($b.Nazwa)" $plikClaude "start" "stala" `
       $kto "wchodzi na start sesji razem z calym plikiem; rachunek za start sesji liczy go jako osobna pozycje" `
-      "podwarstwa" "claude-globalny"
+      "podwarstwa" "claude-globalny" "claude"
     $sub.Istnieje = $true; $sub.Stan = "jest"; $sub.Znaki = $b.Znaki; $sub.Tokeny = Tokeny $b.Znaki
     $pozB = $pozycjeBlokow[$b.Nazwa]
     if ($pozB) { $sub.Znaki = $pozB.Znaki; $sub.Tokeny = $pozB.Tokeny }
@@ -155,7 +168,7 @@ function Tryb-Warstwy {
   $katPamieci = Join-Path $katKlaudii ("projects\" + ($katProjektu -replace '[^A-Za-z0-9]', '-') + "\memory")
   $wp = Z-Pliku (Warstwa "pamiec-natywna" "natywna pamiec Claude Code (MEMORY.md)" (Join-Path $katPamieci "MEMORY.md") "start" "stala" `
     "Claude Code sam (automatyczna pamiec projektu)" `
-    "Claude Code wczytuje ja sam na starcie sesji w tym projekcie - o ile plik istnieje")
+    "Claude Code wczytuje ja sam na starcie sesji w tym projekcie - o ile plik istnieje" "plik" "" "claude")
   if ((-not $wp.Istnieje) -and (Test-Path -LiteralPath $katPamieci -PathType Container)) {
     $wp.Stan = "pusty"
     $wp.Brak = "katalog $katPamieci jest, ale pusty - Claude Code nic tu jeszcze nie zapisal, wiec nic sie nie wczytuje"
@@ -178,7 +191,7 @@ function Tryb-Warstwy {
       $kiedy = "nieuzywane"
       $opis = "zaden hook SessionStart w settings.json go nie wczytuje - plik lezy, ale nie trafia do modelu"
     }
-    $wa = Z-Pliku (Warstwa "sesja-$nr" $poz.Nazwa $poz.Skad $kiedy "stala" "instalator MegaRuchacza (wdroz.ps1)" $opis $rodzaj)
+    $wa = Z-Pliku (Warstwa "sesja-$nr" $poz.Nazwa $poz.Skad $kiedy "stala" "instalator MegaRuchacza (wdroz.ps1)" $opis $rodzaj "" "claude")
     $wa.Znaki = $poz.Znaki; $wa.Tokeny = $poz.Tokeny
     if ($jsonowy) { $wa.Tresc = Ladunek-Hooka $poz.Skad }
     $lista += $wa
@@ -194,13 +207,41 @@ function Tryb-Warstwy {
     $rodzaj = "plik"
     if ($jsonowy) { $rodzaj = "ladunek" }
     $kto = "instalator MegaRuchacza (wdroz.ps1)"
-    if ($poz.Krotka -eq "AGENTS.md domowy") { $kto = "czlowiek recznie + instalator globalny (narzedzia\instaluj-globalnie.ps1, blok zasad)" }
-    $wa = Z-Pliku (Warstwa "sesja-$nr" "$($poz.Nazwa) - czyta tylko Codex" $poz.Skad "start" "stala" $kto `
-      "czyta tylko Codex - Claude Code tego pliku nie wczytuje. Wchodzi na start sesji Codeksa (pozycja rachunku Codeksa: $($poz.Krotka))" $rodzaj)
+    $id = "sesja-$nr"
+    if ($poz.Krotka -eq "AGENTS.md domowy") { $kto = "czlowiek recznie + instalator globalny (narzedzia\instaluj-globalnie.ps1, blok zasad)"; $id = "codex-globalny" }
+    $wa = Z-Pliku (Warstwa $id "$($poz.Nazwa) - czyta tylko Codex" $poz.Skad "start" "stala" $kto `
+      "czyta tylko Codex - Claude Code tego pliku nie wczytuje. Wchodzi na start sesji Codeksa (pozycja rachunku Codeksa: $($poz.Krotka))" $rodzaj "" "codex")
     $wa.Znaki = $poz.Znaki; $wa.Tokeny = $poz.Tokeny
     if ($jsonowy) { $wa.Tresc = Ladunek-Hooka $poz.Skad }
     $lista += $wa
     $juz[(Klucz-Sciezki $poz.Skad)] = $true
+    # Sekcja "## Co wiem" w AGENTS.md - te same podwarstwy, co w CLAUDE.md (Codex ma
+    # w niej pamiec o Tobie i firmie). Pokazujemy je, gdy sekcja tam jest albo gdy
+    # Codeksa uzywasz - wtedy jej brak jest usterka. Liczby z pomiaru Etap-Pomiar
+    # (Zmierz-Warstwy na AGENTS.md) - nic sie nie liczy drugi raz.
+    $nCx = Narzedzie-Po-Kluczu "codex"
+    if (($id -eq "codex-globalny") -and $nCx -and $nCx.Warstwy -and ($nCx.Warstwy.MaSekcje -or $nCx.Uzywane)) {
+      $wc = $nCx.Warstwy
+      $wa.Trwalosc = "mieszana"
+      $brakCw = "w $($nCx.Instrukcje) nie ma sekcji '## Co wiem'$(Gdzie-Indziej-Co-Wiem $nCx.Instrukcje)"
+      $brakBz = $brakCw
+      if ($wc.MaSekcje) { $brakBz = "w sekcji '## Co wiem' w $($nCx.Instrukcje) nie ma podsekcji '### Biezace'" }
+      foreach ($pc in @(
+          @{ Id = "codex-globalny-stala"; Nazwa = "Co wiem - czesc stala (AGENTS.md)"; Trwalosc = "stala"; M = $wc.Stala; Tekst = $wc.StalaTekst; Brak = $brakCw },
+          @{ Id = "codex-globalny-biezace"; Nazwa = "Co wiem - Biezace (AGENTS.md)"; Trwalosc = "tymczasowa"; M = $wc.Biezaca; Tekst = $wc.BiezacaTekst; Brak = $brakBz })) {
+        $sub = Warstwa $pc.Id $pc.Nazwa $nCx.Instrukcje "start" $pc.Trwalosc "czlowiek recznie (kopia wiedzy dla Codeksa)" `
+          "czyta tylko Codex - wchodzi na start jego sesji razem z calym AGENTS.md (rachunek liczy caly plik jedna pozycja)" "podwarstwa" "codex-globalny" "codex"
+        $sub.Istnieje = $wa.Istnieje; $sub.Bajty = $wa.Bajty; $sub.Zmieniony = $wa.Zmieniony
+        if ($pc.M.Znaki -gt 0) {
+          $sub.Stan = "jest"; $sub.Znaki = $pc.M.Znaki; $sub.Tokeny = $pc.M.Tokeny; $sub.Tresc = $pc.Tekst
+        } elseif ($wc.Blad) {
+          $sub.Stan = "blad"; $sub.Brak = $wc.Blad
+        } else {
+          $sub.Stan = "brak"; $sub.Brak = $pc.Brak
+        }
+        $lista += $sub
+      }
+    }
   }
 
   # --- przy KAZDEJ wiadomosci ---------------------------------------------------
@@ -219,7 +260,7 @@ function Tryb-Warstwy {
     $opisPrzyp = "zaden hook UserPromptSubmit w settings.json nie wskazuje ladunku przypomnienia - pokazany plik, ktory liczy rachunek"
   }
   $wa = Z-Pliku (Warstwa "przypomnienie" "przypomnienie zasad (Claude Code)" $sciezkaPrzyp "wiadomosc" "stala" `
-    "instalator MegaRuchacza (instaluj-globalnie.ps1 / wdroz.ps1)" $opisPrzyp "ladunek")
+    "instalator MegaRuchacza (instaluj-globalnie.ps1 / wdroz.ps1)" $opisPrzyp "ladunek" "" "claude")
   if (-not $sciezkaPrzyp) {
     $wa.Brak = "nie znalazlem ladunku przypomnienia: zaden hook UserPromptSubmit w settings.json go nie wskazuje, a w $Zrodlo nie ma .claude\orchestrator-reminder.json"
   } elseif ($wa.Istnieje -and ($wa.Stan -eq "jest")) {
@@ -236,7 +277,7 @@ function Tryb-Warstwy {
 
   foreach ($poz in @($kubWiadomoscCx)) {
     $wa = Z-Pliku (Warstwa "przypomnienie-codex" "$($poz.Nazwa) - czyta tylko Codex" $poz.Skad "wiadomosc" "stala" "instalator MegaRuchacza (wdroz.ps1)" `
-      "czyta tylko Codex - hook UserPromptSubmit Codeksa dokleja ten ladunek do kazdej wiadomosci w Codeksie; Claude Code go nie dostaje" "ladunek")
+      "czyta tylko Codex - hook UserPromptSubmit Codeksa dokleja ten ladunek do kazdej wiadomosci w Codeksie; Claude Code go nie dostaje" "ladunek" "" "codex")
     $wa.Znaki = $poz.Znaki; $wa.Tokeny = $poz.Tokeny; $wa.Tresc = Ladunek-Hooka $poz.Skad
     $lista += $wa
     $juz[(Klucz-Sciezki $poz.Skad)] = $true
@@ -356,6 +397,27 @@ function Tryb-Warstwy {
     $juz[(Klucz-Sciezki $k.Sciezka)] = $true
   }
 
+  # NARZEDZIE, KTOREGO TU NIE UZYWASZ: jego warstwa bez pliku albo bez sekcji to nie
+  # usterka, tylko "nie dotyczy" - na czerwono swiecilaby falszywym alarmem (komputer
+  # z samym Codeksem nie ma po co miec natywnej pamieci Claude Code). Powod braku
+  # zostaje w zdaniu, wiec nic nie znika po cichu.
+  foreach ($wa in $lista) {
+    if (-not $wa.Narzedzie) { continue }
+    $nw = Narzedzie-Po-Kluczu $wa.Narzedzie
+    if (-not $nw) { continue }
+    $wa.NarzedzieNazwa = $nw.Nazwa
+    if ($nw.Uzywane -or (@("brak", "pusty", "blad") -notcontains "$($wa.Stan)")) { continue }
+    $pow = ""
+    if ($wa.Brak) { $pow = " ($($wa.Brak))" }
+    $wa.Stan = "nie-dotyczy"
+    $wa.Brak = "nie dotyczy - nie uzywasz tu $($nw.Nazwa): w ostatnich $DniUzywania dniach nie bylo w nim rozmowy$pow"
+  }
+  $infoNarz = @()
+  foreach ($n in @($narzedzia)) {
+    $infoNarz += [pscustomobject]@{ Klucz = $n.Klucz; Nazwa = $n.Nazwa; Uzywane = [bool]$n.Uzywane
+      Instrukcje = $n.Instrukcje; CoWiem = [bool]($n.Warstwy -and $n.Warstwy.MaSekcje) }
+  }
+
   $wynikW = [pscustomobject]@{
     Wersja        = 1
     Wygenerowano  = (Get-Date).ToString("yyyy-MM-dd HH:mm:ss")
@@ -364,6 +426,7 @@ function Tryb-Warstwy {
     TrybGlobalny  = [bool]$trybGlobalny
     ZnakiNaToken  = $ZnakiNaToken
     Uwagi         = @($script:UwagiWarstw)
+    Narzedzia     = @($infoNarz)
     Warstwy       = @($lista)
   }
   $json = $wynikW | ConvertTo-Json -Depth 6 -Compress

@@ -76,19 +76,21 @@ function Rachunek-Narzedzia($narz) {
   # sie jak "za darmo", a to znaczy "nie ma czego liczyc" - mowi to pole Brak.
   if (-not $r.Jest) { return $r }
 
-  if ($narz -eq "Codex") {
-    $r.PowodCalosci = "calosci otwarcia sesji Codeksa nie mierze (pomiar z transkryptow jest tylko dla Claude Code)"
-  } elseif ($bladOtwarcia) {
-    $r.PowodCalosci = $bladOtwarcia
-  } elseif (-not $otwarcie) {
+  # Pomiar calosci TEGO narzedzia (Etap-Ocena, $pomiaryNarzedzi): Claude Code z jego
+  # transkryptow, Codex od 06.10.2026 z jego (do tej pory "nie mierze").
+  $pom = $null
+  if ($pomiaryNarzedzi) { $pom = $pomiaryNarzedzi[$r.Klucz] }
+  if ($pom -and $pom.Blad) {
+    $r.PowodCalosci = $pom.Blad
+  } elseif (-not $pom) {
     $r.PowodCalosci = "pomiaru calosci w tym trybie nie robie"
-  } elseif ($otwarcie.Powod) {
-    $r.PowodCalosci = $otwarcie.Powod
-  } elseif ((-not $otwarcie.Sesje) -or ($null -eq $otwarcie.Sesje.Mediana) -or ($otwarcie.Sesje.Mediana -le 0)) {
+  } elseif ($pom.Powod) {
+    $r.PowodCalosci = $pom.Powod
+  } elseif ((-not $pom.Otwarcie) -or ($null -eq $pom.Otwarcie.Mediana) -or ($pom.Otwarcie.Mediana -le 0)) {
     $r.PowodCalosci = "pomiar z transkryptow nie oddal mediany sesji"
   } else {
-    $r.Calosc = [long]$otwarcie.Sesje.Mediana
-    $r.Sesji  = [int]$otwarcie.Sesje.Liczba
+    $r.Calosc = [long]$pom.Otwarcie.Mediana
+    $r.Sesji  = [int]$pom.Otwarcie.Liczba
     $r.Udzial = 100.0 * [double]$r.Mr / [double]$r.Calosc
   }
   # Prog w TOKENACH czesci MegaRuchacza, nie w procencie calosci (uzasadnienie przy
@@ -266,6 +268,25 @@ function Etap-Ocena {
   if (-not $TylkoSufity) {
     try { $otwarcie = Pomiar-Otwarcia $false }
     catch { $bladOtwarcia = "pomiar otwarcia sesji sie wywrocil ($($_.Exception.Message))" }
+  }
+  # Pomiar KAZDEGO narzedzia z listy $NARZEDZIA_AI (pomiar.ps1), po kluczu - Claude Code
+  # z pomiaru wyzej, reszta przez Pomiar-Narzedzia (otwarcie.ps1). Zuzycie dzienne
+  # (czytanie wszystkich rozmow z tygodnia) tylko dla -Dane, czyli dla okna nadzorcy -
+  # linia przy starcie sesji go nie potrzebuje i nie ma na nie czekac.
+  $pomiaryNarzedzi = $null
+  if (-not $TylkoSufity) {
+    $pomiaryNarzedzi = @{}
+    foreach ($n in @($narzedzia)) {
+      if ($n.Format -eq "claude") {
+        $pc = [pscustomobject]@{ Klucz = $n.Klucz; Nazwa = $n.Nazwa; Uzywane = [bool]$n.Uzywane; Powod = ""; Blad = $bladOtwarcia
+          Otwarcie = $null; Zuzycie = $null; ZuzycieWOknie = $true }
+        if ($otwarcie) { $pc.Powod = $otwarcie.Powod; $pc.Otwarcie = $otwarcie.Sesje }
+        elseif ($bladOtwarcia) { $pc.Powod = $bladOtwarcia }
+        $pomiaryNarzedzi[$n.Klucz] = $pc
+      } else {
+        $pomiaryNarzedzi[$n.Klucz] = Pomiar-Narzedzia $n $false ([bool]$Dane)
+      }
+    }
   }
 
   $rCc = Rachunek-Narzedzia "Claude"

@@ -6,7 +6,9 @@
 # Tokeny-Albo-Brak, Koszt-Po-Ludzku, Zdanie-Progu) oraz wykres kosztu nauki jako
 # tekst (Linie-Statystyki - od P35 wykres stoi w Szczegolach, tam go wola wydruk).
 # Od P59d sprawy, karty i przyciski modulow spoza rejestru instalacji ($d.Instalacja)
-# nie powstaja - w oknie i w wydruku tak samo.
+# nie powstaja - w oknie i w wydruku tak samo. Od P71 narzedzia AI tej maszyny (Claude
+# Code, Codex - klucze narz.N.* z -Dane): Narzedzia-Z-Rachunku, Zdanie-Narzedzi,
+# Problemy-Narzedzi, Teksty-Kosztu-Narzedzi, Opis-Startu-Narzedzia, Linie-Otwarcia-Innych.
 # Skad wolane: tryby -Raz i -Raport w nadzorca.ps1, karty w przeglad.ps1 (Odmaluj-*),
 # przyciski w okno.ps1, sekcje w szczegoly.ps1. Wczytuje go nadzorca.ps1 kropka
 # PRZED trybami bez GUI - tu sa same definicje, nic sie nie liczy.
@@ -66,6 +68,14 @@ function Zbierz-Problemy($d, $wywrotki, [string]$blad, $czasDanych) {
       "MegaRuchacz potknął się w tle. Pełna treść jest w zakładce Szczegóły.") ((@($wywrotki)) -join " | ")
   }
 
+  # Narzedzia AI tej maszyny (koszt-pamieci.ps1 -Dane, klucze narz.N.* i cowiem.*):
+  # prawdziwe braki ida na liste, braki narzedzia, ktorego tu nie uzywasz - NIE (falszywy
+  # alarm jest gorszy niz brak alarmu). Stary rachunek bez tych kluczy = nic nie dodajemy.
+  if ($d) {
+    try { foreach ($p in (Problemy-Narzedzi $d)) { $lista += $p } }
+    catch { Zanotuj-Wywrotke "sprawy narzedzi AI" $_ }
+  }
+
   # Skille (P18): nieudane albo dawno niewykonane codzienne sprawdzenie - sam plik
   # znacznika, bez wolania skryptu. Tylko z modulem Skille (P59d).
   if (Modul-Jest $(if ($d) { $d.Instalacja } else { $null }) "skille") {
@@ -97,6 +107,226 @@ function Waga-Z-Alarmu($a) {
 function Porada-Z-Alarmu($a) {
   if ($a.Porada) { return $a.Porada }
   return (Porada-Ludzka $a.Tresc)
+}
+
+# ------------------------------------------- narzedzia AI na tym komputerze (P71)
+#
+# Okno pokazywalo dotad tylko Claude Code. Na komputerze z samym Codeksem klamalo:
+# "BRAK SEKCJI" przy wiedzy, ktora stoi w ~\.codex\AGENTS.md, "nie zmierzono" przy
+# tokenach i "Wszystko gra" pod czerwonymi wierszami. Lista narzedzi i ich liczby
+# przychodza z koszt-pamieci.ps1 -Dane (klucze narz.N.*, lista $NARZEDZIA_AI
+# w narzedzia\koszt\pomiar.ps1) - okno niczego nie wykrywa i nie liczy samo.
+# Uzywane = rozmowa w tym narzedziu w ostatnich 14 dniach.
+
+function Narzedzia-Z-Rachunku($d) {
+  $lista = @()
+  if (-not $d -or -not $d.Rachunek -or -not $d.Rachunek.Klucze) { return ,$lista }
+  $k = $d.Rachunek.Klucze
+  $ile = Liczba-Z-Klucza $k "narzedzia"
+  if (-not $ile) { return ,$lista }
+  for ($i = 1; $i -le $ile; $i++) {
+    $p = "narz.$i."
+    $lista += [pscustomobject]@{
+      Klucz = Tekst-Z-Klucza $k "${p}klucz"; Nazwa = Tekst-Z-Klucza $k "${p}nazwa"
+      Uzywane = ((Tekst-Z-Klucza $k "${p}uzywane") -eq "1"); Ostatnio = Tekst-Z-Klucza $k "${p}ostatnio"
+      Instrukcje = Tekst-Z-Klucza $k "${p}instrukcje"; InstrukcjeJest = ((Tekst-Z-Klucza $k "${p}instrukcje_jest") -eq "1")
+      CoWiem = ((Tekst-Z-Klucza $k "${p}cowiem") -eq "1"); Mr = Liczba-Z-Klucza $k "${p}mr"
+      Otwarcie = Liczba-Z-Klucza $k "${p}otwarcie"; OtwarcieSesji = Liczba-Z-Klucza $k "${p}otwarcie_sesji"
+      OtwarciePowod = Tekst-Z-Klucza $k "${p}otwarcie_powod"
+      ZuzycieWOknie = ((Tekst-Z-Klucza $k "${p}zuzycie_w_oknie") -eq "1")
+      Dzis = Liczba-Z-Klucza $k "${p}dzis"; Srednia = Liczba-Z-Klucza $k "${p}srednia"
+      ZuzycieDni = Liczba-Z-Klucza $k "${p}zuzycie_dni"; DniZRozmowami = Liczba-Z-Klucza $k "${p}zuzycie_dni_z_rozmowami"
+      Bufor = Liczba-Z-Klucza $k "${p}zuzycie_bufor"; ZuzyciePowod = Tekst-Z-Klucza $k "${p}zuzycie_powod"
+    }
+  }
+  return ,$lista
+}
+
+# "Claude Code", "Claude Code i Codex", "A, B i C".
+function Lista-Nazw($nazwy) {
+  $n = @($nazwy | Where-Object { $_ })
+  if ($n.Count -le 1) { return ($n -join "") }
+  return (($n[0..($n.Count - 2)] -join ", ") + " i " + $n[-1])
+}
+
+# "z Claude", "z Codeksem" - do zdan "rozmowy z ...". Nieznane narzedzie: "w <nazwa>".
+function Z-Narzedziem([string]$nazwa) {
+  switch ($nazwa) {
+    "Claude Code" { return "z Claude" }
+    "Codex"       { return "z Codeksem" }
+  }
+  return "w $nazwa"
+}
+
+# "w Claude Code", "w Codeksie" - do zdan "zuzywasz w ...".
+function W-Narzedziu([string]$nazwa) {
+  if ($nazwa -eq "Codex") { return "w Codeksie" }
+  return "w $nazwa"
+}
+
+# Jedno zdanie na gorze Przegladu (P71). Pusty tekst = rachunek bez listy narzedzi
+# (stara wersja albo nieudany) - wtedy o brakach mowi juz lista spraw.
+function Zdanie-Narzedzi($d) {
+  $narz = Narzedzia-Z-Rachunku $d
+  if ($narz.Count -eq 0) { return "" }
+  $uz = @($narz | Where-Object { $_.Uzywane })
+  if ($uz.Count -eq 0) {
+    return "Na tym komputerze: w ostatnich 14 dniach nie było rozmowy w żadnym narzędziu ($(Lista-Nazw @($narz | ForEach-Object { $_.Nazwa })))."
+  }
+  return "Na tym komputerze: $(Lista-Nazw @($uz | ForEach-Object { $_.Nazwa }))."
+}
+
+# Prawdziwe braki narzedzi: sekcja "Co wiem" nie stoi w ZADNYM pliku instrukcji (przy
+# module Wiedza) i pomiar tokenow niemozliwy dla narzedzia, ktorego UZYWASZ. Narzedzie
+# nieuzywane nie daje tu nic - jego braki pokazuje szaro zakladka Warstwy pamieci.
+function Problemy-Narzedzi($d) {
+  $lista = @()
+  $k = $null
+  if ($d -and $d.Rachunek) { $k = $d.Rachunek.Klucze }
+  if (-not $k) { return ,$lista }
+  $narz = Narzedzia-Z-Rachunku $d
+  if ($k.Contains("cowiem.gdzie") -and (Modul-Jest $d.Instalacja "wiedza") -and ((Tekst-Z-Klucza $k "cowiem.wiedza_wylaczona") -ne "1") -and
+      (-not (Tekst-Z-Klucza $k "cowiem.gdzie"))) {
+    $spr = Tekst-Z-Klucza $k "cowiem.sprawdzone"
+    $lista += Problem "pilne" "Wiedza o Tobie i firmie nie trafia do żadnego narzędzia" (
+      "W żadnym pliku instrukcji nie ma sekcji `„Co wiem`” - sprawdziłem $(@($narz).Count) $(Odmiana @($narz).Count 'plik' 'pliki' 'plików'). " +
+      "Bez niej ani Claude Code, ani Codex nie wiedzą nic z tego, czego MegaRuchacz się o Tobie nauczył. " +
+      "Kliknij `„Zmień instalację`” i zainstaluj ponownie moduł Wiedza - założy tę sekcję.") "Sprawdzone pliki: $spr"
+  }
+  foreach ($n in $narz) {
+    if (-not $n.Uzywane) { continue }
+    $pow = @()
+    if ($n.OtwarciePowod) { $pow += "otwarcie okna rozmowy: $($n.OtwarciePowod)" }
+    if ((-not $n.ZuzycieWOknie) -and $n.ZuzyciePowod) { $pow += "zużycie dzienne: $($n.ZuzyciePowod)" }
+    if ($pow.Count -eq 0) { continue }
+    $lista += Problem "uwaga" "Nie umiem zmierzyć, ile tokenów zużywasz $(W-Narzedziu $n.Nazwa)" (
+      "Używasz go na tym komputerze (ostatnia rozmowa: $(if ($n.Ostatnio) { $n.Ostatnio } else { 'niedawno' })), ale liczby tokenów nie da się odczytać z jego rozmów. " +
+      "Szczegóły są w zakładce Szczegóły.") ($pow -join " | ")
+  }
+  return ,$lista
+}
+
+# Karta "Ile tokenow naprawde zuzywasz" dla KAZDEGO narzedzia (P71). Teksty Claude Code
+# sklada Teksty-Kosztu (stan-koszt.ps1) jak dotad; tu dochodza narzedzia, ktorych
+# zuzycie liczy koszt-pamieci.ps1 (Codex), osobno i razem, kazda liczba z jednostka.
+# Gdy Claude Code nie jest tu uzywany, karta mowi o pozostalych narzedziach, a o nim
+# jednym zdaniem - spokojnie, bez "nie wiem" na zolto.
+function Teksty-Kosztu-Narzedzi($k, $z, $d) {
+  $t = Teksty-Kosztu $k $z
+  $narz = Narzedzia-Z-Rachunku $d
+  if ($narz.Count -eq 0) { return $t }
+  $cc = @($narz | Where-Object { $_.ZuzycieWOknie }) | Select-Object -First 1
+  $inne = @($narz | Where-Object { (-not $_.ZuzycieWOknie) -and $_.Uzywane })
+  $ccUz = (-not $cc) -or $cc.Uzywane
+  if ($ccUz -and ($inne.Count -eq 0)) { return $t }
+
+  $wiersz = {
+    param($n)
+    $dz = "nie wiem"; $sr = "nie wiem"
+    if (-not $n.ZuzyciePowod) {
+      $dz = "nic"; if ($n.Dzis -gt 0) { $dz = Tokeny-Okolo $n.Dzis }
+      $sr = "nic"; if ($n.Srednia -gt 0) { $sr = Tokeny-Okolo $n.Srednia }
+    }
+    return ,@($n.Nazwa, $dz, $sr)
+  }
+  $znane = @($inne | Where-Object { -not $_.ZuzyciePowod })
+  $bezLiczb = @($inne | Where-Object { $_.ZuzyciePowod })
+
+  if (-not $ccUz) {
+    $x = [pscustomobject]@{
+      Tytul = "Ile tokenów naprawdę zużywasz - $(Lista-Nazw @($inne | ForEach-Object { $_.Nazwa }))"
+      Powod = ""; PowodSzary = $false; Tabela = @(); Udzial = ""; UdzialUwaga = $false
+      NaglowekWorkerow = "Workerzy MegaRuchacza"; Workerzy = @()
+      WorkerzyPusto = "Workerzy MegaRuchacza pracują w Claude Code - tu go nie używasz, więc ich nie ma."
+    }
+    if ($inne.Count -eq 0) {
+      $x.Tytul = "Ile tokenów naprawdę zużywasz"
+      $x.PowodSzary = $true
+      $x.Powod = "Nie ma czego liczyć: w ostatnich 14 dniach nie było tu rozmowy w żadnym narzędziu ($(Lista-Nazw @($narz | ForEach-Object { $_.Nazwa })))."
+      return $x
+    }
+    if ($znane.Count -eq 0) {
+      $x.Powod = "Nie wiem, ile tokenów zużywasz $(W-Narzedziu $inne[0].Nazwa), bo $("$($inne[0].ZuzyciePowod)".TrimEnd('.', ' '))."
+      return $x
+    }
+    $x.Tabela = @(,@("", "dziś (tokenów)", "średnio dziennie"))
+    foreach ($n in $inne) { $x.Tabela += ,(& $wiersz $n) }
+    if ($znane.Count -gt 1) {
+      $sd = [double]0; $ss = [double]0
+      foreach ($n in $znane) { $sd += [double]$n.Dzis; $ss += [double]$n.Srednia }
+      $x.Tabela += ,@("Razem", $(if ($sd -gt 0) { Tokeny-Okolo $sd } else { "nic" }), $(if ($ss -gt 0) { Tokeny-Okolo $ss } else { "nic" }))
+    }
+    $dni = $znane[0].ZuzycieDni
+    $x.Udzial = "Średnio dziennie = z $dni pełnych dni, liczę wszystkie tokeny rozmów (także czytane ponownie z pamięci podręcznej). Claude Code: nie używasz go na tym komputerze."
+    if ($bezLiczb.Count -gt 0) {
+      $x.Udzial += " $($bezLiczb[0].Nazwa): nie wiem, bo $("$($bezLiczb[0].ZuzyciePowod)".TrimEnd('.', ' '))."
+      $x.UdzialUwaga = $true
+    }
+    return $x
+  }
+
+  # Claude Code i inne narzedzie naraz: wiersze Claude Code nazwane z imienia, wiersz
+  # kazdego innego narzedzia i "Razem" ze wszystkich - gdy wszystkie liczby sa znane.
+  $opisInnych = @($inne | ForEach-Object {
+    if ($_.ZuzyciePowod) { "$($_.Nazwa): nie wiem, bo $("$($_.ZuzyciePowod)".TrimEnd('.', ' '))" }
+    else { "$($_.Nazwa): dziś $(if ($_.Dzis -gt 0) { Tokeny-Okolo $_.Dzis } else { 'nic' }), średnio $(if ($_.Srednia -gt 0) { Tokeny-Okolo $_.Srednia } else { 'nic' }) tokenów dziennie" }
+  })
+  $t.Tytul = "Ile tokenów naprawdę zużywasz - Claude Code (rozmowy i workerzy) i $(Lista-Nazw @($inne | ForEach-Object { $_.Nazwa }))"
+  if ($t.Powod -or (@($t.Tabela).Count -lt 4)) {
+    if ($t.Powod) { $t.Powod = "$($t.Powod) $($opisInnych -join '; ')." }
+    return $t
+  }
+  $tab = @($t.Tabela)
+  $razem = $tab[-1]
+  $nowa = @(,$tab[0])
+  $nowa += ,@("Claude: rozmowy", $tab[1][1], $tab[1][2])
+  $nowa += ,@("Claude: workerzy", $tab[2][1], $tab[2][2])
+  foreach ($n in $inne) { $nowa += ,(& $wiersz $n) }
+  if ($bezLiczb.Count -eq 0) {
+    $dz = [double]$k.Rozmowy + [double]$k.Workerzy
+    $sr = $null
+    if ($z -and ($z.Stan -eq "jest") -and ($null -ne $z.SredniaRozmowy) -and ($null -ne $z.SredniaWorkerow)) { $sr = [double]$z.SredniaRozmowy + [double]$z.SredniaWorkerow }
+    foreach ($n in $inne) { $dz += [double]$n.Dzis; if ($null -ne $sr) { $sr += [double]$n.Srednia } }
+    $nowa += ,@("Razem", $(if ($dz -gt 0) { Tokeny-Okolo $dz } else { "nic" }), $(if ($null -ne $sr) { Tokeny-Okolo $sr } else { $razem[2] }))
+  } else {
+    $nowa += ,@("Razem Claude", $razem[1], $razem[2])
+    $t.Udzial = "$($t.Udzial) $($opisInnych -join '; ')."
+    $t.UdzialUwaga = $true
+  }
+  $t.Tabela = $nowa
+  return $t
+}
+
+# Otwarcie okna rozmowy: nazwa narzedzia, ktorego dotyczy pomiar (-Start, Sesje.Narzedzie;
+# stary pomiar bez tego pola = Claude Code) i opis z poprawionym "z Claude".
+function Narzedzie-Startu($start) {
+  if ($start -and $start.Sesje -and $start.Sesje.Narzedzie) { return "$($start.Sesje.Narzedzie)" }
+  return "Claude Code"
+}
+
+function Opis-Startu-Narzedzia($start) {
+  $o = Opis-Startu $start
+  $nazwa = Narzedzie-Startu $start
+  if ($o -and ($nazwa -ne "Claude Code") -and $o.Podstawa) { $o.Podstawa = $o.Podstawa -replace 'z Claude \(', "$(Z-Narzedziem $nazwa) (" }
+  return $o
+}
+
+# Otwarcie okna rozmowy POZOSTALYCH uzywanych narzedzi - jedna linia na narzedzie, pod
+# karta glownego. Liczby z -Dane (narz.N.otwarcie, narz.N.mr); brak to "nie zmierzono, bo".
+function Linie-Otwarcia-Innych($d, $start) {
+  $l = @()
+  $glowne = Narzedzie-Startu $start
+  foreach ($n in (Narzedzia-Z-Rachunku $d)) {
+    if ((-not $n.Uzywane) -or ($n.Nazwa -eq $glowne)) { continue }
+    if ($null -ne $n.Otwarcie) {
+      $x = "$($n.Nazwa): otwarcie okna rozmowy ~$(Okolo $n.Otwarcie) tokenów (typowa wartość z $($n.OtwarcieSesji) $(Odmiana ([int]$n.OtwarcieSesji) 'rozmowy' 'rozmów' 'rozmów'))"
+      if ($null -ne $n.Mr) { $x += ", z tego MegaRuchacz ~$(Okolo $n.Mr) ($(Procent-Ludzko $n.Mr $n.Otwarcie))" }
+      $l += "$x."
+    } else {
+      $l += "$($n.Nazwa): otwarcia okna rozmowy nie zmierzono, bo $("$($n.OtwarciePowod)".TrimEnd('.', ' '))."
+    }
+  }
+  return ,$l
 }
 
 # Ile spraw naprawde wymaga uwagi - informacje sie nie licza. Od tego zalezy,
@@ -217,6 +447,10 @@ function Zbuduj-Przod($d, $problemy, $czas, $start, $zuzycie = $null, $koszt = $
   $l += "liczby sprawdzone: $stempel  (okno odświeża je samo w tle co $Minut min; starsze niż dzisiejsze liczy od nowa przy otwarciu)"
   $jest = Nazwy-Modulow $inst $true
   $l += "zainstalowane moduły: $(if ($jest.Count -gt 0) { $jest -join ', ' } else { 'żaden (sama aplikacja przy zegarze z aktualizacjami)' })$(if ($inst -and $inst.Blad) { '  (REJESTR NIECZYTELNY - pokazuję wszystko)' })"
+  # P71: na jakich narzedziach pracujesz na tym komputerze - w oknie pierwsza linia karty werdyktu.
+  $zn = ""
+  try { $zn = Zdanie-Narzedzi $d } catch { Zanotuj-Wywrotke "zdanie o narzedziach do wydruku" $_ }
+  if ($zn) { $l += "$zn   (w oknie: szara linia na samej górze Przeglądu)" }
   $l += ""
 
   $l += "WERDYKT   (w oknie: pierwsza karta, duże zdanie - zielone: mało, czerwone: dużo, żółte: nie wiadomo)"
@@ -260,12 +494,13 @@ function Zbuduj-Przod($d, $problemy, $czas, $start, $zuzycie = $null, $koszt = $
 
   $l += "ILE TOKENÓW NAPRAWDĘ ZUŻYWASZ   (w oknie: karta pod werdyktem - dwie kolumny obok siebie)"
   $tk = $null
-  try { $tk = Teksty-Kosztu $koszt $zuzycie } catch { Zanotuj-Wywrotke "prawdziwy koszt do wydruku" $_ }
+  try { $tk = Teksty-Kosztu-Narzedzi $koszt $zuzycie $d } catch { Zanotuj-Wywrotke "prawdziwy koszt do wydruku" $_ }
   if (-not $tk) {
     $l += "  NIE UDALO SIE ZLOZYC - szczegoly w dzienniku nadzorcy"
   } elseif ($tk.Powod) {
-    $l += "  $($tk.Powod)  (żółty napis)"
+    $l += "  $($tk.Powod)  ($(if ($tk.PowodSzary) { 'szary' } else { 'żółty' }) napis)"
   } else {
+    if ($tk.Tytul) { $l += "  $($tk.Tytul)" }
     foreach ($r in $tk.Tabela) { $l += ("  {0,-16} {1,-18} {2}" -f $r[0], $r[1], $r[2]) }
     if ($tk.Udzial) { $l += "  $($tk.Udzial)$(if ($tk.UdzialUwaga) { '  (żółty napis)' })" }
     $l += "  | $($tk.NaglowekWorkerow)"
@@ -274,22 +509,26 @@ function Zbuduj-Przod($d, $problemy, $czas, $start, $zuzycie = $null, $koszt = $
   }
   $l += ""
 
-  $l += "OTWARCIE OKNA ROZMOWY   (w oknie: karta z dużą liczbą i paskiem - MegaRuchacz kontra sam Claude Code)"
+  $nazwaStartu = Narzedzie-Startu $start
+  $l += "OTWARCIE OKNA ROZMOWY   (w oknie: karta z dużą liczbą i paskiem - MegaRuchacz kontra sam $nazwaStartu)"
   $os = $null
-  try { $os = Opis-Startu $start } catch { Zanotuj-Wywrotke "otwarcie okna rozmowy do wydruku" $_ }
+  try { $os = Opis-Startu-Narzedzia $start } catch { Zanotuj-Wywrotke "otwarcie okna rozmowy do wydruku" $_ }
   if (-not $os) {
     $l += "  NIE UDALO SIE ZLOZYC - szczegoly w dzienniku nadzorcy"
   } elseif (-not $os.Zmierzone) {
     $l += "  nie zmierzono, bo $($os.Powod)."
     if ($null -ne $os.Mr) { $l += "  sama część MegaRuchacza (z rachunku): ~$(Liczba-Ludzka $os.Mr) tokenów - procentu nie ma, bo nie ma całości" }
   } else {
-    $l += "  Otwarcie okna rozmowy: ~$(Okolo $os.Razem) tokenów. Z tego MegaRuchacz: $(Okolo $os.Mr) ($($os.MrProc)) · Claude Code sam: $(Okolo $os.Cc) ($($os.CcProc))"
+    $l += "  Otwarcie okna rozmowy ($nazwaStartu): ~$(Okolo $os.Razem) tokenów na otwarcie okna. Z tego MegaRuchacz: $(Okolo $os.Mr) ($($os.MrProc)) · $nazwaStartu sam: $(Okolo $os.Cc) ($($os.CcProc))"
     foreach ($sk in (Skladniki-Mr $start $os)) { $l += "      $($sk.Napis): $($sk.Liczba)   ($($sk.Proc))" }
     $zw = Zdanie-Wiadomosci $start
     if ($zw) { $l += "      $zw" }
     $l += "  $($os.Portfel)"
     $l += "  $($os.Podstawa) $($os.Zakres)   (drobnym drukiem)"
   }
+  $inneO = @()
+  try { $inneO = Linie-Otwarcia-Innych $d $start } catch { Zanotuj-Wywrotke "otwarcie okna innych narzedzi do wydruku" $_ }
+  foreach ($x in $inneO) { $l += "  $x   (drobnym drukiem)" }
   $l += ""
 
   $r = $null; $c = $null

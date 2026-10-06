@@ -28,6 +28,15 @@ function Odmaluj-Werdykt {
   $w = $null
   try { $w = Werdykt-Kosztu $script:Start $r $c $script:Zuzycie $script:Instalacja } catch { Zanotuj-Wywrotke "werdykt kosztu" $_ }
   $script:KartaWerdykt.BackColor = $script:TloKarty
+  # P71: na samej gorze Przegladu - na jakich narzedziach pracujesz na tym komputerze.
+  $zn = ""
+  try { $zn = Zdanie-Narzedzi $script:Dane } catch { Zanotuj-Wywrotke "zdanie o narzedziach" $_ }
+  if ($zn) {
+    $ln = Etykieta-Zawijana $zn $script:CzMala $script:KolSzary $szer
+    $ln.UseMnemonic = $false
+    $ln.Margin = New-Object System.Windows.Forms.Padding(0, 0, 0, 4)
+    $script:KartaWerdykt.Controls.Add($ln)
+  }
   if (-not $w) {
     $script:KartaWerdykt.BackColor = $script:TloUwaga
     $script:KartaWerdykt.Controls.Add((Etykieta-Zawijana "Nie udało się ocenić, ile kosztuje MegaRuchacz - powód jest w dzienniku nadzorcy." $script:CzGruba $script:KolUwaga $szer))
@@ -83,7 +92,7 @@ function Odmaluj-Koszt {
   Wyczysc-Panel $script:KartaKoszt
   $szer = $script:SzerKarty - 44
   $t = $null
-  try { $t = Teksty-Kosztu $script:KosztDzis $script:Zuzycie }
+  try { $t = Teksty-Kosztu-Narzedzi $script:KosztDzis $script:Zuzycie $script:Dane }
   catch { Zanotuj-Wywrotke "karta prawdziwego kosztu" $_ }
   $gora = Poziomy
   $tytul = "Ile tokenów naprawdę zużywasz - Twoje rozmowy i workerzy"
@@ -97,7 +106,7 @@ function Odmaluj-Koszt {
   if ($t.Powod) {
     # Jeszcze liczy - szare zdanie; nie udalo sie - zolte "nie wiem, bo ...". Nigdy zero.
     $kolP = $script:KolUwaga
-    if (-not $script:KosztDzis) { $kolP = $script:KolSzary }
+    if ((-not $script:KosztDzis) -or $t.PowodSzary) { $kolP = $script:KolSzary }
     $p = Etykieta-Zawijana $t.Powod $script:CzZwykla $kolP $szer
     $p.UseMnemonic = $false
     $p.Margin = New-Object System.Windows.Forms.Padding(0, 6, 0, 0)
@@ -252,10 +261,14 @@ function Odmaluj-Start {
   $ileTxt = "swoje instrukcje"
   $o = $null
   if ($null -ne $script:Start) {
-    try { $o = Opis-Startu $script:Start } catch { Zanotuj-Wywrotke "opis otwarcia okna rozmowy" $_ }
+    try { $o = Opis-Startu-Narzedzia $script:Start } catch { Zanotuj-Wywrotke "opis otwarcia okna rozmowy" $_ }
   }
+  # P71: pomiar dotyczy glownego narzedzia tej maszyny (z samym Codeksem - Codeksa).
+  $nazwa = Narzedzie-Startu $script:Start
+  $kto = "Claude"
+  if ($nazwa -ne "Claude Code") { $kto = $nazwa }
   if ($o -and $o.Zmierzone) { $ileTxt = "~$(Okolo $o.Razem) tokenów swoich instrukcji" }
-  $pod = Etykieta-Zawijana "Za każdym razem, gdy otwierasz nowe okno rozmowy z Claude, zanim napiszesz słowo, Claude wczytuje $ileTxt. To nasza miara 100%." $script:CzMala $script:KolSzary $szer
+  $pod = Etykieta-Zawijana "Za każdym razem, gdy otwierasz nowe okno rozmowy $(Z-Narzedziem $nazwa), zanim napiszesz słowo, $kto wczytuje $ileTxt. To nasza miara 100%." $script:CzMala $script:KolSzary $szer
   $pod.Margin = New-Object System.Windows.Forms.Padding(0, 0, 0, 8)
   $script:KartaStart.Controls.Add($pod)
 
@@ -276,6 +289,7 @@ function Odmaluj-Start {
       $x.Margin = New-Object System.Windows.Forms.Padding(0, 6, 0, 0)
       $script:KartaStart.Controls.Add($x)
     }
+    Dodaj-Otwarcie-Innych $szer
     return
   }
 
@@ -297,7 +311,7 @@ function Odmaluj-Start {
 
   Wiersz-Legendy-Startu $script:KartaStart $script:KolMr "MegaRuchacz - razem, z tego:" "~$(Okolo $o.Mr)" $o.MrProc
   foreach ($sk in (Skladniki-Mr $script:Start $o)) { Wiersz-Skladnika-Startu $script:KartaStart $sk }
-  Wiersz-Legendy-Startu $script:KartaStart $script:KolCc "Claude Code sam - jego własne instrukcje i podłączone dodatki" "~$(Okolo $o.Cc)" $o.CcProc
+  Wiersz-Legendy-Startu $script:KartaStart $script:KolCc "$nazwa sam - jego własne instrukcje i podłączone dodatki" "~$(Okolo $o.Cc)" $o.CcProc
 
   $p = Etykieta-Zawijana $o.Portfel $script:CzZwykla $script:KolTekst $szer
   $p.Margin = New-Object System.Windows.Forms.Padding(0, 8, 0, 6)
@@ -305,6 +319,20 @@ function Odmaluj-Start {
   # Start workera stoi w Szczegolach - na Przegladzie tylko to, co laik rozumie (P15).
   $pods = (@($o.Podstawa, $o.Zakres) | Where-Object { $_ }) -join " "
   $script:KartaStart.Controls.Add((Etykieta-Zawijana $pods $script:CzMala $script:KolSzary $szer))
+  Dodaj-Otwarcie-Innych $szer
+}
+
+# P71: otwarcie okna rozmowy pozostalych narzedzi, ktorych tu uzywasz - po jednej
+# szarej linii pod karta (Linie-Otwarcia-Innych w przeglad-tresc.ps1).
+function Dodaj-Otwarcie-Innych([int]$szer) {
+  $inne = @()
+  try { $inne = Linie-Otwarcia-Innych $script:Dane $script:Start } catch { Zanotuj-Wywrotke "otwarcie okna innych narzedzi" $_ }
+  foreach ($x in $inne) {
+    $e = Etykieta-Zawijana $x $script:CzMala $script:KolSzary $szer
+    $e.UseMnemonic = $false
+    $e.Margin = New-Object System.Windows.Forms.Padding(0, 4, 0, 0)
+    $script:KartaStart.Controls.Add($e)
+  }
 }
 
 # --- odmalowanie -------------------------------------------------------------

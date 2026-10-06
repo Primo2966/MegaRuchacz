@@ -2,10 +2,101 @@
 # w jego naglowku). Pierwszy etap rachunku (Etap-Pomiar): co NAPRAWDE leci do modelu
 # na tej maszynie - warstwy CLAUDE.md ($w), ktore narzedzie tu jest ($jestClaude,
 # $jestCodex), co czytaja hooki Claude Code, ladunki hookow obu narzedzi i lista
-# sufitow ($sufity). Skad wolane: koszt-pamieci.ps1 kropka (". Etap-Pomiar") zaraz
+# sufitow ($sufity); od P71 takze lista narzedzi AI ($NARZEDZIA_AI -> $narzedzia: ktore
+# uzywane, sekcja "## Co wiem" w pliku instrukcji kazdego). Skad wolane: koszt-pamieci.ps1 kropka (". Etap-Pomiar") zaraz
 # po sciezkach; zmienne stad czyta caly dalszy przebieg. Funkcje nad etapem uzywa
 # tez Etap-Kubelki (Klucz-Sciezki), tryb -Warstwy (Czy-Hook-Czyta) i tryb -Rozbicie
 # oraz pelny raport (Powod-Pustej-Sesji).
+
+# --- narzedzia AI tej maszyny ---------------------------------------------------
+# JEDNA lista narzedzi, ktore MegaRuchacz zna. Nowe narzedzie (np. OpenCode) to
+# jeden wpis tutaj - wykrywanie, szukanie sekcji "## Co wiem", warstwy i pomiar
+# tokenow ida po tej liscie, bez kopiowania logiki. Pola (sciezki wzgledem domu):
+#   Klucz, Nazwa    - klucz w danych dla okna i nazwa dla czlowieka,
+#   Narz            - nazwa w -Narzedzie i w Rachunek-Narzedzia (alarmy.ps1),
+#   Instrukcje      - plik instrukcji, ktory narzedzie wczytuje samo na starcie,
+#   Rozmowy, Pliki  - katalog transkryptow i wzorzec nazwy pliku rozmowy,
+#   Rekurencja      - $true: pliki w podkatalogach dowolnej glebokosci (Codex:
+#                     RRRR\MM\DD); $false: jeden poziom (Claude Code: <projekt>\*.jsonl,
+#                     glebiej leza workerzy - ich liczy osobno Pomiar-Otwarcia),
+#   Historia        - plik dopisywany przy kazdej wiadomosci (najtanszy dowod uzywania),
+#   Format          - czytnik transkryptow w otwarcie.ps1 (Pomiar-Narzedzia); pusty =
+#                     czytnika jeszcze nie ma i okno mowi to wprost, zamiast zgadywac.
+$NARZEDZIA_AI = @(
+  [pscustomobject]@{ Klucz = "claude"; Nazwa = "Claude Code"; Narz = "Claude"; Instrukcje = ".claude\CLAUDE.md"
+                     Rozmowy = ".claude\projects"; Pliki = "*.jsonl"; Rekurencja = $false
+                     Historia = ".claude\history.jsonl"; Format = "claude" },
+  [pscustomobject]@{ Klucz = "codex"; Nazwa = "Codex"; Narz = "Codex"; Instrukcje = ".codex\AGENTS.md"
+                     Rozmowy = ".codex\sessions"; Pliki = "rollout-*.jsonl"; Rekurencja = $true
+                     Historia = ".codex\history.jsonl"; Format = "codex" }
+)
+
+# Narzedzie jest UZYWANE na tej maszynie, gdy w ostatnich tylu dniach byla w nim
+# rozmowa. 14 = okno pomiaru otwarcia sesji (Pomiar-Otwarcia, otwarcie.ps1): narzedzie
+# "uzywane" ma wtedy zawsze z czego zmierzyc, wiec brak pomiaru u uzywanego jest
+# prawdziwa usterka, a nie falszywy alarm. Sam plik instrukcji niczego nie dowodzi -
+# ~\.codex\AGENTS.md i ~\.claude\CLAUDE.md zaklada takze instalator MegaRuchacza.
+$DniUzywania = 14
+
+# Transkrypty narzedzia zmienione od $odKiedy, najnowsze pierwsze. Brak katalogu to
+# pusta lista; nieczytelny podkatalog to wpis w $n.Bledy, nie cisza.
+function Pliki-Rozmow($n, $odKiedy) {
+  if (-not (Test-Path -LiteralPath $n.KatRozmow -PathType Container)) { return @() }
+  $bl = @()
+  if ($n.Rekurencja) {
+    $pl = @(Get-ChildItem -LiteralPath $n.KatRozmow -Recurse -Filter $n.Pliki -File -ErrorAction SilentlyContinue -ErrorVariable +bl)
+  } else {
+    $pl = @(Get-ChildItem -LiteralPath $n.KatRozmow -Directory -ErrorAction SilentlyContinue -ErrorVariable +bl |
+      ForEach-Object { Get-ChildItem -LiteralPath $_.FullName -Filter $n.Pliki -File -ErrorAction SilentlyContinue -ErrorVariable +bl })
+  }
+  foreach ($b in @($bl)) {
+    $t = "nie przejrzalem czesci $($n.KatRozmow) ($b)"
+    if (@($n.Bledy) -notcontains $t) { $n.Bledy += $t }
+  }
+  return @($pl | Where-Object { $_.LastWriteTime -ge $odKiedy } | Sort-Object LastWriteTime -Descending)
+}
+
+# Lista $NARZEDZIA_AI z tym, co o kazdym wiadomo na tej maszynie: czy jest plik
+# instrukcji, kiedy byla ostatnia rozmowa i czy narzedzie jest uzywane.
+function Narzedzia-Maszyny {
+  $od = (Get-Date).AddDays(-$DniUzywania)
+  $lista = @()
+  foreach ($d in $NARZEDZIA_AI) {
+    $n = [pscustomobject]@{
+      Klucz = $d.Klucz; Nazwa = $d.Nazwa; Narz = $d.Narz; Format = "$($d.Format)"
+      Instrukcje = (Join-Path $KatalogDomowy $d.Instrukcje); KatRozmow = (Join-Path $KatalogDomowy $d.Rozmowy)
+      Pliki = $d.Pliki; Rekurencja = [bool]$d.Rekurencja
+      InstrukcjeJest = $false; Ostatnio = $null; Uzywane = $false; Bledy = @(); Warstwy = $null
+    }
+    $n.InstrukcjeJest = Test-Path -LiteralPath $n.Instrukcje -PathType Leaf
+    if ($d.Historia) {
+      $hist = Join-Path $KatalogDomowy $d.Historia
+      if (Test-Path -LiteralPath $hist -PathType Leaf) {
+        try { $n.Ostatnio = (Get-Item -LiteralPath $hist -Force -ErrorAction Stop).LastWriteTime }
+        catch { $n.Bledy += "nie odczytalem daty $hist ($($_.Exception.Message))" }
+      }
+    }
+    # Historia swieza wystarcza; inaczej najnowszy transkrypt (Codex bez history.jsonl).
+    if ((-not $n.Ostatnio) -or ($n.Ostatnio -lt $od)) {
+      $naj = @(Pliki-Rozmow $n $od) | Select-Object -First 1
+      if ($naj -and ((-not $n.Ostatnio) -or ($naj.LastWriteTime -gt $n.Ostatnio))) { $n.Ostatnio = $naj.LastWriteTime }
+    }
+    $n.Uzywane = ($null -ne $n.Ostatnio) -and ($n.Ostatnio -ge $od)
+    $lista += $n
+  }
+  return $lista
+}
+
+function Narzedzie-Po-Kluczu($klucz) {
+  return (@($narzedzia | Where-Object { $_.Klucz -eq $klucz }) | Select-Object -First 1)
+}
+
+# "Claude Code", "Claude Code i Codex", "A, B i C" - nazwy uzywanych narzedzi.
+function Nazwy-Narzedzi($lista) {
+  $n = @($lista | ForEach-Object { $_.Nazwa })
+  if ($n.Count -le 1) { return ($n -join "") }
+  return (($n[0..($n.Count - 2)] -join ", ") + " i " + $n[-1])
+}
 
 function Powod-Pustej-Sesji($sciezkaClaude) {
   # dlaczego rachunek za start sesji wyszedl pusty - zdanie do wypisania zamiast
@@ -102,6 +193,17 @@ function Etap-Pomiar {
   $jestCodex  = ($agentsTresc -ne $null)
   $jestClaude = ((Test-Path -LiteralPath (Join-Path $katKlaudii "history.jsonl")) -or
                  (Test-Path -LiteralPath (Join-Path $KatalogDomowy ".claude.json")))
+
+  # Ktorego narzedzia NAPRAWDE uzywasz (rozmowa w ostatnich $DniUzywania dniach) i co
+  # stoi w jego pliku instrukcji. "Jest" wyzej mowi, czyj rachunek liczyc; "uzywane"
+  # mowi, czego brak jest usterka, a czego brak "nie dotyczy" - warstwy, pomiar tokenow
+  # i sprawy w oknie pytaja o to drugie. Sekcje "## Co wiem" mierzymy w pliku instrukcji
+  # KAZDEGO narzedzia: Codex ja ma w ~\.codex\AGENTS.md, Claude Code w ~\.claude\CLAUDE.md.
+  $narzedzia = @(Narzedzia-Maszyny)
+  foreach ($n in $narzedzia) {
+    if ((Klucz-Sciezki $n.Instrukcje) -eq (Klucz-Sciezki $plikClaude)) { $n.Warstwy = $w }
+    else { $n.Warstwy = Zmierz-Warstwy $n.Instrukcje }
+  }
 
   # --- co naprawde czytaja hooki Claude Code -----------------------------------
   # Rachunek i tryb -Warstwy pytaja o to samo: ktory plik wczytuje hook. Do

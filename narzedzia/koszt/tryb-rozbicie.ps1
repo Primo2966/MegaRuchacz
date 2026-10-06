@@ -132,7 +132,13 @@ function Tryb-Rozbicie {
     }
     $b += Kubelek-Rozbicia "Codex - przy KAZDEJ wiadomosci (Claude Code tego nie dostaje)" $kubWiadomoscCx $tokWiadomoscCx $brakWiadomosc
     $b += Kubelek-Rozbicia "Codex - RAZ, przy starcie sesji (Claude Code tego nie czyta)" $kubSesjaCx $tokSesjaCx "nie ma czego liczyc"
-    $b += ("  {0,-20} {1}" -f "", "Udzialu w calym otwarciu sesji nie porownuje, bo $($rCx.PowodCalosci).")
+    # Od 06.10.2026 calosc otwarcia sesji Codeksa jest mierzona z jego transkryptow
+    # (Pomiar-Narzedzia w otwarcie.ps1) - wtedy ta sama linia, co u Claude Code.
+    if ($null -ne $rCx.Calosc) {
+      $b += ("  {0,-20} {1}" -f "", "Razem MegaRuchacz: ~$(Liczba $rCx.Mr) z ~$(Liczba $rCx.Calosc) tokenow otwarcia sesji Codeksa = $(Procent-Tekst $rCx.Udzial) (prog $(Liczba $AlarmCzesciOtwarcia) tokenow; calosc z $($rCx.Sesji) ostatnich sesji).")
+    } else {
+      $b += ("  {0,-20} {1}" -f "", "Udzialu w calym otwarciu sesji nie porownuje, bo $($rCx.PowodCalosci).")
+    }
     # Wdrozenie dla Codeksa bez AGENTS.md w projekcie: pozycji nie ma, wiec trzeba
     # powiedziec DLACZEGO - inaczej czyta sie to jak "zasady nic nie kosztuja".
     if ($Projekt -and (Test-Path -LiteralPath (Join-Path $Projekt ".megaruchacz")) -and

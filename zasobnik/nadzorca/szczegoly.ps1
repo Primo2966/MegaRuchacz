@@ -98,9 +98,10 @@ function Po-Polsku([string]$t) {
 # ginie - idzie jako zwykly tekst pod tabela, w tej samej kolejnosci.
 #
 # P15: kolumna "% otwarcia sesji" - kazda liczba tokenow MegaRuchacza takze
-# w mierze Przegladu ($o = Opis-Startu). Pozycje Codeksa jej nie dostaja: jego
-# otwarcia sesji nikt nie mierzy, a procent od sesji Claude Code bylby falszywy.
-function Dodaj-Rozbicie($s, $rozbicie, $o = $null) {
+# w mierze Przegladu ($o = Opis-Startu). Procent dostaja tylko pozycje narzedzia,
+# ktorego otwarcie mierzy $o ($nazwaStartu, P71 - z samym Codeksem to Codex); procent
+# od otwarcia innego narzedzia bylby falszywy.
+function Dodaj-Rozbicie($s, $rozbicie, $o = $null, [string]$nazwaStartu = "Claude Code") {
   $kol = @(@{ N = "Pozycja"; S = 250 }, @{ N = "Udział"; S = 170; Pasek = $true }, @{ N = "Tokeny"; S = 100; P = $true },
            @{ N = ""; S = 60; P = $true }, @{ N = "% otwarcia okna rozmowy"; S = 180; P = $true }, @{ N = "Uwaga"; S = 0 })
   $wiersze = @()
@@ -108,7 +109,7 @@ function Dodaj-Rozbicie($s, $rozbicie, $o = $null) {
     if ($wiersze.Count -gt 0) { Dodaj-Tabele $s $kol $wiersze; Set-Variable -Name wiersze -Value @() -Scope 1 }
   }
   $pierwsza = $true
-  $codex = $false
+  $sekcjaNarz = ""
   foreach ($linia in @($rozbicie)) {
     $l = "$linia"
     if (-not $l.Trim()) { continue }
@@ -124,13 +125,18 @@ function Dodaj-Rozbicie($s, $rozbicie, $o = $null) {
       if ($proc) { $procTxt = "$proc%" }
       $sesja = ""
       $tok = [long]($m.Groups[3].Value -replace ' ', '')
-      if ((-not $codex) -and ($tok -gt 0)) { $sesja = Proc-Sesji $tok $o }
-      elseif ($codex) { $sesja = "nie mierzę" }
+      # sekcja bez nazwy narzedzia (np. nauka) - jak dotad, w mierze glownego narzedzia
+      $glownego = (-not $sekcjaNarz) -or ($sekcjaNarz -eq $nazwaStartu)
+      if ($glownego -and ($tok -gt 0)) { $sesja = Proc-Sesji $tok $o }
+      elseif (-not $glownego) { $sesja = "inne narzędzie" }
       $wiersze += ,@((Po-Polsku $m.Groups[1].Value.Trim()), $pasek, $m.Groups[3].Value, $procTxt, $sesja, (Po-Polsku $m.Groups[5].Value.Trim()))
       continue
     }
     & $zrzuc
-    if ($l -match '^\S') { $codex = ($l -match '^Codex') }
+    if ($l -match '^\S') {
+      $sekcjaNarz = ""
+      if ($l -match '^Codex') { $sekcjaNarz = "Codex" } elseif ($l -match '^Claude Code') { $sekcjaNarz = "Claude Code" }
+    }
     if ($l -match '^\S') {
       Dodaj-Podtytul $s (Z-Wielkiej (Po-Polsku $l.Trim()))
     } else {
@@ -142,8 +148,33 @@ function Dodaj-Rozbicie($s, $rozbicie, $o = $null) {
 
 # P26: prawdziwy koszt w calosci - to samo, co karta na Przegladzie, plus liczby
 # odpowiedzi, pelne opisy, projekty i to, jak to policzone.
-function Sekcja-Kosztu($koszt, $zuzycie) {
-  $s = Nowa-Sekcja "Ile tokenów naprawdę zużywasz - Twoje rozmowy i workerzy" "Wszystkie tokeny z transkryptów Claude Code na tym komputerze, osobno Twoje rozmowy (okna) i workerzy."
+function Sekcja-Kosztu($koszt, $zuzycie, $d = $null) {
+  $s = Nowa-Sekcja "Ile tokenów naprawdę zużywasz - Twoje rozmowy i workerzy" "Wszystkie tokeny z transkryptów narzędzi AI na tym komputerze: w Claude Code osobno Twoje rozmowy (okna) i workerzy, w Codeksie same rozmowy."
+  # P71: narzedzia poza Claude Code (Codex) - liczby z koszt-pamieci.ps1 -Dane. Claude
+  # Code, ktorego tu nie uzywasz, dostaje jedno spokojne zdanie zamiast "nie wiem" na zolto.
+  $narz = Narzedzia-Z-Rachunku $d
+  $cc = @($narz | Where-Object { $_.ZuzycieWOknie }) | Select-Object -First 1
+  foreach ($n in @($narz | Where-Object { -not $_.ZuzycieWOknie })) {
+    if (-not $n.Uzywane) {
+      Dodaj-Wiersz $s $n.Nazwa "nie używasz go na tym komputerze (w ostatnich 14 dniach nie było w nim rozmowy)" "szary"
+      continue
+    }
+    if ($n.ZuzyciePowod) {
+      Dodaj-Wiersz $s $n.Nazwa "nie wiem, bo $($n.ZuzyciePowod)" "uwaga"
+      continue
+    }
+    $bf = ""
+    if (($null -ne $n.Bufor) -and ($n.Srednia -gt 0)) { $bf = "; z tego czytane ponownie z pamięci podręcznej (10× tańsze) średnio $(Tokeny-Okolo $n.Bufor) dziennie" }
+    Dodaj-Wiersz $s $n.Nazwa ("dziś $(if ($n.Dzis -gt 0) { Tokeny-Okolo $n.Dzis } else { 'nic' }) tokenów, średnio $(if ($n.Srednia -gt 0) { Tokeny-Okolo $n.Srednia } else { 'nic' }) tokenów dziennie " +
+      "(z $($n.ZuzycieDni) pełnych dni, rozmowy w $($n.DniZRozmowami))$bf")
+    Dodaj-Wiersz $s "" ("Jak to policzone ($($n.Nazwa)): w każdej rozmowie zdarzenia token_count, przyrost total_tokens (wejście razem z pamięcią podręczną + wyjście) " +
+      "względem poprzedniego zdarzenia tej rozmowy - powtórzone zdarzenie nie liczy się drugi raz.") "szary"
+  }
+  if ($cc -and -not $cc.Uzywane) {
+    Dodaj-Wiersz $s "Claude Code" "nie używasz go na tym komputerze (w ostatnich 14 dniach nie było w nim rozmowy) - nie ma tu jego rozmów ani workerów" "szary"
+    return $s
+  }
+  if ($narz.Count -gt 0) { Dodaj-Podtytul $s "Claude Code" }
   if (-not $koszt) { Dodaj-Tekst $s "Jeszcze nie policzone - liczy się w tle przy otwarciu okna." "szary"; return $s }
   if ($koszt.Powod) { Dodaj-Wiersz $s "Dziś" "nie wiem, bo $($koszt.Powod)" "uwaga" }
   else {
@@ -228,7 +259,7 @@ function Sekcje-Szczegolow($d, $wywrotkiNadzorcy, $rozbicie, $start, $koszt = $n
   $lista += $s
 
   # 1a. Prawdziwy koszt (P26) - najwieksze pieniadze, wiec zaraz po tym, co wymaga uwagi.
-  try { $lista += (Sekcja-Kosztu $koszt $zuzycie) }
+  try { $lista += (Sekcja-Kosztu $koszt $zuzycie $d) }
   catch {
     Zanotuj-Wywrotke "prawdziwy koszt do szczegolow" $_
     $s = Nowa-Sekcja "Ile tokenów naprawdę zużywasz - Twoje rozmowy i workerzy" ""
@@ -237,9 +268,11 @@ function Sekcje-Szczegolow($d, $wywrotkiNadzorcy, $rozbicie, $start, $koszt = $n
   }
 
   # 2. Otwarcie okna rozmowy - skad liczby z karty na Przegladzie.
-  $s = Nowa-Sekcja "Otwarcie okna rozmowy - skąd ta liczba" "Ile tokenów Claude wczytuje, gdy otwierasz nowe okno rozmowy (liczone przy pierwszej wiadomości), i jaka część z tego to MegaRuchacz."
+  # P71: pomiar dotyczy glownego narzedzia tej maszyny (z samym Codeksem - Codeksa).
+  $nazwaS = Narzedzie-Startu $start
+  $s = Nowa-Sekcja "Otwarcie okna rozmowy - skąd ta liczba" "Ile tokenów $(if ($nazwaS -eq 'Claude Code') { 'Claude' } else { $nazwaS }) wczytuje, gdy otwierasz nowe okno rozmowy (liczone przy pierwszej wiadomości), i jaka część z tego to MegaRuchacz."
   $o = $null
-  try { $o = Opis-Startu $start } catch { Zanotuj-Wywrotke "opis otwarcia okna rozmowy do szczegolow" $_ }
+  try { $o = Opis-Startu-Narzedzia $start } catch { Zanotuj-Wywrotke "opis otwarcia okna rozmowy do szczegolow" $_ }
   if (-not $start) {
     Dodaj-Tekst $s "Jeszcze nie zmierzone - pomiar rusza przy otwarciu okna." "szary"
   } elseif (-not $o -or -not $o.Zmierzone) {
@@ -252,13 +285,18 @@ function Sekcje-Szczegolow($d, $wywrotkiNadzorcy, $rozbicie, $start, $koszt = $n
     # Bez rozbicia na start + przypomnienie (P14): te dwie liczby stoja jako
     # naglowki w sekcji "Rachunek za pamiec" tuz nizej - drugi raz tu tylko mylil.
     Dodaj-Wiersz $s "MegaRuchacz" "~$(Liczba-Ludzka $o.Mr) tokenów ($($o.MrProc)) - to, co dokłada przy otwarciu okna rozmowy, i przypomnienie doklejone do pierwszej wiadomości; każdą pozycję pokazuje sekcja niżej"
-    Dodaj-Wiersz $s "Claude Code sam" "~$(Liczba-Ludzka $o.Cc) tokenów ($($o.CcProc)) - jego instrukcje, opisy narzędzi (także z serwerów MCP), lista skilli"
+    Dodaj-Wiersz $s "$nazwaS sam" "~$(Liczba-Ludzka $o.Cc) tokenów ($($o.CcProc)) - jego instrukcje, opisy narzędzi (także z serwerów MCP), lista skilli"
     # "(22%)" to udzial w starcie WORKERA, nie w otwarciu sesji - dopisujemy to wprost (P15)
     if ($o.Worker) { Dodaj-Wiersz $s "Start workera" (($o.WorkerZdanie -replace '^Start jednego workera: ', '') -replace '\((\d+%)\)', '($1 startu workera)') }
     else { Dodaj-Wiersz $s "Start workera" ($o.WorkerZdanie -replace '^Start jednego workera: ', '') "uwaga" }
-    Dodaj-Wiersz $s "Jak to zmierzone" ("W każdym transkrypcie Claude Code pierwsza odpowiedź modelu ma pole usage: suma input_tokens, " +
-      "cache_creation_input_tokens i cache_read_input_tokens to cały kontekst w tej chwili. Od tego odejmuję Twoją pierwszą wiadomość " +
-      "(jej znaki / 3) i biorę medianę z ostatnich rozmów.") "szary"
+    if ($nazwaS -eq "Claude Code") {
+      Dodaj-Wiersz $s "Jak to zmierzone" ("W każdym transkrypcie Claude Code pierwsza odpowiedź modelu ma pole usage: suma input_tokens, " +
+        "cache_creation_input_tokens i cache_read_input_tokens to cały kontekst w tej chwili. Od tego odejmuję Twoją pierwszą wiadomość " +
+        "(jej znaki / 3) i biorę medianę z ostatnich rozmów.") "szary"
+    } else {
+      Dodaj-Wiersz $s "Jak to zmierzone" ("W każdej rozmowie $nazwaS pierwsze zdarzenie token_count ma input_tokens - cały kontekst pierwszego wywołania " +
+        "modelu (razem z pamięcią podręczną). Od tego odejmuję Twoją pierwszą wiadomość (jej znaki / 3) i biorę medianę z ostatnich rozmów.") "szary"
+    }
     Dodaj-Wiersz $s "" "Część MegaRuchacza to rachunek narzędzia (znaki / 3 - szacunek), całość to prawdziwe liczby z transkryptów." "szary"
     Dodaj-Wiersz $s "Transkrypty" "$($start.Katalog)" "szary"
     $ws = @()
@@ -287,11 +325,14 @@ function Sekcje-Szczegolow($d, $wywrotkiNadzorcy, $rozbicie, $start, $koszt = $n
       Dodaj-Tabele $s @(@{ N = "Kiedy"; S = 110 }, @{ N = "Rola"; S = 140 }, @{ N = "Start"; S = 110; P = $true }) $ww
     }
   }
+  $inneO = @()
+  try { $inneO = Linie-Otwarcia-Innych $d $start } catch { Zanotuj-Wywrotke "otwarcie okna innych narzedzi do szczegolow" $_ }
+  foreach ($x in $inneO) { Dodaj-Wiersz $s "Inne narzędzie" $x }
   $lista += $s
 
   # 3. Rachunek pozycja po pozycji.
   $s = Nowa-Sekcja "Rachunek za pamięć, pozycja po pozycji" "Co MegaRuchacz dokleja do rozmowy i ile to waży. Liczy narzędzie koszt-pamieci (znaki podzielone przez 3 - szacunek)."
-  if ($null -ne $rozbicie) { Dodaj-Rozbicie $s $rozbicie $o }
+  if ($null -ne $rozbicie) { Dodaj-Rozbicie $s $rozbicie $o $nazwaS }
   else { Dodaj-Tekst $s "Jeszcze nie policzone." "szary" }
   $lista += $s
 

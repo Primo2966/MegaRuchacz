@@ -41,8 +41,19 @@ function Stan-Po-Ludzku([string]$s) {
     "brak"       { return "BRAK" }
     "blad"       { return "BŁĄD ODCZYTU" }
     "nieaktywna" { return "teraz nieaktywna" }
+    "nie-dotyczy" { return "nie dotyczy tego komputera" }
   }
   return "$s"
+}
+
+# P71: warstwa, ktora trafia TYLKO do narzedzia, ktorego tu nie uzywasz (lista narzedzi
+# z -Dane, Narzedzia-Z-Rachunku). Taka warstwa jest szara, nawet gdy plik lezy - nikt go
+# tu nie czyta. Nieznana lista (stary rachunek) = jak dotad.
+function Narzedzie-Nieuzywane($wa) {
+  if (-not $wa.NarzedzieNazwa) { return $false }
+  if ("$($wa.Stan)" -eq "nie-dotyczy") { return $true }
+  $n = @(Narzedzia-Z-Rachunku $script:Dane | Where-Object { $_.Nazwa -eq "$($wa.NarzedzieNazwa)" }) | Select-Object -First 1
+  return ($n -and -not $n.Uzywane)
 }
 
 function Rozmiar-Ludzki($bajty) {
@@ -64,6 +75,7 @@ function Rozmiar-Warstwy($wa) {
     "blad"       { return "BŁĄD ODCZYTU" }
     "pusty"      { return "pusta" }
     "nieaktywna" { return "teraz nic" }
+    "nie-dotyczy" { return "nie dotyczy" }
   }
   if ($wa.Rodzaj -eq "katalog") { return "$(@($wa.Pliki).Count) plików" }
   if ($wa.Rodzaj -eq "baza")    { return (Rozmiar-Ludzki $wa.Bajty) }
@@ -79,10 +91,13 @@ function Rozmiar-Opisowy($wa) {
   if ($null -ne $wa.Znaki) {
     $t = "$(Liczba-Ludzka $wa.Znaki) znaków"
     if ($null -ne $wa.Tokeny) {
-      # P15: tokeny takze jako procent jednego otwarcia sesji Claude Code.
-      # Warstwy Codeksa bez procentu - jego otwarcia sesji nikt nie mierzy.
+      # P15: tokeny takze jako procent jednego otwarcia sesji. P71: tylko warstwy
+      # narzedzia, ktorego otwarcie mierzy karta Przegladu (z samym Codeksem - Codeksa);
+      # procent od otwarcia innego narzedzia bylby falszywy.
       $js = ""
-      if ("$($wa.Nazwa)" -notmatch 'tylko Codex') {
+      $narzW = "$($wa.NarzedzieNazwa)"
+      if ((-not $narzW) -and ("$($wa.Nazwa)" -match 'tylko Codex')) { $narzW = "Codex" }
+      if ((-not $narzW) -or ($narzW -eq (Narzedzie-Startu $script:Start))) {
         $o = $null
         try { if ($script:Start) { $o = Opis-Startu $script:Start } } catch { Zanotuj-Wywrotke "opis otwarcia okna rozmowy do warstwy" $_ }
         $js = Jak-Sesji $wa.Tokeny $o
@@ -158,6 +173,18 @@ function Zdanie-Warstw($dw) {
     if (@($rodzina | Where-Object { ($_.Stan -eq "brak") -or ($_.Stan -eq "blad") }).Count -gt 0) { $zle++ }
   }
   if ($zle -gt 0) { $z += " Brak pliku albo błąd odczytu w $zle z $ile - zaznaczone na czerwono." }
+  # P71: braki narzedzia, ktorego tu nie uzywasz - szare, policzone osobno.
+  $nd = @($wszystkie | Where-Object { "$($_.Stan)" -eq "nie-dotyczy" })
+  if ($nd.Count -gt 0) {
+    $kogo = @($nd | ForEach-Object { "$($_.NarzedzieNazwa)" } | Where-Object { $_ } | Select-Object -Unique)
+    $z += " $($nd.Count) $(Odmiana $nd.Count 'warstwa nie dotyczy' 'warstwy nie dotyczą' 'warstw nie dotyczy') tego komputera - należą do narzędzia, którego tu nie używasz ($($kogo -join ', ')); zaznaczone na szaro."
+  }
+  # Gdzie stoi sekcja "Co wiem" - w pliku instrukcji ktorego narzedzia (podwarstwy
+  # *-globalny-stala ze stanem "jest").
+  $cw = @($wszystkie | Where-Object { ("$($_.Id)" -match '-globalny-stala$') -and ("$($_.Stan)" -eq "jest") } |
+          ForEach-Object { "$([System.IO.Path]::GetFileName("$($_.Sciezka)")) ($(if ($_.NarzedzieNazwa) { $_.NarzedzieNazwa } else { 'Claude Code' }))" })
+  if ($cw.Count -gt 0) { $z += " Sekcja `„Co wiem`” jest w: $($cw -join ', ')." }
+  elseif (@($wszystkie | Where-Object { "$($_.Id)" -match '-globalny-stala$' }).Count -gt 0) { $z += " Sekcji `„Co wiem`” nie ma w żadnym pliku instrukcji." }
   return $z
 }
 
@@ -176,7 +203,7 @@ function Moduly-Warstwy($wa) {
     if ($NADZ_MODULY -contains $Matches[1]) { return ,@($Matches[1]) }
     return ,@()
   }
-  if (@("claude-globalny-stala", "claude-globalny-biezace", "doklejka-cykl", "wiedza") -contains $id) { return ,@("wiedza") }
+  if (@("claude-globalny-stala", "claude-globalny-biezace", "codex-globalny-stala", "codex-globalny-biezace", "doklejka-cykl", "wiedza") -contains $id) { return ,@("wiedza") }
   if ("$($wa.Rodzic)" -eq "wiedza") { return ,@("wiedza") }
   if (@("doklejka-archiwum", "lore") -contains $id) { return ,@("lore") }
   if ((@("przypomnienie", "przypomnienie-codex", "mapa", "worklog") -contains $id) -or ($id -match '^ladunek-\d+$')) { return ,@("kierownik") }
@@ -249,7 +276,8 @@ function Napelnij-Warstwy {
       $it.Group = $grupy[$klucz]
       $it.Tag = $wa
       $it.ToolTipText = "$($wa.Nazwa) - $($wa.Sciezka)"
-      if (($wa.Stan -eq "brak") -or ($wa.Stan -eq "blad")) { $it.ForeColor = $script:KolPilne }
+      if (Narzedzie-Nieuzywane $wa) { $it.ForeColor = $script:KolSzary }
+      elseif (($wa.Stan -eq "brak") -or ($wa.Stan -eq "blad")) { $it.ForeColor = $script:KolPilne }
       elseif (($wa.Kiedy -eq "nieuzywane") -or ($wa.Stan -eq "nieaktywna") -or ($wa.Stan -eq "pusty")) { $it.ForeColor = $script:KolSzary }
       [void]$lv.Items.Add($it)
     }
@@ -298,13 +326,20 @@ function Pokaz-Info-Warstwy($wa) {
     $info.Controls.Add($t)
     $st = "$($wa.Stan)"
     $kolSt = $script:KolDobrze
-    if (($st -eq "brak") -or ($st -eq "blad")) { $kolSt = $script:KolPilne }
+    $nieuz = Narzedzie-Nieuzywane $wa
+    if ($nieuz) { $kolSt = $script:KolSzary }
+    elseif (($st -eq "brak") -or ($st -eq "blad")) { $kolSt = $script:KolPilne }
     elseif (($st -eq "nieaktywna") -or ($st -eq "pusty")) { $kolSt = $script:KolSzary }
     $e = 130
     $info.Controls.Add((Wiersz-Dwukolumnowy "Wczytuje się" (Kiedy-Po-Ludzku "$($wa.Kiedy)") $script:KolTekst $szer $e))
     $info.Controls.Add((Wiersz-Dwukolumnowy "Stan" (Stan-Po-Ludzku $st) $kolSt $szer $e))
     $info.Controls.Add((Wiersz-Dwukolumnowy "Rozmiar" (Rozmiar-Opisowy $wa) $script:KolTekst $szer $e))
     $info.Controls.Add((Wiersz-Dwukolumnowy "Trwałość" (Trwalosc-Po-Ludzku "$($wa.Trwalosc)") $script:KolTekst $szer $e))
+    if ($wa.NarzedzieNazwa) {
+      $tn = "trafia tylko do: $($wa.NarzedzieNazwa)"
+      if ($nieuz) { $tn += " - nie używasz go na tym komputerze, więc ta warstwa nic tu nie kosztuje" }
+      $info.Controls.Add((Wiersz-Dwukolumnowy "Narzędzie" $tn $(if ($nieuz) { $script:KolSzary } else { $script:KolTekst }) $szer $e))
+    }
     if ($wa.Zmieniony) { $info.Controls.Add((Wiersz-Dwukolumnowy "Zmieniony" "$($wa.Zmieniony)" $script:KolTekst $szer $e)) }
     $info.Controls.Add((Wiersz-Dwukolumnowy "Kto pisze" (Po-Polsku "$($wa.KtoPisze)") $script:KolTekst $szer $e))
     if ($wa.Opis) { $info.Controls.Add((Wiersz-Dwukolumnowy "Co to jest" (Po-Polsku "$($wa.Opis)") $script:KolTekst $szer $e)) }
@@ -322,7 +357,11 @@ function Pokaz-Podglad($wa) {
   Pokaz-Info-Warstwy $wa
   $l = New-Object System.Collections.Generic.List[string]
   $st = "$($wa.Stan)"
-  if (($st -eq "brak") -or ($st -eq "blad")) {
+  if ($st -eq "nie-dotyczy") {
+    $l.Add("Nie dotyczy tego komputera: nie używasz tu $($wa.NarzedzieNazwa), więc brak tej warstwy niczego nie psuje.")
+    $l.Add("")
+    $l.Add("Szczegóły: $($wa.Brak)")
+  } elseif (($st -eq "brak") -or ($st -eq "blad")) {
     $l.Add("NIE MA CZEGO POKAZAĆ: $($wa.Brak)")
   } elseif ($st -eq "nieaktywna") {
     $l.Add("Teraz nic się nie dokleja: $($wa.Brak)")
