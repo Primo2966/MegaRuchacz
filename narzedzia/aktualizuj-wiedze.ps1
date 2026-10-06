@@ -3,7 +3,8 @@
 # 1. wylawianie nowych faktow z rozmow (uruchamia narzedzia\wyciagnij-fakty.ps1)
 # 2. weryfikacja: co da sie sprawdzic maszynowo (na razie: sciezki w systemie plikow)
 # 3. fakty wchodza do obowiazujacej wiedzy SAME - kazdy do swojej warstwy
-#    (%USERPROFILE%\.claude\CLAUDE.md, wylacznie sekcja "## Co wiem"). Poczekalnia nie
+#    (wylacznie sekcja "## Co wiem" w pliku instrukcji kazdego narzedzia, ktore tu jest:
+#    ~\.claude\CLAUDE.md, ~\.codex\AGENTS.md, ~\.config\opencode\AGENTS.md). Poczekalnia nie
 #    jest juz kolejka do klikania: rano bylo w niej 90 pozycji i nikt ich nie czytal.
 #    W poczekalni zostaje tylko to, czego automat nie ma prawa rozstrzygnac:
 #      [!] odrzucone - podana sciezka nie istnieje albo wpis nie miesci sie w progu
@@ -232,19 +233,59 @@ function Sprawdz-Wiedze {
   if ($Proba) { Ostrzezenie "TRYB PROBNY - tylko pokazuje, co by zrobil, niczego nie zapisuje" }
   $argumenty = @("--directory", $script:Lore, "run", "python", "-m", "lore.verify")
   if ($Proba) { $argumenty += "--proba" }
+  $start = Get-Date
   & $script:Uv @argumenty
   $kod = $LASTEXITCODE
   if ($kod -ne 0) {
     Blad "sprawdzanie faktow nie powiodlo sie (kod $kod) - szczegoly w liniach powyzej"
+    # Przebieg zatrzymany przez surowa strukture (lore\lore\verify.py raw_leaks) konczy sie bledem,
+    # ale stan zdazyl zapisac - liczniki maja byc widac takze wtedy, a nie tylko po udanym przebiegu.
+    Pokaz-Surowa-Strukture (Czytaj-Stan $start)
     exit $kod
   }
   Naglowek "Gdzie to teraz jest"
-  Krok "obowiazujaca wiedza : $(Join-Path $script:Dom 'CLAUDE.md') (sekcja '## Co wiem')"
+  # Fakty ida do pliku instrukcji KAZDEGO narzedzia, ktore tu jest (verify.py INSTRUCTION_PATHS) -
+  # na maszynie z samym OpenCode CLAUDE.md moze nie istniec wcale.
+  $domUzytkownika = Split-Path -Parent $script:Dom
+  $pliki = @((Join-Path $script:Dom "CLAUDE.md"), (Join-Path $domUzytkownika ".codex\AGENTS.md"),
+             (Join-Path $domUzytkownika ".config\opencode\AGENTS.md")) | Where-Object { Test-Path -LiteralPath $_ }
+  if (-not $pliki) { Ostrzezenie "nie ma tu zadnego pliku instrukcji (CLAUDE.md, AGENTS.md Codeksa ani OpenCode) - wiedza nie ma gdzie wejsc" }
+  foreach ($p in $pliki) { Krok "obowiazujaca wiedza : $p (sekcja '## Co wiem')" }
   Krok "poczekalnia         : $(Join-Path $script:Dom 'wiedza\kandydaci.md')  - juz tylko [!] i [?]"
   Krok "skad sie wzialy     : $(Join-Path $script:Dom 'wiedza\zrodla.md')"
   Krok "kopie przed zmiana  : $(Join-Path $script:Dom 'wiedza\kopie')"
   Pokaz-Podsumowanie
   exit 0
+}
+
+# Pary "klucz: wartosc" z wiedza\.wiedza-stan.txt. $od: tylko plik zapisany po tej chwili - po
+# przebiegu, ktory padl, stary plik z poprzedniego dnia nie moze udawac dzisiejszego stanu.
+function Czytaj-Stan($od = $null) {
+  $stan = @{}
+  $plik = Join-Path $script:Dom "wiedza\.wiedza-stan.txt"
+  if (-not (Test-Path -LiteralPath $plik)) { return $stan }
+  if ($od -and (Get-Item -LiteralPath $plik).LastWriteTime -lt $od) { return $stan }
+  foreach ($linia in (Get-Content -LiteralPath $plik -Encoding UTF8)) {
+    $czesci = $linia -split ":", 2
+    if ($czesci.Count -eq 2) { $stan[$czesci[0].Trim()] = $czesci[1].Trim() }
+  }
+  return $stan
+}
+
+# Surowa struktura z odpowiedzi modelu (JSON, klucze odpowiedzi, etykiety warstwy) zamiast zdan -
+# od 22.09 do 02.10 ponad czterdziesci takich linii stalo w ~\.codex\AGENTS.md jako "fakty".
+# Licznik wiekszy od zera stoi NA POCZATKU podsumowania i na zolto, nie gdzies w srodku.
+function Pokaz-Surowa-Strukture($stan) {
+  $kandydaci = Join-Path $script:Dom "wiedza\kandydaci.md"
+  foreach ($k in @(
+    @{ Klucz = "surowa_struktura_zatrzymana"; Opis = "wpisow surowej struktury z odpowiedzi modelu zatrzymanych przy zapisie - przebieg NIC nie zapisal do plikow instrukcji" },
+    @{ Klucz = "surowa_struktura_w_plikach";  Opis = "wpisow w plikach instrukcji to surowa struktura z odpowiedzi modelu (JSON, klucze, etykiety) - do usuniecia recznie, automat ich nie awansuje" },
+    @{ Klucz = "surowa_struktura_odrzucona";  Opis = "wpisow poczekalni to surowa struktura z odpowiedzi modelu - nie wpisane, oznaczone [!] w $kandydaci" }
+  )) {
+    $ile = 0
+    if ($stan.ContainsKey($k.Klucz)) { [void][int]::TryParse($stan[$k.Klucz], [ref]$ile) }
+    if ($ile -gt 0) { Ostrzezenie "$ile $($k.Opis)" }
+  }
 }
 
 function Pokaz-Podsumowanie {
@@ -260,11 +301,8 @@ function Pokaz-Podsumowanie {
     Ostrzezenie "nie ma $plik - weryfikacja nie zapisala podsumowania, czyli cos poszlo nie tak"
     return
   }
-  $stan = @{}
-  foreach ($linia in (Get-Content -LiteralPath $plik -Encoding UTF8)) {
-    $czesci = $linia -split ":", 2
-    if ($czesci.Count -eq 2) { $stan[$czesci[0].Trim()] = $czesci[1].Trim() }
-  }
+  $stan = Czytaj-Stan
+  Pokaz-Surowa-Strukture $stan
   Krok "dopisane : $($stan['dopisane'])  (stala $($stan['stala']) / biezaca $($stan['biezaca']) / referencyjna $($stan['referencyjna']))"
   Krok "zostaje  : $($stan['odrzucone']) odrzuconych, $($stan['sporne']) spornych, $($stan['wstrzymane_progiem']) wstrzymanych progiem"
   Krok "warstwa stala: $($stan['prog_stalej']) znakow"

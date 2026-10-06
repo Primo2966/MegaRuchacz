@@ -61,7 +61,10 @@ def sandbox(tmp_path, monkeypatch):
     monkeypatch.setattr(facts, "KNOWLEDGE_DIR", knowledge)  # the harvest side of the same trail
     monkeypatch.setattr(verify, "CANDIDATES_PATH", knowledge / "kandydaci.md")
     monkeypatch.setattr(verify, "INSTRUCTION_PATHS",
-                        (tmp_path / "CLAUDE.md", tmp_path / ".codex" / "AGENTS.md"))
+                        (tmp_path / "CLAUDE.md", tmp_path / ".codex" / "AGENTS.md",
+                         tmp_path / ".config" / "opencode" / "AGENTS.md"))
+    # the harvest side reads the same files for duplicates — never the real ~/.config/opencode
+    monkeypatch.setattr(facts, "OPENCODE_RULES_PATH", tmp_path / ".config" / "opencode" / "AGENTS.md")
     monkeypatch.setattr(verify, "BACKUP_DIR", knowledge / "kopie")
     (tmp_path / "CLAUDE.md").write_text(RULES, encoding="utf-8")
     return tmp_path
@@ -498,6 +501,90 @@ def test_without_any_instruction_file_nothing_blows_up(sandbox):
     assert waiting(sandbox) == [f"- [ ] [2026-09-16] Kod robota to `{p}`."]
     assert not codex_path(sandbox).exists()
     assert verify.main(argv=[]) == 0
+
+
+def opencode_path(sandbox):
+    return sandbox / ".config" / "opencode" / "AGENTS.md"
+
+
+def opencode_file(sandbox, text: str = None):
+    """Creates ~/.config/opencode/AGENTS.md — OpenCode's instruction file (read before CLAUDE.md)."""
+    p = opencode_path(sandbox)
+    p.parent.mkdir(parents=True, exist_ok=True)
+    p.write_text(AGENTS.replace("(Codex)", "(OpenCode)") if text is None else text, encoding="utf-8")
+    return p
+
+
+def test_with_the_opencode_file_alone_the_fact_lands_there(sandbox):
+    """A machine with OpenCode and nothing else: no CLAUDE.md, no Codex — the knowledge still has
+    a home, and the other tools' files are not made up."""
+    (sandbox / "CLAUDE.md").unlink()
+    opencode_file(sandbox)
+    p = existing(sandbox)
+    candidates(sandbox, f"Kod robota to `{p}`.")
+
+    r = verify.run()
+
+    assert r["approved"] == [f"Kod robota to `{p}`."]
+    assert r["files"] == [str(opencode_path(sandbox))]
+    assert f"- [2026-09-16] Kod robota to `{p}`." in opencode_path(sandbox).read_text(encoding="utf-8")
+    assert not (sandbox / "CLAUDE.md").exists() and not codex_path(sandbox).parent.exists()
+    assert waiting(sandbox) == []
+
+
+def test_one_fact_lands_in_all_three_tools_files(sandbox):
+    codex_file(sandbox)
+    opencode_file(sandbox)
+    p = existing(sandbox)
+    candidates(sandbox, f"Kod robota to `{p}`.")
+
+    r = verify.run()
+
+    line = f"- [2026-09-16] Kod robota to `{p}`."
+    assert line in rules_text(sandbox) and line in codex_text(sandbox)
+    assert line in opencode_path(sandbox).read_text(encoding="utf-8")
+    assert len(r["files"]) == 3 and len(r["backups"]) == 3
+
+
+def test_without_the_knowledge_section_anywhere_the_run_says_so(sandbox, capsys):
+    """Negative: all three files there, none with "## Co wiem" — nothing written, and that is said:
+    in the result, in the reason the cycle shows (powod) and on the run's output, file by file."""
+    bare = "# Zasady\n\nNic tu nie ma.\n"
+    (sandbox / "CLAUDE.md").write_text(bare, encoding="utf-8")
+    codex_file(sandbox, bare)
+    opencode_file(sandbox, bare)
+    p = existing(sandbox)
+    candidates(sandbox, f"Kod robota to `{p}`.")
+
+    r = verify.run(day="2026-09-17")
+
+    assert r["approved"] == []
+    for path in (sandbox / "CLAUDE.md", codex_path(sandbox), opencode_path(sandbox)):
+        assert str(path) in r["note"]
+        assert path.read_text(encoding="utf-8") == bare  # not a byte touched
+    assert "Co wiem" in state(sandbox)["powod"] and str(opencode_path(sandbox)) in state(sandbox)["powod"]
+    assert waiting(sandbox) == [f"- [ ] [2026-09-16] Kod robota to `{p}`."]  # the fact waits
+
+    assert verify.main(argv=[]) == 0
+    out = capsys.readouterr()
+    assert "Co wiem" in out.out + out.err
+
+
+def test_without_the_knowledge_section_a_rejected_entry_does_not_take_the_good_ones_with_it(sandbox):
+    """Negative, found 2026-10-06 by narzedzia\\test-cykl-opencode.ps1: nowhere to write, plus one
+    entry to mark [!] — the waiting room was rewritten WITHOUT the approved facts, which then
+    vanished without a trace. They wait now, untouched, next to the marked one."""
+    opencode_file(sandbox, "# Zasady\n\nNic tu nie ma.\n")
+    (sandbox / "CLAUDE.md").unlink()
+    p = existing(sandbox)
+    candidates(sandbox, f"Kod robota to `{p}`.", '{"warstwa": "stala", "tresc": "Zdanie z JSON-a"}')
+
+    r = verify.run(day="2026-09-17")
+
+    assert r["approved"] == [] and len(r["raw_rejected"]) == 1
+    left = waiting(sandbox)
+    assert left[0] == f"- [ ] [2026-09-16] Kod robota to `{p}`."
+    assert left[1].startswith("- [!] [2026-09-16] {") and len(left) == 2
 
 
 def test_a_file_without_the_knowledge_section_is_skipped_not_blocking(sandbox):

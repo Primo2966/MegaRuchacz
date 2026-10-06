@@ -52,6 +52,7 @@ def knowledge(tmp_path, monkeypatch, environment):
     monkeypatch.setattr(facts, "KNOWLEDGE_DIR", directory)
     monkeypatch.setattr(facts, "RULES_PATH", tmp_path / "CLAUDE.md")
     monkeypatch.setattr(facts, "CODEX_RULES_PATH", tmp_path / "AGENTS.md")
+    monkeypatch.setattr(facts, "OPENCODE_RULES_PATH", tmp_path / "opencode-AGENTS.md")
     facts.RULES_PATH.write_text(RULES, encoding="utf-8")
     automaton_wrote(CASE_FACT, COMMON_FACT, PAIR_FACT)
     (directory / usage.MARKER_NAME).write_text(ago(2) + "\n", encoding="utf-8")

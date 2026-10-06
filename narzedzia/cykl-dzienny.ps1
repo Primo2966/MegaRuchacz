@@ -3,7 +3,7 @@
 #
 # Rzecz, dla ktorej to powstalo: zadanie o sztywnej godzinie przepada, gdy komputer byl
 # wylaczony, siec padla, uzytkownik byl wylogowany albo skonczyl sie limit. Dlatego:
-#   - cykl rusza przy PIERWSZEJ SESJI danego dnia (Claude Code albo Codex - startuje go
+#   - cykl rusza przy PIERWSZEJ SESJI danego dnia (Claude Code, Codex albo OpenCode - startuje go
 #     straznik-zasad.ps1 osobnym procesem), a nie o ustalonej porze ani przy zalogowaniu.
 #     Komputer wlaczony o 13:00 i pierwsze okno o 15:00 znaczy cykl o 15:00, przy czym
 #     sesja na nic nie czeka: hook ma kilkanascie sekund, a cykl trwa minuty,
@@ -24,8 +24,12 @@
 #
 # Cykl NIE jest przywiazany do jednego narzedzia AI. Czytanie transkryptow, indeksowanie
 # i weryfikacja to robota na plikach - modelu potrzebuje wylacznie wylawianie faktow.
-# Dlatego narzedzia (Claude Code, Codex) wykrywane sa na zywo, brak jednego z nich to
-# normalna maszyna, a brak obu zatrzymuje SAMO wylawianie - weryfikacja idzie dalej.
+# Rozmowy czyta wylawianie z bazy Lore, a ta obejmuje wszystkie trzy zrodla naraz:
+# ~\.claude\projects, ~\.codex\sessions i baze OpenCode (lore\lore\index.py). Fakty trafiaja
+# do pliku instrukcji kazdego narzedzia, ktore tu jest (lore\lore\verify.py INSTRUCTION_PATHS).
+# Dlatego narzedzia (Claude Code, Codex, OpenCode) wykrywane sa na zywo, brak ktoregos to
+# normalna maszyna, a brak wszystkich zatrzymuje SAMO wylawianie - weryfikacja idzie dalej.
+# Kolejnosc jak w lore\lore\facts.py MODEL_CLIS: Claude Code, potem Codex, OpenCode na koncu.
 #
 # Uzycie:
 #   powershell -ExecutionPolicy Bypass -File narzedzia\cykl-dzienny.ps1
@@ -290,12 +294,34 @@ function Zapisz-Podsumowanie($status, $powod, $nadrobione, $zaleglosc) {
 function Znajdz-Narzedzia {
   $lista = @()
   foreach ($n in @(
-    @{ Nazwa = "Claude Code"; Polecenie = "claude"; Adres = "api.anthropic.com" },
-    @{ Nazwa = "Codex";       Polecenie = "codex";  Adres = "chatgpt.com" }
+    @{ Nazwa = "Claude Code"; Polecenie = "claude";   Adres = "api.anthropic.com" },
+    @{ Nazwa = "Codex";       Polecenie = "codex";    Adres = "chatgpt.com" },
+    @{ Nazwa = "OpenCode";    Polecenie = "opencode"; Adres = (Adres-Opencode) }
   )) {
     if (Get-Command $n.Polecenie -CommandType Application -ErrorAction SilentlyContinue) { $lista += $n }
   }
   return ,$lista   # przecinek: jedno narzedzie tez ma wrocic jako lista, nie goly wpis
+}
+
+# OpenCode nie ma jednego dostawcy: rozmawia z tym, do ktorego uzytkownik sie zalogowal
+# (u nas openrouter). Siec sprawdzamy wiec pod adresem tego dostawcy - z NAZW wpisow
+# w auth.json (tresci, czyli kluczy, nie czytamy). Nieznany dostawca albo brak pliku:
+# models.dev, skad OpenCode i tak pobiera liste modeli.
+function Adres-Opencode {
+  $znane = [ordered]@{
+    openrouter = "openrouter.ai"; anthropic = "api.anthropic.com"; openai = "api.openai.com"
+    google = "generativelanguage.googleapis.com"; deepseek = "api.deepseek.com"; opencode = "opencode.ai"
+  }
+  $plik = Join-Path $KatalogDomowy ".local\share\opencode\auth.json"
+  if (Test-Path -LiteralPath $plik) {
+    try {
+      $wpisy = @((Get-Content -LiteralPath $plik -Raw -Encoding UTF8 | ConvertFrom-Json).PSObject.Properties.Name)
+      foreach ($k in $znane.Keys) { if ($wpisy -contains $k) { return $znane[$k] } }
+    } catch {
+      Ostrzezenie "nie umiem odczytac $plik ($($_.Exception.Message)) - siec dla OpenCode sprawdzam pod models.dev"
+    }
+  }
+  return "models.dev"
 }
 
 function Jest-Siec($adres) {
@@ -345,6 +371,13 @@ function Jest-Zalogowany($narzedzie) {
     if ($env:OPENAI_API_KEY) { return $true }
     return $null
   }
+  if ($narzedzie.Polecenie -eq "opencode") {
+    # To samo podejscie: `opencode auth list` nie jest tu sprawdzone jako polecenie bez modelu.
+    # Logowania OpenCode leza w ~\.local\share\opencode\auth.json - jest plik, jest logowanie;
+    # bez pliku dostawca moze brac klucz ze srodowiska, czyli "nie wiadomo".
+    if (Test-Path (Join-Path $KatalogDomowy ".local\share\opencode\auth.json")) { return $true }
+    return $null
+  }
   return $null
 }
 
@@ -352,7 +385,7 @@ function Jest-Zalogowany($narzedzie) {
 # Weryfikacji to nie dotyczy - ona nie wola zadnego modelu i idzie tak czy owak.
 function Znajdz-Przeszkode($narzedzia) {
   if ($narzedzia.Count -eq 0) {
-    return "nie ma na tej maszynie narzedzia AI - ani claude, ani codex w PATH (Claude Code: npm install -g @anthropic-ai/claude-code)"
+    return "nie ma na tej maszynie narzedzia AI - ani claude, ani codex, ani opencode w PATH (Claude Code: npm install -g @anthropic-ai/claude-code)"
   }
   $zSiecia = @($narzedzia | Where-Object { Jest-Siec $_.Adres })
   if ($zSiecia.Count -eq 0) {
@@ -376,10 +409,16 @@ function Rozpoznaj-Powod($tekst, $kod) {
     if ($m.Success) { return $m.Value }
     # lore wola do wylawiania konkretne polecenie; gdy go tu nie ma, komunikat ma
     # mowic wprost, KTOREGO narzedzia brakuje, a nie "wylawianie nie powiodlo sie"
-    if ($tekst -match '(?i)no .?(claude|codex).? in PATH|install Claude Code') {
+    # "no agent CLI in PATH - looked for `claude`, `codex`, `opencode`" (facts.py ModelMissing)
+    # wymienia wszystkie trzy, wiec nie wolno z niego wyczytac jednego narzedzia
+    if ($tekst -match '(?i)no agent CLI in PATH') {
+      return "wylawianie wymaga narzedzia AI (claude, codex albo opencode), a nie ma zadnego w PATH"
+    }
+    if ($tekst -match '(?i)no .?(claude|codex|opencode).? in PATH|install Claude Code') {
       $czym = "modelu"
-      if ($tekst -match '(?i)claude') { $czym = "polecenia claude (Claude Code)" }
-      elseif ($tekst -match '(?i)codex') { $czym = "polecenia codex" }
+      if ($tekst -match '(?i)no .?claude.? in PATH|install Claude Code') { $czym = "polecenia claude (Claude Code)" }
+      elseif ($tekst -match '(?i)no .?codex.? in PATH') { $czym = "polecenia codex" }
+      elseif ($tekst -match '(?i)no .?opencode.? in PATH') { $czym = "polecenia opencode" }
       return "wylawianie wymaga ${czym}, a nie ma go w PATH"
     }
     if ($tekst -match '(?i)usage limit|rate.?limit|limit reached|quota|out of credit|too many requests|\b429\b') {

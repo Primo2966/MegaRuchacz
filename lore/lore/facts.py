@@ -73,6 +73,7 @@ SESSIONS_FIELD = "sesje:"
 DORMANT_NAME = "uspione.md"
 RULES_PATH = CLAUDE_HOME / "CLAUDE.md"  # read only — the waiting room is the only thing we write
 CODEX_RULES_PATH = Path.home() / ".codex" / "AGENTS.md"
+OPENCODE_RULES_PATH = Path.home() / ".config" / "opencode" / "AGENTS.md"
 
 
 def instruction_paths() -> tuple[Path, ...]:
@@ -82,7 +83,7 @@ def instruction_paths() -> tuple[Path, ...]:
     time would ignore that. Kept in step with INSTRUCTION_PATHS in verify.py, which is what
     actually writes into these files.
     """
-    return (RULES_PATH, CODEX_RULES_PATH)
+    return (RULES_PATH, CODEX_RULES_PATH, OPENCODE_RULES_PATH)
 
 # a cost limit, not a suggestion: one run never sends more than this to the model
 MAX_INPUT_CHARS = 60_000
@@ -646,17 +647,64 @@ STRICT_FACTS_SCHEMA = json.dumps(_strict(json.loads(FACTS_SCHEMA)), ensure_ascii
 # --ephemeral (2026-10-06, the same two printouts): what --no-session-persistence is for Claude Code
 #   — without it every run leaves a session file in ~/.codex/sessions, the indexer reads it, and the
 #   next harvest is fed its own instruction and answer.
-CODEX_ARGS = ("exec", "--skip-git-repo-check", "--ephemeral", "--color", "never", "-s", "read-only",
-              "--output-schema", SCHEMA_SLOT, "--output-last-message", ANSWER_SLOT, "-")
+# --disable hooks (2026-10-06, codex-cli 0.157; `--disable <FEATURE>` = `-c features.<name>=false`,
+#   "hooks" is a stable feature in `codex features list`): what --safe-mode does for hooks in Claude
+#   Code. Without it every run fires the user's SessionStart / UserPromptSubmit / Stop hooks from
+#   ~/.codex/hooks.json — the rules guard and the worker register run for a job that is no session.
+#   Proven both ways on a throwaway CODEX_HOME with two hooks writing to a file: without the switch
+#   both wrote, with it neither did.
+CODEX_ARGS = ("exec", "--skip-git-repo-check", "--ephemeral", "--disable", "hooks", "--color", "never",
+              "-s", "read-only", "--output-schema", SCHEMA_SLOT, "--output-last-message", ANSWER_SLOT,
+              "-")
+
+# 2026-10-06, every switch read off `opencode run --help` of OpenCode 1.18.33 (the office machine)
+# and tried on a neutral prompt; the home machine runs 1.17.9, not checked there.
+# - no message in argv: `opencode run` reads the prompt from stdin when there is none — the 60 k of
+#   material never has to fit on a command line (tried: the answer came back).
+# --format json: one JSON event per line instead of a formatted transcript; the answer is the text
+#   parts of the last message (_events_answer) and the bill is in "step_finish" (measured_tokens).
+# --pure: "run without external plugins" — the user's ~/.config/opencode/plugins/mr-log.js (worker
+#   register, the rules guard started in the background) stays out. Proven: its "I was here" stamp
+#   (~/.claude/.megaruchacz-opencode-zyje) did not move during a --pure run.
+# --title: a title given means no extra call to a "small" model to make one up from the prompt.
+# There is no --ephemeral: the run is a session in ~/.local/share/opencode/opencode.db, which Lore
+# indexes — the next harvest would be fed its own material. So the session is deleted right after
+# (`opencode session delete`, forget_sessions), and a failed delete is said in the log.
+OPENCODE_ARGS = ("run", "--format", "json", "--pure", "--title", "lore-fakty")
+# What --safe-mode does for Claude Code, done through the environment (the names are in the binary;
+# each one tried on a neutral prompt — the bill fell from 35 166 tokens to 2 008):
+# - XDG_CONFIG_HOME pointed at an empty directory in the scratch one (CONFIG_SLOT): no
+#   ~/.config/opencode — not its AGENTS.md (the user's rules pulled into the answer), not its MCP
+#   servers (the lore server started again from inside a lore job), not its plugins, not its
+#   "permission: allow everything". The login stays: it lives in ~/.local/share/opencode/auth.json,
+#   and the model the user last picked stays as the default too.
+# - OPENCODE_DISABLE_CLAUDE_CODE: no ~/.claude/CLAUDE.md and ~/.claude/skills as the fallback.
+# - OPENCODE_DISABLE_EXTERNAL_SKILLS, OPENCODE_DISABLE_PROJECT_CONFIG: nothing found on the way up
+#   from the scratch directory either.
+# - OPENCODE_PERMISSION {"*": "deny"}: extracting facts is pure text work, the same as Codex's
+#   read-only sandbox — a tool call is refused instead of waiting for someone to approve it.
+# The model: `-m provider/model` (LORE_OPENCODE_MODEL, OPENCODE_MODEL_ENV); without it the one the
+# user last picked in OpenCode (on the office machine openrouter/~deepseek/deepseek-flash-latest).
+# OpenCode talks to whatever providers the user logged into, so no model name can be fixed here.
+CONFIG_SLOT = "<pusta-konfiguracja>"
+CONFIG_NAME = "konfiguracja"
+OPENCODE_ENV = (("XDG_CONFIG_HOME", CONFIG_SLOT), ("OPENCODE_DISABLE_CLAUDE_CODE", "1"),
+                ("OPENCODE_DISABLE_EXTERNAL_SKILLS", "1"), ("OPENCODE_DISABLE_PROJECT_CONFIG", "1"),
+                ("OPENCODE_PERMISSION", '{"*":"deny"}'))
+OPENCODE_MODEL_ENV = "LORE_OPENCODE_MODEL"
+FORGET_TIMEOUT_S = 60
 
 # best first: when both are installed Claude Code wins, because its switches and its JSON envelope
-# are the ones this module was measured against. A third tool (OpenCode, …) is one row more: its
-# answer is read whatever way it wraps it (answer_object), and a tool given no schema in its switches
-# gets the shape spelled out in the prompt instead (FORMAT_NOTE).
+# are the ones this module was measured against; OpenCode is the last choice — it has no schema
+# switch, so it is held to the shape by the prompt alone. Another tool is one row more: its answer
+# is read whatever way it wraps it (answer_object), and a tool given no schema in its switches gets
+# the shape spelled out in the prompt instead (FORMAT_NOTE).
 MODEL_CLIS = (
-    # name, switches before the prompt, instruction goes on stdin too, switches read off the tool
+    # name, switches before the prompt, instruction goes on stdin too, switches read off the tool,
+    # and optionally: (environment variables, the variable naming the model for `-m`)
     ("claude", MODEL_ARGS, False, True),
     ("codex", CODEX_ARGS, True, True),
+    ("opencode", OPENCODE_ARGS, True, True, (OPENCODE_ENV, OPENCODE_MODEL_ENV)),
 )
 
 # For a tool that cannot be held to FACTS_SCHEMA by a switch: the same shape, asked for in words.
@@ -676,10 +724,23 @@ class ModelCLI:
     args: tuple[str, ...]
     prompt_on_stdin: bool
     verified: bool  # its switches were read off the tool itself, not guessed from documentation
+    env: tuple[tuple[str, str], ...] = ()  # set for the run on top of the inherited environment
+    model_env: str = ""  # the variable whose value goes to `-m`; unset or empty = the tool's default
 
     def answer_in_file(self) -> bool:
         """True when the tool is told to write the answer to a file instead of printing it."""
         return ANSWER_SLOT in self.args
+
+    def answer_in_events(self) -> bool:
+        """True when the tool prints one JSON event per line and the answer is to be found in them."""
+        return any(a == "--format" and b == "json" for a, b in zip(self.args, self.args[1:]))
+
+    def environment(self, scratch: Path) -> dict[str, str] | None:
+        """The environment of the run — None (inherit it as it is) for a tool that needs nothing."""
+        if not self.env:
+            return None
+        slots = {CONFIG_SLOT: str(scratch / CONFIG_NAME)}
+        return {**os.environ, **{key: slots.get(value, value) for key, value in self.env}}
 
     def schema_in_file(self) -> bool:
         """True when the tool reads the shape of the answer from a file (SCHEMA_SLOT)."""
@@ -698,13 +759,95 @@ class ModelCLI:
         """
         slots = {ANSWER_SLOT: str(answer_path), SCHEMA_SLOT: str(answer_path.parent / SCHEMA_NAME)}
         args = [slots.get(a, a) for a in self.args]
+        model = (os.environ.get(self.model_env) or "").strip() if self.model_env else ""
+        if model:
+            args += ["-m", model]
         if self.prompt_on_stdin:
             return [self.exe, *args], f"{instruction}\n\n{material}"
         return [self.exe, *args, instruction], material
 
     def answer(self, stdout: str, answer_path: Path) -> str:
         """The answer alone, from wherever the tool put it."""
-        return _codex_answer(stdout, answer_path) if self.answer_in_file() else stdout
+        if self.answer_in_file():
+            return _codex_answer(stdout, answer_path)
+        if self.answer_in_events():
+            return _events_answer(self.name, stdout)
+        return stdout
+
+    def forget_sessions(self, stdout, env: dict[str, str] | None) -> list[str]:
+        """Deletes the sessions the run left in the tool's own history; what could NOT be deleted.
+
+        Only a tool that reports its sessions in its events (OpenCode) leaves one — the others are
+        told not to (--no-session-persistence, --ephemeral). Never raises: the answer is already in
+        hand, and a session left behind is said in the log instead of being lost in silence.
+        """
+        if not self.answer_in_events():
+            return []
+        left = []
+        for session in _event_sessions(stdout):
+            try:
+                r = subprocess.run([self.exe, "session", "delete", session, "--pure"], env=env,
+                                   capture_output=True, text=True, encoding="utf-8",
+                                   errors="replace", timeout=FORGET_TIMEOUT_S)
+                failure = "" if r.returncode == 0 else \
+                    f"returned {r.returncode}: {(r.stderr or r.stdout or '').strip()[:200]}"
+            except (OSError, subprocess.SubprocessError) as e:
+                failure = str(e)[:200]
+            if failure:
+                left.append(session)
+                log(f"UWAGA: {self.name} session {session} of the harvest was not deleted ({failure})"
+                    f" — Lore will index it and the next harvest may read its own material;"
+                    f" delete it by hand: {self.name} session delete {session}")
+        return left
+
+
+def _events(stdout) -> list[dict]:
+    """The JSON events of a `--format json` run, one per line; a line that is not one is skipped."""
+    if isinstance(stdout, bytes):
+        stdout = stdout.decode("utf-8", errors="replace")
+    out = []
+    for line in (stdout or "").splitlines():
+        try:
+            event = json.loads(line)
+        except ValueError:
+            continue
+        if isinstance(event, dict):
+            out.append(event)
+    return out
+
+
+def _event_sessions(stdout) -> list[str]:
+    """Every session id the events name, in order of appearance, each once."""
+    seen: list[str] = []
+    for event in _events(stdout):
+        session = event.get("sessionID") or (event.get("part") or {}).get("sessionID")
+        if isinstance(session, str) and session and session not in seen:
+            seen.append(session)
+    return seen
+
+
+def _events_answer(tool: str, stdout: str) -> str:
+    """The text of the LAST message of the run — what the model said in the end, not its steps.
+
+    OpenCode 1.18.33 `run --format json` prints events like
+    {"type":"text","sessionID":…,"part":{"messageID":…,"type":"text","text":"…"}}; a message may come
+    in several text parts, so the parts of the last message are glued together. No text at all is an
+    error, not an empty answer — a silent empty harvest would look like "no facts today".
+    """
+    parts = [(p.get("messageID"), p.get("text")) for e in _events(stdout)
+             if isinstance(p := e.get("part"), dict) and p.get("type") == "text"
+             and isinstance(p.get("text"), str)]
+    if parts:
+        last = parts[-1][0]
+        answer = "".join(text for message, text in parts if message == last).strip()
+        if answer:
+            return answer
+    errors = [json.dumps(e.get("error") or e, ensure_ascii=False)[:200] for e in _events(stdout)
+              if e.get("type") == "error"]
+    tail = " ".join((stdout or "").split())[-200:]
+    raise RuntimeError(f"{tool} printed no answer text in its --format json events"
+                       f"{' — error: ' + errors[-1] if errors else ''};"
+                       f" its output ended with: {tail or '(nothing)'}")
 
 
 def _codex_answer(stdout: str, answer_path: Path) -> str:
@@ -728,11 +871,13 @@ def _codex_answer(stdout: str, answer_path: Path) -> str:
 
 def model_clis() -> tuple[ModelCLI, ...]:
     """Every known tool that is really installed, best first. Empty on a machine with none."""
-    return tuple(
-        ModelCLI(name, exe, args, prompt_on_stdin, verified)
-        for name, args, prompt_on_stdin, verified in MODEL_CLIS
-        if (exe := shutil.which(name))
-    )
+    out = []
+    for name, args, prompt_on_stdin, verified, *extra in MODEL_CLIS:
+        exe = shutil.which(name)
+        if exe:
+            env, model_env = extra[0] if extra else ((), "")
+            out.append(ModelCLI(name, exe, args, prompt_on_stdin, verified, tuple(env), model_env))
+    return tuple(out)
 
 
 def find_model_cli() -> ModelCLI:
@@ -775,20 +920,28 @@ def ask_model(material: str, instruction: str = PROMPT) -> str:
     empty = tempfile.mkdtemp(prefix="lore-facts-")
     answer_path = Path(empty) / ANSWER_NAME
     argv, stdin = cli.invocation(instruction, material, answer_path)
+    env = cli.environment(Path(empty))
+    stdout = ""  # what the tool printed, also when it timed out — it names the session to delete
     try:
         if cli.schema_in_file():
             (Path(empty) / SCHEMA_NAME).write_text(STRICT_FACTS_SCHEMA, encoding="utf-8")
-        r = subprocess.run(
-            argv, input=stdin, capture_output=True, cwd=empty,
-            text=True, encoding="utf-8", errors="replace", timeout=MODEL_TIMEOUT_S,
-        )
+        try:
+            r = subprocess.run(
+                argv, input=stdin, capture_output=True, cwd=empty, env=env,
+                text=True, encoding="utf-8", errors="replace", timeout=MODEL_TIMEOUT_S,
+            )
+        except subprocess.TimeoutExpired as e:
+            stdout = e.stdout or ""
+            raise
+        stdout = r.stdout or ""
         if r.returncode != 0:
             raise RuntimeError(f"{cli.name} returned {r.returncode}:"
                                f" {(r.stderr or '').strip()[:200]}")
-        answer = cli.answer(r.stdout or "", answer_path)
-        record_cost(Usage.of(cli.name, len(instruction) + len(material), answer, r.stdout or ""))
+        answer = cli.answer(stdout, answer_path)
+        record_cost(Usage.of(cli.name, len(instruction) + len(material), answer, stdout))
         return answer
     finally:
+        cli.forget_sessions(stdout, env)
         shutil.rmtree(empty, ignore_errors=True)
 
 
@@ -1014,12 +1167,23 @@ def measured_tokens(stdout: str) -> int:
 
     Codex prints its session instead of an envelope, so there the answer is 0 and the caller falls
     back to the character estimate — a number marked as a guess beats a guess dressed as a measurement.
+    OpenCode's `--format json` events carry the bill of every step in "step_finish" (tokens.total,
+    the sum OpenCode itself makes) — those are added up.
     """
     try:
         usage = json.loads(stdout)["usage"]
         return sum(int(usage.get(field) or 0) for field in TOKEN_FIELDS)
     except (AttributeError, KeyError, TypeError, ValueError):
-        return 0
+        pass
+    total = 0
+    for event in _events(stdout):
+        part = event.get("part")
+        if event.get("type") == "step_finish" and isinstance(part, dict):
+            try:
+                total += int((part.get("tokens") or {}).get("total") or 0)
+            except (AttributeError, TypeError, ValueError):
+                continue
+    return total
 
 
 @dataclass

@@ -35,6 +35,7 @@ def selective(tmp_path, monkeypatch, environment):
     monkeypatch.setattr(facts, "CANDIDATES_PATH", knowledge / "kandydaci.md")
     monkeypatch.setattr(facts, "RULES_PATH", tmp_path / "CLAUDE.md")
     monkeypatch.setattr(facts, "CODEX_RULES_PATH", tmp_path / "AGENTS.md")
+    monkeypatch.setattr(facts, "OPENCODE_RULES_PATH", tmp_path / ".config" / "opencode" / "AGENTS.md")
     monkeypatch.setattr(facts, "DB_PATH", tmp_path / "lore.db")
     facts.start_pass()  # the pass accumulator is module state — no test may inherit another's calls
     # a sandbox that has been learning for a long time: day zero drawn at "now" would put every
@@ -827,6 +828,7 @@ def test_harvest_and_verification_together_promote_only_after_a_second_conversat
     still current; in ANOTHER conversation -> durable, and gone from the current layer."""
     from lore import verify
     monkeypatch.setattr(facts, "CODEX_RULES_PATH", tmp_path / "brak-codexa" / "AGENTS.md")
+    monkeypatch.setattr(facts, "OPENCODE_RULES_PATH", tmp_path / "brak-opencode" / "AGENTS.md")
     monkeypatch.setattr(verify, "KNOWLEDGE_DIR", facts.KNOWLEDGE_DIR)
     monkeypatch.setattr(verify, "CANDIDATES_PATH", facts.CANDIDATES_PATH)
     monkeypatch.setattr(verify, "BACKUP_DIR", facts.KNOWLEDGE_DIR / "kopie")
@@ -1175,7 +1177,7 @@ def test_with_no_tool_at_all_the_error_says_what_was_looked_for(unforced, monkey
     assert facts.available_model_cli() is None
     with pytest.raises(facts.ModelMissing) as e:
         facts.find_model_cli()
-    assert "claude" in str(e.value) and "codex" in str(e.value)
+    assert "claude" in str(e.value) and "codex" in str(e.value) and "opencode" in str(e.value)
 
 
 def test_the_environment_variable_overrides_the_order(monkeypatch):
@@ -1389,22 +1391,169 @@ def test_codex_gets_the_schema_in_a_file_beside_the_answer(codex, monkeypatch):
 
 
 def test_a_third_tool_is_one_row_and_gets_the_shape_in_words(unforced, monkeypatch):
-    """OpenCode or whatever comes next: one row in MODEL_CLIS, no switch for a schema — the prompt
+    """Whatever comes after OpenCode: one row in MODEL_CLIS, no switch for a schema — the prompt
     asks for the shape instead, and the answer is read whichever way the tool wraps it."""
-    monkeypatch.setattr(facts, "MODEL_CLIS", facts.MODEL_CLIS + (("opencode", ("run",), True, False),))
-    monkeypatch.setattr(facts.shutil, "which", installed("opencode"))
+    monkeypatch.setattr(facts, "MODEL_CLIS", facts.MODEL_CLIS + (("nowe", ("run",), True, False),))
+    monkeypatch.setattr(facts.shutil, "which", installed("nowe"))
     seen = {}
 
-    def fake_opencode(argv, **kwargs):
+    def fake_tool(argv, **kwargs):
         seen["argv"], seen["stdin"] = argv, kwargs["input"]
         return subprocess.CompletedProcess(argv, 0, "```json\n" + CODEX_REAL + "\n```\n", "")
 
-    monkeypatch.setattr(facts.subprocess, "run", fake_opencode)
+    monkeypatch.setattr(facts.subprocess, "run", fake_tool)
     answer = facts.ask_model("material")
 
-    assert seen["argv"] == ["/bin/opencode", "run"]
+    assert seen["argv"] == ["/bin/nowe", "run"]
     assert facts.FORMAT_NOTE in seen["stdin"] and seen["stdin"].endswith("material")
     assert [f.text for f in facts.parse_facts(answer)] == SENTENCES
+
+
+# ---------------------------------------------------------------- OpenCode
+
+def opencode_events(text: str | None, session: str = "ses_test1", total: int = 2008,
+                    extra: tuple = ()) -> str:
+    """What `opencode run --format json` printed on 2026-10-06 (1.18.33), shortened: a step, the
+    text of the answer, the bill of the step. text=None — a run that ended without a word."""
+    lines = [{"type": "step_start", "sessionID": session,
+              "part": {"messageID": "msg_1", "sessionID": session, "type": "step-start"}}]
+    if text is not None:
+        lines.append({"type": "text", "sessionID": session,
+                      "part": {"messageID": "msg_1", "sessionID": session, "type": "text", "text": text}})
+    lines += list(extra)
+    lines.append({"type": "step_finish", "sessionID": session,
+                  "part": {"messageID": "msg_1", "sessionID": session, "type": "step-finish",
+                           "tokens": {"total": total, "input": total - 4, "output": 4}}})
+    return "\n".join(json.dumps(line, ensure_ascii=False) for line in lines) + "\n"
+
+
+@pytest.fixture
+def opencode(unforced, monkeypatch, tmp_path):
+    """`opencode run` stood in for — and `opencode session delete` after it. What the code would do
+    to the real tool is recorded; nothing is started, no real ~/.config/opencode is touched."""
+    monkeypatch.setattr(facts.shutil, "which", installed("opencode"))
+    monkeypatch.delenv(facts.OPENCODE_MODEL_ENV, raising=False)
+    monkeypatch.setattr(facts, "KNOWLEDGE_DIR", tmp_path / "wiedza")  # record_cost writes there
+    facts.start_pass()
+    seen = {"out": opencode_events(CODEX_REAL), "deleted": [], "delete_code": 0, "logged": []}
+    monkeypatch.setattr(facts, "log", lambda text: seen["logged"].append(text))
+
+    def fake(argv, **kwargs):
+        if argv[1:3] == ["session", "delete"]:
+            seen["deleted"].append(argv[3])
+            seen["delete_env"] = kwargs.get("env")
+            return subprocess.CompletedProcess(argv, seen["delete_code"], "", "nie ma takiej sesji")
+        seen.update(argv=argv, stdin=kwargs["input"], env=kwargs.get("env"), cwd=kwargs.get("cwd"))
+        return subprocess.CompletedProcess(argv, 0, seen["out"], "")
+
+    monkeypatch.setattr(facts.subprocess, "run", fake)
+    return seen
+
+
+def test_with_opencode_alone_the_knowledge_layer_still_has_a_model(opencode):
+    """A machine with OpenCode and nothing else: the harvest runs, the answer comes out of the
+    events as sentences, the run is billed with its real tokens and its session is deleted."""
+    answer = facts.ask_model("material")
+
+    assert opencode["argv"] == ["/bin/opencode", *facts.OPENCODE_ARGS]
+    assert "--pure" in opencode["argv"]  # the user's plugin (mr-log.js) stays out
+    assert opencode["stdin"].endswith("material")  # the prompt on stdin, no size limit
+    assert facts.FORMAT_NOTE in opencode["stdin"]  # no schema switch — the shape is asked in words
+    assert [f.text for f in facts.parse_facts(answer)] == SENTENCES
+    saved = facts.read_cost()
+    assert (saved["narzedzie"], saved["tokeny"], saved["tokeny_zrodlo"]) == ("opencode", "2008", "pomiar")
+    assert opencode["deleted"] == ["ses_test1"]  # Lore must not index the harvest's own material
+    assert not Path(opencode["cwd"]).exists()  # the scratch directory goes, empty config with it
+
+
+def test_opencode_runs_without_the_users_rules_plugins_and_permissions(opencode):
+    """What --safe-mode is for Claude Code: an empty config directory instead of ~/.config/opencode,
+    no ~/.claude fallback, every tool refused."""
+    facts.ask_model("material")
+    env = opencode["env"]
+
+    assert Path(env["XDG_CONFIG_HOME"]).parent == Path(opencode["cwd"])  # inside the scratch dir
+    assert env["XDG_CONFIG_HOME"] != str(Path.home() / ".config")
+    assert env["OPENCODE_DISABLE_CLAUDE_CODE"] == "1"
+    assert json.loads(env["OPENCODE_PERMISSION"]) == {"*": "deny"}
+    assert env.get("PATH") == facts.os.environ.get("PATH")  # the rest of the environment inherited
+    assert opencode["delete_env"] == env  # the delete sees the same OpenCode as the run
+
+
+def test_the_opencode_model_is_chosen_by_a_variable_or_left_to_the_tool(opencode, monkeypatch):
+    facts.ask_model("material")
+    assert "-m" not in opencode["argv"]  # the model the user last picked in OpenCode
+
+    monkeypatch.setenv(facts.OPENCODE_MODEL_ENV, "openrouter/deepseek/deepseek-chat")
+    facts.ask_model("material")
+    assert opencode["argv"][-2:] == ["-m", "openrouter/deepseek/deepseek-chat"]
+
+
+def test_an_opencode_answer_split_into_parts_is_glued_and_only_the_last_message_counts(opencode):
+    steps = [{"type": "text", "part": {"messageID": "msg_2", "type": "text", "text": '{"fakty": [{"tresc": '}},
+             {"type": "text", "part": {"messageID": "msg_2", "type": "text",
+                                       "text": '"Sprzedaje olejki eteryczne na Amazonie i eBayu pod marką AROMAHOLIK."}]}'}}]
+    opencode["out"] = opencode_events("Najpierw przeczytam material.", extra=tuple(steps))
+
+    answer = facts.ask_model("material")
+
+    assert "przeczytam" not in answer  # the first message was the agent thinking out loud
+    assert [f.text for f in facts.parse_facts(answer)] == SENTENCES[:1]
+
+
+def test_an_opencode_run_without_an_answer_is_an_error_and_its_session_still_goes(opencode):
+    """Negative: no text in the events — an error with the tool's own error, not "no facts today";
+    and the session it left is deleted all the same."""
+    opencode["out"] = opencode_events(None, extra=({"type": "error", "error": {"name": "ProviderAuthError"}},))
+
+    with pytest.raises(RuntimeError) as e:
+        facts.ask_model("material")
+
+    assert "ProviderAuthError" in str(e.value) and "opencode" in str(e.value)
+    assert opencode["deleted"] == ["ses_test1"]
+    assert facts.read_cost() == {}  # nothing billed for a run that gave nothing
+
+
+def test_a_session_that_cannot_be_deleted_is_said_out_loud(opencode):
+    """Negative: the delete fails — the answer is kept, but the log says which session is left and
+    how to remove it (the next harvest could read its own material)."""
+    opencode["delete_code"] = 1
+
+    answer = facts.ask_model("material")
+
+    assert [f.text for f in facts.parse_facts(answer)] == SENTENCES
+    warning = [line for line in opencode["logged"] if line.startswith("UWAGA")]
+    assert warning and "ses_test1" in warning[0] and "session delete ses_test1" in warning[0]
+
+
+def test_opencode_is_the_last_choice(unforced, monkeypatch):
+    monkeypatch.setattr(facts.shutil, "which", installed("claude", "codex", "opencode"))
+    assert [c.name for c in facts.model_clis()] == ["claude", "codex", "opencode"]
+    assert facts.find_model_cli().name == "claude"
+
+    monkeypatch.setattr(facts.shutil, "which", installed("codex", "opencode"))
+    assert facts.find_model_cli().name == "codex"
+
+    monkeypatch.setenv(facts.MODEL_CLI_ENV, "opencode")
+    monkeypatch.setattr(facts.shutil, "which", installed("claude", "opencode"))
+    assert facts.find_model_cli().name == "opencode"
+
+
+def test_the_codex_run_fires_none_of_the_users_hooks(unforced, monkeypatch):
+    """--disable hooks: SessionStart / UserPromptSubmit / Stop from ~/.codex/hooks.json stay quiet
+    (proven 2026-10-06 on a throwaway CODEX_HOME — with the switch the hooks wrote nothing)."""
+    monkeypatch.setattr(facts.shutil, "which", installed("codex"))
+    argv, _ = facts.find_model_cli().invocation("instrukcja", "material", Path("odp.txt"))
+
+    assert argv[argv.index("--disable") + 1] == "hooks"
+    assert facts.find_model_cli().environment(Path("x")) is None  # Codex inherits the environment
+
+
+def test_the_opencode_rules_file_is_one_of_the_instruction_files(monkeypatch):
+    assert facts.OPENCODE_RULES_PATH == Path.home() / ".config" / "opencode" / "AGENTS.md"
+    assert facts.OPENCODE_RULES_PATH in facts.instruction_paths()
+    from lore import verify
+    assert facts.OPENCODE_RULES_PATH in verify.INSTRUCTION_PATHS  # kept in step with the writer
 
 
 # ---------------------------------------------------------------- what the day cost

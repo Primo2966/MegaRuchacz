@@ -88,6 +88,7 @@ JOURNAL_NAME = ".zmiany.jsonl"  # the same changes for undo(): the ops and the s
 INSTRUCTION_PATHS = (
     CLAUDE_HOME / "CLAUDE.md",
     Path.home() / ".codex" / "AGENTS.md",
+    Path.home() / ".config" / "opencode" / "AGENTS.md",  # OpenCode reads it before ~/.claude/CLAUDE.md
 )
 
 KNOWLEDGE_HEADING = "## Co wiem"
@@ -551,6 +552,9 @@ def current_entry(day: str, text: str, against: str = "") -> str:
 @dataclass
 class Reviewed:
     lines: list[str] = field(default_factory=list)  # the new content of the waiting room
+    # the waiting room with only the verdicts marked — every approved entry still in it, for a run
+    # that has nowhere to write them (no "## Co wiem" anywhere): they must wait, not vanish
+    marked: list[str] = field(default_factory=list)
     approved: list[Candidate] = field(default_factory=list)  # new entries of the current layer
     suspicious: list[tuple[str, list[str]]] = field(default_factory=list)  # a claim that does not hold
     # always empty since "the newer version wins" — nothing waits for the user any more; the key
@@ -594,6 +598,7 @@ def review_candidates(lines: list[str], exists=None, standing: list | None = Non
     for line in lines:
         pointer = _POINTER_LINE.match(line)
         if pointer:
+            out.marked.append(line)
             if pending is None:  # nothing to attach it to — it stays exactly where it is
                 out.lines.append(line)
             else:
@@ -603,6 +608,7 @@ def review_candidates(lines: list[str], exists=None, standing: list | None = Non
         m = _CANDIDATE.match(line)
         if not m or m.group("box") not in (" ", "!", "?"):  # '[x]' is the user's decision, not ours
             out.lines.append(line)
+            out.marked.append(line)
             continue
         candidate = _read_candidate(m)
         # a piece of the model's answer (raw_structure) is never written into the rules — it stays
@@ -611,6 +617,7 @@ def review_candidates(lines: list[str], exists=None, standing: list | None = Non
         if why:
             out.raw.append((candidate.text, why))
             out.lines.append(_flag(m, "!", f"{candidate.text} ({RAW_NOTE}: {why})"))
+            out.marked.append(out.lines[-1])
             out.waiting += 1
             continue
         verdict = verify(candidate.text, exists)
@@ -618,8 +625,10 @@ def review_candidates(lines: list[str], exists=None, standing: list | None = Non
             out.suspicious.append((candidate.text, verdict.missing))
             out.lines.append(_flag(m, "!", f"{candidate.text}"
                                            f" (nie znaleziono: {', '.join(verdict.missing)})"))
+            out.marked.append(out.lines[-1])
             out.waiting += 1
             continue
+        out.marked.append(line)  # approved: it leaves the waiting room only once it is written
         pending = candidate  # its "odsyłacz:" line, if any, comes next and leaves with it
         # a listing stands in the file as its pointer, not as itself — there is no entry of its own
         # to take the place of, so it goes in as it always did
@@ -2327,8 +2336,9 @@ def run(dry_run: bool = False, exists=None, day: str | None = None) -> dict:
         out["powod"] = _reason(out)
         out["report"] = report_lines(journal, today)
         if not dry_run:
+            # reviewed.marked, not reviewed.lines: the approved ones have nowhere to go, so they stay
             if raw_candidates is not None and (reviewed.suspicious or reviewed.raw):
-                _write(CANDIDATES_PATH, reviewed.lines, _newline(raw_candidates))
+                _write(CANDIDATES_PATH, reviewed.marked, _newline(raw_candidates))
             write_state(out, today)
         return out
 
