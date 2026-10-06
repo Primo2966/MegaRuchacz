@@ -9,9 +9,9 @@ which is exactly what he asked not to do (2026-10-01).
 This pass costs 0 tokens: for every fact of the AUTOMATON in the durable layer it picks a few words
 that point at that fact and nothing else (see signatures()), and looks for them in everything the
 agent wrote and did since the last pass — the full text of its answers and the input of its tool
-calls, in Claude Code and Codex transcripts, subagents included. A hit is a use: the same USED line
-in wiedza/zrodla.md the model writes (lore.facts.note_used), so lore.verify takes the later of the
-two dates without knowing which of them found it.
+calls, in Claude Code and Codex transcripts and the OpenCode database, subagents included. A hit is
+a use: the same USED line in wiedza/zrodla.md the model writes (lore.facts.note_used), so
+lore.verify takes the later of the two dates without knowing which of them found it.
 
 Read once per day, only what is new: the transcript files are read from where the previous pass
 stopped (a byte offset per file, .ostatnie-uzycie-pozycje.json), files untouched since the last
@@ -32,6 +32,7 @@ from __future__ import annotations
 
 import json
 import re
+import sqlite3
 import time
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
@@ -257,8 +258,8 @@ def _strings(value) -> list[str]:
 
 
 def _tool_text(inp) -> str:
-    target = inp.get("file_path") or inp.get("path") or inp.get("notebook_path") \
-        if isinstance(inp, dict) else None
+    target = inp.get("file_path") or inp.get("filePath") or inp.get("path") or inp.get("notebook_path") \
+        if isinstance(inp, dict) else None  # filePath: OpenCode's edit/write tools
     if isinstance(target, str) and _UPKEEP.search(target):
         return ""
     return "\n".join(_strings(inp))
@@ -298,6 +299,16 @@ def agent_text(rec: dict) -> str | None:
             except ValueError:
                 return "" if _UPKEEP.search(raw) else raw
         return _tool_text(raw)
+    return None
+
+
+def opencode_agent_text(part: dict) -> str | None:
+    """agent_text for one part of an OpenCode assistant message: its text, or the input of a tool
+    call (reasoning is left out, as Claude Code's thinking is)."""
+    if part.get("type") == "text" and isinstance(part.get("text"), str):
+        return part["text"]
+    if part.get("type") == "tool":
+        return _tool_text((part.get("state") or {}).get("input"))
     return None
 
 
@@ -355,22 +366,58 @@ def _read_file(path: Path, start: int, since: str | None, watches: list[Watch], 
             ts = rec.get("timestamp") if isinstance(rec.get("timestamp"), str) else ""
             if since and ts and ts <= since:
                 continue
-            text = agent_text(rec)
-            if not text:
-                continue
-            scan.records += 1
-            haystack = _flat(text)
-            for w in watches:
-                words = w.hits(haystack)
-                if not words:
-                    continue
-                session = rec.get("sessionId") or session_default
-                names = [s.word for s in words]
-                found = scan.found.setdefault(w.text, Found(ts, session, names))
-                found.add(ts, session, names)
-                strong = any(s.strong for s in words)
-                found.by_strength.setdefault(strong, Found(ts, session, names)).add(ts, session, names)
+            _match(agent_text(rec), ts, rec.get("sessionId") or session_default, watches, scan)
     return pos
+
+
+def _match(text: str | None, ts: str, session: str, watches: list[Watch], scan: Scan) -> None:
+    """One record of the agent against every watched fact."""
+    if not text:
+        return
+    scan.records += 1
+    haystack = _flat(text)
+    for w in watches:
+        words = w.hits(haystack)
+        if not words:
+            continue
+        names = [s.word for s in words]
+        found = scan.found.setdefault(w.text, Found(ts, session, names))
+        found.add(ts, session, names)
+        strong = any(s.strong for s in words)
+        found.by_strength.setdefault(strong, Found(ts, session, names)).add(ts, session, names)
+
+
+def _scan_opencode(watches: list[Watch], since: str, offsets: dict[str, int], out: Scan) -> None:
+    """The OpenCode database: assistant parts changed after the saved place (ms of the newest part
+    read; the first time, after `since`). No OpenCode here = nothing; an unreadable one is said."""
+    path = index.opencode_db()
+    key = str(path)
+    start = offsets.get(key)
+    if start is None:
+        try:
+            start = int(datetime.fromisoformat(since.replace("Z", "+00:00")).timestamp() * 1000)
+        except ValueError:
+            start = 0
+    try:
+        oc = index.opencode_connect(path)
+    except index.OpencodeError as e:
+        log(f"UWAGA: OpenCode conversations could not be read for the use check: {e}")
+        if key in offsets:
+            out.offsets[key] = offsets[key]
+        return
+    if oc is None:
+        return
+    newest = start
+    try:
+        for updated, session, part in index.opencode_agent_parts(oc, start):
+            newest = max(newest, updated)
+            _match(opencode_agent_text(part), index.opencode_ts(updated), session, watches, out)
+        out.files += 1
+    except sqlite3.Error as e:  # read up to here; the rest waits for the next pass — but it is said
+        log(f"UWAGA: OpenCode database {path} could not be read for the use check: {e}")
+    finally:
+        oc.close()
+    out.offsets[key] = newest
 
 
 _UUID = re.compile(r"[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$", re.IGNORECASE)
@@ -446,6 +493,7 @@ def scan(watches: list[Watch], since: str, offsets: dict[str, int]) -> Scan:
                 out.offsets[key] = start
             continue
         out.files += 1
+    _scan_opencode(watches, since, offsets, out)
     return out
 
 

@@ -1,4 +1,5 @@
-"""Incremental indexer of Claude Code transcripts (~/.claude/projects/**/*.jsonl and ~/<uuid>*.jsonl from Orca).
+"""Incremental indexer of Claude Code transcripts (~/.claude/projects/**/*.jsonl and ~/<uuid>*.jsonl from Orca),
+Codex sessions (~/.codex/sessions) and OpenCode conversations (the SQLite ~/.local/share/opencode/opencode.db).
 
 Run: uv --directory C:\\dev\\claude-worker\\lore run python -m lore.index [--text-only] [--remask]
 
@@ -18,6 +19,7 @@ import re
 import sqlite3
 import sys
 import time
+from collections.abc import Iterator
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
@@ -44,6 +46,11 @@ LOCK_STALE_S = 15 * 60
 # sessions started by Orca drop their transcripts loose in the home directory
 HOME_DIR = Path.home()
 CODEX_SESSIONS_DIR = HOME_DIR / ".codex" / "sessions"
+# OpenCode keeps its conversations in one SQLite database, not in transcript files; None = under
+# HOME_DIR, looked up at call time (a test that moves HOME_DIR moves the database with it)
+OPENCODE_DB: Path | None = None
+OPENCODE_PROJECT = "opencode"
+META_OPENCODE = "opencode_status"  # the outcome of the last OpenCode read: "ok ..." / "BLAD ..." / "absent"
 HOME_PROJECT = "orca"
 _UUID = re.compile(r"[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}", re.I)
 
@@ -439,6 +446,197 @@ def _group_boundary(group_: list[Turn], lines: list[tuple[int, str]], start_line
     return (lines[nxt][0] if nxt < len(lines) else end_offset), last
 
 
+# ---------------------------------------------------------------- OpenCode (SQLite, read only)
+#
+# One session of the OpenCode database is one "file" of Lore: its key is `<db>#<session id>`, a
+# "line" is the ordinal of a message in the session (1, 2, ...), and the files row keeps
+# mtime = the newest change in the session (s), size = its message count, offset = line = the
+# messages already stored. The schema was read on OpenCode 1.18.33 only, so it is checked before
+# every read: a missing table or column is an OpencodeError (said and recorded in meta), never a
+# crash and never silence. No OpenCode on the machine (no database) is the normal case: skipped.
+
+OPENCODE_COLUMNS = {
+    "session": ("id", "directory", "parent_id", "time_updated"),
+    "message": ("id", "session_id", "time_created", "time_updated", "data"),
+    "part": ("id", "message_id", "session_id", "time_updated", "data"),
+}
+
+
+class OpencodeError(Exception):
+    """The OpenCode database exists but cannot be read the way this code expects."""
+
+
+@dataclass
+class OpencodeSession:
+    id: str
+    key: str  # the `file` of its chunks
+    project: str
+    session: str  # the root session — a subagent's conversation is filed under its parent's
+    role_prefix: str
+    count: int  # messages
+    stamp: float  # the newest change in the session, seconds
+
+
+def opencode_db() -> Path:
+    return OPENCODE_DB or HOME_DIR / ".local" / "share" / "opencode" / "opencode.db"
+
+
+def opencode_connect(path: Path | None = None) -> sqlite3.Connection | None:
+    """A read-only connection to the OpenCode database, its schema checked; None = no OpenCode here.
+
+    mode=ro: nothing is ever written to it, and a WAL reader does not block a running OpenCode.
+    """
+    path = path or opencode_db()
+    if not path.is_file():
+        return None
+    try:
+        oc = sqlite3.connect(f"{path.as_uri()}?mode=ro", uri=True, timeout=5)
+    except sqlite3.Error as e:
+        raise OpencodeError(f"cannot open {path}: {e}") from e
+    try:
+        oc.execute("PRAGMA query_only=ON")
+        for table, needed in OPENCODE_COLUMNS.items():
+            have = {r[1] for r in oc.execute(f"PRAGMA table_info({table})")}
+            if not have:
+                raise OpencodeError(f"{path}: no table {table!r} - an OpenCode version this code does not know")
+            missing = [c for c in needed if c not in have]
+            if missing:
+                raise OpencodeError(f"{path}: table {table!r} lacks {', '.join(missing)}"
+                                    " - an OpenCode version this code does not know")
+    except sqlite3.Error as e:
+        oc.close()
+        raise OpencodeError(f"cannot read {path}: {e}") from e
+    except OpencodeError:
+        oc.close()
+        raise
+    return oc
+
+
+def opencode_ts(ms) -> str:
+    return datetime.fromtimestamp(ms / 1000, tz=timezone.utc).isoformat(timespec="milliseconds").replace("+00:00", "Z")
+
+
+def _json(raw) -> dict | None:
+    try:
+        data = json.loads(raw)
+    except (TypeError, ValueError):
+        return None
+    return data if isinstance(data, dict) else None
+
+
+def opencode_sessions(oc: sqlite3.Connection, path: Path | None = None) -> list[OpencodeSession]:
+    path = path or opencode_db()
+    rows = oc.execute(
+        "SELECT s.id, s.directory, s.parent_id, s.time_updated,"
+        " (SELECT count(*) FROM message m WHERE m.session_id = s.id),"
+        " (SELECT max(m.time_updated) FROM message m WHERE m.session_id = s.id),"
+        " (SELECT max(p.time_updated) FROM part p WHERE p.session_id = s.id)"
+        " FROM session s ORDER BY s.time_created, s.id"
+    ).fetchall()
+    parent = {r[0]: r[2] for r in rows}
+    out = []
+    for sid, directory, parent_id, updated, count, msg_updated, part_updated in rows:
+        root, seen = sid, {sid}
+        while parent.get(root) and parent[root] not in seen:  # a cycle must not hang the indexer
+            root = parent[root]
+            seen.add(root)
+        project = Path(directory).name if isinstance(directory, str) and directory.strip("/\\") else ""
+        stamp = max(v for v in (updated, msg_updated, part_updated, 0) if isinstance(v, (int, float))) / 1000
+        out.append(OpencodeSession(sid, f"{path}#{sid}", project or OPENCODE_PROJECT, root,
+                                   "agent:" if parent_id else "", count or 0, float(stamp)))
+    return out
+
+
+def _opencode_texts(oc: sqlite3.Connection, session_id: str, message_ids: set[str]) -> tuple[dict[str, list[str]], int]:
+    """{message id: its text parts in order} and the number of parts whose JSON is unreadable."""
+    texts: dict[str, list[str]] = {}
+    bad = 0
+    for mid, raw in oc.execute("SELECT message_id, data FROM part WHERE session_id=? ORDER BY id", (session_id,)):
+        if mid not in message_ids:
+            continue
+        data = _json(raw)
+        if data is None:
+            bad += 1
+            continue
+        if data.get("type") != "text" or data.get("synthetic") or data.get("ignored"):
+            continue
+        if isinstance(data.get("text"), str):
+            texts.setdefault(mid, []).append(data["text"])
+    return texts, bad
+
+
+def _opencode_rewritten(oc: sqlite3.Connection, s: OpencodeSession, offset: int, since: float) -> bool:
+    """Did a stored message change after the last pass (an undo, an edit)? Then the session goes again from zero."""
+    if offset <= 0:
+        return False
+    head = oc.execute("SELECT id, time_created FROM message WHERE session_id=? ORDER BY time_created, id LIMIT ?",
+                      (s.id, offset)).fetchall()
+    since_ms = since * 1000
+    if any(created > since_ms for _, created in head):
+        return True  # a message inserted among the stored ones: the ordinals moved
+    ids = {mid for mid, _ in head}
+    for mid, raw in oc.execute("SELECT message_id, data FROM part WHERE session_id=? AND time_updated>?",
+                               (s.id, since_ms)):
+        data = _json(raw)
+        if mid in ids and data is not None and data.get("type") == "text":
+            return True
+    return False
+
+
+def _opencode_turns(oc: sqlite3.Connection, s: OpencodeSession, offset: int) -> tuple[list[Turn], int, int]:
+    """Turns of the messages after `offset`, the number of messages read, unreadable rows.
+
+    Reading stops before an assistant message still being written (no time.completed) in a session
+    touched within TAIL_CLOSING_AGE_S - its text is not final yet; older ones count as finished."""
+    rows = oc.execute("SELECT id, time_created, data FROM message WHERE session_id=? ORDER BY time_created, id"
+                      " LIMIT -1 OFFSET ?", (s.id, offset)).fetchall()
+    texts, bad = _opencode_texts(oc, s.id, {r[0] for r in rows})
+    recent = time.time() - s.stamp <= TAIL_CLOSING_AGE_S
+    turns: list[Turn] = []
+    read = 0
+    for nr, (mid, created, raw) in enumerate(rows, start=offset + 1):
+        data = _json(raw)
+        if data is None:
+            bad += 1
+            read += 1
+            continue
+        role = data.get("role")
+        if role == "assistant" and recent and not (data.get("time") or {}).get("completed"):
+            break
+        read += 1
+        if role not in ("user", "assistant"):
+            continue
+        parts = texts.get(mid, [])
+        if role == "user":
+            parts = [_clean_user_text(t) for t in parts]
+        text = "\n".join(t.strip() for t in parts if t and t.strip())
+        text = mask(text).encode("utf-8", errors="replace").decode("utf-8").strip()
+        if len(text) < MIN_LENGTH:
+            continue
+        ms = (data.get("time") or {}).get("created")
+        turns.append(Turn(nr, opencode_ts(ms if isinstance(ms, (int, float)) else created), s.role_prefix + role, text))
+    return turns, read, bad
+
+
+def opencode_agent_parts(oc: sqlite3.Connection, after_ms: int) -> Iterator[tuple[int, str, dict]]:
+    """(time_updated ms, root session, part) of every assistant part changed after `after_ms`, oldest
+    first — for lore.usage, which looks for the agent's text and tool input. A row with unreadable
+    JSON is skipped here; the indexer's pass over the same database counts and reports it."""
+    sessions = {s.id: s.session for s in opencode_sessions(oc)}
+    roles = {}
+    for mid, raw in oc.execute("SELECT id, data FROM message"):
+        data = _json(raw)
+        roles[mid] = data.get("role") if data else None
+    for updated, mid, sid, raw in oc.execute(
+            "SELECT time_updated, message_id, session_id, data FROM part WHERE time_updated>? ORDER BY time_updated, id",
+            (after_ms,)):
+        if roles.get(mid) != "assistant":
+            continue
+        data = _json(raw)
+        if data is not None:
+            yield updated, sessions.get(sid, sid), data
+
+
 # ---------------------------------------------------------------- cross-process lock
 
 def _acquire_lock(path: Path | None = None) -> bool:
@@ -591,31 +789,140 @@ def process_file(conn: sqlite3.Connection, p: Path, text_only: bool = False) -> 
         if row2 and row2[0] == st.st_mtime and row2[1] == st.st_size and row2[2] >= new_offset:
             conn.execute("ROLLBACK")
             return 0
-        if from_scratch:
-            _delete_file_chunks(conn, path)
-        else:
-            _delete_file_chunks(conn, path, from_line=start_line)
-        for i, c in enumerate(chunks):
-            cur = conn.execute(
-                "INSERT INTO chunks(project, session, file, line, part, ts, role, text, indexed_at)"
-                " VALUES (?,?,?,?,?,?,?,?,?)",
-                (project, session, path, c.line, c.part, c.ts, c.role, c.text, landed),
-            )
-            cid = cur.lastrowid
-            conn.execute("INSERT INTO chunks_fts(rowid, text) VALUES (?,?)", (cid, c.text))
-            if emb is not None:
-                conn.execute("INSERT INTO vectors(chunk_id, emb) VALUES (?,?)", (cid, emb[i].tobytes()))
-        conn.execute(
-            "INSERT INTO files(path, mtime, size, offset, line, project, session) VALUES (?,?,?,?,?,?,?) "
-            "ON CONFLICT(path) DO UPDATE SET mtime=excluded.mtime, size=excluded.size, "
-            "offset=excluded.offset, line=excluded.line, project=excluded.project, session=excluded.session",
-            (path, st.st_mtime, st.st_size, new_offset, new_line, project, session),
-        )
+        _store(conn, path, project, session, chunks, emb, landed, None if from_scratch else start_line,
+               (st.st_mtime, st.st_size, new_offset, new_line))
         conn.execute("COMMIT")
     except Exception:
         conn.execute("ROLLBACK")
         raise
     return len(chunks)
+
+
+def _store(conn: sqlite3.Connection, path: str, project: str, session: str, chunks: list[Chunk], emb, landed: str,
+           from_line: int | None, state: tuple) -> None:
+    """Inside the caller's transaction: replaces the chunks past `from_line` (None = all) and saves
+    the resume point `state` = (mtime, size, offset, line)."""
+    _delete_file_chunks(conn, path, from_line=from_line)
+    for i, c in enumerate(chunks):
+        cur = conn.execute(
+            "INSERT INTO chunks(project, session, file, line, part, ts, role, text, indexed_at)"
+            " VALUES (?,?,?,?,?,?,?,?,?)",
+            (project, session, path, c.line, c.part, c.ts, c.role, c.text, landed),
+        )
+        cid = cur.lastrowid
+        conn.execute("INSERT INTO chunks_fts(rowid, text) VALUES (?,?)", (cid, c.text))
+        if emb is not None:
+            conn.execute("INSERT INTO vectors(chunk_id, emb) VALUES (?,?)", (cid, emb[i].tobytes()))
+    conn.execute(
+        "INSERT INTO files(path, mtime, size, offset, line, project, session) VALUES (?,?,?,?,?,?,?) "
+        "ON CONFLICT(path) DO UPDATE SET mtime=excluded.mtime, size=excluded.size, "
+        "offset=excluded.offset, line=excluded.line, project=excluded.project, session=excluded.session",
+        (path, *state, project, session),
+    )
+
+
+def process_opencode_session(conn: sqlite3.Connection, oc: sqlite3.Connection, s: OpencodeSession,
+                             text_only: bool = False) -> tuple[int, int]:
+    """Adds the new messages of one OpenCode session — process_file for the database.
+    Returns (new chunks, unreadable rows met)."""
+    path = s.key
+    row = conn.execute("SELECT mtime, size, offset FROM files WHERE path=?", (path,)).fetchone()
+    stale_tail = bool(row) and row[2] < s.count and time.time() - s.stamp > TAIL_CLOSING_AGE_S
+    if row and row[0] == s.stamp and row[1] == s.count and not stale_tail:
+        return 0, 0
+    offset = row[2] if row else 0
+    from_scratch = not row
+    if row and (s.count < offset or _opencode_rewritten(oc, s, offset, row[0])):
+        from_scratch, offset = True, 0  # messages undone or changed: the session is indexed from zero
+
+    turns, read, bad = _opencode_turns(oc, s, offset)
+    groups = group(turns)
+    if groups and _tail_open(groups[-1], s.stamp):
+        groups.pop()  # the last group may still grow — stored once it closes
+    if groups:
+        new_offset = max(t.line for t in groups[-1])  # a line is a message ordinal: no byte offsets here
+    elif turns:
+        new_offset = offset
+    else:
+        new_offset = offset + read
+    chunks = [c for g in groups for c in _chunks_from_group(g, s.role_prefix)]
+
+    model = active_model(conn)
+    emb = _embed(chunks, model, text_only)
+    landed = now_iso()
+    conn.execute("BEGIN IMMEDIATE")
+    try:
+        if active_model(conn) != model:
+            conn.execute("ROLLBACK")
+            log(f"vector model changed to {active_model(conn)} while indexing OpenCode {s.id} - embedding again")
+            return process_opencode_session(conn, oc, s, text_only)
+        row2 = conn.execute("SELECT mtime, size, offset FROM files WHERE path=?", (path,)).fetchone()
+        if row2 and row2[0] == s.stamp and row2[1] == s.count and row2[2] >= new_offset:
+            conn.execute("ROLLBACK")
+            return 0, bad
+        _store(conn, path, s.project, s.session, chunks, emb, landed, None if from_scratch else offset,
+               (s.stamp, s.count, new_offset, new_offset))
+        conn.execute("COMMIT")
+    except Exception:
+        conn.execute("ROLLBACK")
+        raise
+    return len(chunks), bad
+
+
+def _record_opencode(conn: sqlite3.Connection, status: str) -> None:
+    conn.execute("INSERT INTO meta(key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value=excluded.value",
+                 (META_OPENCODE, status))
+
+
+def index_opencode(conn: sqlite3.Connection, text_only: bool = False, quiet: bool = False,
+                   path: Path | None = None) -> tuple[int, int, int]:
+    """All OpenCode sessions: (new chunks, sessions changed, sessions). Never raises: a fault is logged
+    and recorded in meta (META_OPENCODE, "BLAD ..."), a pass that went well records "ok ...", and a
+    machine without OpenCode records "absent" — so an old fault does not hang on after an uninstall."""
+    path = path or opencode_db()
+    stamp = datetime.now(timezone.utc).isoformat(timespec="seconds").replace("+00:00", "Z")
+    new = changed = 0
+    sessions: list[OpencodeSession] = []
+    faults: list[str] = []
+    bad = 0
+    try:
+        oc = opencode_connect(path)
+    except OpencodeError as e:
+        log(f"UWAGA: OpenCode conversations are NOT indexed: {e}")
+        _record_opencode(conn, f"BLAD {stamp}: {e}")
+        return 0, 0, 0
+    if oc is None:
+        _record_opencode(conn, "absent")
+        return 0, 0, 0
+    try:
+        sessions = opencode_sessions(oc, path)
+        for s in sessions:
+            try:
+                n, b = process_opencode_session(conn, oc, s, text_only)
+            except sqlite3.Error as e:  # one session must not hide the others — but it is said
+                faults.append(f"{s.id}: {e}")
+                log(f"UWAGA: OpenCode session {s.id} skipped: {e}")
+                continue
+            bad += b
+            if n:
+                new += n
+                changed += 1
+                if not quiet:
+                    log(f"+{n:5d}  opencode {s.project}/{s.id}")
+            _refresh_lock()
+    except sqlite3.Error as e:
+        faults.append(str(e))
+        log(f"UWAGA: OpenCode database {path} could not be read: {e}")
+    finally:
+        oc.close()
+    if bad:
+        faults.append(f"{bad} rows with unreadable JSON skipped")
+        log(f"UWAGA: OpenCode: {bad} messages/parts with unreadable JSON skipped - a format this code does not know?")
+    if faults:
+        _record_opencode(conn, f"BLAD {stamp}: " + "; ".join(faults)[:1000])
+    else:
+        _record_opencode(conn, f"ok {stamp}: {len(sessions)} sessions")
+    return new, changed, len(sessions)
 
 
 def index(conn: sqlite3.Connection | None = None, quiet: bool = False, text_only: bool = False) -> int:
@@ -652,13 +959,17 @@ def index(conn: sqlite3.Connection | None = None, quiet: bool = False, text_only
                 if not quiet:
                     log(f"+{n:5d}  {_label(p)}")
             _refresh_lock()
+        oc_new, oc_changed, oc_sessions = index_opencode(conn, text_only, quiet)
+        new += oc_new
+        changed_files += oc_changed
         conn.execute(
             "INSERT INTO meta(key, value) VALUES ('last_indexed', ?) "
             "ON CONFLICT(key) DO UPDATE SET value=excluded.value",
             (datetime.now(timezone.utc).isoformat(timespec="seconds").replace("+00:00", "Z"),),
         )
         if not quiet:
-            log(f"done: {new} new chunks from {changed_files}/{len(files)} files in {time.time() - start:.1f}s")
+            opencode = f" + {oc_sessions} OpenCode sessions" if oc_sessions else ""
+            log(f"done: {new} new chunks from {changed_files}/{len(files)} files{opencode} in {time.time() - start:.1f}s")
     finally:
         _release_lock()
         if own:
