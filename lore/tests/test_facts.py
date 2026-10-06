@@ -1144,8 +1144,9 @@ def test_with_codex_alone_the_knowledge_layer_still_has_a_model(unforced, monkey
 
     assert cli.name == "codex"
     assert cli.verified  # 2026-09-17: the switches come from a real `codex exec --help`
-    assert argv[1:] == [a if a != facts.ANSWER_SLOT else str(Path("/tmp/odpowiedz.txt"))
-                        for a in facts.CODEX_ARGS]
+    slots = {facts.ANSWER_SLOT: str(Path("/tmp/odpowiedz.txt")),
+             facts.SCHEMA_SLOT: str(Path("/tmp") / facts.SCHEMA_NAME)}  # the schema beside the answer
+    assert argv[1:] == [slots.get(a, a) for a in facts.CODEX_ARGS]
     assert stdin == "instrukcja\n\nmaterial"  # codex exec takes one prompt, so both go together
 
 
@@ -1267,6 +1268,143 @@ def test_the_dry_run_names_the_tool_it_would_use(waiting_room, unforced, monkeyp
 
     assert r["status"] == "dry-run"
     assert (r["model_available"], r["model_cli"]) == (True, "codex")
+
+
+# ---------------------------------------------------------------- every tool's way of wrapping it
+
+# 2026-10-06: the real answer of `codex exec --output-schema` (codex-cli 0.157) — the bare object,
+# no envelope; "uzyte" null, because the strict schema has no optional fields
+CODEX_REAL = ('{"fakty":[{"tresc":"Sprzedaje olejki eteryczne na Amazonie i eBayu pod marką AROMAHOLIK.",'
+              '"warstwa":"stala","podsekcja":"uzytkownik"},{"tresc":"Woli, aby komunikaty commitów były'
+              ' zawsze pisane po polsku.","warstwa":"stala","podsekcja":"uzytkownik"}],"uzyte":null}')
+SENTENCES = ["Sprzedaje olejki eteryczne na Amazonie i eBayu pod marką AROMAHOLIK.",
+             "Woli, aby komunikaty commitów były zawsze pisane po polsku."]
+
+
+def test_the_codex_answer_without_an_envelope_gives_sentences_not_json():
+    """The bug: only Claude Code's envelope was unwrapped, so this whole line became one "fact"."""
+    found = facts.parse_facts(CODEX_REAL)
+
+    assert [f.text for f in found] == SENTENCES
+    assert [f.label() for f in found] == ["stala/uzytkownik"] * 2
+
+
+# the shapes Codex made up on its own before it had a schema — every one of them stood in the
+# current layer of ~/.codex/AGENTS.md between 2026-09-22 and 2026-10-02
+ITEM = {"warstwa": "stala", "podsekcja": "praca", "tresc": "Commity w projekcie są po polsku."}
+SHAPES = {
+    "one object per line": "\n".join(json.dumps(i, ensure_ascii=False)
+                                     for i in (ITEM, {**ITEM, "tresc": "Wdrożenia idą przez Actions."})),
+    "pretty-printed": json.dumps({"fakty": [ITEM], "uzyte": []}, ensure_ascii=False, indent=2),
+    "in a fence": "```json\n" + json.dumps({"fakty": [ITEM]}, ensure_ascii=False) + "\n```",
+    "with words around": "Oto lista:\n" + json.dumps({"fakty": [ITEM]}, ensure_ascii=False) + "\nGotowe.",
+    "a bare list": json.dumps([ITEM], ensure_ascii=False),
+    "claude, answer as a string": json.dumps({"type": "result", "result": json.dumps({"fakty": [ITEM]})}),
+}
+
+
+@pytest.mark.parametrize("shape", SHAPES)
+def test_every_wrapping_of_the_answer_is_unwrapped(shape, capsys):
+    found = facts.parse_facts(SHAPES[shape])
+
+    assert found and all(f.text in ("Commity w projekcie są po polsku.", "Wdrożenia idą przez Actions.")
+                         for f in found)
+    assert all(f.label() == "stala/praca" for f in found)
+    assert "UWAGA" not in capsys.readouterr().err  # all read, nothing had to be thrown away
+
+
+def test_an_empty_answer_without_an_envelope_is_no_facts_not_one_fact():
+    """The last line of the Codex rules on 2026-10-02: {"fakty":[],"uzyte":[]} standing as a fact."""
+    assert facts.parse_facts('{"fakty":[],"uzyte":[]}') == []
+    assert facts.parse_used('{"fakty":[],"uzyte":[2]}', ["a", "b"]) == ["b"]  # no envelope either
+
+
+def test_a_claude_envelope_with_text_instead_of_json_is_read_as_text():
+    """The schema not kept: the lines come out of "result", not out of the envelope around it."""
+    envelope = json.dumps({"type": "result", "result": "- Firma użytkownika sprzedaje olejki na eBay."})
+
+    assert [f.text for f in facts.parse_facts(envelope)] == ["Firma użytkownika sprzedaje olejki na eBay."]
+
+
+def test_pieces_of_structure_are_never_facts_and_say_so(capsys):
+    """The negative test of the guard: every kind of debris that stood in the Codex rules, in an
+    answer the parser can only read line by line — none of it may come out as a fact."""
+    debris = [
+        '{"warstwa":"stala","podsekcja":"praca","tresc":"Urwany obiekt bez konca',  # not valid JSON
+        '"warstwa": "stala",',
+        '"tresc": "Użytkownik oczekuje, że agent nie będzie ponownie pytał o hasło."',
+        'stala | praca | Commit message mają być pisane po polsku.',
+        'stala | podsekcja: praca | Komunikaty commitów należy pisać po polsku.',
+        '[{"tresc": "urwana lista obiektow',
+    ]
+    answer = "\n".join(debris + ["- Firma użytkownika sprzedaje olejki na eBay."])
+
+    found = facts.parse_facts(answer)
+
+    assert [f.text for f in found] == ["Firma użytkownika sprzedaje olejki na eBay."]
+    err = capsys.readouterr().err
+    assert "UWAGA" in err and f"{len(debris)} lines" in err  # not dropped quietly
+
+
+@pytest.mark.parametrize("sentence", [
+    "Skład zestawu wynika z numerów w SKU: SET3-Citrus[020312] = olejki 02, 03, 12.",
+    'Pole „What steps have you taken already?" trzeba zawsze uzupełnić, krótko.',
+    'W formularzu pole "Opis": maksymalnie 2000 znaków.',
+    "Stała cena kuriera to 12,70 zł brutto.",
+    "[DE] i [FR] mają różne opłaty FBA.",
+])
+def test_a_sentence_with_brackets_or_quotes_is_not_taken_for_structure(sentence):
+    """A false alarm is worse than none — real facts quote, bracket and colon all the time."""
+    assert facts.raw_structure(sentence) == ""
+
+
+def test_codex_gets_the_schema_in_a_file_beside_the_answer(codex, monkeypatch):
+    seen = {}
+    real = facts.subprocess.run
+
+    def look(argv, **kwargs):
+        schema = Path(argv[argv.index("--output-schema") + 1])
+        assert schema.parent == Path(argv[argv.index("--output-last-message") + 1]).parent
+        seen["schema"] = json.loads(schema.read_text(encoding="utf-8"))
+        seen["stdin"] = kwargs["input"]
+        return real(argv, **kwargs)
+
+    monkeypatch.setattr(facts.subprocess, "run", look)
+    facts.ask_model("material")
+
+    def objects(node):
+        if isinstance(node, dict):
+            if node.get("type") == "object":
+                yield node
+            for value in node.values():
+                yield from objects(value)
+        elif isinstance(node, list):
+            for value in node:
+                yield from objects(value)
+
+    # OpenAI's strict mode: every property required, else 400 invalid_json_schema (seen 2026-10-06)
+    assert all(set(o["required"]) == set(o["properties"]) for o in objects(seen["schema"]))
+    assert facts.FORMAT_NOTE not in seen["stdin"]  # the schema holds the shape, words are not needed
+    assert not codex["path"].parent.exists()  # and the schema file goes with the scratch directory
+
+
+def test_a_third_tool_is_one_row_and_gets_the_shape_in_words(unforced, monkeypatch):
+    """OpenCode or whatever comes next: one row in MODEL_CLIS, no switch for a schema — the prompt
+    asks for the shape instead, and the answer is read whichever way the tool wraps it."""
+    monkeypatch.setattr(facts, "MODEL_CLIS", facts.MODEL_CLIS + (("opencode", ("run",), True, False),))
+    monkeypatch.setattr(facts.shutil, "which", installed("opencode"))
+    seen = {}
+
+    def fake_opencode(argv, **kwargs):
+        seen["argv"], seen["stdin"] = argv, kwargs["input"]
+        return subprocess.CompletedProcess(argv, 0, "```json\n" + CODEX_REAL + "\n```\n", "")
+
+    monkeypatch.setattr(facts.subprocess, "run", fake_opencode)
+    answer = facts.ask_model("material")
+
+    assert seen["argv"] == ["/bin/opencode", "run"]
+    assert facts.FORMAT_NOTE in seen["stdin"] and seen["stdin"].endswith("material")
+    assert [f.text for f in facts.parse_facts(answer)] == SENTENCES
 
 
 # ---------------------------------------------------------------- what the day cost

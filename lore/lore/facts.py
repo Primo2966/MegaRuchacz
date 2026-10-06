@@ -598,6 +598,36 @@ MODEL_CLI_ENV = "LORE_MODEL_CLI"  # forces one of them by name — for testing a
 # temporary one, made per call in ask_model and substituted here at the last moment
 ANSWER_SLOT = "<plik-odpowiedzi>"
 ANSWER_NAME = "odpowiedz.txt"  # inside the scratch directory, so cleaning up is one rmtree
+# the same for the file holding the shape of the answer (STRICT_FACTS_SCHEMA), for a tool that takes
+# its schema from a file and not from argv — written next to the answer, swept away with it
+SCHEMA_SLOT = "<plik-schematu>"
+SCHEMA_NAME = "schemat.json"
+
+
+def _strict(node):
+    """FACTS_SCHEMA in the shape OpenAI's strict mode accepts: every property of an object listed
+    in "required", the ones that were optional allowed to be null instead of missing."""
+    if isinstance(node, list):
+        return [_strict(item) for item in node]
+    if not isinstance(node, dict):
+        return node
+    node = {key: _strict(value) for key, value in node.items()}
+    if node.get("type") == "object" and "properties" in node:
+        required = set(node.get("required", []))
+        for key, prop in node["properties"].items():
+            if key not in required and isinstance(prop.get("type"), str):
+                prop["type"] = [prop["type"], "null"]
+                if "enum" in prop:
+                    prop["enum"] = [*prop["enum"], None]
+        node["required"] = list(node["properties"])
+    return node
+
+
+# 2026-10-06, measured with codex-cli 0.157 against the real API: FACTS_SCHEMA as it is comes back
+# with 400 "invalid_json_schema … 'required' is required to be supplied and to be an array including
+# every key in properties. Missing 'podsekcja'". This one went through and the answer was the bare
+# object {"fakty": [...], "uzyte": null}.
+STRICT_FACTS_SCHEMA = json.dumps(_strict(json.loads(FACTS_SCHEMA)), ensure_ascii=False)
 
 # 2026-09-17: every switch below is confirmed by a real `codex exec --help` printout from a machine
 #   that has Codex. `-` really is "read the prompt from stdin" (the material does not fit in argv)
@@ -608,16 +638,34 @@ ANSWER_NAME = "odpowiedz.txt"  # inside the scratch directory, so cleaning up is
 # -s read-only: extracting facts is pure text work — it has no business writing or running anything.
 #   It cannot hang either: `codex exec` is the non-interactive mode, so a refused action ends the run
 #   instead of waiting for someone to approve it at a console nobody is sitting at.
-CODEX_ARGS = ("exec", "--skip-git-repo-check", "--color", "never", "-s", "read-only",
-              "--output-last-message", ANSWER_SLOT, "-")
+# --output-schema (2026-10-06, in `codex exec --help` of 0.157 here and 0.160 at home): what
+#   --json-schema is for Claude Code. Without it Codex made up its own shape every day — one JSON
+#   object per line, "stala | praca | …", a pretty-printed object cut into lines — and from
+#   2026-09-22 to 2026-10-02 over forty such lines stood in the current layer of ~/.codex/AGENTS.md
+#   as "facts" (the parser below now also reads every one of those shapes, see answer_object).
+# --ephemeral (2026-10-06, the same two printouts): what --no-session-persistence is for Claude Code
+#   — without it every run leaves a session file in ~/.codex/sessions, the indexer reads it, and the
+#   next harvest is fed its own instruction and answer.
+CODEX_ARGS = ("exec", "--skip-git-repo-check", "--ephemeral", "--color", "never", "-s", "read-only",
+              "--output-schema", SCHEMA_SLOT, "--output-last-message", ANSWER_SLOT, "-")
 
 # best first: when both are installed Claude Code wins, because its switches and its JSON envelope
-# are the ones this module was measured against
+# are the ones this module was measured against. A third tool (OpenCode, …) is one row more: its
+# answer is read whatever way it wraps it (answer_object), and a tool given no schema in its switches
+# gets the shape spelled out in the prompt instead (FORMAT_NOTE).
 MODEL_CLIS = (
     # name, switches before the prompt, instruction goes on stdin too, switches read off the tool
     ("claude", MODEL_ARGS, False, True),
     ("codex", CODEX_ARGS, True, True),
 )
+
+# For a tool that cannot be held to FACTS_SCHEMA by a switch: the same shape, asked for in words.
+# Without it a tool answers in whatever shape it fancies (see CODEX_ARGS for what that did).
+FORMAT_NOTE = """
+
+Odpowiedz WYŁĄCZNIE jednym obiektem JSON, bez żadnego tekstu przed nim ani po nim i bez bloku kodu,
+w tym kształcie:
+{"fakty": [{"tresc": "…", "warstwa": "stala", "podsekcja": "praca"}, {"tresc": "…", "warstwa": "biezaca"}, {"tresc": "…", "warstwa": "referencyjna", "plik": "nazwa-pliku.md", "odsylacz": "…"}], "uzyte": []}"""
 
 
 @dataclass(frozen=True)
@@ -633,13 +681,23 @@ class ModelCLI:
         """True when the tool is told to write the answer to a file instead of printing it."""
         return ANSWER_SLOT in self.args
 
+    def schema_in_file(self) -> bool:
+        """True when the tool reads the shape of the answer from a file (SCHEMA_SLOT)."""
+        return SCHEMA_SLOT in self.args
+
+    def holds_shape(self) -> bool:
+        """True when a switch holds the answer to FACTS_SCHEMA; otherwise the prompt has to ask."""
+        return self.schema_in_file() or FACTS_SCHEMA in self.args
+
     def invocation(self, instruction: str, material: str, answer_path: Path) -> tuple[list[str], str]:
         """(argv, stdin) — the 60 k of material never fits in argv, so it always goes on stdin.
 
         Claude Code takes the instruction in argv and reads the material from stdin. Codex `exec`
         wants a single prompt instead, so there the two are glued and handed over together.
+        The schema file, when the tool takes one, lies next to the answer file (SCHEMA_NAME).
         """
-        args = [str(answer_path) if a == ANSWER_SLOT else a for a in self.args]
+        slots = {ANSWER_SLOT: str(answer_path), SCHEMA_SLOT: str(answer_path.parent / SCHEMA_NAME)}
+        args = [slots.get(a, a) for a in self.args]
         if self.prompt_on_stdin:
             return [self.exe, *args], f"{instruction}\n\n{material}"
         return [self.exe, *args, instruction], material
@@ -712,10 +770,14 @@ def ask_model(material: str, instruction: str = PROMPT) -> str:
     away with it whatever happens — a clean run, a timeout or a crash.
     """
     cli = find_model_cli()
+    if not cli.holds_shape():
+        instruction += FORMAT_NOTE
     empty = tempfile.mkdtemp(prefix="lore-facts-")
     answer_path = Path(empty) / ANSWER_NAME
     argv, stdin = cli.invocation(instruction, material, answer_path)
     try:
+        if cli.schema_in_file():
+            (Path(empty) / SCHEMA_NAME).write_text(STRICT_FACTS_SCHEMA, encoding="utf-8")
         r = subprocess.run(
             argv, input=stdin, capture_output=True, cwd=empty,
             text=True, encoding="utf-8", errors="replace", timeout=MODEL_TIMEOUT_S,
@@ -897,12 +959,8 @@ def watched_facts() -> Watched:
 def parse_used(output: str, watched: list[str]) -> list[str] | None:
     """The facts the model marked as used; None when the answer has no "uzyte" at all — which is
     not "nothing was used" and is reported as such (see run)."""
-    try:
-        envelope = json.loads(output)
-        answer = envelope.get("structured_output") or json.loads(envelope.get("result") or "")
-        numbers = answer["uzyte"]
-    except (AttributeError, KeyError, TypeError, ValueError):
-        return None
+    answer, _ = answer_object(output)
+    numbers = (answer or {}).get("uzyte")
     if not isinstance(numbers, list):
         return None
     out = []
@@ -1561,26 +1619,71 @@ class Fact:
 
 
 def parse_facts(output: str) -> list[Fact]:
-    """Model output -> facts: the structured answer when there is one, otherwise line by line."""
-    structured = _structured(output)
-    facts = []
+    """Model output -> facts: the structured answer when there is one, otherwise line by line.
+
+    A line that is a piece of structure and not a sentence (raw_structure) never becomes a fact.
+    It is not dropped quietly either: the log says how many and shows the first one."""
+    answer, text = answer_object(output)
+    structured = answer.get("fakty") if answer is not None else None
+    if not isinstance(structured, list):
+        structured = None
+    if structured is None and not text.strip() and (output or "").strip():
+        log("UWAGA: the model's envelope came back with no answer in it — no facts from this call")
+    facts, raw = [], []
     # an empty list from the envelope means "no facts" — it must not fall back to the raw text
-    for raw in output.splitlines() if structured is None else structured:
-        fact = _as_fact(raw)
+    for item in text.splitlines() if structured is None else structured:
+        fact = _as_fact(item, raw)
         if fact is not None:
             facts.append(fact)
+    if raw:
+        log(f"UWAGA: {len(raw)} lines of the model's answer were pieces of JSON or of its labels,"
+            f" not sentences — not taken as facts (the answer came in a shape this did not expect);"
+            f" the first one: {raw[0][:120]}")
     return facts
 
 
-def _as_fact(raw) -> Fact | None:
+# A fact is a sentence. What the answer's own machinery leaves behind — a JSON object, a key of the
+# answer, a layer label glued in front — is not one. From 2026-09-22 to 2026-10-02 over forty such
+# lines ({"warstwa":"stala",…}, "tresc": "…", {"fakty":[],"uzyte":[]}, stala | praca | …) stood in
+# the current layer of ~/.codex/AGENTS.md, read into every Codex session as knowledge. The same test
+# guards the harvest here and the writing in lore.verify, so the two cannot drift apart.
+_ANSWER_KEYS = ("warstwa", "podsekcja", "tresc", "plik", "odsylacz", "fakty", "uzyte",
+                "structured_output", "result")
+_RAW_KEY = re.compile(r'"(?:' + "|".join(_ANSWER_KEYS) + r')"\s*:')
+# an opening a sentence never has: a brace, a closing bracket, a bracket opening a list of objects or
+# strings, a code fence
+_RAW_START = re.compile(r'^(?:[{}\]]|\[\s*[{\["\]]|```)')
+# the label of the waiting room in front of the text: "stala | praca | …", "biezaca | …",
+# "stala/firma | …" — and the same with the subsection named, "stala | podsekcja: praca | …"
+_RAW_LABEL = re.compile(r"^\(?(?:stala|biezaca|referencyjna)\b[\w/:() -]{0,40}\|", re.IGNORECASE)
+
+
+def raw_structure(text: str) -> str:
+    """Why this is a piece of the answer's structure and not a sentence — '' for a sentence."""
+    t = (text or "").strip()
+    if _RAW_START.match(t):
+        return "zaczyna sie jak JSON"
+    if _RAW_KEY.search(t):
+        return "zawiera klucz odpowiedzi modelu"
+    if _RAW_LABEL.match(t):
+        return "zaczyna sie od etykiety warstwy"
+    return ""
+
+
+def _as_fact(raw, rejected: list | None = None) -> Fact | None:
     """One item of the answer -> Fact. A missing or made-up layer falls back to the default one:
-    a fact in the wrong subsection costs one move, a dropped fact is gone for good."""
+    a fact in the wrong subsection costs one move, a dropped fact is gone for good. A piece of
+    structure in place of the text goes to `rejected` instead (see raw_structure)."""
     item = {"tresc": raw} if isinstance(raw, str) else raw if isinstance(raw, dict) else None
     if item is None:
         return None
     text = " ".join(_BULLET.sub("", str(item.get("tresc") or "")).split())
     if len(text) < MIN_FACT_CHARS or text.startswith("#") or text.endswith(("?", ":")):
         return None  # a question or a heading above a list is not a fact
+    if raw_structure(text):
+        if rejected is not None:
+            rejected.append(text)
+        return None
     layer = str(item.get("warstwa") or "").strip().lower()
     if layer not in LAYERS:
         return Fact(text)
@@ -1641,15 +1744,74 @@ def name_from_text(text: str) -> str:
     return file_name("-".join(words)) if words else ""
 
 
-def _structured(output: str) -> list | None:
-    """The `--output-format json` envelope -> the list of facts; None when it is plain text."""
-    try:
-        envelope = json.loads(output)
-        answer = envelope.get("structured_output") or json.loads(envelope.get("result") or "")
-        facts = answer["fakty"]
-    except (AttributeError, KeyError, TypeError, ValueError):
+def answer_object(output: str) -> tuple[dict | None, str]:
+    """(the answer as FACTS_SCHEMA describes it, the text to read line by line when there is none).
+
+    Every tool wraps it differently, and reading only Claude Code's way is what put raw JSON into
+    the Codex rules (see CODEX_ARGS). What is unwrapped here:
+    - Claude Code, `--output-format json`: an envelope, the answer under "structured_output" — or as
+      a JSON string under "result", or under "result" as plain text when the schema was not kept;
+    - Codex with --output-schema: the object itself, no envelope at all;
+    - a tool held to the shape by the prompt alone (FORMAT_NOTE): the object, maybe inside a ```json
+      fence or with a sentence around it, a bare list of items, or one item per line.
+    """
+    text = output or ""
+    data = _json_in(text)
+    for _ in range(3):  # envelope -> "result" -> answer, at most
+        if isinstance(data, list):
+            return {"fakty": data}, text
+        if not isinstance(data, dict):
+            return None, text
+        if "fakty" in data or "uzyte" in data:
+            return data, text
+        if "tresc" in data:  # a single item standing on its own
+            return {"fakty": [data]}, text
+        inner, result = data.get("structured_output"), data.get("result")
+        if isinstance(inner, (dict, list)):
+            data = inner
+        elif isinstance(result, (dict, list)):
+            data = result
+        elif isinstance(result, str):
+            text, data = result, _json_in(result)  # plain text there is what the lines are read from
+        else:
+            return None, text
+    return None, text
+
+
+_FENCE = re.compile(r"^\s*```[\w-]*\s*\n(.*?)\n\s*```\s*$", re.DOTALL)
+
+
+def _json_in(text: str):
+    """The JSON value the text is, or holds: whole, inside a fence, one object per line, or the first
+    object or list with words around it. None when there is none."""
+    t = (text or "").strip()
+    fenced = _FENCE.match(t)
+    if fenced:
+        t = fenced.group(1).strip()
+    if not t:
         return None
-    return list(facts) if isinstance(facts, list) else None
+    try:
+        return json.loads(t)
+    except ValueError:
+        pass
+    lines = [line.strip().rstrip(",") for line in t.splitlines() if line.strip()]
+    try:
+        items = [json.loads(line) for line in lines]
+    except ValueError:
+        items = []
+    if len(items) > 1 and all(isinstance(item, dict) for item in items):
+        return items
+    decoder = json.JSONDecoder()
+    for i, ch in enumerate(t):
+        if ch in "{[":
+            try:
+                value, _ = decoder.raw_decode(t, i)
+            except ValueError:
+                continue
+            if isinstance(value, dict) or (isinstance(value, list) and value
+                                            and all(isinstance(v, dict) for v in value)):
+                return value
+    return None
 
 
 # ---------------------------------------------------------------- the waiting room

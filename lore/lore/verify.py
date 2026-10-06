@@ -72,7 +72,8 @@ from . import safeio
 from .db import CLAUDE_HOME, log
 from .facts import (DORMANT_NAME, PENDING_NOTE, SESSIONS_FIELD, SIGHTED, SIGHTED_AGAIN,
                     SOURCES_HEADER, SOURCES_NAME, USED, USED_WEAK, describe_file, dormant_entry,
-                    file_name, is_technical, name_from_text, normalize, pointers_in)
+                    file_name, is_technical, name_from_text, normalize, pointers_in,
+                    raw_structure)
 
 KNOWLEDGE_DIR = CLAUDE_HOME / "wiedza"
 CANDIDATES_PATH = KNOWLEDGE_DIR / "kandydaci.md"
@@ -190,6 +191,9 @@ _POINTER_LINE = re.compile(r"^\s+odsy[łl]acz:\s*(.+)$")
 _NOT_FOUND = re.compile(r"\s*\(nie znaleziono:[^)]*\)\s*$")
 _DISPUTED = re.compile(r"\s*\(sporne:\s.*$")  # the quote inside may hold brackets of its own
 _OVER_LIMIT = re.compile(r"\s*\(nie mieści się:[^)]*\)\s*$")
+# the note a waiting room entry gets when it is a piece of the model's answer, not a sentence
+RAW_NOTE = "odrzucone: surowa struktura z odpowiedzi modelu"
+_RAW = re.compile(r"\s*\(" + RAW_NOTE + r"[^)]*\)\s*$")
 _BULLET_START = re.compile(r"^\s{0,3}[-*]\s+\S")
 _UNCONFIRMED = re.compile(r"\s*<!--\s*niepotwierdzone[^>]*-->\s*$")
 _LEADING_DAY = re.compile(r"^\[\d{4}-\d{2}-\d{2}\]\s*")  # the date a "biezaca" entry carries
@@ -555,6 +559,7 @@ class Reviewed:
     replacing: list["Replacement"] = field(default_factory=list)  # a newer version, taking a place
     pending: list[Candidate] = field(default_factory=list)  # among approved: waiting on a pinned one
     waiting: int = 0  # still in the waiting room: the rejected ones
+    raw: list[tuple[str, str]] = field(default_factory=list)  # (entry, why): JSON, not a sentence
 
 
 def _flag(m: re.Match, box: str, text: str) -> str:
@@ -565,7 +570,8 @@ def _flag(m: re.Match, box: str, text: str) -> str:
 
 
 def _read_candidate(m: re.Match) -> Candidate:
-    text = _OVER_LIMIT.sub("", _DISPUTED.sub("", _NOT_FOUND.sub("", m.group("text")))).rstrip()
+    text = _OVER_LIMIT.sub("", _DISPUTED.sub("", _NOT_FOUND.sub("", _RAW.sub("", m.group("text")))))
+    text = text.rstrip()
     layer = m.group("layer") or "stala"
     detail = (m.group("detail") or "").strip()
     return Candidate(text, layer, detail, m.group("day") or "")
@@ -599,6 +605,14 @@ def review_candidates(lines: list[str], exists=None, standing: list | None = Non
             out.lines.append(line)
             continue
         candidate = _read_candidate(m)
+        # a piece of the model's answer (raw_structure) is never written into the rules — it stays
+        # here, marked, and the run says so in the state (see _reason) until a human takes it out
+        why = raw_structure(candidate.text)
+        if why:
+            out.raw.append((candidate.text, why))
+            out.lines.append(_flag(m, "!", f"{candidate.text} ({RAW_NOTE}: {why})"))
+            out.waiting += 1
+            continue
         verdict = verify(candidate.text, exists)
         if verdict.missing:
             out.suspicious.append((candidate.text, verdict.missing))
@@ -2113,6 +2127,11 @@ def _state(r: dict, day: str) -> dict[str, str]:
         "weszlo_do_biezacej": str(entered),
         "awansowane_do_stalej": str(promoted),
         "odrzucone": str(len(r["suspicious"])),
+        # pieces of the model's answer instead of sentences (JSON, its keys, a layer label in front):
+        # turned back in the waiting room, standing in the rules already, stopped at the writing
+        "surowa_struktura_odrzucona": str(len(r.get("raw_rejected", []))),
+        "surowa_struktura_w_plikach": str(len(r.get("raw_standing", []))),
+        "surowa_struktura_zatrzymana": str(len(r.get("raw_leaked", []))),
         # nothing waits for the user any more ("the newer version wins"): always 0, kept for
         # aktualizuj-wiedze.ps1, which warns when it is not
         "sporne": str(len(r["disputed"])),
@@ -2163,6 +2182,14 @@ def _reason(r: dict) -> str:
     # what went wrong with the files of wiedza\ goes FIRST: the start of the line is what survives
     # when it is cut to fit somewhere
     alarms = []
+    if r.get("raw_rejected"):
+        alarms.append(f"UWAGA: {len(r['raw_rejected'])} wpisow poczekalni to surowa struktura z"
+                      f" odpowiedzi modelu (JSON, klucze, etykiety), nie zdania - nie wpisane,"
+                      f" oznaczone [!] w kandydaci.md (np. {r['raw_rejected'][0][0][:60]})")
+    if r.get("raw_standing"):
+        alarms.append(f"UWAGA: {len(r['raw_standing'])} wpisow w plikach instrukcji to surowa"
+                      f" struktura z odpowiedzi modelu - do usuniecia recznie, automat ich nie"
+                      f" awansuje (np. {r['raw_standing'][0][0][:60]})")
     if r["unpointed"]:
         alarms.append(f"UWAGA: {len(r['unpointed'])} plikow wiedzy bez odsylacza ("
                       + ", ".join(f"{name}: {why}" for name, why in r["unpointed"]) + ")")
@@ -2204,6 +2231,8 @@ def _plain_reason(r: dict) -> str:
     held = []
     if r["suspicious"]:
         held.append(f"{len(r['suspicious'])} odrzucone (nie ma podanych sciezek)")
+    if r.get("raw_rejected"):
+        held.append(f"{len(r['raw_rejected'])} odrzucone (surowa struktura zamiast zdania)")
     if r["disputed"]:
         held.append(f"{len(r['disputed'])} sporne - czekaja na decyzje uzytkownika")
     held += tail
@@ -2248,7 +2277,8 @@ def run(dry_run: bool = False, exists=None, day: str | None = None) -> dict:
            "replaced": [], "slept": [], "woken": [], "pending": 0, "changes": [],
            "report": [], "powod": "", "new_files": [], "pointers_added": [], "unpointed": [],
            "unnamed": [], "no_room": [], "archived": [], "archive_failed": 0,
-           "local_settings": machine_words().problem}
+           "local_settings": machine_words().problem, "raw_rejected": [], "raw_standing": [],
+           "raw_leaked": []}
     files = instruction_files()
     out["files"] = [str(path) for path in files]
     ws = Workspace()
@@ -2274,6 +2304,10 @@ def run(dry_run: bool = False, exists=None, day: str | None = None) -> dict:
     _merge(current, [(e.day, e.text) for e in standing if e.current],
            key=lambda item: fact_key(item[1]))
     out["compared"] = len(standing)
+    # pieces of the model's answer already standing in the rules (raw_structure): never promoted,
+    # never a target, reported every run until a human takes them out — the automaton's own ones
+    # also age out of the current layer like any other entry
+    _merge(out["raw_standing"], [(e.text, why) for e in standing if (why := raw_structure(e.text))])
     out["stable_chars"] = max((stable_chars(original[p]) for p in files), default=0)
 
     raw_candidates = _read(CANDIDATES_PATH)
@@ -2281,6 +2315,7 @@ def run(dry_run: bool = False, exists=None, day: str | None = None) -> dict:
     out["suspicious"] = list(reviewed.suspicious)
     out["disputed"] = list(reviewed.disputed)
     out["waiting"] = reviewed.waiting
+    out["raw_rejected"] = list(reviewed.raw)
 
     writable = [p for p in files if section_bounds(original[p]) is not None]
     if not writable:
@@ -2292,7 +2327,7 @@ def run(dry_run: bool = False, exists=None, day: str | None = None) -> dict:
         out["powod"] = _reason(out)
         out["report"] = report_lines(journal, today)
         if not dry_run:
-            if raw_candidates is not None and reviewed.suspicious:
+            if raw_candidates is not None and (reviewed.suspicious or reviewed.raw):
                 _write(CANDIDATES_PATH, reviewed.lines, _newline(raw_candidates))
             write_state(out, today)
         return out
@@ -2319,6 +2354,8 @@ def run(dry_run: bool = False, exists=None, day: str | None = None) -> dict:
     #    have now been heard in a second conversation
     replacements = []
     for rep in reviewed.replacing + _confirmed_waiting(standing, trail, reviewed.replacing):
+        if raw_structure(rep.new):
+            continue  # a piece of structure standing in the file — reported in raw_standing
         grow = 0 if rep.target.current else len(rep.new) - len(rep.target.text)
         if left is not None and grow > left:
             out["over_limit"].append(rep.new)  # the ceiling stops it and says so
@@ -2335,6 +2372,10 @@ def run(dry_run: bool = False, exists=None, day: str | None = None) -> dict:
     # 3. the dormant facts heard again, and the promotions — one limit, one ceiling
     wakes = []
     for d in read_dormant(ws.lines[dormant_path]):
+        why = raw_structure(d.text)
+        if why:  # it stays asleep, and the run says what lies in uspione.md
+            _merge(out["raw_standing"], [(d.text, why)])
+            continue
         # heard again OR used again by the agent since it fell asleep. A change the user took back
         # (Trail.blocked) waits for HIS word — the agent's use alone does not overrule an undo.
         sightings = trail.evidence(d.key)
@@ -2348,7 +2389,7 @@ def run(dry_run: bool = False, exists=None, day: str | None = None) -> dict:
                | {fact_key(c.shown) for c in reviewed.pending})
     gone = {e.key for r in replacements for e in [r.target, *r.extra]}
     candidates = ([text for _, text in current] + [c.shown for c in reviewed.approved])
-    candidates = [t for t in candidates if fact_key(t) not in waiting | gone]
+    candidates = [t for t in candidates if fact_key(t) not in waiting | gone and not raw_structure(t)]
     candidates += [r.new for r in replacements if r.target.current and not r.against]
     chosen = choose_promotions(candidates, trail, durable, left, wakes)
     out["deferred"] = [p.text for p in chosen.deferred]
@@ -2408,6 +2449,22 @@ def run(dry_run: bool = False, exists=None, day: str | None = None) -> dict:
     out["pending"] = len({e.key for p in writable for e in entries(ws.lines[p])
                           if e.current and e.against})
     out["changes"] = [c.id for c in changes.done]
+    # The last guard, at the writing itself: whatever way a piece of the model's answer got this far,
+    # it does not go into the rules. Nothing of the run is written then — not a part of it with a
+    # hole in the middle — and the state says why, so the cycle reports it instead of "ok".
+    out["raw_leaked"] = raw_leaks(ws, files, original)
+    if out["raw_leaked"]:
+        out["status"] = "blad"
+        first = out["raw_leaked"][0]
+        out["note"] = (f"ALARM: {len(out['raw_leaked'])} wpisow to surowa struktura z odpowiedzi"
+                       f" modelu, nie zdania (np. {first[1][:80]} - {first[2]}) - przebieg niczego"
+                       f" nie zapisal, poczekalnia nietknieta")
+        out["powod"] = _reason(out)
+        out["report"] = report_lines(journal, today)
+        if dry_run:
+            return out
+        write_state(out, today)
+        raise RuntimeError(out["note"])
     out["powod"] = _reason(out)
     if dry_run:
         out["report"] = report_lines(journal + [c.record(today) for c in changes.done], today)
@@ -2474,6 +2531,20 @@ def run(dry_run: bool = False, exists=None, day: str | None = None) -> dict:
         _write(CANDIDATES_PATH, reviewed.lines, _newline(raw_candidates))
     out["report"] = report_lines(read_journal(), today)
     write_state(out, today)
+    return out
+
+
+def raw_leaks(ws: "Workspace", files: list[Path], original: dict) -> list[tuple[str, str, str]]:
+    """(file, entry, why) for every entry this run would put into the rules that is a piece of the
+    model's answer and not a sentence (raw_structure). What stood there before is not counted — it
+    is reported as raw_standing and is the human's to take out."""
+    out = []
+    for path in files:
+        before = {e.text for e in entries(original[path])}
+        for e in entries(ws.lines[path]):
+            why = raw_structure(e.text) if e.text not in before else ""
+            if why:
+                out.append((str(path), e.text, why))
     return out
 
 
@@ -2548,6 +2619,10 @@ def _report(r: dict) -> None:
         log(f"  - ? {fact}  (starszy niż {CURRENT_DAYS} dni, wpisany ręcznie — decyzja użytkownika)")
     for fact, missing in r["suspicious"]:
         log(f"  ? {fact}  (nie znaleziono: {', '.join(missing)})")
+    for fact, why in r.get("raw_rejected", []):
+        log(f"UWAGA: not a sentence, left marked in the waiting room ({why}): {fact[:120]}")
+    for fact, why in r.get("raw_standing", []):
+        log(f"UWAGA: not a sentence, standing in the rules - take it out by hand ({why}): {fact[:120]}")
     for fact in r["over_limit"]:
         log(f"  = {fact}  (awans wstrzymany: nie mieści się w progu {STABLE_LIMIT} znaków"
             f" warstwy stałej)")

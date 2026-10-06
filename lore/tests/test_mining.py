@@ -404,8 +404,9 @@ def test_with_codex_alone_the_dig_still_has_a_model(unforced, called, monkeypatc
     assert mining.ask_model("material") == "odpowiedz"
     # the same command line as the daily harvest, with the temporary answer file filled in
     answer_file = called["argv"][called["argv"].index("--output-last-message") + 1]
-    assert called["argv"] == ["/bin/codex",
-                              *(answer_file if a == facts.ANSWER_SLOT else a for a in facts.CODEX_ARGS)]
+    slots = {facts.ANSWER_SLOT: answer_file,
+             facts.SCHEMA_SLOT: str(Path(answer_file).parent / facts.SCHEMA_NAME)}
+    assert called["argv"] == ["/bin/codex", *(slots.get(a, a) for a in facts.CODEX_ARGS)]
     assert called["stdin"] == f"{facts.with_known_files(mining.PROMPT)}\n\nmaterial"  # one prompt
 
 

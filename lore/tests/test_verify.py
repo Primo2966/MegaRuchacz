@@ -948,6 +948,97 @@ def test_a_current_fact_is_not_stopped_by_the_ceiling(sandbox):
     assert "Trwa przenoszenie magazynu" in subsection(sandbox, "### Bieżące")
 
 
+# ---------------------------------------------------------------- the model's JSON is not a fact
+
+# What stood in the current layer of ~/.codex/AGENTS.md on 2026-10-06 — 43 of its 44 entries looked
+# like these: the harvest had taken Codex's answer for sentences, line by line.
+DEBRIS = [
+    '{"warstwa":"stala","podsekcja":"praca","tresc":"Commity w projekcie ticket-system mają komunikaty po polsku."}',
+    'stala | praca | Commit message mają być pisane po polsku.',
+    'stala | podsekcja: praca | Komunikaty commitów należy pisać po polsku.',
+    '"warstwa": "stala",',
+    '"tresc": "Użytkownik oczekuje, że agent nie będzie ponownie pytał o IP ani hasło."',
+    '{"fakty":[],"uzyte":[]}',
+]
+SENTENCE = "Skład zestawu wynika z numerów w SKU: SET3-Citrus[020312] = olejki 02, 03, 12."
+
+
+def test_the_models_json_never_reaches_the_rules_and_the_run_says_so(sandbox):
+    """The negative test of the guard: every kind of debris from the Codex rules, offered at once."""
+    codex_file(sandbox)
+    waiting_room(sandbox, *(entry(d, "biezaca") for d in DEBRIS), entry(SENTENCE, "stala/firma"))
+
+    r = verify.run(day="2026-09-17")
+
+    for text in (rules_text(sandbox), codex_text(sandbox)):
+        assert SENTENCE in text  # a sentence with brackets and a colon is not a false alarm
+        assert "warstwa" not in text and "fakty" not in text and "stala |" not in text
+    assert [t for t, _ in r["raw_rejected"]] == DEBRIS
+    assert all(line.startswith("- [!] ") and verify.RAW_NOTE in line for line in waiting(sandbox))
+    assert len(waiting(sandbox)) == len(DEBRIS)  # kept, marked — not dropped without a word
+    s = state(sandbox)
+    assert s["surowa_struktura_odrzucona"] == str(len(DEBRIS))
+    assert s["powod"].startswith("UWAGA: 6 wpisow poczekalni to surowa struktura")
+
+
+def test_a_second_run_does_not_pile_up_the_raw_note(sandbox):
+    waiting_room(sandbox, entry(DEBRIS[0], "biezaca"))
+
+    verify.run(day="2026-09-17")
+    after_first = verify.CANDIDATES_PATH.read_text(encoding="utf-8")
+    r = verify.run(day="2026-09-17")
+
+    assert verify.CANDIDATES_PATH.read_text(encoding="utf-8") == after_first
+    assert waiting(sandbox)[0].count(verify.RAW_NOTE) == 1
+    assert len(r["raw_rejected"]) == 1  # and it is reported again, as long as it lies there
+
+
+def test_debris_already_in_the_rules_is_reported_and_never_promoted(sandbox):
+    """What the broken harvest already wrote stays the human's to take out — but it is said out
+    loud every run, and repetition does not carry it into the durable layer."""
+    junk = DEBRIS[0]
+    text = RULES.replace("### Bieżące\n\n_(pusto)_", f"### Bieżące\n\n- [2026-09-16] {junk}")
+    (sandbox / "CLAUDE.md").write_text(text, encoding="utf-8")
+    heard_twice(junk)
+
+    r = verify.run(day="2026-09-17")
+
+    assert r["promoted"] == []
+    assert r["raw_standing"] == [(junk, "zaczyna sie jak JSON")]
+    assert junk in subsection(sandbox, "### Bieżące")  # not cleaned up here — not this run's to delete
+    assert junk not in subsection(sandbox, "### Nad czym pracuje")
+    s = state(sandbox)
+    assert s["surowa_struktura_w_plikach"] == "1" and "do usuniecia recznie" in s["powod"]
+
+
+def test_the_last_guard_refuses_to_write_whatever_got_past_the_waiting_room(sandbox, monkeypatch):
+    """The guard at the writing itself, broken on purpose: a piece of JSON smuggled past the review
+    of the waiting room must still not reach the file — and the run must end as an error."""
+    real = verify.review_candidates
+
+    def leaky(*args, **kwargs):
+        out = real(*args, **kwargs)
+        out.approved.append(verify.Candidate(DEBRIS[0], "biezaca", day="2026-09-16"))
+        return out
+
+    monkeypatch.setattr(verify, "review_candidates", leaky)
+    waiting_room(sandbox, entry("Marka firmy nazywa się PRZYKLAD.", "stala/firma"))
+    before = rules_text(sandbox)
+
+    with pytest.raises(RuntimeError) as e:
+        verify.run(day="2026-09-17")
+
+    assert "ALARM" in str(e.value)
+    assert rules_text(sandbox) == before  # nothing of the run, not even the healthy fact
+    assert waiting(sandbox) == ["- [ ] [2026-09-16] (stala/firma) Marka firmy nazywa się PRZYKLAD."]
+    s = state(sandbox)
+    assert (s["przebieg"], s["surowa_struktura_zatrzymana"]) == ("blad", "1")
+    assert s["powod"].startswith("ALARM")
+
+    r = verify.run(dry_run=True, day="2026-09-17")  # the dry run reports it, without raising
+    assert r["status"] == "blad" and len(r["raw_leaked"]) == 1
+
+
 # ---------------------------------------------------------------- the way back
 
 def test_a_copy_is_taken_before_a_fact_walks_in_by_itself(sandbox):
