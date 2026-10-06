@@ -227,10 +227,6 @@ $MINUT_MIEDZY_PROBAMI = 15
 # Koszt cyklu wiedzy starszy niz tyle dni znaczy, ze cykl przestal chodzic -
 # ta sama liczba, co przy meldunku o samym cyklu (Zglos-Cykl).
 $DNI_KOSZT_CYKLU_STARY = 2
-# NIEAKTUALNE od 06.10: Codex 0.157.0 czyta globalny ~\.codex\AGENTS.md w calosci (dowod przy polu
-# Limit w kierownik-cele.ps1), 32 KiB przycina tylko AGENTS.md projektu. Tu zostaje, bo czyta to jeszcze
-# narzedzia\koszt\pomiar.ps1 (sufit "instrukcje dla Codeksa" w raporcie kosztow) - do poprawy tam.
-$LIMIT_AGENTS = 32768
 
 # W tle nikt nie czeka na otwarcie okna, wiec git dostaje wiecej czasu niz
 # w hooku, gdzie caly przebieg ma sie zmiescic w kilkunastu sekundach.

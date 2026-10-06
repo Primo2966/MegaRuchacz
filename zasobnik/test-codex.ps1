@@ -13,6 +13,8 @@
 #                UZYWANEGO narzedzia ma trafic do spraw wymagajacych uwagi.
 #   codex-prawdziwy - zanonimizowana probka w PRAWDZIWYM zapisie Codeksa (DomPrawdziwy nizej,
 #                z podagentem niosacym kopie rozmowy-rodzica) - od 06.10.2026.
+#   codex-duzy - AGENTS.md ponad 40 KB: bez alarmu "UCINA" (Codex czyta plik w calosci); proba
+#                negatywna na kopii zrodla z Codeksem Limit = 32768 - alarm jest (od 06.10.2026).
 # Do tego werdykt i Pomiar-Startu okna: liczby Codeksa nazwane Codeksem, nie Claude'em.
 # Liczby w rozmowach sa dobrane tak, zeby wynik dalo sie policzyc na kartce: dzis przyrosty
 # 20 500 + 0 (zdarzenie powtorzone) + 25 400 = 45 900; 3 dni temu 30 000, czyli srednio
@@ -301,6 +303,45 @@ try {
   Sprawdz "negatywna -Warstwy: AGENTS.md raz, bez warstw 'sesja-N' z pozycji blokow" (($dubel.Count -eq 1) -and ($dubel[0].Id -eq "codex-globalny")) (@($dubel | ForEach-Object { $_.Id }) -join ", ")
   $r = Odpal $koszt @("-KatalogDomowy", $dWl, "-Zrodlo", $Zrodlo)
   Sprawdz "pelny raport: POMIAR Codeksa = $StartCx i linia o wlasnych instrukcjach poza rachunkiem" (($r.Tekst -match "POMIAR narzedzie=codex tokenow=$StartCx ") -and ($r.Tekst -match 'nie doliczam Twoich wlasnych instrukcji')) (([regex]::Match($r.Tekst, '(?s)Codex \(osobny rachunek.*?POMIAR narzedzie=codex[^\n]*')).Value)
+
+  # ------------------------------------------------------------- sufit AGENTS.md Codeksa
+  # Od 06.10.2026 limit pliku instrukcji Codeksa idzie z listy narzedzi AI (narzedzia\kierownik-cele.ps1
+  # Narzedzia-AI, pole Limit), a nie z $LIMIT_AGENTS straznika (32 768 B, zdjety). Codex czyta globalny
+  # ~\.codex\AGENTS.md w calosci (Limit = 0), wiec plik ponad 40 KB nie moze dawac alarmu "UCINA".
+  $dDuzy = Dom "codex-duzy" $true $true ("`n## Duze instrukcje`n`n" + ("Pisz krotko i po polsku. " * 1700) + "`n")
+  $bajtyDuzy = (Get-Item -LiteralPath (Join-Path $dDuzy ".codex\AGENTS.md")).Length
+  Sprawdz "bez sufitu: przygotowanie - AGENTS.md Codeksa ponad 40 KB" ($bajtyDuzy -gt 40960) "$bajtyDuzy B"
+  $r = Odpal $koszt @("-KatalogDomowy", $dDuzy, "-Zrodlo", $Zrodlo, "-TylkoSufity")
+  Sprawdz "bez sufitu: -TylkoSufity kod 0, bez 'UCINA' i bez wiersza 'instrukcje dla Codeksa'" (($r.Kod -eq 0) -and ($r.Tekst -cnotmatch 'UCINA') -and ($r.Tekst -notmatch 'instrukcje dla Codeksa')) $r.Tekst
+  $r = Odpal $koszt @("-KatalogDomowy", $dDuzy, "-Zrodlo", $Zrodlo, "-Dane", "-Zwykly")
+  $kd = Klucze $r.Tekst
+  Sprawdz "bez sufitu: -Dane - linia Codeksa 'nic nie jest ucinane', kod 0" (($kd["kod"] -eq "0") -and ($kd["linia"] -match '^pamiec Codex: .*nic nie jest ucinane') -and ($r.Tekst -cnotmatch 'UCINANE')) "kod=$($kd['kod']) linia=$($kd['linia'])"
+  $r = Odpal $koszt @("-KatalogDomowy", $dDuzy, "-Zrodlo", $Zrodlo)
+  Sprawdz "bez sufitu: pelny raport bez 'UCINANE PO CICHU' i bez sufitu AGENTS.md Codeksa" (($r.Tekst -cnotmatch 'UCINANE') -and ($r.Tekst -notmatch 'instrukcje dla Codeksa \(')) (([regex]::Match($r.Tekst, '(?s)0\. CO WYMAGA UWAGI.*?\n\n')).Value)
+
+  # Proba negatywna: NARZEDZIE TESTOWE Z LIMITEM - kopia zrodla, w ktorej Codex ma Limit = 32768
+  # (tak, jak do 06.10). Ten sam dom ma wtedy dac UCINA, z sufitem wzietym z listy narzedzi.
+  $ZL = Join-Path $T "zrodlo-sufit"
+  New-Item -ItemType Directory -Force -Path (Join-Path $ZL ".claude") | Out-Null
+  foreach ($kat in @("narzedzia", "szablony-global", "szablony-opencode", "szablony-codex")) { Copy-Item -Recurse (Join-Path $Zrodlo $kat) (Join-Path $ZL $kat) }
+  $orch = Join-Path $Zrodlo ".claude\orchestrator-reminder.json"
+  if (Test-Path -LiteralPath $orch) { Copy-Item $orch (Join-Path $ZL ".claude\orchestrator-reminder.json") }
+  $kcL = Join-Path $ZL "narzedzia\kierownik-cele.ps1"
+  $kcT = [System.IO.File]::ReadAllText($kcL)
+  $kcT2 = $kcT.Replace('Wariant = "opencode"; Limit = 0;     Zapas = $null', 'Wariant = "opencode"; Limit = 32768; Zapas = $null')
+  if ($kcT2 -ceq $kcT) { throw "narzedzie testowe z limitem: kotwica wpisu Codeksa w kierownik-cele.ps1 sie zmienila" }
+  [System.IO.File]::WriteAllText($kcL, $kcT2, $bezBom)
+  $kosztL = Join-Path $ZL "narzedzia\koszt-pamieci.ps1"
+  $r = Odpal $kosztL @("-KatalogDomowy", $dDuzy, "-Zrodlo", $ZL, "-TylkoSufity")
+  Sprawdz "negatywna sufit: Codex z Limit = 32768 - -TylkoSufity kod 1, 'UCINA instrukcje dla Codeksa', sufit z kierownik-cele.ps1" (($r.Kod -eq 1) -and
+    ($r.Tekst -match 'UCINA instrukcje dla Codeksa - [\d ]+ z 32 768 bajtow, przepada [\d ]+; sufit: narzedzia\\kierownik-cele\.ps1')) $r.Tekst
+  $r = Odpal $kosztL @("-KatalogDomowy", $dDuzy, "-Zrodlo", $ZL, "-Dane", "-Zwykly")
+  $kd = Klucze $r.Tekst
+  Sprawdz "negatywna sufit: -Dane - linia Codeksa 'UCINANE: instrukcje dla Codeksa', kod 1" (($kd["kod"] -eq "1") -and ($kd["linia"] -match '^UWAGA pamiec Codex: .*UCINANE: instrukcje dla Codeksa')) "kod=$($kd['kod']) linia=$($kd['linia'])"
+  # Proba negatywna: listy narzedzi nie ma - wiersz sufitu zostaje, z powodem, a nie cichy brak alarmu
+  Remove-Item -LiteralPath $kcL -Force
+  $r = Odpal $kosztL @("-KatalogDomowy", $dDuzy, "-Zrodlo", $ZL, "-TylkoSufity")
+  Sprawdz "negatywna sufit: bez kierownik-cele.ps1 - wiersz 'instrukcje dla Codeksa' nie zmierzone, z powodem" ($r.Tekst -match '\?\s+instrukcje dla Codeksa - nie zmierzone: nie umiem odczytac sufitu z narzedzia\\kierownik-cele\.ps1 .* - nie ma pliku') $r.Tekst
 
   # ------------------------------------------------------------- okno (-Raport)
   $r = Odpal $nadz @("-Zrodlo", $Zrodlo, "-KatalogDomowy", $dCx, "-Raport", "-Proba", "-Cicho")

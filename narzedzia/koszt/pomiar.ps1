@@ -160,6 +160,32 @@ function Polecenia-Hookow($plik, $zdarzenie) {
 
 function Klucz-Sciezki($sciezka) { return ("$sciezka" -replace '/', '\').ToLowerInvariant() }
 
+# Ile bajtow pliku instrukcji narzedzie wczytuje - z JEDNEJ listy narzedzi AI
+# (narzedzia\kierownik-cele.ps1 Narzedzia-AI, pole Limit; 0 = bez limitu). Do 06.10
+# sufit Codeksa szedl z $LIMIT_AGENTS w straznik-zasad.ps1 (32 768 B) - falszywy dla
+# globalnego ~\.codex\AGENTS.md, ktory Codex czyta w calosci (dowod przy polu Limit),
+# wiec plik ~36 KB dawal pilny alarm "UCINA PO CICHU" o czyms, czego nic nie ucina.
+# Liste wczytujemy we wlasnym zasiegu (& { . plik }), zeby jej funkcje i zmienne nie
+# mieszaly sie z rachunkiem. .Limit - liczba z listy albo $null; .Blad - dlaczego $null.
+function Limit-Z-Listy-Narzedzi([string]$id) {
+  $wynik = [pscustomobject]@{ Limit = $null; Blad = $null }
+  $plik = Join-Path $Zrodlo "narzedzia\kierownik-cele.ps1"
+  if (-not (Test-Path -LiteralPath $plik -PathType Leaf)) { $wynik.Blad = "nie ma pliku $plik"; return $wynik }
+  $n = $null
+  try { $n = & { param($p, $i) . $p; Narzedzie-AI $i } $plik $id }
+  catch {
+    $wynik.Blad = "nie wczytalem listy narzedzi z $plik ($($_.Exception.Message))"
+    return $wynik
+  }
+  if (-not $n) { $wynik.Blad = "w $plik (Narzedzia-AI) nie ma narzedzia '$id'"; return $wynik }
+  if (($n.PSObject.Properties.Name -notcontains "Limit") -or ($null -eq $n.Limit)) {
+    $wynik.Blad = "w $plik (Narzedzia-AI) narzedzie '$id' nie ma pola Limit"
+    return $wynik
+  }
+  $wynik.Limit = [long]$n.Limit
+  return $wynik
+}
+
 # Czy ktorys hook naprawde wczytuje ten plik - po pelnej sciezce w poleceniu,
 # z $CLAUDE_PROJECT_DIR podmienionym na katalog projektu.
 function Czy-Hook-Czyta($polecenia, $sciezka, $katProj) {
@@ -187,13 +213,14 @@ function Etap-Pomiar {
 
   # --- sufity: pomiary ---------------------------------------------------------
 
-  $limitAgents  = Limit-Z-Pliku $plikStraznika '(?m)^\s*\$LIMIT_AGENTS\s*=\s*(\d+)'
+  $listaCx      = Limit-Z-Listy-Narzedzi "codex"
+  $limitAgents  = $listaCx.Limit
   $limitZasad   = Limit-Hooka $plikHookow "zasady-sesja.json"
   $limitPrzyp   = Limit-Hooka $plikHookow "przypomnienie.json"
   $limitWejscia = Limit-Z-Pliku $plikFaktow  '(?m)^MAX_INPUT_CHARS\s*=\s*([\d_]+)'
   $limitKawalka = Limit-Z-Pliku $plikIndeksu '(?m)^CHUNK_SIZE\s*=\s*([\d_]+)'
 
-  # AGENTS.md Codeksa - sufit jest w BAJTACH, bo tyle czyta Codex
+  # AGENTS.md Codeksa - sufit (gdy jest) jest w BAJTACH, bo tyle czyta Codex
   $agentsTresc = Czytaj-Cicho $plikAgents
   $agentsBajty = $null
   if ($agentsTresc -ne $null) {
@@ -423,21 +450,28 @@ function Etap-Pomiar {
     Uwaga      = (Powod-Braku $(if ($w.Jest) { $w.Stala.Znaki } else { $null }) $ProgStalej $powodBrakuClaude "tego skryptu")
   })
 
-  $sufity += Sufit ([ordered]@{
-    Nazwa      = "instrukcje dla Codeksa (~\.codex\AGENTS.md)"
-    Krotka     = "instrukcje dla Codeksa"
-    Narzedzie  = "Codex"
-    Teraz      = $agentsBajty
-    Limit      = $limitAgents
-    Jednostka  = "bajtow"
-    Czyj       = "NARZUCONY przez Codeksa - tego nie podniesiemy, trzeba sie zmiescic"
-    SkadLimitu = "narzedzia\straznik-zasad.ps1 (`$LIMIT_AGENTS)"
-    Plik       = $plikAgents
-    Skutek     = "UCINA PO CICHU: Codex czyta tylko poczatek pliku, koniec zasad nie dociera do niego wcale"
-    Ucina      = $true
-    Tresc      = $agentsTresc
-    Uwaga      = (Powod-Braku $agentsBajty $limitAgents "nie ma pliku $plikAgents - Codeksa nie ma na tej maszynie, wiec ten sufit dzis nikogo nie dotyczy" "narzedzia\straznik-zasad.ps1")
-  })
+  # Limit Codeksa z listy narzedzi AI. 0 = Codex czyta plik w calosci - sufitu nie ma,
+  # wiec nie ma tez wiersza (wiersz "nie zmierzone" czytalby sie jak usterka). Listy nie
+  # da sie odczytac ($null) - wiersz zostaje, z powodem, zamiast cichego "nic nie ucina".
+  $skadLimituCx = "narzedzia\kierownik-cele.ps1 (Narzedzia-AI, pole Limit Codeksa)"
+  if (($null -eq $limitAgents) -or ($limitAgents -gt 0)) {
+    $sufity += Sufit ([ordered]@{
+      Nazwa      = "instrukcje dla Codeksa (~\.codex\AGENTS.md)"
+      Krotka     = "instrukcje dla Codeksa"
+      Narzedzie  = "Codex"
+      Teraz      = $agentsBajty
+      Limit      = $limitAgents
+      Jednostka  = "bajtow"
+      Czyj       = "NARZUCONY przez Codeksa - tego nie podniesiemy, trzeba sie zmiescic"
+      SkadLimitu = $skadLimituCx
+      Plik       = $plikAgents
+      Skutek     = "UCINA PO CICHU: Codex czyta tylko poczatek pliku, koniec zasad nie dociera do niego wcale"
+      Ucina      = $true
+      Tresc      = $agentsTresc
+      Uwaga      = (Powod-Braku $agentsBajty $limitAgents "nie ma pliku $plikAgents - Codeksa nie ma na tej maszynie, wiec ten sufit dzis nikogo nie dotyczy" `
+                      $(if ($listaCx.Blad) { "$skadLimituCx - $($listaCx.Blad)" } else { $skadLimituCx }))
+    })
+  }
 
   $sufity += Sufit ([ordered]@{
     Nazwa      = "zasady kierownika wstrzykiwane Codeksowi przy starcie sesji"
