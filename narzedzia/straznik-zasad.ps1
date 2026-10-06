@@ -227,8 +227,9 @@ $MINUT_MIEDZY_PROBAMI = 15
 # Koszt cyklu wiedzy starszy niz tyle dni znaczy, ze cykl przestal chodzic -
 # ta sama liczba, co przy meldunku o samym cyklu (Zglos-Cykl).
 $DNI_KOSZT_CYKLU_STARY = 2
-# Codex czyta AGENTS.md do 32 KiB - dluzszy plik przycina, wiec koniec zasad
-# po prostu przepada. Za ten limit nie odpowiadamy, ale mamy o nim powiedziec.
+# NIEAKTUALNE od 06.10: Codex 0.157.0 czyta globalny ~\.codex\AGENTS.md w calosci (dowod przy polu
+# Limit w kierownik-cele.ps1), 32 KiB przycina tylko AGENTS.md projektu. Tu zostaje, bo czyta to jeszcze
+# narzedzia\koszt\pomiar.ps1 (sufit "instrukcje dla Codeksa" w raporcie kosztow) - do poprawy tam.
 $LIMIT_AGENTS = 32768
 
 # W tle nikt nie czeka na otwarcie okna, wiec git dostaje wiecej czasu niz
@@ -2236,7 +2237,7 @@ function Cele-Zasad {
   if (-not (Get-Command Cele-Narzedzi -ErrorAction SilentlyContinue)) {
     # starsza kopia kierownik-cele.ps1 - jak do 0.27: sam CLAUDE.md i AGENTS.md Codeksa
     $cele += [ordered]@{ nazwa = "Claude Code"; plik = $plikDomowy; limit = 0; n = $null }
-    if (Test-Path (Split-Path -Parent $plikCodex)) { $cele += [ordered]@{ nazwa = "Codex"; plik = $plikCodex; limit = $LIMIT_AGENTS; n = $null } }
+    if (Test-Path (Split-Path -Parent $plikCodex)) { $cele += [ordered]@{ nazwa = "Codex"; plik = $plikCodex; limit = 0; n = $null } }
     return ,$cele
   }
   foreach ($n in (Cele-Narzedzi $KatalogDomowy)) {

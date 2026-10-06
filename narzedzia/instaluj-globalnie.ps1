@@ -34,7 +34,7 @@
 #                                       CLAUDE.md). Gdy go nie ma, zaczyna sie od
 #                                       tresci CLAUDE.md, ktory opencode czytal
 #                                       dotad zamiast niego (bez bloku kierownika).
-#               Zapis, po ktorym plik przekroczylby limit narzedzia (Codex 32 KiB),
+#               Zapis, po ktorym plik przekroczylby limit narzedzia (pole Limit listy),
 #               jest odmawiany - BLAD, plik zostaje, jaki byl.
 #               Wymuszenie wariantu w CLAUDE.md: -WariantZasad claude|opencode.
 #   znacznik    ~/.claude/.megaruchacz-global       fakt instalacji globalnej

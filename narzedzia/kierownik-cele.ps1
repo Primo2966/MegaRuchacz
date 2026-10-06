@@ -3,7 +3,7 @@
 # MegaRuchacz wpisuje zasady, i to, jak sie je wykrywa, zaklada i pilnuje.
 #
 #   ~/.claude/CLAUDE.md           Claude Code - wariant zasad kierownika "claude"
-#   ~/.codex/AGENTS.md            Codex       - wariant opencode/Codex, Codex czyta do 32 KiB
+#   ~/.codex/AGENTS.md            Codex       - wariant opencode/Codex, Codex czyta go w calosci
 #   ~/.config/opencode/AGENTS.md  OpenCode    - wariant opencode/Codex
 #
 # Kazdy plik jest SAMODZIELNY: bloki zasad (lore, wiedza, kierownik) i wlasna sekcja "## Co wiem",
@@ -41,8 +41,16 @@ $ZNACZNIK_MEGARUCHACZA = "<!-- MegaRuchacz:"   # = GUARD_PREFIX w lore\lore\veri
 #              (Lore, wiedza, rejestr instalacji), wiec nic nie dowodzi.
 #   Wariant    wariant bloku zasad kierownika: claude (szablony-global\claude) albo opencode
 #              (szablony-opencode - Codex i OpenCode: praca bez tla i bez worktree)
-#   Limit      ile bajtow pliku narzedzie wczytuje; 0 = limitu nie znamy. Codex przycina
-#              AGENTS.md na 32 KiB (project_doc_max_bytes), a nasze bloki stoja na koncu pliku.
+#   Limit      ile bajtow pliku narzedzie wczytuje; 0 = bez limitu albo limitu nie znamy. Ponad limit
+#              zapis jest odmawiany (Ponad-Limit), bo nasze bloki stoja na koncu pliku.
+#              Codex: 0. Do 06.10 stalo tu 32768 (project_doc_max_bytes z docs) - FALSZYWE dla
+#              globalnego pliku. Dowod (Codex 0.157.0, 2026-10-06): w sztucznym CODEX_HOME
+#              "codex debug prompt-input ping" (tekst, ktory dostaje model, bez wywolania modelu)
+#              ma ~/.codex/AGENTS.md 40 033 B i 200 KB w calosci, ze znacznikiem z konca pliku, takze
+#              bez project_doc_max_bytes w config.toml. Ten limit (domyslnie 32 KiB) przycina tylko
+#              AGENTS.md w katalogach projektu (40 KB w repo: uciety po linii 495 z 605, z
+#              project_doc_max_bytes = 65536 caly). Nowa wersja Codeksa moze to zmienic - wtedy
+#              ta sama proba i wpis tutaj.
 #              OpenCode: w docs (opencode.ai/docs/rules) limitu brak - niepotwierdzone.
 #   Skille     katalogi skilli, ktore narzedzie czyta (wzgledem domu), w KOLEJNOSCI WCZYTYWANIA: przy
 #              dublu nazwy wygrywa katalog pozniejszy (OpenCode 1.18.33 - narzedzia\skille.ps1, naglowek).
@@ -56,7 +64,7 @@ function Narzedzia-AI {
   return @(
     [pscustomobject]@{ Id = "claude";   Nazwa = "Claude Code"; Plik = ".claude\CLAUDE.md";          Polecenie = "claude";   Slady = @(".claude.json", ".claude\history.jsonl");                       Wariant = "claude";   Limit = 0;     Zapas = $null
                        Skille = @(".claude\skills") },
-    [pscustomobject]@{ Id = "codex";    Nazwa = "Codex";       Plik = ".codex\AGENTS.md";           Polecenie = "codex";    Slady = @(".codex", "AppData\Roaming\orca\codex-runtime-home\home"); Wariant = "opencode"; Limit = 32768; Zapas = $null
+    [pscustomobject]@{ Id = "codex";    Nazwa = "Codex";       Plik = ".codex\AGENTS.md";           Polecenie = "codex";    Slady = @(".codex", "AppData\Roaming\orca\codex-runtime-home\home"); Wariant = "opencode"; Limit = 0;     Zapas = $null
                        Skille = @(".agents\skills") },
     [pscustomobject]@{ Id = "opencode"; Nazwa = "OpenCode";    Plik = ".config\opencode\AGENTS.md"; Polecenie = "opencode"; Slady = @(".config\opencode");                                       Wariant = "opencode"; Limit = 0;     Zapas = "claude"
                        Skille = @(".claude\skills", ".agents\skills", ".config\opencode\skills") }
@@ -365,7 +373,7 @@ function Skrot-Linii([string]$l) {
 #   - plik bez wpisu w stanie (pierwsza synchronizacja, nowe CLI) wnosi tylko DOPISANE linie: bez
 #     bazy nie da sie odroznic linii skasowanej od niedopisanej, a kasowac wiedzy na zgadywanie nie
 #     wolno. Baza pierwszej synchronizacji = najbogatsza sekcja (jak przy zasiewie);
-#   - zapis ponad limit narzedzia (Codex 32 KiB) - odmowa z powodem, pozostale pliki i tak dostaja
+#   - zapis ponad limit narzedzia (pole Limit listy) - odmowa z powodem, pozostale pliki i tak dostaja
 #     swoje; przed kazdym zapisem kopia .bak-<stempel>, a tuz przed nim plik czytamy jeszcze raz -
 #     zmieniony w miedzyczasie (cykl wiedzy) zostaje do nastepnego przebiegu.
 # Puste sekcje i pliki bez sekcji nie biora udzialu - te zaklada i zasiewa Plan-Pliku-Narzedzia.

@@ -18,7 +18,7 @@
 # plikach sa laczone, ta sama linia zmieniona inaczej = UWAGA z konkretami i nic nie zapisane.
 # Plik, ktorego narzedzie jeszcze nie ma, zaczyna sie od Tekst-Startowy: OpenCode - od tresci
 # CLAUDE.md, ktory czytal dotad zamiast wlasnego; stara kopia dla opencode traci linie naglowka.
-# Plik, ktory po zapisie przekroczylby limit narzedzia (Codex: 32 KiB), NIE jest zapisywany -
+# Plik, ktory po zapisie przekroczylby limit narzedzia (pole Limit listy), NIE jest zapisywany -
 # ostrzezenie stoi w PIERWSZEJ linii wyjscia, kod 1. Tak samo zasiew "Co wiem" ponad limit - wtedy
 # odpada sam zasiew (sekcja zostaje pusta), a reszta pliku jest zapisywana.
 #

@@ -12,11 +12,15 @@
 # skasowanie w nowszym pliku znika wszedzie, -WzorCoWiem jako narzedzie reczne, pierwsza
 # synchronizacja bez stanu - same dopisy; Pliki-Pamieci
 # (zapis-trwaly.ps1) z listy narzedzi - takze czwartego.
-# Proby negatywne: starszy plik nie wygrywa z nowszym (ani poprawka, ani skasowaniem); plik, ktory przekroczylby limit Codeksa (32 KiB) - odmowa zapisu z ostrzezeniem
+# Codex od 06.10 bez limitu (globalny AGENTS.md czyta w calosci - dowod w kierownik-cele.ps1): plik ponad
+# 32 KiB jest zapisywany. Sufit sprawdzamy na NARZEDZIU TESTOWYM Z LIMITEM - kopia zrodla ($ZL), w ktorej
+# Codex ma Limit = 32768 (tak, jak do 06.10).
+# Proby negatywne: starszy plik nie wygrywa z nowszym (ani poprawka, ani skasowaniem); plik, ktory
+# przekroczylby limit narzedzia - odmowa zapisu z ostrzezeniem
 # w PIERWSZEJ linii, plik co do bajtu, bez kopii (a ten sam plik ponizej limitu - zapisany); zasiew
 # "Co wiem" ponad limit - odmowa w PIERWSZEJ linii, sekcja pusta, reszta pliku zapisana (a mniejszy
-# zasiew - przechodzi); synchronizacja ponad limit Codeksa - odmowa w PIERWSZEJ linii przy kazdym
-# przebiegu, Codex co do bajtu, pozostale pliki zsynchronizowane, zalegly Codex niczego nie kasuje.
+# zasiew - przechodzi); synchronizacja ponad limit - odmowa w PIERWSZEJ linii przy kazdym
+# przebiegu, plik co do bajtu, pozostale pliki zsynchronizowane, zalegly plik niczego nie kasuje.
 #
 # Wszystko w kopii w %TEMP%: katalogi domowe, projekt, katalog zrodlowy (bez .git). Procesy potomne
 # dostaja PATH bez claude/codex/opencode (wykrywanie ma widziec tylko to, co test polozyl w domu)
@@ -73,8 +77,10 @@ function Odpal([string]$dom, [string]$skrypt, [string[]]$argumenty, [string]$pat
   $p.WaitForExit()
   return [pscustomobject]@{ Kod = $p.ExitCode; Tekst = ($wy + $bledy.Result) }
 }
-function Wpisz([string]$dom, [string[]]$dod = @()) { return (Odpal $dom (Join-Path $Z "narzedzia\wpisz-zasady.ps1") (@("-Zrodlo", $Z, "-KatalogDomowy", $dom) + $dod)) }
-function Dopasuj([string]$dom) { return (Odpal $dom (Join-Path $Z "narzedzia\straznik-zasad.ps1") @("-Dopasuj", "-Zrodlo", $Z, "-Projekt", $P, "-KatalogDomowy", $dom)) }
+# Zrodlo, z ktorego ida wpisz-zasady i straznik: $Z, a w probach sufitu $ZL (Codex z limitem 32 KiB).
+$script:ZT = $Z
+function Wpisz([string]$dom, [string[]]$dod = @()) { return (Odpal $dom (Join-Path $script:ZT "narzedzia\wpisz-zasady.ps1") (@("-Zrodlo", $script:ZT, "-KatalogDomowy", $dom) + $dod)) }
+function Dopasuj([string]$dom) { return (Odpal $dom (Join-Path $script:ZT "narzedzia\straznik-zasad.ps1") @("-Dopasuj", "-Zrodlo", $script:ZT, "-Projekt", $P, "-KatalogDomowy", $dom)) }
 
 function Czytaj([string]$p) { if (-not (Test-Path -LiteralPath $p)) { return $null }; return [System.IO.File]::ReadAllText($p, $Utf8) }
 function Zapisz([string]$p, [string]$t) { New-Item -ItemType Directory -Force -Path (Split-Path -Parent $p) | Out-Null; [System.IO.File]::WriteAllText($p, $t, $Utf8) }
@@ -142,12 +148,20 @@ try {
   $NaglClaude = ((Czytaj (Join-Path $Z "szablony-global\claude\zasady-kierownika.md")).Trim() -split "`r?`n")[0]
   $NaglOc = ((Czytaj (Join-Path $Z "szablony-opencode\zasady-kierownika.md")).Trim() -split "`r?`n")[0]
   Sprawdz "przygotowanie: naglowki wariantow kierownika rozne" ($NaglClaude -and $NaglOc -and ($NaglClaude -ne $NaglOc)) "$NaglClaude | $NaglOc"
+  # narzedzie testowe z limitem: ta sama kopia zrodla, a Codex z Limit = 32768 - do prob sufitu
+  $ZL = Join-Path $T "zrodlo-sufit"
+  Copy-Item -Recurse $Z $ZL
+  $kcL = Join-Path $ZL "narzedzia\kierownik-cele.ps1"
+  $kcT = Czytaj $kcL
+  $kcT2 = $kcT.Replace('Wariant = "opencode"; Limit = 0;     Zapas = $null', 'Wariant = "opencode"; Limit = 32768; Zapas = $null')
+  if ($kcT2 -ceq $kcT) { throw "narzedzie testowe z limitem: kotwica wpisu Codeksa w kierownik-cele.ps1 sie zmienila" }
+  Zapisz $kcL $kcT2
 
   # ------------------------------------------------------------ lista narzedzi: jeden wpis = jedno narzedzie
   . (Join-Path $Z "narzedzia\kierownik-cele.ps1")
   $lista = @(Narzedzia-AI)
   Sprawdz "lista: claude, codex, opencode - plik, polecenie, slady, wariant, limit" ((($lista | ForEach-Object { $_.Id }) -join ",") -eq "claude,codex,opencode" -and
-    (@($lista | Where-Object { $_.Plik -and $_.Polecenie -and $_.Slady -and $_.Wariant -and ($null -ne $_.Limit) }).Count -eq 3) -and ((Narzedzie-AI "codex").Limit -eq 32768))
+    (@($lista | Where-Object { $_.Plik -and $_.Polecenie -and $_.Slady -and $_.Wariant -and ($null -ne $_.Limit) }).Count -eq 3) -and ((Narzedzie-AI "codex").Limit -eq 0))
   Sprawdz "lista: katalogi skilli w kolejnosci wczytywania (claude .claude, codex .agents, opencode .claude/.agents/.config\opencode)" (
     ((@((Narzedzie-AI "claude").Skille) -join ";") -eq ".claude\skills") -and ((@((Narzedzie-AI "codex").Skille) -join ";") -eq ".agents\skills") -and
     ((@((Narzedzie-AI "opencode").Skille) -join ";") -eq ".claude\skills;.agents\skills;.config\opencode\skills"))
@@ -249,9 +263,22 @@ try {
   $w = Wpisz $dom; $d = Dopasuj $dom
   Sprawdz "Co wiem za blokami: wpisz-zasady i straznik nie zmieniaja pliku (sekcja jest, nic do dolozenia)" (($w.Kod -eq 0) -and ($d.Kod -eq 0) -and ((Skrot (Join-Path $dom ".codex\AGENTS.md")) -eq $przed)) ($w.Tekst + " | " + $d.Tekst)
 
-  # ------------------------------------------------------------ proba negatywna: sufit Codeksa
-  # AGENTS.md uzytkownika ~31 KiB bez naszych blokow: z blokami przekroczylby 32 KiB, a Codex wczytuje
-  # tylko poczatek - koniec pliku (nasze zasady) przepadlby po cichu. Odmowa, plik co do bajtu.
+  # ------------------------------------------------------------ Codex bez sufitu
+  # AGENTS.md uzytkownika ~31 KiB bez naszych blokow: z blokami ponad 32 KiB - Codex czyta globalny plik
+  # w calosci, wiec zapis idzie (kod 0, bloki na koncu), bez zadnej odmowy.
+  $dom = Nowy-Dom "bez-sufitu" @("codex")
+  $duzy = "# Moje zasady Codeksa`r`n`r`n" + ((1..560 | ForEach-Object { "- linia uzytkownika do wypelnienia pliku, numer {0:D5}`r`n" -f $_ }) -join "")
+  Zapisz (Join-Path $dom ".codex\AGENTS.md") $duzy
+  $w = Wpisz $dom; $d = Dopasuj $dom
+  $cx = Czytaj (Join-Path $dom ".codex\AGENTS.md")
+  Sprawdz "bez sufitu: Codex - wpisz-zasady i straznik kod 0, plik ponad 32 KiB zapisany, bez ODMOWY" (($w.Kod -eq 0) -and ($d.Kod -eq 0) -and (($w.Tekst + $d.Tekst) -notmatch "ODMOWA|NIE wpisalem") -and ($Utf8.GetByteCount($cx) -gt 32768) -and $cx.StartsWith($duzy)) "$($Utf8.GetByteCount($cx)) B | $($w.Tekst) | $($d.Tekst)"
+  Sprawdz-Plik "bez sufitu - Codex ponad 32 KiB" $cx "opencode"
+
+  # ------------------------------------------------------------ proba negatywna: sufit (narzedzie testowe z limitem)
+  # Codex z Limit = 32768 ($ZL). AGENTS.md uzytkownika ~31 KiB bez naszych blokow: z blokami przekroczylby
+  # limit, a narzedzie wczytuje tylko poczatek - koniec pliku (nasze zasady) przepadlby po cichu. Odmowa,
+  # plik co do bajtu.
+  $script:ZT = $ZL
   $dom = Nowy-Dom "sufit" @("codex")
   $duzy = "# Moje zasady Codeksa`r`n`r`n" + ((1..560 | ForEach-Object { "- linia uzytkownika do wypelnienia pliku, numer {0:D5}`r`n" -f $_ }) -join "")
   Zapisz (Join-Path $dom ".codex\AGENTS.md") $duzy
@@ -272,6 +299,7 @@ try {
   $cx = Czytaj (Join-Path $dom ".codex\AGENTS.md")
   Sprawdz-Plik "sufit - plik ponizej limitu" $cx "opencode"
   Sprawdz "sufit - plik ponizej limitu: po zapisie nadal ponizej 32 KiB" ((Get-Item (Join-Path $dom ".codex\AGENTS.md")).Length -le 32768)
+  $script:ZT = $Z
 
   # ------------------------------------------------------------ ta sama wiedza: zastany pusty szkielet
   # Jak na biurowej 06.10: AGENTS.md Codeksa z samym szkieletem, CLAUDE.md z pelna wiedza. Straznik przy
@@ -424,10 +452,11 @@ try {
   $w = Wpisz $dom
   Sprawdz "stan nieczytelny: wpisz-zasady kod 0, uwaga o stanie, dopis przeniesiony" (($w.Kod -eq 0) -and ($w.Tekst -match "UWAGA\s+Co wiem - stan synchronizacji") -and (Czytaj $pCm).Contains("Po zepsutym stanie.")) $w.Tekst
 
-  # ------------------------------------------------------------ proba negatywna: synchronizacja ponad sufit Codeksa
-  # AGENTS.md Codeksa z wlasna trescia uzytkownika tuz pod 32 KiB, a CLAUDE.md dostaje duzy dopis: Codeksowi
+  # ------------------------------------------------------------ proba negatywna: synchronizacja ponad sufit (narzedzie testowe z limitem)
+  # Codex z Limit = 32768 ($ZL). AGENTS.md Codeksa z wlasna trescia uzytkownika tuz pod 32 KiB, a CLAUDE.md dostaje duzy dopis: Codeksowi
   # NIE zapisujemy (odmowa w PIERWSZEJ linii, przy kazdym przebiegu), OpenCode i tak dostaje swoje. Zalegly
   # Codex nie kasuje niczego, czego nie dostal, a jego wlasny dopis idzie do pozostalych.
+  $script:ZT = $ZL
   $dom = Nowy-Dom "sync-sufit" @("claude", "codex", "opencode")
   $pCx = Join-Path $dom ".codex\AGENTS.md"; $pCm = Join-Path $dom ".claude\CLAUDE.md"; $pOc = Join-Path $dom ".config\opencode\AGENTS.md"
   Zapisz $pCm ("# Ustalenia globalne`r`n`r`n" + $wiedzaCm)
@@ -458,6 +487,7 @@ try {
   $d4 = Dopasuj $dom
   $cm = Czytaj $pCm; $cx = Czytaj $pCx; $oc = Czytaj $pOc
   Sprawdz "sufit synchronizacji: po skroceniu CLAUDE.md kod 0, trzy pliki rowne, Codex ponizej 32 KiB" (($d4.Kod -eq 0) -and ((Linie-Sekcji $cx) -ceq (Linie-Sekcji $cm)) -and ((Linie-Sekcji $oc) -ceq (Linie-Sekcji $cm)) -and $cx.Contains($fZal) -and -not $cm.Contains("Duzy dopis") -and ((Get-Item $pCx).Length -le 32768)) $d4.Tekst
+  $script:ZT = $Z
 
   # ------------------------------------------------------------ Pliki-Pamieci (zapis-trwaly.ps1) z listy narzedzi
   # Kopie dzienne i alarm o zerach biora pliki z Pliki-Pamieci. Wolajacy bez listy (kopie-dzienne) - lista
@@ -481,10 +511,11 @@ try {
   $r4 = Odpal $dom $skrypt @($Z4, $dom)
   Sprawdz "Pliki-Pamieci: czwarte CLI dopisane do listy - jego plik tez (i trzy pozostale)" (($kc4 -cne $kc) -and ($r4.Kod -eq 0) -and $r4.Tekst.Contains("PLIK " + (Join-Path $dom ".czwarte\AGENTS.md")) -and (@($trzy | Where-Object { -not $r4.Tekst.Contains($_) }).Count -eq 0)) $r4.Tekst
 
-  # ------------------------------------------------------------ proba negatywna: zasiew ponad sufit Codeksa
-  # Wiedza w CLAUDE.md wieksza niz to, co zostalo do 32 KiB w AGENTS.md Codeksa: zasiewu NIE ma, powod
+  # ------------------------------------------------------------ proba negatywna: zasiew ponad sufit (narzedzie testowe z limitem)
+  # Codex z Limit = 32768 ($ZL). Wiedza w CLAUDE.md wieksza niz to, co zostalo do 32 KiB w AGENTS.md Codeksa: zasiewu NIE ma, powod
   # w PIERWSZEJ linii (wpisz-zasady i straznik), sekcja zostaje pusta, a reszta pliku (zdjety blok lore)
   # i tak jest zapisana. Mniejsza wiedza na tej samej sciezce przechodzi - to sufit blokuje.
+  $script:ZT = $ZL
   $dom = Nowy-Dom "sufit-zasiew" @("codex")
   [void](Zainstaluj "sufit zasiewu - przygotowanie (Codex z pustym szkieletem)" $dom)
   $pCx = Join-Path $dom ".codex\AGENTS.md"; $pCm = Join-Path $dom ".claude\CLAUDE.md"
@@ -511,6 +542,7 @@ try {
   $w = Wpisz $dom
   $cx = Czytaj $pCx
   Sprawdz "sufit zasiewu - mniejsza wiedza: kod 0, Codex zasiany, ponizej 32 KiB" (($w.Kod -eq 0) -and $cx.Contains("numer 00020") -and -not $cx.Contains("numer 00021") -and ((Get-Item $pCx).Length -le 32768)) $w.Tekst
+  $script:ZT = $Z
 
   # ------------------------------------------------------------ instalator globalny: opencode i wszystkie trzy
   foreach ($k in @(@{ n = "oc"; t = @("opencode") }, @{ n = "trzy"; t = @("claude", "codex", "opencode") })) {

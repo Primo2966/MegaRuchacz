@@ -13,8 +13,8 @@
 #     nie rusza. Bez niej weryfikacja niczego do tego pliku nie zapisze (verify.py pisze do kazdego pliku
 #     z ta sekcja). Sekcja pusta (zakladana albo zastana) dostaje tresc najbogatszej sekcji z plikow
 #     narzedzi (kierownik-cele.ps1 Zrodlo-Co-Wiem) - ta sama wiedza w kazdym CLI; sekcji z wpisami nie
-#     nadpisuje, rozne sekcje = UWAGA (bez scalania). Plik, ktorego narzedzie jeszcze nie ma, zaczyna sie od Tekst-Startowy (OpenCode - od
-#     tresci CLAUDE.md, ktory czytal dotad). Zapis ponad limit narzedzia (Codex 32 KiB) = odmowa z UWAGA.
+#     nadpisuje; rozne sekcje wyrownuje synchronizacja (Synchronizuj-Co-Wiem - nowszy plik wygrywa). Plik, ktorego narzedzie jeszcze nie ma, zaczyna sie od Tekst-Startowy (OpenCode - od
+#     tresci CLAUDE.md, ktory czytal dotad). Zapis ponad limit narzedzia (pole Limit listy) = odmowa z UWAGA.
 #     Zadnego narzedzia AI = UWAGA (fakty czekaja w wiedza\kandydaci.md), nie odmowa.
 #     Stoi nad PIERWSZYM znacznikiem <!-- MegaRuchacz: (bloki lore, wiedza, kierownik): lore\lore\verify.py
 #     (section_bounds, GUARD_PREFIX od P59a) konczy sekcje na "## " albo na kazdym takim znaczniku, wiec
