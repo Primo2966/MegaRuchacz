@@ -427,6 +427,11 @@ function Skladniki-Mr($start, $o) {
     }
     $uw = ""
     if ($null -ne $x[1]) { $uw = $x[3] }
+    # Zero przy wiadomosci to "nic sie nie dokleja" (OpenCode nie ma hooka wiadomosci,
+    # modul kierownik wylaczony) - nie "+0", ktore czyta sie jak doplata.
+    if (($x[2] -eq "+") -and ($null -ne $x[1]) -and ([long]$x[1] -le 0)) {
+      $liczba = "nic"; $uw = "MegaRuchacz nie dokleja niczego do Twoich wiadomości"
+    }
     $lista += [pscustomobject]@{ Napis = $x[0]; Liczba = $liczba; Proc = $proc; Uwaga = $uw }
   }
   return ,$lista

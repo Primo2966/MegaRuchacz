@@ -1,6 +1,6 @@
 # narzedzia\koszt\alarmy.ps1 - czesc narzedzia\koszt-pamieci.ps1 (patrz BUDOWA
 # w jego naglowku). Trzeci etap (Etap-Ocena): ocena kosztu nauki, rachunek kazdego
-# narzedzia z jego progami i alarmami (Rachunek-Narzedzia -> $rCc, $rCx, $rDom),
+# narzedzia z jego progami i alarmami (Rachunek-Narzedzia -> $rCc, $rCx, $rOc, $rDom, $rInne),
 # alarmy nauki z rozmow ($alarmy, $informacje) i jedna linia dla -Zwiezle / -Dane
 # (Linia-Narzedzia -> $liniaZwiezla, $kodWyjscia). Progi ($AlarmCzesciOtwarcia,
 # $AlarmCyklu i reszta) stoja na gorze koszt-pamieci.ps1. Skad wolane:
@@ -41,16 +41,26 @@ function Procent-Tekst($proc) {
 # i jego alarmy. Tematy alarmow Claude Code sa bez przedrostka (nadzorca zna je
 # po nazwie: otwarcie, udzial, wzrost); Codex dostaje przedrostek "codex-". Krotki
 # opis zaczyna sie od nazwy narzedzia - liczba bez tej nazwy klamie.
+#
+# OpenCode (od 06.10.2026, temat "opencode-"): rachunek z jego pliku instrukcji
+# (kubelki.ps1). BezHookaWiadomosci = $true - do wiadomosci nic sie nie dokleja i linia
+# mowi to wprost, zamiast "przypomnienia nie umiem zmierzyc".
 function Rachunek-Narzedzia($narz) {
   if ($narz -eq "Codex") {
     $r = [pscustomobject]@{ Narz = "Codex"; Klucz = "codex"; Nazwa = "Codex"; Temat = "codex-"
       Jest = [bool]$jestCodex; KubW = @($kubWiadomoscCx); TokW = $tokWiadomoscCx
       KubS = @($kubSesjaCx); TokS = $tokSesjaCx
-      Brak = "brak Codeksa na tej maszynie (nie ma $plikAgents)" }
+      Brak = "brak Codeksa na tej maszynie (nie ma $plikAgents)"; BezHookaWiadomosci = $false }
+  } elseif ($narz -eq "OpenCode") {
+    $ocInstr = Join-Path $KatalogDomowy ".config\opencode\AGENTS.md"
+    $r = [pscustomobject]@{ Narz = "OpenCode"; Klucz = "opencode"; Nazwa = "OpenCode"; Temat = "opencode-"
+      Jest = [bool]$jestOpenCode; KubW = @($kubWiadomoscOc); TokW = $tokWiadomoscOc
+      KubS = @($kubSesjaOc); TokS = $tokSesjaOc
+      Brak = "brak OpenCode na tej maszynie (nie ma $ocInstr ani jego bazy rozmow)"; BezHookaWiadomosci = $true }
   } else {
     $r = [pscustomobject]@{ Narz = "Claude"; Klucz = "claude"; Nazwa = "Claude Code"; Temat = ""
       Jest = $true; KubW = @($kubWiadomosc); TokW = $tokWiadomosc
-      KubS = @($kubSesja); TokS = $tokSesja; Brak = "" }
+      KubS = @($kubSesja); TokS = $tokSesja; Brak = ""; BezHookaWiadomosci = $false }
   }
   $r | Add-Member -NotePropertyName ZnakiS -NotePropertyValue 0
   foreach ($p in @($r.KubS)) { $r.ZnakiS += [int]$p.Znaki }
@@ -122,8 +132,10 @@ function Rachunek-Narzedzia($narz) {
     if ($null -ne $r.Udzial) {
       $wCalosci = ", czyli $(Procent-Tekst $r.Udzial) calego otwarcia (~$(Liczba $r.Calosc) tokenow, mediana z $($r.Sesji) ostatnich sesji w transkryptach)"
     }
+    $skladniki = "start $(Liczba $r.TokS) + przypomnienie $(Liczba $r.TokW)"
+    if ($r.BezHookaWiadomosci) { $skladniki = "sam start - do wiadomosci $($r.Nazwa) nic sie nie dokleja" }
     $r.Alarmy += Alarm "$($r.Nazwa): MegaRuchacz to ~$(Liczba $r.Mr) tokenow otwarcia sesji (prog $(Liczba $AlarmCzesciOtwarcia))" `
-      ("MegaRuchacz dokleja na otwarcie sesji $($r.Nazwa) ~$(Liczba $r.Mr) tokenow (start $(Liczba $r.TokS) + przypomnienie $(Liczba $r.TokW))$wCalosci. " +
+      ("MegaRuchacz dokleja na otwarcie sesji $($r.Nazwa) ~$(Liczba $r.Mr) tokenow ($skladniki)$wCalosci. " +
        "Prog to $(Liczba $AlarmCzesciOtwarcia) tokenow. To stan plikow na teraz, nie koszt jednego dnia. " +
        "Najdrozsza pozycja: $($n.Nazwa) (~$(Liczba $n.Tokeny) tokenow) - $($n.Rada). Plik: $($n.Skad).") `
       "$($r.Temat)otwarcie" "pilne" $r.Mr $AlarmCzesciOtwarcia "stan na teraz, przy kazdym starcie sesji"
@@ -185,6 +197,7 @@ function Linia-Narzedzia($r) {
     $czSesja = "start sesji +$($r.TokS) tokenow"
     if ($r.TokS -le 0) { $czSesja = "startu sesji nie umiem zmierzyc" }
     if ($r.TokW -gt 0) { $czTokeny = "$czSesja, wiadomosc +$($r.TokW) tokenow" }
+    elseif ($r.BezHookaWiadomosci) { $czTokeny = "$czSesja, do wiadomosci nic nie dokleja ($($r.Nazwa) nie ma hooka wiadomosci)" }
     else { $czTokeny = "$czSesja, przypomnienia nie umiem zmierzyc" }
     if ($null -ne $r.Udzial) {
       $rachunek = "pamiec $($r.Nazwa): MegaRuchacz to $(Procent-Tekst $r.Udzial) otwarcia sesji " +
@@ -291,9 +304,15 @@ function Etap-Ocena {
 
   $rCc = Rachunek-Narzedzia "Claude"
   $rCx = Rachunek-Narzedzia "Codex"
-  if ($narzDomyslne -eq "Codex") { $rDom = $rCx; $rInny = $rCc } else { $rDom = $rCc; $rInny = $rCx }
+  $rOc = Rachunek-Narzedzia "OpenCode"
+  # $rDom - rachunek domyslnego narzedzia, $rInne - pozostalych (kolejnosc: Claude Code,
+  # Codex, OpenCode), $rInny - pierwszy z nich (klucze inne.* w -Dane, jak dotad).
+  $rDom = $rCc
+  if ($narzDomyslne -eq "Codex") { $rDom = $rCx } elseif ($narzDomyslne -eq "OpenCode") { $rDom = $rOc }
+  $rInne = @(@($rCc, $rCx, $rOc) | Where-Object { $_.Narz -ne $rDom.Narz })
+  $rInny = $rInne[0]
   # Informacje (zolte, bez kodu 1) domyslnego narzedzia ida do wspolnej listy -
-  # te same, ktore pokazuje linia i nadzorca. Drugie narzedzie dorzuca swoje nizej.
+  # te same, ktore pokazuje linia i nadzorca. Pozostale narzedzia dorzucaja swoje nizej.
   $informacje += @($rDom.Informacje)
 
   # Nauka z rozmow (cykl wiedzy) - jedyny koszt w tym raporcie placony naprawde

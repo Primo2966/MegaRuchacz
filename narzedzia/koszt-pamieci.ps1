@@ -8,7 +8,7 @@
 # w ktorym naprawde wola sie model i wydaje tokeny uzytkownika. Dwa pierwsze to
 # TEKST doklejany do rozmowy, trzeci to PRAWDZIWE WYWOLANIE - i wlasnie dlatego
 # nie sumuja sie w jedna liczbe.
-# Dwa pierwsze rachunki liczymy OSOBNO DLA KAZDEGO NARZEDZIA (Claude Code, Codex):
+# Dwa pierwsze rachunki liczymy OSOBNO DLA KAZDEGO NARZEDZIA (Claude Code, Codex, OpenCode):
 # kazde z tego, co naprawde trafia do JEGO modelu, i kazde z wlasnym
 # sprawdzeniem progow - Claude Code nie czyta ~\.codex\AGENTS.md, Codex nie czyta
 # ~\.claude\CLAUDE.md, wiec wspolna suma bylaby liczba, ktorej nikt nie placi.
@@ -39,10 +39,11 @@
 #                            z paskiem, udzialem i sciezka przy kazdej. Straznik pokazuje
 #                            to RAZ dziennie, przy pierwszej sesji
 #     -Zwykly                bez kolorow (do zapisu wydruku w pliku)
-#     -Narzedzie <nazwa>     Claude albo Codex: czyj rachunek jest DOMYSLNY - ten idzie
-#                            w linii -Zwiezle/-Dane, jego progi podnosza kod wyjscia
+#     -Narzedzie <nazwa>     Claude, Codex albo OpenCode: czyj rachunek jest DOMYSLNY - ten
+#                            idzie w linii -Zwiezle/-Dane, jego progi podnosza kod wyjscia
 #                            i jego kubelki stoja w rozbiciu pierwsze. Bez parametru:
-#                            Claude Code, gdy jest na maszynie, inaczej Codex.
+#                            narzedzie, ktorego uzywasz (Claude Code, Codex, OpenCode -
+#                            w tej kolejnosci), a bez rozmow - to, ktore jest na maszynie.
 #                            Kazde narzedzie ma WLASNY rachunek (patrz "rachunki
 #                            narzedzi" nizej) - liczba bez nazwy narzedzia klamie
 #     -Warstwy               JSON z lista WSZYSTKICH warstw pamieci (zakladka "Warstwy
@@ -57,7 +58,8 @@
 #                            kontekstu przy pierwszej odpowiedzi modelu z rozmow GLOWNEGO
 #                            narzedzia tej maszyny (Claude Code: <dom>\.claude\projects,
 #                            osobno sesje i workerzy; z samym Codeksem - Codex z
-#                            <dom>\.codex\sessions), plus czesc MegaRuchacza z rachunku.
+#                            <dom>\.codex\sessions, z samym OpenCode - OpenCode z jego
+#                            bazy), plus czesc MegaRuchacza z rachunku tego narzedzia.
 #                            Pole Narzedzie mowi, czyje to liczby, a Narzedzia - pomiar
 #                            kazdego narzedzia z listy $NARZEDZIA_AI osobno (Claude Code,
 #                            Codex, OpenCode z <dom>\.local\share\opencode\opencode.db).
@@ -90,7 +92,7 @@
 #   pomiar-dzienny.ps1  zadanie LoreKoszt w Harmonogramie i poprzedni POMIAR
 #   pomiar.ps1          etap: co leci do modelu - warstwy, hooki, ladunki, sufity,
 #                       lista narzedzi AI ($NARZEDZIA_AI)
-#   kubelki.ps1         etap: rachunki Claude Code i Codeksa, narzedzie domyslne
+#   kubelki.ps1         etap: rachunki Claude Code, Codeksa i OpenCode, narzedzie domyslne
 #   otwarcie.ps1        pomiar otwarcia sesji i zuzycia z rozmow kazdego narzedzia,
 #                       tryb -Start
 #   tryb-warstwy.ps1    tryb -Warstwy (lista warstw dla okna nadzorcy)
@@ -114,7 +116,7 @@ param(
   [switch]$Dane,
   [switch]$Rozbicie,
   [switch]$Zwykly,
-  [ValidateSet("", "Claude", "Codex")]
+  [ValidateSet("", "Claude", "Codex", "OpenCode")]
   [string]$Narzedzie = "",
   [switch]$Warstwy,
   [switch]$Start,

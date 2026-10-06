@@ -36,7 +36,7 @@ function Poprzedni-Pomiar($plik, $narz, $nazwa) {
   if ([regex]::IsMatch($tekst, '(?m)^\s*POMIAR\s+narzedzie=')) {
     # raport w nowym formacie, ale bez linii tego narzedzia - np. Codeksa wtedy nie bylo
     return [pscustomobject]@{ Tokeny = 0; Data = $data; Porownywalny = $false
-      Powod = "w poprzednim pomiarze nie ma linii dla $nazwa - tego narzedzia wtedy na maszynie nie bylo" }
+      Powod = "w poprzednim pomiarze nie ma linii dla $nazwa - tego narzedzia wtedy na maszynie nie bylo albo rachunek go jeszcze nie liczyl (OpenCode - od 06.10.2026)" }
   }
   return $null
 }

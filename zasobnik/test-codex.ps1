@@ -270,6 +270,12 @@ try {
   Sprawdz "okno: zdanie 'Na tym komputerze: Codex.'" ($przod -match 'Na tym komputerze: Codex\.') $przod.Substring(0, [Math]::Min(800, $przod.Length))
   Sprawdz "okno: karta zuzycia z wierszem Codeksa (dzis ~46 000, srednio ~4 300)" (($przod -match '(?m)^\s+Codex\s+~46 000\s+~4 300') -and ($przod -notmatch 'Nie wiem, ile tokenów zużywasz')) (([regex]::Match($przod, '(?s)ILE TOKEN.*?OTWARCIE')).Value)
   Sprawdz "okno: otwarcie okna rozmowy zmierzone dla Codeksa" ($przod -match 'Otwarcie okna rozmowy \(Codex\): ~') (([regex]::Match($przod, '(?s)OTWARCIE OKNA.*?\n\n')).Value)
+  # Werdykt i karta otwarcia na komputerze z samym Codeksem - ani slowa o Claude (06.10.2026:
+  # liczba zawsze z nazwa narzedzia, takze "przy otwarciu okna w Codeksie").
+  $werdyktCx = ([regex]::Match($przod, '(?s)WERDYKT .*?\n\n')).Value
+  $otwCx = ([regex]::Match($przod, '(?s)OTWARCIE OKNA ROZMOWY .*?\n\n')).Value
+  Sprawdz "okno: werdykt i karta otwarcia o Codeksie, bez słowa 'Claude'" (($werdyktCx -match 'co Codex wczytuje') -and ($werdyktCx -match 'w Codeksie') -and
+    ($werdyktCx -cnotmatch 'Claude') -and ($otwCx -cnotmatch 'Claude')) "$werdyktCx$otwCx"
   Sprawdz "okno: brak sprawy 'Wiedza ... nie trafia' przy sekcji w AGENTS.md" ($przod -notmatch 'nie trafia do żadnego narzędzia') $uwaga
   Sprawdz "okno: zadnej sprawy o nieuzywanym Claude Code (falszywy alarm)" ($uwaga -notmatch 'Claude') $uwaga
 

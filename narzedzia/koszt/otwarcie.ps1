@@ -530,27 +530,34 @@ function Tryb-Start {
         Powod = $wynikS.Powod; Otwarcie = $wynikS.Sesje; MegaRuchacz = [long]($tokSesja + $tokWiadomosc) }
     } else {
       $pn = Pomiar-Narzedzia $n $false $false
-      # Czesc MegaRuchacza liczy rachunek tylko dla Claude Code i Codeksa (kubelki.ps1) -
-      # u OpenCode jej nie znamy i zostaje pusta, zamiast pozyczac liczbe Codeksa.
+      # Czesc MegaRuchacza z rachunku TEGO narzedzia (kubelki.ps1): Codex i od 06.10.2026
+      # OpenCode. Narzedzie bez rachunku zostaje z pusta - nigdy z pozyczona liczba.
       $mrN = $null
       if ($n.Narz -eq "Codex") { $mrN = [long]($tokSesjaCx + $tokWiadomoscCx) }
+      elseif ($n.Narz -eq "OpenCode") { $mrN = [long]($tokSesjaOc + $tokWiadomoscOc) }
       $pomiary += [pscustomobject]@{ Klucz = $pn.Klucz; Nazwa = $pn.Nazwa; Uzywane = $pn.Uzywane; Ostatnio = $pn.Ostatnio
         Powod = $pn.Powod; Otwarcie = $pn.Otwarcie; MegaRuchacz = $mrN; Pomiar = $pn }
     }
   }
+  # Glowne narzedzie inne niz Claude Code (z samym Codeksem albo z samym OpenCode) - na
+  # wierzch idzie jego pomiar i jego czesc MegaRuchacza (start + wiadomosc z jego rachunku).
   $glowne = "Claude Code"
-  if ($narzDomyslne -eq "Codex") {
-    $cx = @($pomiary | Where-Object { $_.Klucz -eq "codex" }) | Select-Object -First 1
-    if ($cx) {
-      $glowne = "Codex"
-      $wynikS.Katalog = $cx.Pomiar.Katalog
-      $wynikS.Metoda = $cx.Pomiar.Metoda
-      $wynikS.Powod = $cx.Powod
-      $wynikS.Sesje = $cx.Otwarcie
-      $wynikS.Workerzy = $cx.Pomiar.Workerzy
-      $wynikS.MegaRuchaczSesja = [long]($tokSesjaCx + $tokWiadomoscCx)
-      $wynikS.MegaRuchaczStart = [long]$tokSesjaCx
-      $wynikS.MegaRuchaczWiadomosc = [long]$tokWiadomoscCx
+  $doms = @{
+    "Codex"    = @{ Klucz = "codex";    Start = $tokSesjaCx; Wiadomosc = $tokWiadomoscCx }
+    "OpenCode" = @{ Klucz = "opencode"; Start = $tokSesjaOc; Wiadomosc = $tokWiadomoscOc } }
+  $dom = $doms["$narzDomyslne"]
+  if ($dom) {
+    $px = @($pomiary | Where-Object { $_.Klucz -eq $dom.Klucz }) | Select-Object -First 1
+    if ($px) {
+      $glowne = $px.Nazwa
+      $wynikS.Katalog = $px.Pomiar.Katalog
+      $wynikS.Metoda = $px.Pomiar.Metoda
+      $wynikS.Powod = $px.Powod
+      $wynikS.Sesje = $px.Otwarcie
+      $wynikS.Workerzy = $px.Pomiar.Workerzy
+      $wynikS.MegaRuchaczSesja = [long]($dom.Start + $dom.Wiadomosc)
+      $wynikS.MegaRuchaczStart = [long]$dom.Start
+      $wynikS.MegaRuchaczWiadomosc = [long]$dom.Wiadomosc
       $wynikS.MegaRuchaczWorker = $null
     }
   }

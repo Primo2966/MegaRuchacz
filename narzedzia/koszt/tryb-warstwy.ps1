@@ -254,8 +254,9 @@ function Tryb-Warstwy {
   }
 
   # OpenCode (od 06.10.2026) czyta ~\.config\opencode\AGENTS.md sam, na starcie kazdej
-  # rozmowy - to jego odpowiednik CLAUDE.md. Rachunek MegaRuchacza za OpenCode nie powstaje
-  # (kubelki.ps1 zna Claude Code i Codeksa), wiec rozmiar idzie z samego pliku, a sekcja
+  # rozmowy - to jego odpowiednik CLAUDE.md. Rachunek MegaRuchacza za OpenCode (kubelki.ps1,
+  # od 06.10.2026) liczy w nim tylko bloki zasad i "Co wiem", a ta warstwa to caly plik -
+  # wiec rozmiar idzie z samego pliku, a sekcja
   # "Co wiem" ma te same podwarstwy, co w AGENTS.md Codeksa. Brak pliku przy OpenCode,
   # ktorego tu nie uzywasz, zamienia sie nizej w "nie dotyczy".
   $nOc = Narzedzie-Po-Kluczu "opencode"

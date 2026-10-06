@@ -162,9 +162,9 @@ function Raport-Pelny {
   # nauki z rozmow. Kod wyjscia pelnego raportu podnosi ktorykolwiek z nich.
   $alarmyNauki = @($alarmy)
   $alarmy = @($rDom.Alarmy)
-  if ($rInny.Jest) { $alarmy += @($rInny.Alarmy) }
+  foreach ($ri in @($rInne)) { if ($ri.Jest) { $alarmy += @($ri.Alarmy) } }
   $alarmy += $alarmyNauki
-  if ($rInny.Jest) { $informacje += @($rInny.Informacje) }
+  foreach ($ri in @($rInne)) { if ($ri.Jest) { $informacje += @($ri.Informacje) } }
 
   $ostrzezenia = @()
   foreach ($s in $ucinane) {
@@ -203,7 +203,7 @@ function Raport-Pelny {
   }
   # Udzial w calym otwarciu sesji - zawsze jedna linia: procent albo zdanie,
   # dlaczego go nie ma. Brak pomiaru nie jest alarmem, wiec bez koloru.
-  foreach ($rr in @($rDom, $rInny)) {
+  foreach ($rr in (@($rDom) + @($rInne))) {
     if (-not $rr.Jest) { continue }
     if ($null -ne $rr.Udzial) {
       Linia "  $($rr.Nazwa): MegaRuchacz to $(Procent-Tekst $rr.Udzial) otwarcia sesji (~$(Liczba $rr.Mr) z ~$(Liczba $rr.Calosc) tokenow, prog $(Liczba $AlarmCzesciOtwarcia) tokenow)."
@@ -269,6 +269,9 @@ function Raport-Pelny {
   } else {
     Wypisz-Kubelek $kubWiadomoscCx $tokWiadomoscCx "Nie znalazlem przypomnienia Codeksa - przy wiadomosci nie dokleja sie nic."
   }
+  if ($jestOpenCode) {
+    Linia "  OpenCode: nic - nie ma hooka wiadomosci, a wtyczka MegaRuchacza (mr-log.js) niczego do wiadomosci nie dokleja."
+  }
   Linia "  Tylko to jest doklejane przy kazdym Twoim zdaniu, kazdemu narzedziu jego wlasne. Reszta wchodzi raz, na starcie sesji."
 
   Linia ""
@@ -306,6 +309,13 @@ function Raport-Pelny {
     Wypisz-Kubelek $kubSesjaCx $tokSesjaCx "Nie ma czego mierzyc."
     Linia ("  POMIAR narzedzie=codex tokenow={0} znakow={1}" -f $rCx.TokS, $rCx.ZnakiS)
     Wypisz-Porownanie $rCx
+  }
+  # OpenCode (od 06.10.2026) - bloki MegaRuchacza i "Co wiem" z pliku, ktory czyta (kubelki.ps1).
+  if ($jestOpenCode) {
+    Linia "  OpenCode (osobny rachunek - z $plikOc$(if ($ocZastepczy) { ', bo nie ma ~\.config\opencode\AGENTS.md' })):"
+    Wypisz-Kubelek $kubSesjaOc $tokSesjaOc "Nie ma czego mierzyc - ani blokow zasad MegaRuchacza, ani sekcji '## Co wiem'."
+    Linia ("  POMIAR narzedzie=opencode tokenow={0} znakow={1}" -f $rOc.TokS, $rOc.ZnakiS)
+    Wypisz-Porownanie $rOc
   }
   Linia "  To wchodzi do kontekstu raz i siedzi w nim do konca sesji - nie jest wysylane ponownie przy kazdej wiadomosci."
   Linia "  Tokeny to SZACUNEK, nie pomiar: przyjete ~$ZnakiNaToken znaki na token dla polszczyzny."
@@ -490,6 +500,10 @@ function Raport-Pelny {
     if ($tokWiadomoscCx -gt 0) { Linia "  Codex, kazda wiadomosc: +$(Liczba $tokWiadomoscCx) tokenow." }
     else { Linia "  Codex, kazda wiadomosc: nie umiem zmierzyc - nie znalazlem przypomnienia Codeksa." }
     Linia "  Codex, start sesji: +$(Liczba $tokSesjaCx) tokenow, raz."
+  }
+  if ($jestOpenCode) {
+    Linia "  OpenCode, kazda wiadomosc: nic (nie ma hooka wiadomosci)."
+    Linia "  OpenCode, start sesji: +$(Liczba $tokSesjaOc) tokenow, raz."
   }
   # Trzecia liczba stoi osobno i celowo nie jest dodana do dwoch powyzej:
   # tamte to doklejony tekst, ta to prawdziwie wydane tokeny.

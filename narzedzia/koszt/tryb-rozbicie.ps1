@@ -75,10 +75,10 @@ function Kubelek-Rozbicia($naglowek, $pozycje, $razem, $powodBraku, $dopisek = "
 # jak gdy ten kod stal w koszt-pamieci.ps1 wprost.
 function Tryb-Rozbicie {
   # Kazde narzedzie ma wlasne dwa kubelki pod wlasnym naglowkiem - domyslne
-  # pierwsze. Drugie stoi tylko wtedy, gdy jest na maszynie: rozbicie idzie
+  # pierwsze. Pozostale stoja tylko wtedy, gdy sa na maszynie: rozbicie idzie
   # do kontekstu modelu, a linia "Codeksa tu nie ma" w oknie Claude Code nic
-  # nikomu nie mowi. Wyjatek: jawne -Narzedzie Codex bez Codeksa - wtedy
-  # rachunek Codeksa MOWI "brak Codeksa" zamiast pokazac zero.
+  # nikomu nie mowi. Wyjatek: jawne -Narzedzie Codex (OpenCode) bez tego narzedzia -
+  # wtedy jego rachunek MOWI "brak Codeksa" zamiast pokazac zero.
   function Kubelki-Claude {
     # Powody, dla ktorych kubelek moze byc pusty - kazdy nazwany po imieniu, bo
     # w tym rachunku brak liczby jest osobna wiadomoscia, a nie brakiem wiadomosci.
@@ -147,15 +147,57 @@ function Tryb-Rozbicie {
     }
     return $b
   }
+  # OpenCode (od 06.10.2026): przy wiadomosci nic - OpenCode nie ma hooka wiadomosci, wiec
+  # kubelek stoi z tym zdaniem (znikniety czytalby sie jak "nie zmierzone"). Na starcie -
+  # bloki MegaRuchacza i "Co wiem" z pliku, ktory OpenCode naprawde czyta (kubelki.ps1).
+  function Kubelki-OpenCode {
+    $b = @()
+    if (-not $jestOpenCode) {
+      $b += Kubelek-Niezmierzony "OpenCode (osobny rachunek)" "brak OpenCode" "$($rOc.Brak) - nie ma czego liczyc"
+      return $b
+    }
+    $b += Kubelek-Niezmierzony "OpenCode - przy KAZDEJ wiadomosci" "nic" `
+      "OpenCode nie ma hooka wiadomosci, a wtyczka MegaRuchacza (mr-log.js) niczego do wiadomosci nie dokleja"
+    $brakSesja = "w $(Sciezka-Ludzka $plikOc) nie ma ani blokow zasad MegaRuchacza, ani sekcji '## Co wiem'"
+    if (-not $plikOc) { $brakSesja = "nie ma ani ~\.config\opencode\AGENTS.md, ani ~\.claude\CLAUDE.md - OpenCode nie czyta niczego od MegaRuchacza" }
+    elseif ($wOc -and $wOc.Blad) { $brakSesja = $wOc.Blad }
+    $dopS = ""
+    if ($null -ne $rOc.Calosc) { $dopS = " = $(Procent-Tekst (100.0 * $tokSesjaOc / $rOc.Calosc)) otwarcia okna rozmowy (reszta to sam OpenCode)" }
+    $b += Kubelek-Rozbicia "OpenCode - RAZ, przy starcie sesji (czyta to tylko OpenCode)" $kubSesjaOc $tokSesjaOc $brakSesja $dopS
+    if ($ocZastepczy) {
+      $b += ("  {0,-20} {1}" -f "", "Nie ma ~\.config\opencode\AGENTS.md, wiec OpenCode czyta $(Sciezka-Ludzka $plikOc) - liczone stamtad.")
+    }
+    if ($null -ne $rOc.Calosc) {
+      $b += ("  {0,-20} {1}" -f "", "Razem MegaRuchacz: ~$(Liczba $rOc.Mr) z ~$(Liczba $rOc.Calosc) tokenow otwarcia okna rozmowy OpenCode = $(Procent-Tekst $rOc.Udzial) (prog $(Liczba $AlarmCzesciOtwarcia) tokenow; calosc z $($rOc.Sesji) ostatnich rozmow).")
+    } else {
+      $b += ("  {0,-20} {1}" -f "", "Udzialu w calym otwarciu okna rozmowy nie porownuje, bo $($rOc.PowodCalosci).")
+    }
+    if ($wOc -and -not $ocZastepczy) {
+      foreach ($nb in @($wOc.BlokiBezKonca)) {
+        $b += ("  {0,-20} {1}" -f "", "UWAGA: blok '$nb' w $(Sciezka-Ludzka $plikOc) nie ma znacznika konca - nie umiem go policzyc.")
+      }
+    }
+    if ($wpisyStareOc.Count -gt 0) {
+      $b += ("  {0,-20} {1}" -f "", "Do zrobienia: $(Ile-Wpisow $wpisyStareOc.Count) w $(Sciezka-Ludzka $plikOc) starsze niz $DniWaznosci dni - przejrzyj albo odswiez date.")
+    }
+    return $b
+  }
 
+  # Domyslne narzedzie pierwsze, potem pozostale, ktore sa na maszynie.
   $blok = @()
   $blok += "MegaRuchacz - pamiec i koszty"
   if ($narzDomyslne -eq "Codex") {
     $blok += Kubelki-Codex
     if ($jestClaude) { $blok += Kubelki-Claude }
+    if ($jestOpenCode) { $blok += Kubelki-OpenCode }
+  } elseif ($narzDomyslne -eq "OpenCode") {
+    $blok += Kubelki-OpenCode
+    if ($jestClaude) { $blok += Kubelki-Claude }
+    if ($jestCodex) { $blok += Kubelki-Codex }
   } else {
     $blok += Kubelki-Claude
     if ($jestCodex) { $blok += Kubelki-Codex }
+    if ($jestOpenCode) { $blok += Kubelki-OpenCode }
   }
 
   # Trzeci kubelek to inne pieniadze: prawdziwe wolanie modelu, nie doklejony tekst.

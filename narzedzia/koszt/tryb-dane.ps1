@@ -24,15 +24,16 @@ function Para($klucz, $wartosc) {
 # glownego: zmienne i funkcje, ktore tu powstaja, widzi dalszy przebieg - tak samo,
 # jak gdy ten kod stal w koszt-pamieci.ps1 wprost.
 function Tryb-Dane {
-  # Linia i jej alarmy mowia o domyslnym narzedziu. Alarmy DRUGIEGO narzedzia
-  # (tematy z przedrostkiem, np. "codex-otwarcie", i jego ucinanie) tez ida na
-  # liste - kazde ma wlasne progi i nie wolno ich przemilczec - ale z jego nazwa
-  # w opisie i bez mieszania liczb. Kod 1 = cokolwiek czerwonego na liscie.
+  # Linia i jej alarmy mowia o domyslnym narzedziu. Alarmy POZOSTALYCH narzedzi
+  # (tematy z przedrostkiem, np. "codex-otwarcie", "opencode-otwarcie", i ich ucinanie)
+  # tez ida na liste - kazde ma wlasne progi i nie wolno ich przemilczec - ale z jego
+  # nazwa w opisie i bez mieszania liczb. Kod 1 = cokolwiek czerwonego na liscie.
   $alarmyInnego = @()
   $informacjeInnego = @()
-  if ($rInny.Jest) {
-    $alarmyInnego = @($rInny.AlarmyUcinania) + @($rInny.Alarmy)
-    $informacjeInnego = @($rInny.Informacje)
+  foreach ($ri in @($rInne)) {
+    if (-not $ri.Jest) { continue }
+    $alarmyInnego += @($ri.AlarmyUcinania) + @($ri.Alarmy)
+    $informacjeInnego += @($ri.Informacje)
   }
   $kodDanych = $kodWyjscia
   if ($alarmyInnego.Count -gt 0) { $kodDanych = 1 }
@@ -61,7 +62,8 @@ function Tryb-Dane {
   # uzywasz (narz.N.uzywane - od tego zalezy, czy brak czegos jest usterka, czy "nie
   # dotyczy"), czy w jego pliku instrukcji stoi sekcja "## Co wiem", otwarcie okna
   # rozmowy (mediana tokenow) i zuzycie dzienne. Okno sklada z tego zdanie "Na tym
-  # komputerze: ...", sprawy wymagajace uwagi i liczby Codeksa obok Claude Code.
+  # komputerze: ...", sprawy wymagajace uwagi, liczby Codeksa i OpenCode obok Claude Code
+  # i werdykt o kazdym uzywanym narzedziu (narz.N.mr).
   # narz.N.zuzycie_w_oknie = 1: zuzycie tego narzedzia liczy samo okno (Claude Code,
   # zasobnik\nadzorca\stan-zuzycie.ps1) - tu go nie ma i to nie jest brak.
   # Brak liczby to pusta wartosc z powodem obok, nigdy zero.
@@ -70,8 +72,13 @@ function Tryb-Dane {
     $nrN++
     $pom = $null
     if ($pomiaryNarzedzi) { $pom = $pomiaryNarzedzi[$n.Klucz] }
+    # Czesc MegaRuchacza w otwarciu okna rozmowy TEGO narzedzia (jego rachunek, alarmy.ps1):
+    # mr = start + wiadomosc, mr_start i mr_wiadomosc osobno (zero za start = nie bylo czego
+    # policzyc, nie "za darmo" - tak samo jak udzial.start).
+    $rN = $null
+    if ($n.Narz -eq "Codex") { $rN = $rCx } elseif ($n.Narz -eq "Claude") { $rN = $rCc } elseif ($n.Narz -eq "OpenCode") { $rN = $rOc }
     $mrN = $null
-    if ($n.Narz -eq "Codex") { $mrN = $rCx.Mr } elseif ($n.Narz -eq "Claude") { $mrN = $rCc.Mr }
+    if ($rN) { $mrN = $rN.Mr }
     Para "narz.$nrN.klucz"           $n.Klucz
     Para "narz.$nrN.nazwa"           $n.Nazwa
     Para "narz.$nrN.uzywane"         ([int][bool]$n.Uzywane)
@@ -80,6 +87,8 @@ function Tryb-Dane {
     Para "narz.$nrN.instrukcje_jest" ([int][bool]$n.InstrukcjeJest)
     Para "narz.$nrN.cowiem"          ([int][bool]($n.Warstwy -and $n.Warstwy.MaSekcje))
     Para "narz.$nrN.mr"              $mrN
+    Para "narz.$nrN.mr_start"        $(if ($rN) { $rN.TokS } else { $null })
+    Para "narz.$nrN.mr_wiadomosc"    $(if ($rN) { $rN.TokW } else { $null })
     if ($pom) {
       $ot = $pom.Otwarcie
       Para "narz.$nrN.otwarcie"       $(if ($ot -and ($null -ne $ot.Mediana)) { $ot.Mediana } else { "" })

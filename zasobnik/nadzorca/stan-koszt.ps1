@@ -175,8 +175,10 @@ function Teksty-Kosztu($k, $z) {
 # P16 (28.09.2026): "+115 przy kazdej wiadomosci" po ludzku - to stala doplata,
 # nie zalezy od dlugosci wiadomosci (przypomnienie zasad ma zawsze te sama tresc).
 # Bez pomiaru przypomnienia zdania nie ma - zadnego "0" zamiast "nie wiem".
+# Zero (OpenCode nie ma hooka wiadomosci, modul kierownik wylaczony) - tez bez zdania:
+# "+0 to stala doplata" brzmialoby jak koszt.
 function Zdanie-Wiadomosci($start) {
-  if (-not $start -or ($null -eq $start.MrWiadomosc)) { return "" }
+  if (-not $start -or ($null -eq $start.MrWiadomosc) -or ([long]$start.MrWiadomosc -le 0)) { return "" }
   return "Te +$(Liczba-Ludzka ([long]$start.MrWiadomosc)) to stała dopłata MegaRuchacza do każdej Twojej wiadomości - tyle samo, czy piszesz dwa słowa, czy długi tekst."
 }
 
@@ -203,6 +205,8 @@ function Zdanie-Wiadomosci($start) {
 # P59d ($inst = Stan-Instalacji): bez modulow, ktore dopisuja tekst do rozmow (Wiedza,
 # Lore, Kierownik), zero w rachunku nie jest "nie wiem", tylko odpowiedzia - zolte
 # "nie wiadomo" przy samej bazie byloby falszywym alarmem.
+# 06.10.2026: kazde uzywane narzedzie ma wlasny rachunek (Claude Code, Codex, OpenCode) -
+# glowne idzie w udzial.*, pozostale w narz.N.mr; werdykt mowi o kazdym (Inne-Narzedzia-Werdyktu).
 function Werdykt-Kosztu($start, $rachunek, $cykl, $zuzycie = $null, $inst = $null) {
   $w = [pscustomobject]@{ Stan = "licze"; Zdanie = ""; Wyjasnienie = ""; Nauka = ""; Prog = $null; Proc = "" }
   if ($null -eq $start) {
@@ -255,13 +259,21 @@ function Werdykt-Kosztu($start, $rachunek, $cykl, $zuzycie = $null, $inst = $nul
     $w.Zdanie = "Nie wiadomo, czy MegaRuchacz kosztuje dużo, czy mało."
     $w.Wyjasnienie = ("Rachunek nie zmierzył, ile MegaRuchacz dokłada przy otwarciu okna rozmowy - nie znalazł ani jego zasad, ani wiedzy wczytywanej na starcie " +
                       "(co dokładnie, pokazuje zakładka Szczegóły). Nie ma czego porównać z progiem.")
+    # pozostale uzywane narzedzia i tak maja swoje liczby - nie wolno ich przemilczec
+    $glN = Kto-Wczytuje $start $k
+    if ($glN -eq "Claude") { $glN = "Claude Code" }
+    foreach ($n in (Inne-Narzedzia-Werdyktu $k $glN)) { $w.Wyjasnienie += " " + (Zdanie-Narzedzia-Werdyktu $n.Nazwa $n.Mr $n.Otwarcie) }
     return $w
   }
   # Bez zmierzonej calosci procentu nie ma - werdykt zapada i tak (prog jest w tokenach),
   # a zdanie mowi, czemu procentu brak. Nigdy 0% i nigdy zgadniety procent.
-  # P71: liczby moga byc Codeksa (komputer z samym Codeksem) - zdanie nazywa narzedzie,
-  # ktorego otwarcie mierzono, a nie zawsze Claude'a.
+  # P71: liczby moga byc Codeksa albo OpenCode (komputer bez Claude Code) - zdanie nazywa
+  # narzedzie, ktorego otwarcie mierzono, a nie zawsze Claude'a.
   $kto = Kto-Wczytuje $start $k
+  # Gdzie liczono: bez procentu zdanie nie nazywaloby narzedzia wcale - "w OpenCode",
+  # "w Codeksie"; u Claude Code zdania zostaja jak dotad (pusty dopisek).
+  $gdzie = ""
+  if ($kto -ne "Claude") { $gdzie = " $(Miejsce-Narzedzia $kto)" }
   $bezProcentu = ""
   if (-not $w.Proc) { $bezProcentu = " Jaką to część wszystkiego, co $kto wczytuje przy otwarciu okna, nie wiem, bo $("$($o.Powod)".TrimEnd('.', ' '))." }
   $ile = "~$(Okolo $mr) tokenów"
@@ -269,22 +281,81 @@ function Werdykt-Kosztu($start, $rachunek, $cykl, $zuzycie = $null, $inst = $nul
     $w.Stan = "duzo"
     if ($w.Proc) {
       $w.Zdanie = "MegaRuchacz kosztuje dużo: dokłada $($w.Proc) do tego, co $kto wczytuje przy każdym otwarciu nowego okna rozmowy."
-      $w.Wyjasnienie = "To $ile przy każdym otwarciu okna, a drogo robi się już od ~$(Okolo $w.Prog) tokenów - warto odchudzić jego zasady albo wiedzę (co ile waży, pokazuje zakładka Szczegóły)."
+      $w.Wyjasnienie = "To $ile przy każdym otwarciu okna$gdzie, a drogo robi się już od ~$(Okolo $w.Prog) tokenów - warto odchudzić jego zasady albo wiedzę (co ile waży, pokazuje zakładka Szczegóły)."
     } else {
-      $w.Zdanie = "MegaRuchacz kosztuje dużo: dokłada $ile przy każdym otwarciu nowego okna rozmowy."
+      $w.Zdanie = "MegaRuchacz kosztuje dużo: dokłada $ile przy każdym otwarciu nowego okna rozmowy$gdzie."
       $w.Wyjasnienie = "Drogo robi się już od ~$(Okolo $w.Prog) tokenów - warto odchudzić jego zasady albo wiedzę (co ile waży, pokazuje zakładka Szczegóły).$bezProcentu"
     }
   } else {
     $w.Stan = "malo"
     if ($w.Proc) {
       $w.Zdanie = "MegaRuchacz kosztuje mało: dokłada $($w.Proc) do tego, co $kto wczytuje przy każdym otwarciu nowego okna rozmowy."
-      $w.Wyjasnienie = "Drogo byłoby, gdyby MegaRuchacz urósł o $(Wzrost-Do-Progu $mr $w.Prog) (dziś $ile przy otwarciu okna)."
+      $w.Wyjasnienie = "Drogo byłoby, gdyby MegaRuchacz urósł o $(Wzrost-Do-Progu $mr $w.Prog) (dziś $ile przy otwarciu okna$gdzie)."
     } else {
-      $w.Zdanie = "MegaRuchacz kosztuje mało: dokłada $ile przy każdym otwarciu nowego okna rozmowy."
+      $w.Zdanie = "MegaRuchacz kosztuje mało: dokłada $ile przy każdym otwarciu nowego okna rozmowy$gdzie."
       $w.Wyjasnienie = "Drogo byłoby, gdyby MegaRuchacz urósł o $(Wzrost-Do-Progu $mr $w.Prog).$bezProcentu"
     }
   }
+  # Kilka narzedzi naraz: werdykt mowi o kazdym, ktorego uzywasz - glowne wyzej, pozostale
+  # zdaniem na narzedzie. Drogie inne narzedzie przy tanim glownym zmienia werdykt na
+  # "dużo" i to ono staje w zdaniu (ten sam prog w tokenach, kazde liczone osobno).
+  $glowne = $kto
+  if ($glowne -eq "Claude") { $glowne = "Claude Code" }
+  $inne = Inne-Narzedzia-Werdyktu $k $glowne
+  if ($inne.Count -gt 0) {
+    $drogie = @($inne | Where-Object { $_.Mr -gt $w.Prog })
+    if (($drogie.Count -gt 0) -and ($w.Stan -ne "duzo")) {
+      $d0 = $drogie[0]
+      $w.Stan = "duzo"
+      $w.Zdanie = "MegaRuchacz kosztuje dużo $(Miejsce-Narzedzia $d0.Nazwa): dokłada ~$(Okolo $d0.Mr) tokenów przy każdym otwarciu nowego okna rozmowy."
+      $w.Wyjasnienie = ("Drogo robi się już od ~$(Okolo $w.Prog) tokenów - warto odchudzić jego zasady albo wiedzę (co ile waży, pokazuje zakładka Szczegóły). " +
+                        (Zdanie-Narzedzia-Werdyktu $glowne $mr $(if ($w.Proc) { $o.Razem } else { $null })))
+      $inne = @($inne | Where-Object { $_.Nazwa -ne $d0.Nazwa })
+    }
+    foreach ($n in $inne) { $w.Wyjasnienie = ("$($w.Wyjasnienie) " + (Zdanie-Narzedzia-Werdyktu $n.Nazwa $n.Mr $n.Otwarcie)).Trim() }
+  }
   return $w
+}
+
+# "w Claude Code", "w Codeksie", "w OpenCode" - gdzie MegaRuchacz doklada (werdykt).
+function Miejsce-Narzedzia([string]$nazwa) {
+  switch ($nazwa) {
+    "Claude"      { return "w Claude Code" }
+    "Claude Code" { return "w Claude Code" }
+    "Codex"       { return "w Codeksie" }
+  }
+  return "w $nazwa"
+}
+
+# Pozostale narzedzia do werdyktu (klucze narz.N.* z koszt-pamieci.ps1 -Dane): tylko te,
+# ktorych UZYWASZ (rozmowa w 14 dniach), inne niz glowne, z czescia MegaRuchacza z ich
+# rachunku (narz.N.mr). Stary rachunek bez tych kluczy = pusta lista, werdykt jak dotad.
+function Inne-Narzedzia-Werdyktu($k, [string]$glowne) {
+  $l = @()
+  $ile = Liczba-Z-Klucza $k "narzedzia"
+  if (-not $ile) { return ,$l }
+  for ($i = 1; $i -le $ile; $i++) {
+    $nazwa = Tekst-Z-Klucza $k "narz.$i.nazwa"
+    if ((-not $nazwa) -or ($nazwa -eq $glowne) -or ((Tekst-Z-Klucza $k "narz.$i.uzywane") -ne "1")) { continue }
+    $mr = Liczba-Z-Klucza $k "narz.$i.mr"
+    if ($null -eq $mr) { continue }
+    $l += [pscustomobject]@{ Nazwa = $nazwa; Mr = $mr; Otwarcie = (Liczba-Z-Klucza $k "narz.$i.otwarcie") }
+  }
+  return ,$l
+}
+
+# Jedno zdanie o jednym narzedziu, zawsze z jednostka: "W OpenCode MegaRuchacz dokłada
+# ~2 000 tokenów przy każdym otwarciu okna rozmowy (9% tego, co OpenCode wczytuje)."
+# Bez zmierzonego otwarcia - bez procentu; zero = rachunek nic nie znalazl, nie "za darmo".
+function Zdanie-Narzedzia-Werdyktu([string]$nazwa, $mr, $calosc) {
+  $miejsce = Miejsce-Narzedzia $nazwa
+  $miejsce = $miejsce.Substring(0, 1).ToUpper() + $miejsce.Substring(1)
+  if (($null -eq $mr) -or ($mr -le 0)) {
+    return "$miejsce rachunek nie znalazł niczego od MegaRuchacza w tym, co $nazwa wczytuje przy otwarciu okna rozmowy."
+  }
+  $z = "$miejsce MegaRuchacz dokłada ~$(Okolo $mr) tokenów przy każdym otwarciu okna rozmowy"
+  if (($null -ne $calosc) -and ($calosc -gt 0)) { $z += " ($(Procent-Ludzko ([double]$mr) ([double]$calosc)) tego, co $nazwa wczytuje)" }
+  return "$z."
 }
 
 # Kto wczytuje otwarcie okna rozmowy, o ktorym mowi werdykt (P71): glowne narzedzie tej

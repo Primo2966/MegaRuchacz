@@ -136,6 +136,7 @@ function Dodaj-Rozbicie($s, $rozbicie, $o = $null, [string]$nazwaStartu = "Claud
     if ($l -match '^\S') {
       $sekcjaNarz = ""
       if ($l -match '^Codex') { $sekcjaNarz = "Codex" } elseif ($l -match '^Claude Code') { $sekcjaNarz = "Claude Code" }
+      elseif ($l -match '^OpenCode') { $sekcjaNarz = "OpenCode" }
     }
     if ($l -match '^\S') {
       Dodaj-Podtytul $s (Z-Wielkiej (Po-Polsku $l.Trim()))
@@ -289,15 +290,22 @@ function Sekcje-Szczegolow($d, $wywrotkiNadzorcy, $rozbicie, $start, $koszt = $n
     Dodaj-Wiersz $s "Razem na otwarcie" "~$(Liczba-Ludzka $o.Razem) tokenów (mediana z $($o.Sesji) $(Odmiana $o.Sesji 'rozmowy' 'rozmów' 'rozmów'))"
     # Bez rozbicia na start + przypomnienie (P14): te dwie liczby stoja jako
     # naglowki w sekcji "Rachunek za pamiec" tuz nizej - drugi raz tu tylko mylil.
-    Dodaj-Wiersz $s "MegaRuchacz" "~$(Liczba-Ludzka $o.Mr) tokenów ($($o.MrProc)) - to, co dokłada przy otwarciu okna rozmowy, i przypomnienie doklejone do pierwszej wiadomości; każdą pozycję pokazuje sekcja niżej"
+    $mrCo = "to, co dokłada przy otwarciu okna rozmowy, i przypomnienie doklejone do pierwszej wiadomości"
+    if (($null -ne $start.MrWiadomosc) -and ([long]$start.MrWiadomosc -le 0)) { $mrCo = "to, co dokłada przy otwarciu okna rozmowy (do wiadomości nie dokleja nic)" }
+    Dodaj-Wiersz $s "MegaRuchacz" "~$(Liczba-Ludzka $o.Mr) tokenów ($($o.MrProc)) - $mrCo; każdą pozycję pokazuje sekcja niżej"
     Dodaj-Wiersz $s "$nazwaS sam" "~$(Liczba-Ludzka $o.Cc) tokenów ($($o.CcProc)) - jego instrukcje, opisy narzędzi (także z serwerów MCP), lista skilli"
     # "(22%)" to udzial w starcie WORKERA, nie w otwarciu sesji - dopisujemy to wprost (P15)
     if ($o.Worker) { Dodaj-Wiersz $s "Start workera" (($o.WorkerZdanie -replace '^Start jednego workera: ', '') -replace '\((\d+%)\)', '($1 startu workera)') }
+    elseif ($nazwaS -ne "Claude Code") { Dodaj-Wiersz $s "Start workera" "nie dotyczy - start workera mierzę tylko w Claude Code" "szary" }
     else { Dodaj-Wiersz $s "Start workera" ($o.WorkerZdanie -replace '^Start jednego workera: ', '') "uwaga" }
     if ($nazwaS -eq "Claude Code") {
       Dodaj-Wiersz $s "Jak to zmierzone" ("W każdym transkrypcie Claude Code pierwsza odpowiedź modelu ma pole usage: suma input_tokens, " +
         "cache_creation_input_tokens i cache_read_input_tokens to cały kontekst w tej chwili. Od tego odejmuję Twoją pierwszą wiadomość " +
         "(jej znaki / 3) i biorę medianę z ostatnich rozmów.") "szary"
+    } elseif ($nazwaS -eq "OpenCode") {
+      Dodaj-Wiersz $s "Jak to zmierzone" ("W bazie OpenCode (opencode.db, tylko odczyt) pierwsza odpowiedź modelu w każdej rozmowie ma pole tokens: " +
+        "wejście + pamięć podręczna (odczyt i zapis) to cały kontekst w tej chwili. Od tego odejmuję Twoją pierwszą wiadomość " +
+        "(jej znaki / 3) i biorę medianę z ostatnich rozmów - bez podagentów, rozmów rozwidlonych i nauki MegaRuchacza.") "szary"
     } else {
       Dodaj-Wiersz $s "Jak to zmierzone" ("W każdej rozmowie $nazwaS pierwsze zdarzenie token_count ma input_tokens - cały kontekst pierwszego wywołania " +
         "modelu (razem z pamięcią podręczną). Od tego odejmuję Twoją pierwszą wiadomość (jej znaki / 3) i biorę medianę z ostatnich rozmów.") "szary"

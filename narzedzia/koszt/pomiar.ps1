@@ -1,7 +1,7 @@
 # narzedzia\koszt\pomiar.ps1 - czesc narzedzia\koszt-pamieci.ps1 (patrz BUDOWA
 # w jego naglowku). Pierwszy etap rachunku (Etap-Pomiar): co NAPRAWDE leci do modelu
 # na tej maszynie - warstwy CLAUDE.md ($w), ktore narzedzie tu jest ($jestClaude,
-# $jestCodex), co czytaja hooki Claude Code, ladunki hookow obu narzedzi i lista
+# $jestCodex, $jestOpenCode i plik, ktory czyta OpenCode: $wOc, $plikOc), co czytaja hooki Claude Code, ladunki hookow obu narzedzi i lista
 # sufitow ($sufity); od P71 takze lista narzedzi AI ($NARZEDZIA_AI -> $narzedzia: ktore
 # uzywane, sekcja "## Co wiem" w pliku instrukcji kazdego). Skad wolane: koszt-pamieci.ps1 kropka (". Etap-Pomiar") zaraz
 # po sciezkach; zmienne stad czyta caly dalszy przebieg. Funkcje nad etapem uzywa
@@ -220,6 +220,41 @@ function Etap-Pomiar {
   foreach ($n in $narzedzia) {
     if ((Klucz-Sciezki $n.Instrukcje) -eq (Klucz-Sciezki $plikClaude)) { $n.Warstwy = $w }
     else { $n.Warstwy = Zmierz-Warstwy $n.Instrukcje }
+  }
+
+  # OpenCode (rachunek od 06.10.2026). Jest na maszynie, gdy lezy jego plik instrukcji
+  # albo baza rozmow, albo gdy go uzywasz. Czyta ~\.config\opencode\AGENTS.md, a gdy tego
+  # pliku nie ma - ~\.claude\CLAUDE.md (zgodnosc z Claude Code; to samo zaklada wtyczka
+  # szablony-opencode\plugins\mr-log.js). $wOc to warstwy pliku, ktory NAPRAWDE czyta,
+  # $plikOc - jego sciezka, $ocZastepczy - czy to CLAUDE.md zamiast wlasnego AGENTS.md.
+  $nOc = Narzedzie-Po-Kluczu "opencode"
+  $jestOpenCode = [bool]($nOc -and ($nOc.InstrukcjeJest -or $nOc.Uzywane -or
+                  ($nOc.Baza -and (Test-Path -LiteralPath $nOc.Baza -PathType Leaf))))
+  $wOc = $null; $plikOc = $null; $ocZastepczy = $false
+  if ($jestOpenCode) {
+    if ($nOc.InstrukcjeJest) { $wOc = $nOc.Warstwy; $plikOc = $nOc.Instrukcje }
+    elseif ($w.Jest -or $w.Blad) { $wOc = $w; $plikOc = $plikClaude; $ocZastepczy = $true }
+  }
+  # Wtyczka MegaRuchacza w projekcie (<projekt>\.opencode\plugins\mr-log.js) dokleja
+  # <projekt>\.megaruchacz\zasady-kierownika.md jako plik instrukcji - ale tylko wtedy,
+  # gdy zasad kierownika nie ma ani w AGENTS.md projektu, ani w globalnym pliku, ktory
+  # OpenCode czyta (te same znaczniki, co w jej funkcji maZasady). Bez -Projekt nie wiemy,
+  # w ktorym projekcie otworzy sie rozmowa, wiec tej pozycji wtedy nie ma. Do wiadomosci
+  # wtyczka nie dokleja niczego - OpenCode nie ma odpowiednika hooka UserPromptSubmit.
+  $zasadyOcTresc = $null; $zasadyOcSkad = $null
+  if ($Projekt -and $jestOpenCode -and
+      (Test-Path -LiteralPath (Join-Path $Projekt ".opencode\plugins\mr-log.js") -PathType Leaf)) {
+    $maZasadyOc = {
+      param($t)
+      return ("$t".Contains("<!-- MegaRuchacz:start -->") -or "$t".Contains("<!-- MegaRuchacz:kierownik:start -->"))
+    }
+    $globalnyOc = $plikClaude
+    if ($nOc.InstrukcjeJest) { $globalnyOc = $nOc.Instrukcje }
+    if (-not ((& $maZasadyOc (Czytaj-Cicho (Join-Path $Projekt "AGENTS.md"))) -or (& $maZasadyOc (Czytaj-Cicho $globalnyOc)))) {
+      $p = Join-Path $Projekt ".megaruchacz\zasady-kierownika.md"
+      $t = Czytaj-Cicho $p
+      if ($t) { $zasadyOcTresc = $t; $zasadyOcSkad = $p }
+    }
   }
 
   # --- co naprawde czytaja hooki Claude Code -----------------------------------

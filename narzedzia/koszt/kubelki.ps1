@@ -1,7 +1,8 @@
 # narzedzia\koszt\kubelki.ps1 - czesc narzedzia\koszt-pamieci.ps1 (patrz BUDOWA
 # w jego naglowku). Drugi etap (Etap-Kubelki): rachunki narzedzi - kazde ma wlasne
 # dwa kubelki, przy kazdej wiadomosci i raz przy starcie sesji: Claude Code
-# ($kubWiadomosc, $kubSesja) i Codex ($kubWiadomoscCx, $kubSesjaCx) - oraz ktore
+# ($kubWiadomosc, $kubSesja), Codex ($kubWiadomoscCx, $kubSesjaCx) i OpenCode
+# ($kubWiadomoscOc - zawsze pusty, $kubSesjaOc) - oraz ktore
 # narzedzie jest domyslne ($narzDomyslne). Skad wolane: koszt-pamieci.ps1 kropka
 # (". Etap-Kubelki") po Etap-Pomiar; kubelki czytaja tryby -Start, -Warstwy
 # i -Rozbicie, etap Etap-Ocena (alarmy.ps1) i pelny raport.
@@ -159,6 +160,85 @@ function Etap-Kubelki {
   $tokSesja   = Policz-Udzialy $kubSesja
   $tokSesjaCx = Policz-Udzialy $kubSesjaCx
 
+  # RACHUNEK OPENCODE (od 06.10.2026). OpenCode czyta sam na starcie kazdej rozmowy swoj
+  # plik instrukcji ($plikOc: ~\.config\opencode\AGENTS.md, a bez niego ~\.claude\CLAUDE.md -
+  # Etap-Pomiar). Liczymy w nim TO SAMO, co u Claude Code w CLAUDE.md: bloki MegaRuchacza
+  # i sekcje "Co wiem" (stala i biezaca) - reszta pliku to Twoje wlasne instrukcje. Do
+  # 06.10.2026 rachunku OpenCode nie bylo wcale i okno na komputerze z samym OpenCode
+  # mowilo o Claude Code. Przy kazdej wiadomosci: nic - OpenCode nie ma hooka wiadomosci,
+  # a wtyczka mr-log.js do wiadomosci niczego nie dokleja (pusty kubelek to tu prawda,
+  # nie brak pomiaru - Rachunek-Narzedzia mowi to wprost).
+  $kubWiadomoscOc = @()
+  $kubSesjaOc = @()
+  $wpisyStareOc = @()
+  if ($jestOpenCode -and $wOc -and $wOc.Jest) {
+    $gdzieOc = "AGENTS.md OpenCode"
+    if ($ocZastepczy) { $gdzieOc = "CLAUDE.md, ktory czyta OpenCode" }
+    $wpisyOc = @($wOc.Wpisy)
+    $wpisyStareOc = @($wpisyOc | Where-Object { $_.Stary })
+    $uwagaBiezacaOc = "  tymczasowa, $($wpisyOc.Count) wpisow"
+    if ($wpisyStareOc.Count -gt 0) { $uwagaBiezacaOc += ", $($wpisyStareOc.Count) po terminie" }
+    if ($wOc.Blok.Znaki -gt 0) {
+      $kubSesjaOc += Pozycja "blok zasad MegaRuchacza w $gdzieOc (stary, wspolny)" $wOc.Blok.Znaki $plikOc `
+        "ten blok nalezy do narzedzia - straznik zamieni go na bloki lore i wiedza przy najblizszym przebiegu" `
+        "zasady globalne"
+    }
+    if ($wOc.Stala.Znaki -gt 0) {
+      $kubSesjaOc += Pozycja "warstwa STALA (Co wiem) w $gdzieOc" $wOc.Stala.Znaki $plikOc `
+        "przenies najdluzsze zestawienie do pliku w $katWiedzy i zostaw tu jedna linie odsylacza - warstwa referencyjna nie kosztuje nic" `
+        "warstwa stala" "  nie wygasa"
+    }
+    if ($wOc.Biezaca.Znaki -gt 0) {
+      $kubSesjaOc += Pozycja "warstwa BIEZACA w $gdzieOc" $wOc.Biezaca.Znaki $plikOc `
+        "skasuj wpisy starsze niz $DniWaznosci dni albo przenies te trwale do warstwy stalej" `
+        "warstwa biezaca" $uwagaBiezacaOc
+    }
+    foreach ($b in @($wOc.Bloki)) {
+      if ($b.Znaki -le 0) { continue }
+      if ($b.Nazwa -eq "kierownik") {
+        $kubSesjaOc += Pozycja "zasady kierownika w $gdzieOc (blok kierownik)" $b.Znaki $plikOc `
+          "ten blok wgrywa narzedzia\instaluj-globalnie.ps1 - skracaj go w $(Szablon-Kierownika $b.Tekst) i wgraj ponownie, nie recznie" `
+          "zasady kierownika"
+      } elseif ($b.Nazwa -eq "lore") {
+        $kubSesjaOc += Pozycja "zasady Lore w $gdzieOc (blok lore)" $b.Znaki $plikOc `
+          "ten blok wpisuje straznik (narzedzia\wpisz-zasady.ps1) z zasady-lore.md - skracaj go w zrodle, nie recznie" `
+          "zasady Lore"
+      } elseif ($b.Nazwa -eq "wiedza") {
+        $kubSesjaOc += Pozycja "zasady wiedzy w $gdzieOc (blok wiedza)" $b.Znaki $plikOc `
+          "ten blok wpisuje straznik (narzedzia\wpisz-zasady.ps1) z zasady-wiedza.md - skracaj go w zrodle, nie recznie" `
+          "zasady wiedzy"
+      } else {
+        $kubSesjaOc += Pozycja "blok '$($b.Nazwa)' w $gdzieOc" $b.Znaki $plikOc `
+          "ten blok nalezy do narzedzia - skracaj go w zrodle i wgraj ponownie, nie recznie" `
+          (Skroc "blok $($b.Nazwa)" 20)
+      }
+    }
+  }
+  # AGENTS.md projektu - OpenCode czyta go sam, tak jak Codex (a bez niego CLAUDE.md
+  # projektu). Liczymy caly plik, tak samo jak w rachunku Codeksa - tylko przy -Projekt.
+  if ($jestOpenCode -and $Projekt) {
+    $plikOcProjektu = Join-Path $Projekt "AGENTS.md"
+    $ocProjektu = Czytaj-Cicho $plikOcProjektu
+    $nazwaOcProjektu = "AGENTS.md projektu (OpenCode czyta go sam)"
+    if (-not $ocProjektu) {
+      $plikOcProjektu = Join-Path $Projekt "CLAUDE.md"
+      $ocProjektu = Czytaj-Cicho $plikOcProjektu
+      $nazwaOcProjektu = "CLAUDE.md projektu (OpenCode czyta go, bo nie ma AGENTS.md)"
+    }
+    if ($ocProjektu) {
+      $kubSesjaOc += Pozycja $nazwaOcProjektu $ocProjektu.Length $plikOcProjektu `
+        "to plik projektu - trzymaj w nim tylko reguly tego repo; zasady kierownika skracaj w szablony-opencode\zasady-kierownika.md" `
+        "plik projektu (OC)"
+    }
+  }
+  if ($zasadyOcTresc) {
+    $kubSesjaOc += Pozycja "zasady kierownika z wtyczki (OpenCode, mr-log.js)" $zasadyOcTresc.Length $zasadyOcSkad `
+      "wtyczka dokleja ten plik, bo zasad nie ma ani w AGENTS.md projektu, ani w globalnym - skracaj je w szablony-opencode\zasady-kierownika.md" `
+      "zasady z wtyczki (OC)"
+  }
+  $tokWiadomoscOc = Policz-Udzialy $kubWiadomoscOc
+  $tokSesjaOc     = Policz-Udzialy $kubSesjaOc
+
   # Czyj rachunek jest domyslny: jawne -Narzedzie, a bez niego Claude Code, gdy
   # jest na maszynie (jego linie pokazuje hook Claude Code i nadzorca). Maszyna
   # z samym Codeksem dostaje domyslnie rachunek Codeksa - inaczej jego ladunek
@@ -166,13 +246,18 @@ function Etap-Kubelki {
   # Przed tym - narzedzie, ktorego naprawde UZYWASZ (rozmowa w ostatnich $DniUzywania
   # dniach, pomiar.ps1): na komputerze z samym Codeksem ~\.claude.json potrafi lezec
   # po jednym uruchomieniu Claude Code i rachunek mowil wtedy o narzedziu, ktorego nikt
-  # tu nie uzywa.
+  # tu nie uzywa. OpenCode (od 06.10.2026) - po Codeksie: na komputerze z samym OpenCode
+  # rachunek, linia i werdykt okna mowia o OpenCode, a nie o Claude Code.
   $narzDomyslne = $Narzedzie
   if (-not $narzDomyslne) {
     $uzCc = Narzedzie-Po-Kluczu "claude"; $uzCx = Narzedzie-Po-Kluczu "codex"
     if ($uzCc -and $uzCc.Uzywane) { $narzDomyslne = "Claude" }
     elseif ($uzCx -and $uzCx.Uzywane -and $jestCodex) { $narzDomyslne = "Codex" }
-    elseif ($jestClaude -or (-not $jestCodex)) { $narzDomyslne = "Claude" } else { $narzDomyslne = "Codex" }
+    elseif ($nOc -and $nOc.Uzywane -and $jestOpenCode) { $narzDomyslne = "OpenCode" }
+    elseif ($jestClaude) { $narzDomyslne = "Claude" }
+    elseif ($jestCodex) { $narzDomyslne = "Codex" }
+    elseif ($jestOpenCode) { $narzDomyslne = "OpenCode" }
+    else { $narzDomyslne = "Claude" }
   }
 }
 
