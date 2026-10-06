@@ -1155,7 +1155,7 @@ function Nanies-Poprawki-Opencode($zrodlo, $projekt, $stempel) {
 # Sufit ladunku trzeba sprawdzac przy KAZDYM przebiegu, nie tylko po podbiciu
 # wersji. Sprawdzone 2026-09-17: gdy wersja wdrozenia rowna sie zrodlowej,
 # Pilnuj-Wersji przerywa petle i Nanies-Poprawki wcale nie leci - a sufit da sie
-# zlamac bez zadnej aktualizacji, choćby recznym obnizeniem limitu w hooks.json.
+# zlamac bez zadnej aktualizacji, chocby recznym obnizeniem limitu w hooks.json.
 function Pilnuj-Sufitu-Zawsze {
   if (-not $Projekt) { return }
   $celMega  = Join-Path $Projekt '.megaruchacz'
@@ -2383,9 +2383,8 @@ function Pilnuj-Zasad {
 #   - zapis - jedna linia (co skad dokad); nic do zrobienia - cisza;
 #   - odmowa ponad limit narzedzia - UWAGA przy kazdym przebiegu, na poczatku (to narzedzie nie ma
 #     najnowszej wiedzy, dopoki czlowiek nie skroci pliku);
-#   - sprzeczne zmiany tej samej linii - RAZ na stan plikow; bez widowni (-Tlo) odlozone do najblizszego
-#     przebiegu, ktory ma komu mowic. Konflikt to sprawa dla czlowieka, nie nieudana naprawa - nie
-#     liczy sie do kodu -Dopasuj;
+#   - rozne wersje tej samej linii - rozstrzygniete bez czlowieka (nowszy plik wygrywa, decyzja
+#     uzytkownika 06.10): slad tylko w dzienniku (Notuj) i w stanie synchronizacji, bez meldunku;
 #   - wywrotka - glosno i do kodu -Dopasuj (pliki zostaja, jakie byly).
 function Zglos-Synchronizacje-Co-Wiem {
   $s = $null
@@ -2398,12 +2397,7 @@ function Zglos-Synchronizacje-Co-Wiem {
   foreach ($o in $s.Odmowy) { Mow "MegaRuchacz: UWAGA - $o"; $script:Niepowodzenia++ }
   if ($s.Opis) { Mow "MegaRuchacz: $($s.Opis)." }
   foreach ($u in $s.Uwagi) { Notuj "Co wiem: $u" }
-  if ($s.Konflikt) {
-    if ($s.KonfliktNowy) {
-      Mow "MegaRuchacz: UWAGA - $($s.Konflikt)"
-      if ($Tlo) { Odloz-Wiadomosc "MegaRuchacz: UWAGA - $($s.Konflikt)" }
-    } else { Notuj "Co wiem: sprzeczne zmiany bez zmian od ostatniego meldunku - nie powtarzam" }
-  }
+  foreach ($x in @($s.Nadpisane)) { Notuj "Co wiem: nowszy plik wygral - $x" }
 }
 
 # ------------------------------------------------ 1b. blok zasad kierownika

@@ -8,10 +8,11 @@
 # Ta sama wiedza w kazdym CLI: pusta "Co wiem" (zakladana i zastana) zasiana trescia najbogatszej
 # sekcji, niepusta nietknieta przez zasiew; synchronizacja (Synchronizuj-Co-Wiem): zmiana w jednym
 # pliku idzie do pozostalych (w obie strony), dopisy w kilku plikach polaczone na swoich miejscach,
-# ta sama linia zmieniona inaczej - jeden meldunek (nie przy kazdym przebiegu), rozstrzygniecie
-# poprawka albo -WzorCoWiem, pierwsza synchronizacja bez stanu - same dopisy; Pliki-Pamieci
+# ta sama linia zmieniona inaczej - wygrywa nowszy plik bez zadnego meldunku (slad w stanie i .bak),
+# skasowanie w nowszym pliku znika wszedzie, -WzorCoWiem jako narzedzie reczne, pierwsza
+# synchronizacja bez stanu - same dopisy; Pliki-Pamieci
 # (zapis-trwaly.ps1) z listy narzedzi - takze czwartego.
-# Proby negatywne: plik, ktory przekroczylby limit Codeksa (32 KiB) - odmowa zapisu z ostrzezeniem
+# Proby negatywne: starszy plik nie wygrywa z nowszym (ani poprawka, ani skasowaniem); plik, ktory przekroczylby limit Codeksa (32 KiB) - odmowa zapisu z ostrzezeniem
 # w PIERWSZEJ linii, plik co do bajtu, bez kopii (a ten sam plik ponizej limitu - zapisany); zasiew
 # "Co wiem" ponad limit - odmowa w PIERWSZEJ linii, sekcja pusta, reszta pliku zapisana (a mniejszy
 # zasiew - przechodzi); synchronizacja ponad limit Codeksa - odmowa w PIERWSZEJ linii przy kazdym
@@ -79,6 +80,8 @@ function Czytaj([string]$p) { if (-not (Test-Path -LiteralPath $p)) { return $nu
 function Zapisz([string]$p, [string]$t) { New-Item -ItemType Directory -Force -Path (Split-Path -Parent $p) | Out-Null; [System.IO.File]::WriteAllText($p, $t, $Utf8) }
 function Skrot([string]$p) { if (-not (Test-Path -LiteralPath $p)) { return "brak" }; return (Get-FileHash -LiteralPath $p -Algorithm SHA256).Hash }
 function Ile([string]$t, [string]$co) { if ($null -eq $t) { return 0 }; return ([regex]::Matches($t, [regex]::Escape($co))).Count }
+# Czas zapisu pliku cofniety o $minut minut - ktory plik jest "nowszy" przy synchronizacji "Co wiem".
+function Wiek([string]$p, [int]$minut) { [System.IO.File]::SetLastWriteTimeUtc($p, [DateTime]::UtcNow.AddMinutes(-$minut)) }
 function Ile-Bak([string]$dom) { return @(Get-ChildItem -LiteralPath $dom -Recurse -File -Force -Filter "*.bak-*").Count }
 function Pierwsza([string]$t) { return (($t -split "`r?`n") | Where-Object { $_.Trim() } | Select-Object -First 1) }
 # Sekcja "Co wiem" jako niepuste linie (porownanie tresci) i plik z wycietym cialem sekcji (reszta pliku
@@ -314,39 +317,67 @@ try {
   $iF = $cm.IndexOf("### O firmie"); $iB = $cm.IndexOf($BIEZACE); $iD = $cm.IndexOf("### Dane referencyjne")
   Sprawdz "dopisy: kazdy w swojej podsekcji (A w O firmie, B i C w Biezace, B przed C)" (($cm.IndexOf($fCm) -gt $iF) -and ($cm.IndexOf($fCm) -lt $iB) -and ($cm.IndexOf($fCx) -gt $iB) -and ($cm.IndexOf($fOc) -gt $cm.IndexOf($fCx)) -and ($cm.IndexOf($fOc) -lt $iD)) $cm
 
-  # ------------------------------------------------------------ synchronizacja: ta sama linia zmieniona inaczej
-  # Konflikt: nic nie zapisane, meldunek z konkretami (pliki, obie wersje, jak rozstrzygnac) - RAZ, nie przy
-  # kazdym przebiegu; wpisz-zasady (przebieg reczny) mowi zawsze; zmiana stanu plikow - meldunek znowu raz.
+  # ------------------------------------------------------------ synchronizacja: ta sama linia zmieniona inaczej - NOWSZY WYGRYWA
+  # Decyzja uzytkownika 06.10: w pelni automatycznie, bez meldunku o konflikcie. Nowszy = plik z pozniejszym
+  # czasem zapisu (czasy ustawiamy recznie). Dopis z trzeciego pliku wchodzi obok; wersja przegrana zostaje
+  # w kopii .bak i w stanie (nadpisane); drugi przebieg nic nie zmienia.
   $linia = "- Marka testowa, zapachy z numerami."
-  Zapisz $pCm ((Czytaj $pCm).Replace($linia, "- Marka testowa AROMA, zapachy z numerami."))
-  Zapisz $pCx ((Czytaj $pCx).Replace($linia, "- Marka testowa NATURO, zapachy z numerami."))
-  $odc = Odcisk $dom; $bak = Ile-Bak $dom
-  $d = Dopasuj $dom
-  Sprawdz "konflikt: straznik kod 0, meldunek z plikami, obiema wersjami i rozstrzygnieciem" (($d.Kod -eq 0) -and ($d.Tekst -match "UWAGA - sekcja 'Co wiem' - sprzeczne zmiany") -and ($d.Tekst -match "~/\.claude/CLAUDE\.md -> '- Marka testowa AROMA") -and ($d.Tekst -match "~/\.codex/AGENTS\.md -> '- Marka testowa NATURO") -and ($d.Tekst -match "linia '- Marka testowa, zapachy") -and ($d.Tekst -match "-WzorCoWiem")) $d.Tekst
-  Sprawdz "konflikt: nic nie zapisane (pliki co do bajtu, bez kopii)" (((Odcisk $dom) -eq $odc) -and ((Ile-Bak $dom) -eq $bak))
-  $d2 = Dopasuj $dom
-  Sprawdz "konflikt: drugi przebieg straznika milczy (meldunek raz)" (($d2.Kod -eq 0) -and ($d2.Tekst -notmatch "sprzeczne") -and ((Odcisk $dom) -eq $odc)) $d2.Tekst
-  $w = Wpisz $dom
-  Sprawdz "konflikt: wpisz-zasady (przebieg reczny) mowi zawsze - UWAGA, kod 0, nic nie zapisane" (($w.Kod -eq 0) -and ($w.Tekst -match "UWAGA\s+sekcja 'Co wiem' - sprzeczne") -and ((Odcisk $dom) -eq $odc)) $w.Tekst
-  $d3 = Dopasuj $dom
-  Sprawdz "konflikt: po wpisz-zasady straznik dalej milczy" ($d3.Tekst -notmatch "sprzeczne") $d3.Tekst
-  $fOc2 = "- [2026-10-06] Dopis w OpenCode w trakcie konfliktu."
-  Zapisz $pOc ((Czytaj $pOc).Replace($fOc, "$fOc`r`n$fOc2"))
-  $d4 = Dopasuj $dom; $d5 = Dopasuj $dom
-  Sprawdz "konflikt: pliki sie zmienily - meldunek znowu, ale tylko raz" (($d4.Tekst -match "sprzeczne") -and ($d5.Tekst -notmatch "sprzeczne")) ($d4.Tekst + " | " + $d5.Tekst)
-  # rozstrzygniecie: czlowiek poprawia linie w Codeksie tak jak w CLAUDE.md - reszta wyrownuje sie sama
-  Zapisz $pCx ((Czytaj $pCx).Replace("NATURO", "AROMA"))
+  $pStan = Join-Path $dom ".claude\mr\co-wiem-sync.json"
+  $fOc2 = "- [2026-10-06] Dopis w OpenCode obok roznych wersji."
+  Zapisz $pCm ((Czytaj $pCm).Replace($linia, "- Marka testowa AROMA, zapachy z numerami.")); Wiek $pCm 10
+  Zapisz $pCx ((Czytaj $pCx).Replace($linia, "- Marka testowa NATURO, zapachy z numerami.")); Wiek $pCx 2
+  Zapisz $pOc ((Czytaj $pOc).Replace($fOc, "$fOc`r`n$fOc2")); Wiek $pOc 5
+  $bak = Ile-Bak $dom
   $d = Dopasuj $dom
   $cm = Czytaj $pCm; $cx = Czytaj $pCx; $oc = Czytaj $pOc
-  Sprawdz "konflikt rozstrzygniety: zsynchronizowane, AROMA wszedzie, dopis z OpenCode wszedzie" (($d.Kod -eq 0) -and ($d.Tekst -match "zsynchronizowana") -and ((Linie-Sekcji $cx) -ceq (Linie-Sekcji $cm)) -and ((Linie-Sekcji $oc) -ceq (Linie-Sekcji $cm)) -and $oc.Contains("testowa AROMA") -and -not $cm.Contains("NATURO") -and $cm.Contains($fOc2)) ($d.Tekst + " | " + $cm)
-  # rozstrzygniecie wzorem: znow sprzeczne, wpisz-zasady -WzorCoWiem codex - sekcja Codeksa wszedzie
-  Zapisz $pCx ((Czytaj $pCx).Replace("testowa AROMA", "testowa NATURO"))
-  Zapisz $pCm ((Czytaj $pCm).Replace("testowa AROMA", "testowa ZAPACH"))
+  Sprawdz "nowszy wygrywa: straznik kod 0, zsynchronizowana, ZADNEGO meldunku o konflikcie" (($d.Kod -eq 0) -and ($d.Tekst -match "zsynchronizowana") -and ($d.Tekst -notmatch "UWAGA|sprzeczn|konflikt|WzorCoWiem|nadpisan|wygral")) $d.Tekst
+  Sprawdz "nowszy wygrywa: wersja z nowszego Codeksa (NATURO) we wszystkich trzech, starszej (AROMA) nigdzie" (((Linie-Sekcji $cx) -ceq (Linie-Sekcji $cm)) -and ((Linie-Sekcji $oc) -ceq (Linie-Sekcji $cm)) -and $cm.Contains("testowa NATURO") -and $oc.Contains("testowa NATURO") -and -not ($cm + $cx + $oc).Contains("AROMA")) $cm
+  Sprawdz "nowszy wygrywa: dopis z OpenCode wszedzie, dokladnie raz" (((Ile $cm $fOc2) -eq 1) -and ((Ile $cx $fOc2) -eq 1)) $cm
+  $bakCm = @(Get-ChildItem -LiteralPath (Split-Path -Parent $pCm) -Filter "CLAUDE.md.bak-*" | Sort-Object Name | Select-Object -Last 1)
+  Sprawdz "nowszy wygrywa: przegrana wersja (AROMA) w kopii .bak CLAUDE.md przed zapisem" (((Ile-Bak $dom) -gt $bak) -and ($bakCm.Count -eq 1) -and (Czytaj $bakCm[0].FullName).Contains("testowa AROMA")) "$(Ile-Bak $dom) kopii"
+  $st = Czytaj $pStan
+  Sprawdz "nowszy wygrywa: slad w stanie (nadpisane: kto wygral, co nadpisano)" ($st -match '"nadpisane"' -and $st.Contains("wygral nowszy ~/.codex/AGENTS.md") -and $st.Contains("testowa NATURO") -and $st.Contains("testowa AROMA")) $st
+  $odc = Odcisk $dom; $bak = Ile-Bak $dom
+  $d2 = Dopasuj $dom
+  Sprawdz "nowszy wygrywa: drugi przebieg nic nie zmienia i o 'Co wiem' milczy" (($d2.Kod -eq 0) -and ((Odcisk $dom) -eq $odc) -and ((Ile-Bak $dom) -eq $bak) -and ($d2.Tekst -notmatch "Co wiem|zsynchronizowana")) $d2.Tekst
+  # proba negatywna: STARSZY nie wygrywa - teraz starszy jest Codex, a nowszy CLAUDE.md (pierwszy na liscie
+  # i ostatni zapisany przez test jest Codex - wygrac ma i tak czas pliku, nie kolejnosc); przebieg reczny
+  # (wpisz-zasady) mowi o tym zwyklym INFO, nie UWAGA
+  Zapisz $pCm ((Czytaj $pCm).Replace("testowa NATURO", "testowa ZAPACH")); Wiek $pCm 1
+  Zapisz $pCx ((Czytaj $pCx).Replace("testowa NATURO", "testowa ROSE")); Wiek $pCx 10
+  $w = Wpisz $dom
+  $cm = Czytaj $pCm; $cx = Czytaj $pCx; $oc = Czytaj $pOc
+  Sprawdz "starszy nie wygrywa: ZAPACH (nowszy CLAUDE.md) wszedzie, ROSE (starszy Codex) nigdzie" (($w.Kod -eq 0) -and $cx.Contains("testowa ZAPACH") -and $oc.Contains("testowa ZAPACH") -and -not ($cm + $cx + $oc).Contains("ROSE") -and ((Linie-Sekcji $cx) -ceq (Linie-Sekcji $cm))) ($w.Tekst + " | " + $cx)
+  Sprawdz "starszy nie wygrywa: wpisz-zasady - INFO o nowszym pliku, bez UWAGA o 'Co wiem'" (($w.Tekst -match "INFO\s+Co wiem - nowszy plik wygral: .*ZAPACH.*ROSE") -and ($w.Tekst -notmatch "UWAGA\s+(Co wiem|sekcja 'Co wiem')")) $w.Tekst
+
+  # ------------------------------------------------------------ synchronizacja: skasowanie w nowszym pliku
+  # Wpis skasowany w nowszym pliku znika ze wszystkich - takze gdy starszy go w tym czasie poprawil; wpis
+  # skasowany w jednym pliku, a nietkniety w innych - tez znika.
+  Zapisz $pOc ((Czytaj $pOc).Replace("- Dopis w CLAUDE.md.`r`n", "")); Wiek $pOc 1
+  Zapisz $pCm ((Czytaj $pCm).Replace("- Dopis w CLAUDE.md.", "- Dopis w CLAUDE.md, poprawiony w starszym.")); Wiek $pCm 10
+  Zapisz $pCx ((Czytaj $pCx).Replace("$fCx`r`n", "")); Wiek $pCx 5
+  $d = Dopasuj $dom
+  $cm = Czytaj $pCm; $cx = Czytaj $pCx; $oc = Czytaj $pOc
+  Sprawdz "skasowanie: straznik kod 0, bez meldunku o konflikcie" (($d.Kod -eq 0) -and ($d.Tekst -notmatch "UWAGA|sprzeczn|konflikt")) $d.Tekst
+  Sprawdz "skasowanie w nowszym (OpenCode) wygrywa z poprawka w starszym (CLAUDE.md) - linii nie ma nigdzie" ((-not ($cm + $cx + $oc).Contains("- Dopis w CLAUDE.md")) -and ((Linie-Sekcji $cx) -ceq (Linie-Sekcji $cm)) -and ((Linie-Sekcji $oc) -ceq (Linie-Sekcji $cm))) $cm
+  Sprawdz "skasowanie w jednym pliku (Codex) znika z pozostalych" (-not ($cm + $oc).Contains($fCx)) $cm
+  # proba negatywna: skasowanie w STARSZYM nie wygrywa z poprawka w nowszym
+  Zapisz $pCm ((Czytaj $pCm).Replace("$fCm`r`n", "")); Wiek $pCm 10
+  $fCmPopr = "- Dopis A w CLAUDE.md do firmy, poprawiony w Codeksie."
+  Zapisz $pCx ((Czytaj $pCx).Replace($fCm, $fCmPopr)); Wiek $pCx 1
+  $d = Dopasuj $dom
+  $cm = Czytaj $pCm; $cx = Czytaj $pCx; $oc = Czytaj $pOc
+  Sprawdz "skasowanie w starszym (CLAUDE.md) nie wygrywa z poprawka w nowszym (Codex) - poprawka wszedzie" (($d.Kod -eq 0) -and ((Ile $cm $fCmPopr) -eq 1) -and ((Ile $oc $fCmPopr) -eq 1) -and (-not ($cm + $oc).Contains("$fCm`r`n")) -and ((Linie-Sekcji $oc) -ceq (Linie-Sekcji $cx))) ($d.Tekst + " | " + $cm)
+
+  # ------------------------------------------------------------ -WzorCoWiem: narzedzie reczne
+  # Sekcja wskazanego pliku idzie do wszystkich - nawet gdy inny plik jest nowszy.
+  Zapisz $pCx ((Czytaj $pCx).Replace("testowa ZAPACH", "testowa NATURO")); Wiek $pCx 10
+  Zapisz $pCm ((Czytaj $pCm).Replace("testowa ZAPACH", "testowa LAWENDA")); Wiek $pCm 1
   $w = Wpisz $dom @("-WzorCoWiem", "codex")
   $cm = Czytaj $pCm; $cx = Czytaj $pCx; $oc = Czytaj $pOc
-  Sprawdz "wzor: wpisz-zasady -WzorCoWiem codex - kod 0, sekcja Codeksa w CLAUDE.md i OpenCode" (($w.Kod -eq 0) -and ($w.Tekst -match "wedlug wzoru") -and ((Linie-Sekcji $cm) -ceq (Linie-Sekcji $cx)) -and ((Linie-Sekcji $oc) -ceq (Linie-Sekcji $cx)) -and $cm.Contains("testowa NATURO") -and -not $cm.Contains("ZAPACH")) $w.Tekst
+  Sprawdz "wzor: wpisz-zasady -WzorCoWiem codex - kod 0, sekcja Codeksa w CLAUDE.md i OpenCode (mimo nowszego CLAUDE.md)" (($w.Kod -eq 0) -and ($w.Tekst -match "wedlug wzoru") -and ((Linie-Sekcji $cm) -ceq (Linie-Sekcji $cx)) -and ((Linie-Sekcji $oc) -ceq (Linie-Sekcji $cx)) -and $cm.Contains("testowa NATURO") -and -not $cm.Contains("LAWENDA")) $w.Tekst
   $d = Dopasuj $dom
-  Sprawdz "wzor: potem straznik milczy o 'Co wiem'" (($d.Kod -eq 0) -and ($d.Tekst -notmatch "sprzeczne|zsynchronizowana")) $d.Tekst
+  Sprawdz "wzor: potem straznik milczy o 'Co wiem'" (($d.Kod -eq 0) -and ($d.Tekst -notmatch "sprzeczn|zsynchronizowana")) $d.Tekst
   $w = Wpisz $dom @("-WzorCoWiem", "nieznane")
   Sprawdz "wzor: nieznane narzedzie - kod 1" ($w.Kod -eq 1) $w.Tekst
 

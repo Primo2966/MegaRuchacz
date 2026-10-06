@@ -227,8 +227,16 @@ try {
       }
       else { Krok "w $plik ($($pl.N.Nazwa)) jest pusty szkielet sekcji '$Naglowek' (O uzytkowniku, O firmie, Nad czym pracuje, Jak pracuje, Biezace, Dane referencyjne)" }
     }
-    $rozjazd = Rozjazd-Co-Wiem $KatalogDomowy
-    if ($rozjazd) { Ostrzezenie $rozjazd }
+    # Ta sama wiedza w kazdym CLI: synchronizacja jak przy starcie okna (kierownik-cele.ps1
+    # Synchronizuj-Co-Wiem) - rozne wersje tej samej linii rozstrzyga sama (nowszy plik wygrywa), wiec
+    # zamiast meldunku o roznicach jest wyrownanie. Sufit narzedzia i wywrotka - ostrzezenie, nie cisza.
+    try {
+      $sync = Synchronizuj-Co-Wiem $KatalogDomowy "" ([bool]$Proba)
+      foreach ($o in $sync.Odmowy) { Ostrzezenie $o }
+      if ($sync.Opis) { if ($Proba) { Plan $sync.Opis } else { Krok $sync.Opis } }
+      foreach ($u in $sync.Uwagi) { Ostrzezenie "Co wiem: $u" }
+      foreach ($x in $sync.Nadpisane) { Krok "Co wiem - nowszy plik wygral: $x" }
+    } catch { Ostrzezenie "synchronizacja sekcji Co wiem miedzy narzedziami AI nie wyszla: $($_.Exception.Message) - wyrowna ja straznik przy najblizszym starcie okna" }
 
     # 3. katalog wiedzy i kopie dzienne
     if (Test-Path -LiteralPath $Wiedza) { Krok "katalog wiedzy jest: $Wiedza" }

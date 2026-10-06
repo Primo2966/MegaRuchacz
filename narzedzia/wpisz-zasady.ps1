@@ -31,8 +31,9 @@
 #     -Usun                   wycina bloki razem ze znacznikami (z -Blok - tylko te)
 #     -Proba                  wypisuje, co by zrobil, ale nic nie zapisuje
 #     -WzorCoWiem <id>        sekcja "Co wiem" narzedzia <id> (claude, codex, opencode) idzie do
-#                             plikow wszystkich obecnych narzedzi bez laczenia - rozstrzygniecie
-#                             sprzecznych zmian albo wyrownanie od czysta
+#                             plikow wszystkich obecnych narzedzi bez laczenia - narzedzie reczne
+#                             ("ta wersja i koniec") albo wyrownanie od czysta; na co dzien rozne
+#                             wersje tej samej linii rozstrzyga synchronizacja (nowszy plik wygrywa)
 #     -BezSynchronizacji      wewnetrzne: bez synchronizacji "Co wiem" (straznik zrobil ja przed wywolaniem)
 #     -Zrodlo <katalog>       katalog glowny repo (domyslnie katalog nad narzedzia\)
 #     -KatalogDomowy <kat>    wewnetrzne: podmiana bazy sciezek docelowych (testy)
@@ -294,7 +295,7 @@ if (($Blok.Count -eq 0) -and -not $Usun) {
 # Szkielet "Co wiem" idzie tylko w przebiegu wedlug rejestru, przy wlaczonym module wiedza.
 $script:Szkielet = ($Blok.Count -eq 0) -and (-not $Usun) -and ($script:Chciane.Nazwy -contains "wiedza")
 # Synchronizacja "Co wiem" miedzy plikami narzedzi - przed planem (zasiew i plan biora wyrownana tresc).
-# Wynik wypisujemy z reszta: odmowy w pierwszych liniach, opis i konflikt pod naglowkiem.
+# Wynik wypisujemy z reszta: odmowy w pierwszych liniach, opis i nadpisane wersje pod naglowkiem.
 $script:Sync = $null
 $script:SyncBlad = $null
 if ($WzorCoWiem) {
@@ -360,11 +361,8 @@ if ($script:Sync) {
     $script:Raport += "Co wiem : $($script:Sync.Opis)"
   }
   foreach ($u in $script:Sync.Uwagi) { Write-Host "UWAGA  Co wiem - $u" -ForegroundColor Yellow }
-  if ($script:Sync.Konflikt) {
-    # Przebieg reczny ma widownie - konflikt mowimy zawsze (straznik przy starcie okna - raz).
-    Write-Host "UWAGA  $($script:Sync.Konflikt)" -ForegroundColor Yellow
-    $script:Raport += "Co wiem : sprzeczne zmiany miedzy narzedziami - UWAGA wyzej"
-  }
+  # rozne wersje tej samej linii rozstrzygniete (nowszy plik wygral) - zwykla informacja, nie UWAGA
+  foreach ($x in @($script:Sync.Nadpisane)) { Write-Host "INFO  Co wiem - nowszy plik wygral: $x" }
   if ($script:Sync.Odmowy.Count -gt 0) { $script:Raport += "Co wiem : ODMOWA ZAPISU synchronizacji - ponad limit" }
 }
 
