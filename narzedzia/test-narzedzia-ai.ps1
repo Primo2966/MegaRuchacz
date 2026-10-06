@@ -148,6 +148,28 @@ try {
   $lista = @(Narzedzia-AI)
   Sprawdz "lista: claude, codex, opencode - plik, polecenie, slady, wariant, limit" ((($lista | ForEach-Object { $_.Id }) -join ",") -eq "claude,codex,opencode" -and
     (@($lista | Where-Object { $_.Plik -and $_.Polecenie -and $_.Slady -and $_.Wariant -and ($null -ne $_.Limit) }).Count -eq 3) -and ((Narzedzie-AI "codex").Limit -eq 32768))
+  Sprawdz "lista: katalogi skilli w kolejnosci wczytywania (claude .claude, codex .agents, opencode .claude/.agents/.config\opencode)" (
+    ((@((Narzedzie-AI "claude").Skille) -join ";") -eq ".claude\skills") -and ((@((Narzedzie-AI "codex").Skille) -join ";") -eq ".agents\skills") -and
+    ((@((Narzedzie-AI "opencode").Skille) -join ";") -eq ".claude\skills;.agents\skills;.config\opencode\skills"))
+
+  # ------------------------------------------------------------ wykrywanie: rejestr instalacji
+  # narzedzia.<id> = true w ~\.claude\mr\instalacja.json (wybor w instalatorze) = narzedzie jest, takze bez
+  # sladow; false i brak sladow = nie ma; rejestr nieczytelny = RejestrBlad (wolajacy mowi), bez wywrotki.
+  # PATH bez prawdziwych CLI - wykrywanie ma widziec tylko dom testu.
+  $domRej = Join-Path $T "dom-rejestr"
+  $pathTestu = $env:PATH
+  try {
+    $env:PATH = $Systemowe
+    Zapisz (Join-Path $domRej ".claude\mr\instalacja.json") '{"wersja":1,"moduly":{"wiedza":true},"narzedzia":{"claude":false,"codex":true,"opencode":false}}'
+    $wy = Wykryj-Narzedzia-AI $domRej   # oddaje tablice przecinkiem - bez @()
+    $wc = $wy | Where-Object { $_.Id -eq "codex" }; $wo = $wy | Where-Object { $_.Id -eq "opencode" }
+    Sprawdz "rejestr: codex = true bez sladow - Codex jest (dowod: rejestr instalacji), z katalogami skilli; opencode = false - nie ma" ($wc.Jest -and ($wc.Dowod -eq "rejestr instalacji") -and ((@($wc.Skille) -join ";") -eq ".agents\skills") -and -not $wo.Jest -and -not $wc.RejestrBlad) (($wy | ForEach-Object { "$($_.Id)=$($_.Jest)/$($_.Dowod)" }) -join ", ")
+    Zapisz (Join-Path $domRej ".claude\mr\instalacja.json") '{"wersja":1,"moduly":{"wiedza":true},"narzedzia":{"claude":false,"codex":false,"opencode":false}}'
+    Sprawdz "rejestr: PROBA NEGATYWNA - codex = false i brak sladow - zadnego narzedzia" (@(Cele-Narzedzi $domRej).Count -eq 0)
+    Zapisz (Join-Path $domRej ".claude\mr\instalacja.json") "{ to nie jest json"
+    $wy = Wykryj-Narzedzia-AI $domRej
+    Sprawdz "rejestr: nieczytelny - RejestrBlad w kazdym wpisie, narzedzia tylko po sladach (tu zadne)" ((@($wy | Where-Object { $_.RejestrBlad -match "rejestr instalacji .* nieczytelny" }).Count -eq 3) -and (@($wy | Where-Object { $_.Jest }).Count -eq 0))
+  } finally { $env:PATH = $pathTestu }
 
   # ------------------------------------------------------------ tylko Codex
   $dom = Nowy-Dom "codex" @("codex")
@@ -451,8 +473,9 @@ try {
   New-Item -ItemType Directory -Force -Path (Join-Path $Z4 "narzedzia") | Out-Null
   Copy-Item (Join-Path $Z "narzedzia\zapis-trwaly.ps1") (Join-Path $Z4 "narzedzia\zapis-trwaly.ps1")
   $kc = Czytaj (Join-Path $Z "narzedzia\kierownik-cele.ps1")
-  $kc4 = $kc.Replace('Limit = 0;     Zapas = "claude" }', ('Limit = 0;     Zapas = "claude" },' + "`r`n" +
-         '    [pscustomobject]@{ Id = "czwarte"; Nazwa = "Czwarte"; Plik = ".czwarte\AGENTS.md"; Polecenie = "czwarte"; Slady = @(".czwarte"); Wariant = "opencode"; Limit = 0; Zapas = $null }'))
+  $kc4 = $kc.Replace('".config\opencode\skills") }', ('".config\opencode\skills") },' + "`r`n" +
+         '    [pscustomobject]@{ Id = "czwarte"; Nazwa = "Czwarte"; Plik = ".czwarte\AGENTS.md"; Polecenie = "czwarte"; Slady = @(".czwarte"); Wariant = "opencode"; Limit = 0; Zapas = $null; Skille = @() }'))
+  if ($kc4 -ceq $kc) { throw "czwarte CLI: kotwica listy narzedzi w kierownik-cele.ps1 sie zmienila - test nie dopisal wpisu" }
   Zapisz (Join-Path $Z4 "narzedzia\kierownik-cele.ps1") $kc4
   Zapisz (Join-Path $dom ".czwarte\AGENTS.md") "# czwarte`r`n"
   $r4 = Odpal $dom $skrypt @($Z4, $dom)

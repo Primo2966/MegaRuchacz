@@ -63,13 +63,15 @@
 #                 Dlatego OpenCode nie ma wlasnego celu ani wlasnej kopii - Cele-Instalacji.
 #                 Skill z bazy w ~\.config\opencode\skills w INNEJ wersji niz nasza kopia
 #                 przykrywa ja w OpenCode - to sprawa w stanie i w oknie (Przykrycia-Skilli).
-#   Ktore narzedzie jest na komputerze: Narzedzia-Obecne - lista Narzedzia-AI
-#   z kierownik-cele.ps1 (jedno zrodlo prawdy, Wykryj-Narzedzia-AI) + rejestr instalacji;
-#   skad ktore czyta skille: $KATALOGI_SKILLI.
+#   Ktore narzedzie jest na komputerze i skad czyta skille: Narzedzia-Obecne - lista
+#   Narzedzia-AI z kierownik-cele.ps1 (jedno zrodlo prawdy: Wykryj-Narzedzia-AI z rejestrem
+#   instalacji i sladami, pole Skille - katalogi w kolejnosci wczytywania).
 #
 # STAN (poza repo): ~\.claude\mr\skille\
 #   stan.json        - co pod opieka, z jakiego zrodla i commita, kiedy sprawdzone
 #   znacznik.txt     - codzienny przebieg: dzien, wynik, powod (czyta nadzorca co 15 min)
+#   przykryte.json   - skille przykryte w OpenCode (Przykrycia-Skilli) dla Przegladu nadzorcy;
+#                      odswiezany przy kazdym liczeniu stanu (Zapisz-Przykryte)
 #   dziennik.log     - co sie zmienilo, z ktorego commita na ktory i kiedy
 #   operacja.txt/.log- ostatnia operacja (klucze + pelny wydruk) dla okna
 #   kopie\           - kopie zapasowe przed kazda podmiana
@@ -130,6 +132,7 @@ $PlikZnacz  = Join-Path $KatStanu "znacznik.txt"
 $PlikDzien  = Join-Path $KatStanu "dziennik.log"
 $PlikOper   = Join-Path $KatStanu "operacja.txt"
 $PlikOperLog = Join-Path $KatStanu "operacja.log"
+$PlikPrzykr = Join-Path $KatStanu "przykryte.json"
 $KatKopii   = Join-Path $KatStanu "kopie"
 $KatRepo    = Join-Path $KatStanu "repo"
 $KatTmp     = Join-Path $KatStanu "tmp"
@@ -474,51 +477,34 @@ function Wczytaj-Katalog {
   return ,$zrodla
 }
 
-# Ktore narzedzia AI sa na komputerze (2026-10-06: uzytkownik moze miec dowolny zestaw).
-# Lista i slady - JEDNO zrodlo prawdy: Narzedzia-AI / Wykryj-Narzedzia-AI z kierownik-cele.ps1
-# (polecenie w PATH, slad zakladany przez SAMO narzedzie, nasze bloki w jego pliku instrukcji;
-# katalog .claude nic nie dowodzi, zaklada go tez MegaRuchacz). Do tego rejestr instalacji
-# (narzedzia.<id>, zapisuje go instalator): to zdjecie z dnia instalacji, wiec sam nie
-# wystarcza - narzedzie zainstalowane pozniej widac po sladach. Nieczytelny rejestr = UWAGA.
-# Narzedzie z listy, o ktorym nie wiemy, skad czyta skille ($KATALOGI_SKILLI), i narzedzie
-# z $KATALOGI_SKILLI, ktorego na liscie nie ma - UWAGA w wydruku i w oknie, nie cisza.
+# Ktore narzedzia AI sa na komputerze (2026-10-06: uzytkownik moze miec dowolny zestaw) i skad
+# czytaja skille - JEDNO zrodlo prawdy: Narzedzia-AI / Wykryj-Narzedzia-AI z kierownik-cele.ps1
+# (rejestr instalacji narzedzia.<id>, polecenie w PATH, slad zakladany przez SAMO narzedzie, nasze
+# bloki w jego pliku instrukcji; katalog .claude nic nie dowodzi, zaklada go tez MegaRuchacz; pole
+# Skille - katalogi skilli wzgledem domu, w kolejnosci wczytywania: przy dublu nazwy wygrywa katalog
+# POZNIEJSZY, OpenCode 1.18.33, naglowek). Nieczytelny rejestr = UWAGA. Narzedzie obecne bez
+# katalogow skilli na liscie - UWAGA w wydruku i w oknie, nie cisza.
 function Narzedzia-Obecne {
-  $rej = $null
-  $umowa = Join-Path $PSScriptRoot "instalacja\stan.ps1"
-  if (Test-Path -LiteralPath $umowa) {
-    . $umowa
-    $r = Czytaj-Instalacje $Dom
-    if ($r.blad) { Pisz "UWAGA: rejestr instalacji ($(Sciezka-Instalacji $Dom)) nieczytelny: $($r.blad) - narzędzia AI rozpoznaję tylko po śladach na dysku." }
-    elseif ($r.narzedzia) { $rej = $r.narzedzia }
-  }
   $wynik = [ordered]@{}
   # Wykryj-Narzedzia-AI oddaje tablice przecinkiem - bez @(), inaczej tablica w tablicy
   $lista = Wykryj-Narzedzia-AI $Dom
+  $blad = @($lista | Where-Object { $_.RejestrBlad } | Select-Object -First 1)
+  if ($blad.Count -gt 0) { Pisz "UWAGA: $($blad[0].RejestrBlad) - narzędzia AI rozpoznaję tylko po śladach na dysku." }
   foreach ($n in $lista) {
-    $dowody = @()
-    if ($rej -and ($rej.PSObject.Properties.Name -contains $n.Id) -and $rej.($n.Id) -eq $true) { $dowody += "rejestr instalacji" }
-    if ($n.Jest) { $dowody += "$($n.Dowod)" }
-    $w = [pscustomobject]@{ Id = $n.Id; Nazwa = $n.Nazwa; Jest = ($dowody.Count -gt 0); Dowod = ($dowody -join ", ") }
+    $w = [pscustomobject]@{ Id = $n.Id; Nazwa = $n.Nazwa; Jest = [bool]$n.Jest; Dowod = "$($n.Dowod)"; Skille = @($n.Skille) }
     $wynik[$n.Id] = $w
-    if ($w.Jest -and -not $KATALOGI_SKILLI.Contains($n.Id)) {
-      Pisz "UWAGA: $($n.Nazwa) jest na tym komputerze ($($w.Dowod)), ale nie wiem, skąd czyta skille - skilli mu nie wgrywam i ich nie sprawdzam. Trzeba dopisać jego katalogi skilli w narzedzia\skille.ps1 (KATALOGI_SKILLI)."
+    if ($w.Jest -and $w.Skille.Count -eq 0) {
+      Pisz "UWAGA: $($n.Nazwa) jest na tym komputerze ($($w.Dowod)), ale nie wiem, skąd czyta skille - skilli mu nie wgrywam i ich nie sprawdzam. Trzeba dopisać jego katalogi skilli w narzedzia\kierownik-cele.ps1 (Narzedzia-AI, pole Skille)."
     }
-  }
-  foreach ($id in @($KATALOGI_SKILLI.Keys)) {
-    if ($wynik.Contains($id)) { continue }
-    Pisz "UWAGA: na liście narzędzi AI (narzedzia\kierownik-cele.ps1, Narzedzia-AI) nie ma '$id' - jego skilli nie sprawdzam i nic mu nie wgrywam."
-    $wynik[$id] = [pscustomobject]@{ Id = $id; Nazwa = $id; Jest = $false; Dowod = "" }
   }
   return $wynik
 }
 
-# Skad narzedzie czyta skille (wzgledem domu), w kolejnosci wczytywania: przy dublu nazwy wygrywa
-# katalog POZNIEJSZY (OpenCode 1.18.33, naglowek). Lista Narzedzia-AI katalogow skilli jeszcze nie
-# niesie - gdy dostanie, ta tablica ma zniknac (jedno zrodlo prawdy).
-$KATALOGI_SKILLI = [ordered]@{
-  claude   = @(".claude\skills")
-  codex    = @(".agents\skills")
-  opencode = @(".claude\skills", ".agents\skills", ".config\opencode\skills")
+# Katalog skilli narzedzia $id z listy (pelna sciezka): $ktory = 0 - pierwszy, -1 - ostatni.
+function Katalog-Skilli([string]$id, [int]$ktory) {
+  $k = @($script:Narzedzia[$id].Skille)
+  if ($k.Count -eq 0) { throw "na liście narzędzi AI (kierownik-cele.ps1 Narzedzia-AI) '$id' nie ma katalogów skilli (pole Skille)" }
+  return (Join-Path $Dom $k[$ktory])
 }
 
 # Gdzie wgrywamy - cel to KATALOG, a nie narzedzie (Id zostaja "claude" i "codex", bo pod
@@ -538,8 +524,8 @@ $KATALOGI_SKILLI = [ordered]@{
 function Cele-Instalacji {
   $n = $script:Narzedzia
   $jestClaude = $n["claude"].Jest; $jestCodex = $n["codex"].Jest; $jestOpen = $n["opencode"].Jest
-  $kClaude = Join-Path $Dom $KATALOGI_SKILLI["claude"][0]; $kAgents = Join-Path $Dom $KATALOGI_SKILLI["codex"][0]
-  $kOpen = Join-Path $Dom (@($KATALOGI_SKILLI["opencode"])[-1])
+  $kClaude = Katalog-Skilli "claude" 0; $kAgents = Katalog-Skilli "codex" 0
+  $kOpen = Katalog-Skilli "opencode" -1
   $dlaClaude = @(); if ($jestClaude) { $dlaClaude += "Claude Code" }; if ($jestOpen) { $dlaClaude += "OpenCode" }
   $dlaAgents = @(); if ($jestCodex) { $dlaAgents += "Codex" }; if ($jestOpen) { $dlaAgents += "OpenCode" }
   $celClaude = $jestClaude -or ($jestOpen -and -not $jestCodex)
@@ -558,7 +544,7 @@ function Katalogi-Skilli($cele) {
   $n = $script:Narzedzia
   $k = @()
   foreach ($c in $cele) { if (@($c.Dla).Count -gt 0) { $k += [pscustomobject]@{ Id = $c.Id; Nazwa = $c.Nazwa; Katalog = $c.Katalog } } }
-  if ($n["opencode"].Jest) { $k += [pscustomobject]@{ Id = "opencode"; Nazwa = "OpenCode"; Katalog = (Join-Path $Dom (@($KATALOGI_SKILLI["opencode"])[-1])) } }
+  if ($n["opencode"].Jest) { $k += [pscustomobject]@{ Id = "opencode"; Nazwa = "OpenCode"; Katalog = (Katalog-Skilli "opencode" -1) } }
   return ,$k
 }
 
@@ -585,9 +571,9 @@ function Przykrycia-Skilli($zrodla, $cele) {
   $wynik = [ordered]@{}
   $nasze = @{}
   foreach ($c in $cele) { if ($c.Jest) { $nasze[$c.Katalog.TrimEnd('\').ToLowerInvariant()] = $true } }
-  foreach ($id in @($KATALOGI_SKILLI.Keys)) {
-    $kat = @($KATALOGI_SKILLI[$id])
+  foreach ($id in @($script:Narzedzia.Keys)) {
     $nz = $script:Narzedzia[$id]
+    $kat = @($nz.Skille)
     if ($kat.Count -lt 2 -or -not $nz -or -not $nz.Jest) { continue }
     $pelne = @($kat | ForEach-Object { (Join-Path $Dom $_).TrimEnd('\') })
     foreach ($z in $zrodla) {
@@ -2020,6 +2006,19 @@ function Stan-Dla-Okna($stan, $zrodla, $cele) {
   }
 }
 
+# Przykrycia (lista przykryte z Stan-Dla-Okna) dla Przegladu nadzorcy (zasobnik\nadzorca\stan-skille.ps1
+# Problemy-Skilli): nadzorca nie wola tego skryptu co kwadrans, tylko czyta ten maly plik. Zapis przy
+# kazdym liczeniu stanu (zakladka Skille, codzienny przebieg, operacje z przyciskow), wiec po usunieciu
+# przykrywajacej kopii sprawa znika przy najblizszym. Tylko gdy skille sa pod opieka (stan.json jest) -
+# sam podglad stanu niczego w domu nie zaklada. Zwraca powod nieudanego zapisu albo $null.
+function Zapisz-Przykryte($o) {
+  if (-not (Test-Path -LiteralPath $PlikStanu)) { return $null }
+  try {
+    Zapisz-Tekst $PlikPrzykr (Na-Json ([pscustomobject]@{ sprawdzono = (Teraz); przykryte = @($o.przykryte) }))
+    return $null
+  } catch { return "UWAGA: nie zapisałem $PlikPrzykr (przykryte skille dla Przeglądu): $($_.Exception.Message)" }
+}
+
 # JSON bez polskich liter wprost (\uXXXX) - okno czyta wydruk z pliku przekierowania,
 # a strona kodowa konsoli nie ma tu nic do gadania.
 function Na-Json($o) {
@@ -2049,6 +2048,8 @@ if ($Tryb -eq "stan") {
     $stan = Wczytaj-Stan
     Zastosuj-Przenosiny $stan $zrodla
     $o = Stan-Dla-Okna $stan $zrodla $cele
+    $bladP = Zapisz-Przykryte $o
+    if ($bladP) { $o.uwagi = @($o.uwagi) + @($bladP) }
     if ($Json) { Write-Output (Na-Json $o) }
     else {
       $l = $o.liczniki
@@ -2190,6 +2191,8 @@ try {
 
   if ($Tryb -ne "spakuj") {
   $o = Stan-Dla-Okna $stan $zrodla $cele
+  $bladP = Zapisz-Przykryte $o
+  if ($bladP) { Pisz $bladP }
   $l = $o.liczniki
   Pisz ""
   Pisz "Skilli w bazie: $($l.wBazie) - aktualne: $($l.zgodne), starsze wersje: $($l.starsze), zmienione ręcznie: $($l.zmienione), niezainstalowane: $($l.brak), usunięte przez autora: $($l.usuniete), z błędem: $($l.bledy). Zmienionych teraz: $zmian."

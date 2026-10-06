@@ -126,7 +126,8 @@ function Stan-Skilli {
   return $w
 }
 
-# Sprawy dla Przegladu - TYLKO z pliku znacznika (dozor i okno czytaja to czesto).
+# Sprawy dla Przegladu - TYLKO z plikow w katalogu stanu skilli (znacznik, stan.json, przykryte.json),
+# bez wolania skille.ps1 (dozor i okno czytaja to czesto).
 # Zwraca liste obiektow Waga/Tytul/Porada/Pelne; pusta = nic sie nie pali.
 function Problemy-Skilli {
   $lista = @()
@@ -157,6 +158,30 @@ function Problemy-Skilli {
       $lista += [pscustomobject]@{ Waga = "uwaga"; Tytul = "Skille: sprawdzenie urwało się w połowie"
         Porada = "Sprawdzenie ruszyło $($zn['start']) i nie zapisało wyniku. Kliknij w zakładce Skille `„Sprawdź teraz`”, żeby spróbować jeszcze raz."
         Pelne = "znacznik: $($zn['start']), proces $($zn['pid']) już nie żyje" }
+    }
+  }
+  # Skill z bazy, ktory narzedzie czytajace kilka katalogow skilli (OpenCode) bierze z innej kopii niz
+  # nasza pod opieka (narzedzia\skille.ps1 Przykrycia-Skilli; plik przykryte.json odswieza kazde liczenie
+  # stanu skilli, takze codzienne). Sprawa z instrukcja, nie blad - waga "uwaga".
+  $plikP = Join-Path $kat "przykryte.json"
+  if (Test-Path -LiteralPath $plikP) {
+    try {
+      $pj = [System.IO.File]::ReadAllText($plikP, [System.Text.Encoding]::UTF8) | ConvertFrom-Json
+      if (($null -eq $pj) -or -not ($pj.PSObject.Properties.Name -contains "przykryte")) { throw "brak pola przykryte" }
+      $pk = @($pj.przykryte | Where-Object { $_ -and $_.folder })
+      if ($pk.Count -gt 0) {
+        $kto = @($pk | ForEach-Object { "$($_.narzedzie)" } | Select-Object -Unique) -join " i "
+        $tytul = if ($pk.Count -eq 1) { "Skill $($pk[0].folder): $kto bierze inną kopię niż Twoja pod opieką" }
+                 else { "Skille ($($pk.Count)): $kto bierze inne kopie niż Twoje pod opieką" }
+        $porada = "$($pk[0].rada)"
+        if ($pk.Count -gt 1) { $porada = "Skill $($pk[0].folder): $porada Tak samo z pozostałymi - lista w szczegółach i w zakładce Skille." }
+        $lista += [pscustomobject]@{ Waga = "uwaga"; Tytul = $tytul; Porada = $porada
+          Pelne = ((@($pk | ForEach-Object { "$($_.folder): $($_.rada)" }) -join "`r`n") + "`r`n(sprawdzone $($pj.sprawdzono))") }
+      }
+    } catch {
+      $lista += [pscustomobject]@{ Waga = "uwaga"; Tytul = "Skille: nie da się odczytać listy przykrytych skilli"
+        Porada = "Plik, w którym sprawdzenie skilli zapisuje skille brane przez OpenCode z innej kopii, jest nieczytelny. Otwórz zakładkę Skille - zapisze go od nowa."
+        Pelne = "${plikP}: $($_.Exception.Message)" }
     }
   }
   $dzien = Data-Lub-Nic $zn["dzien"]

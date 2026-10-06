@@ -44,6 +44,9 @@ $ZNACZNIK_MEGARUCHACZA = "<!-- MegaRuchacz:"   # = GUARD_PREFIX w lore\lore\veri
 #   Limit      ile bajtow pliku narzedzie wczytuje; 0 = limitu nie znamy. Codex przycina
 #              AGENTS.md na 32 KiB (project_doc_max_bytes), a nasze bloki stoja na koncu pliku.
 #              OpenCode: w docs (opencode.ai/docs/rules) limitu brak - niepotwierdzone.
+#   Skille     katalogi skilli, ktore narzedzie czyta (wzgledem domu), w KOLEJNOSCI WCZYTYWANIA: przy
+#              dublu nazwy wygrywa katalog pozniejszy (OpenCode 1.18.33 - narzedzia\skille.ps1, naglowek).
+#              Pusta lista = nie wiemy - skille.ps1 nic mu nie wgrywa i mowi o tym UWAGA.
 #   Zapas      Id narzedzia, ktorego plik to narzedzie czyta, gdy wlasnego nie ma. OpenCode czyta
 #              ~/.claude/CLAUDE.md, dopoki nie ma ~/.config/opencode/AGENTS.md, a gdy ten jest -
 #              TYLKO jego (docs: rules). Wlasny plik zakladamy wiec z trescia tamtego (bez bloku
@@ -51,9 +54,12 @@ $ZNACZNIK_MEGARUCHACZA = "<!-- MegaRuchacz:"   # = GUARD_PREFIX w lore\lore\veri
 #              i nic nie wchodzi dwa razy.
 function Narzedzia-AI {
   return @(
-    [pscustomobject]@{ Id = "claude";   Nazwa = "Claude Code"; Plik = ".claude\CLAUDE.md";          Polecenie = "claude";   Slady = @(".claude.json", ".claude\history.jsonl");                       Wariant = "claude";   Limit = 0;     Zapas = $null },
-    [pscustomobject]@{ Id = "codex";    Nazwa = "Codex";       Plik = ".codex\AGENTS.md";           Polecenie = "codex";    Slady = @(".codex", "AppData\Roaming\orca\codex-runtime-home\home"); Wariant = "opencode"; Limit = 32768; Zapas = $null },
-    [pscustomobject]@{ Id = "opencode"; Nazwa = "OpenCode";    Plik = ".config\opencode\AGENTS.md"; Polecenie = "opencode"; Slady = @(".config\opencode");                                       Wariant = "opencode"; Limit = 0;     Zapas = "claude" }
+    [pscustomobject]@{ Id = "claude";   Nazwa = "Claude Code"; Plik = ".claude\CLAUDE.md";          Polecenie = "claude";   Slady = @(".claude.json", ".claude\history.jsonl");                       Wariant = "claude";   Limit = 0;     Zapas = $null
+                       Skille = @(".claude\skills") },
+    [pscustomobject]@{ Id = "codex";    Nazwa = "Codex";       Plik = ".codex\AGENTS.md";           Polecenie = "codex";    Slady = @(".codex", "AppData\Roaming\orca\codex-runtime-home\home"); Wariant = "opencode"; Limit = 32768; Zapas = $null
+                       Skille = @(".agents\skills") },
+    [pscustomobject]@{ Id = "opencode"; Nazwa = "OpenCode";    Plik = ".config\opencode\AGENTS.md"; Polecenie = "opencode"; Slady = @(".config\opencode");                                       Wariant = "opencode"; Limit = 0;     Zapas = "claude"
+                       Skille = @(".claude\skills", ".agents\skills", ".config\opencode\skills") }
   )
 }
 
@@ -72,19 +78,42 @@ function Ma-Nasze-Bloki([string]$sciezka) {
   try { return ([System.IO.File]::ReadAllText($sciezka)).Contains($ZNACZNIK_MEGARUCHACZA) } catch { return $false }
 }
 
+# Narzedzia zaznaczone w rejestrze instalacji (~\.claude\mr\instalacja.json, pole narzedzia.<id> = true -
+# wybor w instalatorze; uklad pliku: narzedzia\instalacja\stan.ps1). .Narzedzia - obiekt z pola albo
+# $null (brak pliku, pole null); .Blad - plik jest, a nie da sie go odczytac (wolajacy mowi o tym).
+function Narzedzia-Z-Rejestru([string]$dom) {
+  $w = [pscustomobject]@{ Narzedzia = $null; Blad = $null }
+  $p = Join-Path $dom ".claude\mr\instalacja.json"
+  if (-not (Test-Path -LiteralPath $p -PathType Leaf)) { return $w }
+  try {
+    $t = (Czytaj-Utf8 $p).TrimStart([char]0xFEFF)
+    if ($t.IndexOf([char]0) -ge 0) { throw "ma bajty 0x00 (uszkodzony zapis)" }
+    $j = $t | ConvertFrom-Json
+    if ($null -eq $j) { throw "plik jest pusty" }
+    if ($j.narzedzia) { $w.Narzedzia = $j.narzedzia }
+  } catch { $w.Blad = "rejestr instalacji ($p) nieczytelny: $($_.Exception.Message)" }
+  return $w
+}
+
 # Kazde narzedzie z listy z polami Sciezka (pelna sciezka pliku), Jest i Dowod (czym sie zdradzilo,
-# do meldunkow). Obecne = polecenie w PATH albo slad w domu albo nasze bloki w jego pliku.
+# do meldunkow), Skille (katalogi skilli z listy) i RejestrBlad (rejestr instalacji nieczytelny albo
+# $null - ten sam w kazdym wpisie). Obecne = zaznaczone w rejestrze instalacji albo polecenie w PATH
+# albo slad w domu albo nasze bloki w jego pliku. Rejestr to zdjecie z dnia instalacji - narzedzie
+# zainstalowane pozniej widac po sladach, wiec rejestr doklada, a niczego nie odbiera.
 function Wykryj-Narzedzia-AI([string]$dom) {
   $wynik = @()
+  $rej = Narzedzia-Z-Rejestru $dom
   foreach ($n in (Narzedzia-AI)) {
     $dowody = @()
+    if ($rej.Narzedzia -and ($rej.Narzedzia.PSObject.Properties.Name -contains $n.Id) -and ($rej.Narzedzia.($n.Id) -eq $true)) { $dowody += "rejestr instalacji" }
     $pol = Get-Command $n.Polecenie -CommandType Application -ErrorAction SilentlyContinue | Select-Object -First 1
     if ($pol) { $dowody += "polecenie $($n.Polecenie)" }
     foreach ($s in $n.Slady) { if (Test-Path -LiteralPath (Join-Path $dom $s)) { $dowody += $s } }
     $sciezka = Join-Path $dom $n.Plik
     if (Ma-Nasze-Bloki $sciezka) { $dowody += "zasady MegaRuchacza w $($n.Plik)" }
     $w = [pscustomobject]@{ Id = $n.Id; Nazwa = $n.Nazwa; Plik = $n.Plik; Sciezka = $sciezka; Wariant = $n.Wariant
-                            Limit = $n.Limit; Zapas = $n.Zapas; Jest = ($dowody.Count -gt 0); Dowod = ($dowody -join ", ") }
+                            Limit = $n.Limit; Zapas = $n.Zapas; Skille = @($n.Skille); Jest = ($dowody.Count -gt 0); Dowod = ($dowody -join ", ")
+                            RejestrBlad = $rej.Blad }
     $wynik += $w
   }
   return ,$wynik

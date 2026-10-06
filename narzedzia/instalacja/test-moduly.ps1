@@ -3,7 +3,9 @@
 #
 # Co jest kopia, a co prawdziwe:
 #   - repo: git clone tego repo (HEAD) + nalozone niezapisane w gicie pliki tego, co sie testuje
-#     (narzedzia\instalacja\, narzedzia\instaluj-lore.ps1, lore\), w katalogu z "MRTEST" w nazwie;
+#     (narzedzia\instalacja\, narzedzia\instaluj-lore.ps1, lore\, skille - narzedzia\skille.ps1, skille\,
+#     zasobnik\nadzorca\stan-skille.ps1 - i lista narzedzi AI narzedzia\kierownik-cele.ps1), w katalogu
+#     z "MRTEST" w nazwie;
 #     cudze niezapisane zmiany (inni workerzy) do kopii nie trafiaja
 #   - katalog domowy: osobny, pusty na kazdy scenariusz. Procesy potomne maja USERPROFILE,
 #     LOCALAPPDATA, APPDATA i TEMP w katalogu testu; uv dostaje prawdziwa pamiec podreczna
@@ -166,7 +168,7 @@ function Przygotuj-Kopie {
   New-Item -ItemType Directory -Force -Path $T, $Bin, $TmpKrotki, (Join-Path $T "localappdata"), (Join-Path $T "appdata") | Out-Null
   Git-Cicho @("clone", "--quiet", "--no-hardlinks", $RepoPrawdziwe, $Repo)
   # to, co sie testuje: niezapisane w gicie pliki z zakresu instalatora i Lore
-  $zakres = @("narzedzia/instalacja/", "narzedzia/instaluj-lore.ps1", "lore/lore/", "lore/tests/", "narzedzia/skille.ps1", "skille/")
+  $zakres = @("narzedzia/instalacja/", "narzedzia/instaluj-lore.ps1", "lore/lore/", "lore/tests/", "narzedzia/skille.ps1", "skille/", "zasobnik/nadzorca/stan-skille.ps1", "narzedzia/kierownik-cele.ps1")
   $zmiany = @(& git -C $RepoPrawdziwe status --porcelain --untracked-files=all 2>$null)
   foreach ($l in $zmiany) {
     $sc = $l.Substring(3).Trim('"')
@@ -757,6 +759,24 @@ function Scenariusz-Skille-Cele {
   [System.IO.File]::WriteAllText((Join-Path $domZ2 ".claude\CLAUDE.md"), "# Ustalenia`n")
   $w = & $narz $domZ2
   Sprawdz "skille narzedzia: PROBA NEGATYWNA - ~\.claude\CLAUDE.md bez znacznika to nie Claude Code (zadne narzedzie, zadnego celu)" (($null -ne $w.C) -and -not $w.C.jest -and (@($w.J.cele | Where-Object { $_.jest }).Count -eq 0)) $w.R.Tekst
+  # rejestr instalacji (narzedzia.<id> = true - wybor w instalatorze) rozpoznaje narzedzie bez zadnego sladu
+  # na dysku - w Wykryj-Narzedzia-AI, nie w skille.ps1. Proba negatywna: narzedzia.codex = false - nic;
+  # rejestr nieczytelny - UWAGA, narzedzia tylko po sladach.
+  $domR = Dom "skille-rejestr"
+  $pRej = Join-Path $domR ".claude\mr\instalacja.json"
+  New-Item -ItemType Directory -Force -Path (Split-Path -Parent $pRej) | Out-Null
+  $rejTekst = '{"wersja":1,"moduly":{"wiedza":false,"lore":false,"kierownik":false,"skille":true,"kopia":false},"narzedzia":{"claude":false,"codex":CODEX,"opencode":false}}'
+  [System.IO.File]::WriteAllText($pRej, $rejTekst.Replace("CODEX", "true"))
+  $w = & $narz $domR
+  $wx = $(if ($w.J) { @($w.J.narzedzia | Where-Object { $_.id -eq "codex" }) | Select-Object -First 1 })
+  Sprawdz "skille narzedzia: Codex z rejestru instalacji (narzedzia.codex = true) bez sladow na dysku - cel ~\.agents\skills jest" (($null -ne $wx) -and $wx.jest -and ("$($wx.dowod)" -match "rejestr instalacji") -and (@($w.J.cele | Where-Object { $_.id -eq "codex" -and $_.jest }).Count -eq 1)) $w.R.Tekst
+  [System.IO.File]::WriteAllText($pRej, $rejTekst.Replace("CODEX", "false"))
+  $w = & $narz $domR
+  $wx = $(if ($w.J) { @($w.J.narzedzia | Where-Object { $_.id -eq "codex" }) | Select-Object -First 1 })
+  Sprawdz "skille narzedzia: PROBA NEGATYWNA - narzedzia.codex = false i brak sladow - Codeksa nie ma, zadnego celu" (($null -ne $wx) -and -not $wx.jest -and (@($w.J.cele | Where-Object { $_.jest }).Count -eq 0)) $w.R.Tekst
+  [System.IO.File]::WriteAllText($pRej, "{ to nie jest json")
+  $w = & $narz $domR
+  Sprawdz "skille narzedzia: rejestr nieczytelny - UWAGA w stanie (rejestr instalacji ... nieczytelny), bez wywrotki" (($null -ne $w.J) -and ((@($w.J.uwagi) -join " ") -match "rejestr instalacji .* nieczytelny")) $w.R.Tekst
 
   # --- tylko Codex
   $domX = Dom "skille-codex"
@@ -851,11 +871,29 @@ function Scenariusz-Skille-Cele {
   $log = Join-Path $domW ".claude\mr\skille\operacja.log"
   $wydruk = $(if (Test-Path $log) { [System.IO.File]::ReadAllText($log) } else { "" })
   Sprawdz "skille przykrycie: codzienny przebieg - wynik ok (to nie blad), UWAGA w wydruku operacji, kopii OpenCode NIE rusza (co do bajtu)" (($r.Kod -eq 0) -and ($wydruk -match "UWAGA: skill wbud-a - OpenCode") -and ($przedOc -eq [Convert]::ToBase64String([System.IO.File]::ReadAllBytes((Join-Path $ocA "SKILL.md"))))) ($r.Tekst + " | " + $wydruk)
+  # karta na Przegladzie nadzorcy (zasobnik\nadzorca\stan-skille.ps1 Problemy-Skilli) - z pliku
+  # przykryte.json, ktory zapisuje kazde liczenie stanu skilli; nadzorca skille.ps1 nie wola
+  $plikProblemow = Join-Path $T "problemy-skilli.ps1"
+  [System.IO.File]::WriteAllText($plikProblemow, (@(
+    'param($zr, $dom)', '$ErrorActionPreference = "Stop"', '. (Join-Path $zr "zasobnik\stan-nadzorcy.ps1")', 'Ustaw-Nadzorce $zr $dom $true',
+    '$t = (@(Problemy-Skilli) | ForEach-Object { "KARTA|$($_.Waga)|$($_.Tytul)|$($_.Porada)" }) -join "`n"',
+    'Write-Output ([regex]::Replace($t, "[^\x00-\x7F]", { param($m) "?" }))') -join "`r`n"), (New-Object System.Text.UTF8Encoding($true)))
+  $plikP = Join-Path $domW ".claude\mr\skille\przykryte.json"
+  $pp = Uruchom $plikProblemow @($Repo, $domW) (Srodowisko $domW @{ PATH = $sciezka })
+  $karty = @(($pp.Tekst -split "`r?`n") | Where-Object { $_ -like "KARTA|*" })
+  Sprawdz "skille przykrycie: przykryte.json zapisany (wbud-a, bez wbud-d)" ((Test-Path -LiteralPath $plikP) -and ([System.IO.File]::ReadAllText($plikP) -match '"folder":"wbud-a"') -and ([System.IO.File]::ReadAllText($plikP) -notmatch '"folder":"wbud-d"')) $(if (Test-Path -LiteralPath $plikP) { [System.IO.File]::ReadAllText($plikP) } else { "brak $plikP" })
+  Sprawdz "skille przykrycie: karta na Przegladzie (Problemy-Skilli) - uwaga, skill wbud-a, OpenCode, katalog do usuniecia" (($pp.Kod -eq 0) -and (@($karty | Where-Object { $_ -match "^KARTA\|uwaga\|Skill wbud-a: OpenCode" -and $_.Contains($ocA) }).Count -eq 1) -and (@($karty | Where-Object { $_ -match "wbud-d" }).Count -eq 0)) $pp.Tekst
   # usuniecie wedlug instrukcji zamyka sprawe
   Remove-Item -LiteralPath $ocA -Recurse -Force
   $r = Uruchom $silnik @("-Tryb", "stan", "-Json", "-KatalogDomowy", $domW, "-Katalog", $kat) (Srodowisko $domW @{ PATH = $sciezka })
   $j = $null; try { $j = ($r.Tekst -split "`nSTDERR:")[0].Trim() | ConvertFrom-Json } catch { $j = $null }
   Sprawdz "skille przykrycie: po usunieciu kopii z ~\.config\opencode\skills sprawy nie ma" (($null -ne $j) -and ($j.liczniki.przykryte -eq 0) -and (@($j.przykryte).Count -eq 0)) $r.Tekst
+  $pp = Uruchom $plikProblemow @($Repo, $domW) (Srodowisko $domW @{ PATH = $sciezka })
+  Sprawdz "skille przykrycie: po usunieciu kopii karty na Przegladzie nie ma" (($pp.Kod -eq 0) -and ($pp.Tekst -notmatch "KARTA\|.*wbud-a")) $pp.Tekst
+  # proba negatywna: zepsuty przykryte.json to karta o nieczytelnym pliku, a nie cisza
+  [System.IO.File]::WriteAllText($plikP, "{ zepsuty")
+  $pp = Uruchom $plikProblemow @($Repo, $domW) (Srodowisko $domW @{ PATH = $sciezka })
+  Sprawdz "skille przykrycie: PROBA NEGATYWNA - nieczytelny przykryte.json = karta 'nie da sie odczytac', nie cisza" (($pp.Kod -eq 0) -and ($pp.Tekst -match "KARTA\|uwaga\|Skille: nie da si. odczyta. listy przykrytych")) $pp.Tekst
 }
 
 function Scenariusz-Kopia {
