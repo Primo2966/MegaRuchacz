@@ -712,8 +712,9 @@ function Scenariusz-Skille-Wbudowane {
   Sprawdz "skille wbudowane: reczne aktualizuj -ZeZrodla inne aktualizuje niewbudowany (obcy-skill v2)" (($r.Kod -eq 0) -and ([System.IO.File]::ReadAllText($plikI) -match "obcy-skill v2")) $r.Tekst
 }
 
-# Skille wbudowane w kazdym obecnym narzedziu AI (2026-10-06). Narzedzia rozpoznaje skille.ps1 po
-# sladach w domu (.claude.json, .codex, .config\opencode) - w PATH testu nie ma tu atrap claude/codex.
+# Skille wbudowane w kazdym obecnym narzedziu AI (2026-10-06). Narzedzia rozpoznaje skille.ps1 lista
+# Narzedzia-AI z kierownik-cele.ps1 (slady w domu: .claude.json, .codex, .config\opencode, zasady
+# MegaRuchacza w pliku instrukcji) - w PATH testu nie ma tu atrap claude/codex.
 # Cele: Claude Code ~\.claude\skills, Codex ~\.agents\skills; OpenCode czyta oba i ~\.config\opencode\skills
 # sam, wiec nie dostaje wlasnej kopii (tylko OpenCode = ~\.claude\skills). Domy: tylko Codex (potem
 # dochodzi Claude Code - codzienny przebieg dogrywa), tylko OpenCode (z proba dubla), wszystkie trzy
@@ -740,6 +741,22 @@ function Scenariusz-Skille-Cele {
   $jest = { param($d, $w) Test-Path -LiteralPath (Join-Path $d $w) }
   # ile katalogow czytanych przez OpenCode ma skill o tej nazwie (1 = bez dubla)
   $ileOC = { param($d, $n) @($katOC | Where-Object { Test-Path -LiteralPath (Join-Path $d "$_\$n") }).Count }
+
+  # --- narzedzia z listy Narzedzia-AI (kierownik-cele.ps1), nie z wlasnej: tylko ta lista uznaje
+  # Claude Code po zasadach MegaRuchacza w ~\.claude\CLAUDE.md. Proba negatywna: ten sam plik bez
+  # znacznika - sam katalog .claude nic nie dowodzi (zaklada go tez MegaRuchacz).
+  $narz = { param($d)
+    $r = Uruchom $silnik @("-Tryb", "stan", "-Json", "-KatalogDomowy", $d, "-Katalog", $kat) (Srodowisko $d @{ PATH = $sciezka })
+    $j = $null; try { $j = ($r.Tekst -split "`nSTDERR:")[0].Trim() | ConvertFrom-Json } catch { $j = $null }
+    return [pscustomobject]@{ R = $r; J = $j; C = $(if ($j) { @($j.narzedzia | Where-Object { $_.id -eq "claude" }) | Select-Object -First 1 }) } }
+  $domZ = Dom "skille-zasady"
+  [System.IO.File]::WriteAllText((Join-Path $domZ ".claude\CLAUDE.md"), "# Ustalenia`n<!-- MegaRuchacz:lore:start -->`nx`n<!-- MegaRuchacz:lore:koniec -->`n")
+  $w = & $narz $domZ
+  Sprawdz "skille narzedzia: Claude Code rozpoznany z listy Narzedzia-AI (zasady MegaRuchacza w ~\.claude\CLAUDE.md), cel ~\.claude\skills jest" (($null -ne $w.C) -and $w.C.jest -and ("$($w.C.dowod)" -match "zasady MegaRuchacza") -and (@($w.J.cele | Where-Object { $_.id -eq "claude" -and $_.jest }).Count -eq 1)) $w.R.Tekst
+  $domZ2 = Dom "skille-bez-zasad"
+  [System.IO.File]::WriteAllText((Join-Path $domZ2 ".claude\CLAUDE.md"), "# Ustalenia`n")
+  $w = & $narz $domZ2
+  Sprawdz "skille narzedzia: PROBA NEGATYWNA - ~\.claude\CLAUDE.md bez znacznika to nie Claude Code (zadne narzedzie, zadnego celu)" (($null -ne $w.C) -and -not $w.C.jest -and (@($w.J.cele | Where-Object { $_.jest }).Count -eq 0)) $w.R.Tekst
 
   # --- tylko Codex
   $domX = Dom "skille-codex"
@@ -803,6 +820,42 @@ function Scenariusz-Skille-Cele {
           (@($j.narzedzia | Where-Object { $_.jest }).Count -eq 3)
   }
   Sprawdz "skille cele: stan dla okna - oba cele z nazwami czytajacych narzedzi, obcy-b w celu Codeksa 'starszy', spoza bazy z ~\.agents\skills i ~\.config\opencode\skills pokazane jako nieznane" $ok $r.Tekst
+
+  # --- przykrycie w OpenCode: wbud-a v1 w ~\.config\opencode\skills (czytany PO naszych celach) przy
+  # naszym v2 w ~\.claude\skills i ~\.agents\skills - OpenCode bierze v1. Ma byc sprawa w stanie, w oknie
+  # i w wydruku przebiegu, a tamta kopia nietknieta (moze to celowa zmiana uzytkownika). Proba negatywna:
+  # wbud-d w ~\.config\opencode\skills w TEJ SAMEJ wersji co nasza (tylko CRLF) - to nie jest sprawa.
+  $ocA = Join-Path $domW ".config\opencode\skills\wbud-a"; $ocD = Join-Path $domW ".config\opencode\skills\wbud-d"
+  New-Item -ItemType Directory -Force -Path $ocA, $ocD | Out-Null
+  [System.IO.File]::WriteAllText((Join-Path $ocA "SKILL.md"), "---`nname: wbud-a`ndescription: skill testowy`n---`n# wbud-a v1`n")
+  [System.IO.File]::WriteAllText((Join-Path $ocD "SKILL.md"), ([System.IO.File]::ReadAllText((Join-Path $domW ".claude\skills\wbud-d\SKILL.md")) -replace "`r?`n", "`r`n"))
+  $przedOc = [Convert]::ToBase64String([System.IO.File]::ReadAllBytes((Join-Path $ocA "SKILL.md")))
+  $r = Uruchom $silnik @("-Tryb", "stan", "-Json", "-KatalogDomowy", $domW, "-Katalog", $kat) (Srodowisko $domW @{ PATH = $sciezka })
+  $j = $null; try { $j = ($r.Tekst -split "`nSTDERR:")[0].Trim() | ConvertFrom-Json } catch { $j = $null }
+  $ok = $false; $okD = $false
+  if ($j) {
+    $pa = @(@($j.przykryte) | Where-Object { $_.folder -eq "wbud-a" })
+    $cw = @(@($j.zrodla | Where-Object { $_.id -eq "cw" }).skille)
+    $sa = @($cw | Where-Object { $_.nazwa -eq "wbud-a" }); $sd = @($cw | Where-Object { $_.nazwa -eq "wbud-d" })
+    $ok = ($pa.Count -eq 1) -and ($pa[0].narzedzie -eq "OpenCode") -and ($pa[0].wygrywa -eq $ocA) -and
+          (@($pa[0].przykryte).Count -eq 2) -and (@($pa[0].przykryte) -contains (Join-Path $domW ".claude\skills\wbud-a")) -and
+          (@($pa[0].przykryte) -contains (Join-Path $domW ".agents\skills\wbud-a")) -and ($pa[0].rada -match [regex]::Escape($ocA)) -and
+          ($sa.Count -eq 1) -and ($null -ne $sa[0].przykryty) -and ($sa[0].przykryty.rada -eq $pa[0].rada)
+    $okD = ($sd.Count -eq 1) -and ($null -eq $sd[0].przykryty) -and (@(@($j.przykryte) | Where-Object { $_.folder -eq "wbud-d" }).Count -eq 0) -and ($j.liczniki.przykryte -eq 1)
+  }
+  Sprawdz "skille przykrycie: stan dla okna - wbud-a v1 w ~\.config\opencode\skills przykrywa w OpenCode nasze v2 w obu celach (sprawa z instrukcja przy skillu i na liscie)" $ok $r.Tekst
+  Sprawdz "skille przykrycie: PROBA NEGATYWNA - wbud-d w ~\.config\opencode\skills w tej samej wersji (inne konce linii) to nie sprawa, licznik przykrytych = 1" $okD $r.Tekst
+  $r = Uruchom $silnik @("-Tryb", "stan", "-KatalogDomowy", $domW, "-Katalog", $kat) (Srodowisko $domW @{ PATH = $sciezka })
+  Sprawdz "skille przykrycie: stan tekstem - UWAGA o wbud-a z katalogiem do usuniecia, bez UWAGI o wbud-d" (($r.Kod -eq 0) -and ($r.Tekst -match "UWAGA: skill wbud-a - OpenCode") -and ($r.Tekst -match [regex]::Escape($ocA)) -and ($r.Tekst -notmatch "UWAGA: skill wbud-d")) $r.Tekst
+  $r = Uruchom $silnik @("-Tryb", "codziennie", "-Wymus", "-KatalogDomowy", $domW, "-Katalog", $kat, "-Przerwy", "0") (Srodowisko $domW @{ PATH = $sciezka })
+  $log = Join-Path $domW ".claude\mr\skille\operacja.log"
+  $wydruk = $(if (Test-Path $log) { [System.IO.File]::ReadAllText($log) } else { "" })
+  Sprawdz "skille przykrycie: codzienny przebieg - wynik ok (to nie blad), UWAGA w wydruku operacji, kopii OpenCode NIE rusza (co do bajtu)" (($r.Kod -eq 0) -and ($wydruk -match "UWAGA: skill wbud-a - OpenCode") -and ($przedOc -eq [Convert]::ToBase64String([System.IO.File]::ReadAllBytes((Join-Path $ocA "SKILL.md"))))) ($r.Tekst + " | " + $wydruk)
+  # usuniecie wedlug instrukcji zamyka sprawe
+  Remove-Item -LiteralPath $ocA -Recurse -Force
+  $r = Uruchom $silnik @("-Tryb", "stan", "-Json", "-KatalogDomowy", $domW, "-Katalog", $kat) (Srodowisko $domW @{ PATH = $sciezka })
+  $j = $null; try { $j = ($r.Tekst -split "`nSTDERR:")[0].Trim() | ConvertFrom-Json } catch { $j = $null }
+  Sprawdz "skille przykrycie: po usunieciu kopii z ~\.config\opencode\skills sprawy nie ma" (($null -ne $j) -and ($j.liczniki.przykryte -eq 0) -and (@($j.przykryte).Count -eq 0)) $r.Tekst
 }
 
 function Scenariusz-Kopia {

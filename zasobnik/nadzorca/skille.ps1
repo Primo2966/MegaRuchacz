@@ -113,6 +113,8 @@ function Napis-Skilla($s) {
   # Wyzerowany po zaniku pradu (P62) - przed bledem sprawdzenia, bo mowi, co zrobic.
   if ($s.wyzerowany) { return @("uszkodzony (same zera) - do naprawy", $script:KolPilne) }
   if ($s.blad) { return @("nie udało się sprawdzić", $script:KolPilne) }
+  # OpenCode bierze inna kopie niz nasza pod opieka (narzedzia\skille.ps1 Przykrycia-Skilli)
+  if ($s.przykryty) { return @("$($s.przykryty.narzedzie) bierze inną kopię", $script:KolUwaga) }
   if ($s.dzisZaktualizowany -and $s.stan -eq "zgodny") { return @("nowa wersja pobrana dziś", $script:KolDobrze) }
   # Autor usunal skill - neutralnie (szaro): to nie usterka, kopia u Ciebie dziala.
   if ($s.stan -eq "usuniety") {
@@ -229,6 +231,7 @@ function Liczby-Grupy($z) {
     Problem = @($sk | Where-Object { $_.blad }).Count
     Zmienione = @($sk | Where-Object { $_.stan -eq "zmieniony" }).Count
     Usuniete = @($sk | Where-Object { $_.stan -eq "usuniety" }).Count
+    Przykryte = @($sk | Where-Object { $_.przykryty }).Count
   }
 }
 
@@ -262,6 +265,7 @@ function Grupa-Zrodla($z) {
   }
   if ($l.Zmienione -gt 0) { $cz += "zmienione ręcznie: $($l.Zmienione)" }
   if ($l.Usuniete -gt 0) { $cz += "autor usunął: $($l.Usuniete)" }
+  if ($l.Przykryte -gt 0) { $cz += "OpenCode bierze inną kopię: $($l.Przykryte)" }
   $g.Liczby = $cz -join "   ·   "
   # Zrodlo, z ktorego bierzemy tylko czesc (open-design): ile pominieto i dlaczego
   if ($z.pominiete) {
@@ -273,6 +277,8 @@ function Grupa-Zrodla($z) {
     $g.Napis = "błąd pobrania"; $g.KolorNapisu = $script:KolPilne; $g.Znacznik = $script:KolPilne
   } elseif ($l.Problem -gt 0) {
     $g.Napis = "problem: $($l.Problem)"; $g.KolorNapisu = $script:KolPilne; $g.Znacznik = $script:KolPilne
+  } elseif ($l.Przykryte -gt 0) {
+    $g.Napis = "OpenCode: inna kopia ($($l.Przykryte))"; $g.KolorNapisu = $script:KolUwaga; $g.Znacznik = $script:KolUwaga
   } elseif ($l.Starsze -gt 0) {
     $g.Napis = $(if ($wbud) { "nowsza wersja: $($l.Starsze)" } else { "nowsza wersja: $($l.Starsze) - ręcznie" })
     $g.KolorNapisu = $script:KolUwaga; $g.Znacznik = $script:KolUwaga
@@ -531,6 +537,7 @@ function Zdanie-Skilli($d) {
   if ($l.usuniete -gt 0) { $t += " Autor usunął: $($l.usuniete)." }
   if ($l.dzisZaktualizowane -gt 0) { $t += " Dziś pobrano nowe wersje: $($l.dzisZaktualizowane)." }
   if ($l.bledy -gt 0) { $t += " Nie udało się sprawdzić: $($l.bledy)." }
+  if ($l.przykryte -gt 0) { $t += " OpenCode bierze inną kopię niż Twoja pod opieką: $($l.przykryte) - co zrobić, po prawej." }
   $zn = $d.znacznik
   if ($zn -and $zn.dzien) {
     $t += " Codzienne sprawdzenie: $($zn.start)"
@@ -645,6 +652,13 @@ function Pokaz-Przeglad-Skilli {
   $l = New-Object System.Collections.Generic.List[string]
   $l.Add("Kliknij grupę po lewej, żeby ją rozwinąć, a potem skill - zobaczysz, co robi, jaką masz wersję i co się zmieniło przy ostatniej aktualizacji. Grupa z czerwonym paskiem ma problem, z bursztynowym - nowszą wersję do pobrania.")
   $l.Add("")
+  # Sprawa do zalatwienia recznie - na gorze, przed opisem dzialania (narzedzia\skille.ps1 Przykrycia-Skilli)
+  $przyk = @($d.przykryte | Where-Object { $_ })
+  if ($przyk.Count -gt 0) {
+    $l.Add("DO ZROBIENIA - $($przyk.Count) $(Odmiana $przyk.Count 'skill' 'skille' 'skilli') w OpenCode $(if ($przyk.Count -eq 1) { 'działa' } else { 'działają' }) w innej wersji niż Twoja pod opieką MegaRuchacza:")
+    foreach ($p in $przyk) { $l.Add("- $($p.folder): $($p.rada)") }
+    $l.Add("")
+  }
   $l.Add("Jak to działa:")
   $l.Add("- Raz dziennie MegaRuchacz sam pobiera nowsze wersje skilli WBUDOWANYCH (górna część listy), które masz pod opieką. Gdy któregoś źródła nie masz wcale, przy jego nazwie jest przycisk `„Zainstaluj`”.")
   $l.Add("- Skille z innych wykrytych źródeł (dolna część listy) nie są częścią MegaRuchacza - sam ich nie aktualizuje. Robisz to ręcznie: `„Sprawdź aktualizacje`” przy źródle albo `„Aktualizuj teraz`” przy skillu. Link przy źródle prowadzi do jego repozytorium.")
@@ -717,6 +731,7 @@ function Pokaz-Info-Skilla($para) {
     $ns = Napis-Skilla $s
     $info.Controls.Add((Wiersz-Dwukolumnowy "Stan" (Zdanie-Stanu-Skilla $s) $ns[1] $szer $e))
     if ($s.blad) { $info.Controls.Add((Wiersz-Dwukolumnowy "Błąd" "$($s.blad)" $script:KolPilne $szer $e)) }
+    if ($s.przykryty) { $info.Controls.Add((Wiersz-Dwukolumnowy "$($s.przykryty.narzedzie)" "$($s.przykryty.rada)" $script:KolUwaga $szer $e)) }
     if ($s.przeniesiony) {
       $info.Controls.Add((Wiersz-Dwukolumnowy "Przeniesiony" "Autor przeniósł go w swoim repo z $($s.przeniesiony.z) do $($s.przeniesiony.na) (zauważone $(Data-Krotko "$($s.przeniesiony.kiedy)")). MegaRuchacz sam bierze go z nowego miejsca." $script:KolSzary $szer $e))
     }

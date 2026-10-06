@@ -61,7 +61,11 @@
 #                 "duplicate skill name" w jego dzienniku, skill dziala, a wygrywa katalog
 #                 czytany POZNIEJ (kolejnosc: .claude, .agents, .config\opencode).
 #                 Dlatego OpenCode nie ma wlasnego celu ani wlasnej kopii - Cele-Instalacji.
-#   Ktore narzedzie jest na komputerze: Narzedzia-Obecne (rejestr instalacji + slady).
+#                 Skill z bazy w ~\.config\opencode\skills w INNEJ wersji niz nasza kopia
+#                 przykrywa ja w OpenCode - to sprawa w stanie i w oknie (Przykrycia-Skilli).
+#   Ktore narzedzie jest na komputerze: Narzedzia-Obecne - lista Narzedzia-AI
+#   z kierownik-cele.ps1 (jedno zrodlo prawdy, Wykryj-Narzedzia-AI) + rejestr instalacji;
+#   skad ktore czyta skille: $KATALOGI_SKILLI.
 #
 # STAN (poza repo): ~\.claude\mr\skille\
 #   stan.json        - co pod opieka, z jakiego zrodla i commita, kiedy sprawdzone
@@ -155,6 +159,15 @@ $LINII_DZIENNIKA = 3000
 $SMIECI = @("desktop.ini", "Thumbs.db", ".DS_Store")
 # Rozpoznawanie plikow wyzerowanych (P58/P62) - te same funkcje co cykl i straznik.
 . (Join-Path $PSScriptRoot "zapis-trwaly.ps1")
+# Lista narzedzi AI (Narzedzia-AI, Wykryj-Narzedzia-AI) - ta sama, z ktorej biora wpisz-zasady,
+# straznik i instalator. Bez niej nie wiadomo, gdzie wgrywac - odmowa z powodem, nie zgadywanie.
+try { . (Join-Path $PSScriptRoot "kierownik-cele.ps1") }
+catch {
+  $t = "nie udało się wczytać listy narzędzi AI (narzedzia\kierownik-cele.ps1): $($_.Exception.Message)"
+  if ($Json) { Write-Output ([regex]::Replace((([pscustomobject]@{ powod = $t }) | ConvertTo-Json -Compress), '[^\x00-\x7F]', { param($m) '\u{0:x4}' -f [int][char]$m.Value })) }
+  else { Write-Output "BŁĄD: $t" }
+  exit 1
+}
 
 $script:Wydruk = New-Object System.Collections.Generic.List[string]
 $script:Bledy  = 0
@@ -462,16 +475,13 @@ function Wczytaj-Katalog {
 }
 
 # Ktore narzedzia AI sa na komputerze (2026-10-06: uzytkownik moze miec dowolny zestaw).
-# Jest = rejestr instalacji mowi true (narzedzia.<id>, zapisuje go instalator) ALBO widac je
-# teraz: polecenie w PATH albo slad, ktory zaklada SAMO narzedzie - te same slady co lista
-# Narzedzia-AI w kierownik-cele.ps1 (katalog .claude nic nie dowodzi, zaklada go tez
-# MegaRuchacz). Rejestr sam nie wystarcza, bo to zdjecie z dnia instalacji - narzedzie
-# zainstalowane pozniej widac po sladach. Nieczytelny rejestr = UWAGA w wydruku, nie cisza.
-$NARZEDZIA_AI = @(
-  [pscustomobject]@{ Id = "claude";   Nazwa = "Claude Code"; Polecenie = "claude";   Slady = @(".claude.json", ".claude\history.jsonl") },
-  [pscustomobject]@{ Id = "codex";    Nazwa = "Codex";       Polecenie = "codex";    Slady = @(".codex", "AppData\Roaming\orca\codex-runtime-home") },
-  [pscustomobject]@{ Id = "opencode"; Nazwa = "OpenCode";    Polecenie = "opencode"; Slady = @(".config\opencode") }
-)
+# Lista i slady - JEDNO zrodlo prawdy: Narzedzia-AI / Wykryj-Narzedzia-AI z kierownik-cele.ps1
+# (polecenie w PATH, slad zakladany przez SAMO narzedzie, nasze bloki w jego pliku instrukcji;
+# katalog .claude nic nie dowodzi, zaklada go tez MegaRuchacz). Do tego rejestr instalacji
+# (narzedzia.<id>, zapisuje go instalator): to zdjecie z dnia instalacji, wiec sam nie
+# wystarcza - narzedzie zainstalowane pozniej widac po sladach. Nieczytelny rejestr = UWAGA.
+# Narzedzie z listy, o ktorym nie wiemy, skad czyta skille ($KATALOGI_SKILLI), i narzedzie
+# z $KATALOGI_SKILLI, ktorego na liscie nie ma - UWAGA w wydruku i w oknie, nie cisza.
 function Narzedzia-Obecne {
   $rej = $null
   $umowa = Join-Path $PSScriptRoot "instalacja\stan.ps1"
@@ -482,14 +492,33 @@ function Narzedzia-Obecne {
     elseif ($r.narzedzia) { $rej = $r.narzedzia }
   }
   $wynik = [ordered]@{}
-  foreach ($n in $NARZEDZIA_AI) {
+  # Wykryj-Narzedzia-AI oddaje tablice przecinkiem - bez @(), inaczej tablica w tablicy
+  $lista = Wykryj-Narzedzia-AI $Dom
+  foreach ($n in $lista) {
     $dowody = @()
     if ($rej -and ($rej.PSObject.Properties.Name -contains $n.Id) -and $rej.($n.Id) -eq $true) { $dowody += "rejestr instalacji" }
-    if (Get-Command $n.Polecenie -CommandType Application -ErrorAction SilentlyContinue | Select-Object -First 1) { $dowody += "polecenie $($n.Polecenie)" }
-    foreach ($s in $n.Slady) { if (Test-Path -LiteralPath (Join-Path $Dom $s)) { $dowody += $s } }
-    $wynik[$n.Id] = [pscustomobject]@{ Id = $n.Id; Nazwa = $n.Nazwa; Jest = ($dowody.Count -gt 0); Dowod = ($dowody -join ", ") }
+    if ($n.Jest) { $dowody += "$($n.Dowod)" }
+    $w = [pscustomobject]@{ Id = $n.Id; Nazwa = $n.Nazwa; Jest = ($dowody.Count -gt 0); Dowod = ($dowody -join ", ") }
+    $wynik[$n.Id] = $w
+    if ($w.Jest -and -not $KATALOGI_SKILLI.Contains($n.Id)) {
+      Pisz "UWAGA: $($n.Nazwa) jest na tym komputerze ($($w.Dowod)), ale nie wiem, skąd czyta skille - skilli mu nie wgrywam i ich nie sprawdzam. Trzeba dopisać jego katalogi skilli w narzedzia\skille.ps1 (KATALOGI_SKILLI)."
+    }
+  }
+  foreach ($id in @($KATALOGI_SKILLI.Keys)) {
+    if ($wynik.Contains($id)) { continue }
+    Pisz "UWAGA: na liście narzędzi AI (narzedzia\kierownik-cele.ps1, Narzedzia-AI) nie ma '$id' - jego skilli nie sprawdzam i nic mu nie wgrywam."
+    $wynik[$id] = [pscustomobject]@{ Id = $id; Nazwa = $id; Jest = $false; Dowod = "" }
   }
   return $wynik
+}
+
+# Skad narzedzie czyta skille (wzgledem domu), w kolejnosci wczytywania: przy dublu nazwy wygrywa
+# katalog POZNIEJSZY (OpenCode 1.18.33, naglowek). Lista Narzedzia-AI katalogow skilli jeszcze nie
+# niesie - gdy dostanie, ta tablica ma zniknac (jedno zrodlo prawdy).
+$KATALOGI_SKILLI = [ordered]@{
+  claude   = @(".claude\skills")
+  codex    = @(".agents\skills")
+  opencode = @(".claude\skills", ".agents\skills", ".config\opencode\skills")
 }
 
 # Gdzie wgrywamy - cel to KATALOG, a nie narzedzie (Id zostaja "claude" i "codex", bo pod
@@ -509,7 +538,8 @@ function Narzedzia-Obecne {
 function Cele-Instalacji {
   $n = $script:Narzedzia
   $jestClaude = $n["claude"].Jest; $jestCodex = $n["codex"].Jest; $jestOpen = $n["opencode"].Jest
-  $kClaude = Join-Path $Dom ".claude\skills"; $kAgents = Join-Path $Dom ".agents\skills"; $kOpen = Join-Path $Dom ".config\opencode\skills"
+  $kClaude = Join-Path $Dom $KATALOGI_SKILLI["claude"][0]; $kAgents = Join-Path $Dom $KATALOGI_SKILLI["codex"][0]
+  $kOpen = Join-Path $Dom (@($KATALOGI_SKILLI["opencode"])[-1])
   $dlaClaude = @(); if ($jestClaude) { $dlaClaude += "Claude Code" }; if ($jestOpen) { $dlaClaude += "OpenCode" }
   $dlaAgents = @(); if ($jestCodex) { $dlaAgents += "Codex" }; if ($jestOpen) { $dlaAgents += "OpenCode" }
   $celClaude = $jestClaude -or ($jestOpen -and -not $jestCodex)
@@ -528,8 +558,67 @@ function Katalogi-Skilli($cele) {
   $n = $script:Narzedzia
   $k = @()
   foreach ($c in $cele) { if (@($c.Dla).Count -gt 0) { $k += [pscustomobject]@{ Id = $c.Id; Nazwa = $c.Nazwa; Katalog = $c.Katalog } } }
-  if ($n["opencode"].Jest) { $k += [pscustomobject]@{ Id = "opencode"; Nazwa = "OpenCode"; Katalog = (Join-Path $Dom ".config\opencode\skills") } }
+  if ($n["opencode"].Jest) { $k += [pscustomobject]@{ Id = "opencode"; Nazwa = "OpenCode"; Katalog = (Join-Path $Dom (@($KATALOGI_SKILLI["opencode"])[-1])) } }
   return ,$k
+}
+
+# Czy dwie kopie skilla na dysku (Odcisk-Lokalny) to ta sama tresc: te same pliki, kazdy
+# z tym samym skrotem po CRLF->LF (ta sama wersja wgrana raz z LF, raz z CRLF to nie roznica).
+function Te-Same-Pliki($a, $b) {
+  if ($null -eq $a -or $null -eq $b) { return $false }
+  if ($a.Count -ne $b.Count) { return $false }
+  foreach ($rel in $a.Keys) {
+    if (-not $b.ContainsKey($rel)) { return $false }
+    if ("$($a[$rel][1])" -ne "$($b[$rel][1])") { return $false }
+  }
+  return $true
+}
+
+# Przykrycie (2026-10-06): narzedzie czytajace kilka katalogow skilli (OpenCode) bierze przy dublu
+# nazwy kopie z katalogu czytanego POZNIEJ. Skill z bazy lezacy w takim katalogu, do ktorego nic nie
+# wgrywamy (~\.config\opencode\skills), w INNEJ wersji niz nasza kopia w celu (~\.claude\skills,
+# ~\.agents\skills) - narzedzie uzywa tamtej, a nasza (pod opieka, aktualizowana) w nim nie dziala.
+# Nie kasujemy sami (moze to celowa zmiana uzytkownika pod OpenCode) - sprawa z instrukcja.
+# Wynik: folder -> Narzedzie, Wygrywa (sciezka), Przykryte (sciezki naszych kopii), Rada.
+# Ta sama tresc w obu miejscach = nie sprawa (OpenCode ostrzega tylko w swoim dzienniku).
+function Przykrycia-Skilli($zrodla, $cele) {
+  $wynik = [ordered]@{}
+  $nasze = @{}
+  foreach ($c in $cele) { if ($c.Jest) { $nasze[$c.Katalog.TrimEnd('\').ToLowerInvariant()] = $true } }
+  foreach ($id in @($KATALOGI_SKILLI.Keys)) {
+    $kat = @($KATALOGI_SKILLI[$id])
+    $nz = $script:Narzedzia[$id]
+    if ($kat.Count -lt 2 -or -not $nz -or -not $nz.Jest) { continue }
+    $pelne = @($kat | ForEach-Object { (Join-Path $Dom $_).TrimEnd('\') })
+    foreach ($z in $zrodla) {
+      foreach ($sk in $z.Skille) {
+        if ($wynik.Contains($sk.Folder)) { continue }
+        $kopie = @($pelne | ForEach-Object { [pscustomobject]@{ Katalog = $_; Sciezka = (Join-Path $_ $sk.Folder) } } |
+                   Where-Object { Test-Path -LiteralPath $_.Sciezka -PathType Container })
+        if ($kopie.Count -lt 2) { continue }
+        $wyg = $kopie[-1]
+        if ($nasze.ContainsKey($wyg.Katalog.ToLowerInvariant())) { continue }   # wygrywa nasza kopia
+        $przykryte = @()
+        try {
+          $odWyg = Odcisk-Lokalny $wyg.Sciezka
+          foreach ($k in @($kopie | Select-Object -First ($kopie.Count - 1))) {
+            if (-not $nasze.ContainsKey($k.Katalog.ToLowerInvariant())) { continue }
+            if (-not (Te-Same-Pliki (Odcisk-Lokalny $k.Sciezka) $odWyg)) { $przykryte += $k.Sciezka }
+          }
+        } catch {
+          Pisz "UWAGA: nie udało się porównać kopii skilla $($sk.Folder) czytanych przez $($nz.Nazwa) ($($wyg.Sciezka)): $($_.Exception.Message)"
+          continue
+        }
+        if ($przykryte.Count -eq 0) { continue }
+        $rada = ("$($nz.Nazwa) używa kopii z $($wyg.Sciezka), a nie Twojej pod opieką MegaRuchacza ($($przykryte -join ' i ')) - " +
+                 "ich treść się różni, więc aktualizacje tego skilla w $($nz.Nazwa) nie działają. Co zrobić: jeśli tamtej kopii nie " +
+                 "zmieniałeś celowo dla $($nz.Nazwa), usuń katalog $($wyg.Sciezka) - $($nz.Nazwa) weźmie wtedy wersję pod opieką. " +
+                 "Jeśli to Twoja celowa zmiana, zostaw ją - MegaRuchacz jej nie aktualizuje i nie rusza.")
+        $wynik[$sk.Folder] = [pscustomobject]@{ Narzedzie = $nz.Nazwa; Wygrywa = $wyg.Sciezka; Przykryte = $przykryte; Rada = $rada }
+      }
+    }
+  }
+  return $wynik
 }
 
 # -------------------------------------------------------------------- stan
@@ -1805,6 +1894,9 @@ function Stan-Dla-Okna($stan, $zrodla, $cele) {
   # ile zainstalowanych, ile czeka nowsza wersja (u innych: do recznej aktualizacji).
   $licz["wbudZrodel"] = 0; $licz["wbudSkilli"] = 0; $licz["wbudZainstalowane"] = 0; $licz["wbudStarsze"] = 0
   $licz["inneZrodel"] = 0; $licz["inneSkilli"] = 0; $licz["inneZainstalowane"] = 0; $licz["inneStarsze"] = 0
+  # Skille z bazy, ktore narzedzie (OpenCode) bierze z innej kopii niz nasza - sprawa z instrukcja
+  $przyk = Przykrycia-Skilli $zrodla $cele
+  $licz["przykryte"] = $przyk.Count
   foreach ($z in $zrodla) {
     $zs = Na-Slownik $stan.zrodla[$z.Id]
     $grupa = $(if ($z.Wbudowane) { "wbud" } else { "inne" })
@@ -1872,6 +1964,7 @@ function Stan-Dla-Okna($stan, $zrodla, $cele) {
         najnowszy = $(if ($x -and $x.najnowszy) { [pscustomobject]@{ commit = "$($x.najnowszy.commit)"; data = "$($x.najnowszy.data)" } } else { $null })
         cele = $wc
         zmiana = $(if ($x -and $x.zmiana) { [pscustomobject]$x.zmiana } else { $null })
+        przykryty = $(if ($przyk.Contains($sk.Folder)) { $p = $przyk[$sk.Folder]; [pscustomobject]@{ narzedzie = $p.Narzedzie; wygrywa = $p.Wygrywa; przykryte = @($p.Przykryte); rada = $p.Rada } } else { $null })
       }
     }
     # pominiete: $null = zrodlo bierze wszystko albo jeszcze nie policzone (brak sprawdzenia)
@@ -1923,6 +2016,7 @@ function Stan-Dla-Okna($stan, $zrodla, $cele) {
     operacja = [pscustomobject](Klucze-Z-Pliku $PlikOper)
     liczniki = [pscustomobject]$licz
     zrodla = $wynikZ; spozaBazy = $spoza
+    przykryte = @($przyk.Keys | ForEach-Object { $p = $przyk[$_]; [pscustomobject]@{ folder = $_; narzedzie = $p.Narzedzie; wygrywa = $p.Wygrywa; przykryte = @($p.Przykryte); rada = $p.Rada } })
   }
 }
 
@@ -1964,6 +2058,7 @@ if ($Tryb -eq "stan") {
       Write-Output ("Narzędzia AI: " + (@($o.narzedzia | ForEach-Object { "$($_.nazwa) - $(if ($_.jest) { 'jest (' + $_.dowod + ')' } else { 'nie ma' })" }) -join "; "))
       Write-Output (Linia-Gdzie $cele)
       foreach ($u in @($o.uwagi)) { Write-Output $u }
+      foreach ($pk in @($o.przykryte)) { Write-Output "UWAGA: skill $($pk.folder) - $($pk.rada)" }
       foreach ($z in $o.zrodla) {
         Write-Output ""
         Write-Output "== $($z.nazwa) [$($z.id)] $(if ($z.wbudowane) { '[wbudowane]' } else { '[inne - aktualizacja ręczna]' }) $($z.adres) $(if ($z.blad) { 'BŁĄD: ' + $z.blad })"
@@ -2098,6 +2193,8 @@ try {
   $l = $o.liczniki
   Pisz ""
   Pisz "Skilli w bazie: $($l.wBazie) - aktualne: $($l.zgodne), starsze wersje: $($l.starsze), zmienione ręcznie: $($l.zmienione), niezainstalowane: $($l.brak), usunięte przez autora: $($l.usuniete), z błędem: $($l.bledy). Zmienionych teraz: $zmian."
+  # przykrycie to nie blad przebiegu (wynik zostaje ok), ale ma byc widac je w wydruku operacji
+  foreach ($pk in @($o.przykryte)) { Pisz "UWAGA: skill $($pk.folder) - $($pk.rada)" }
   }
   if ($script:Bledy -gt 0) { $kod = 1 }
   $wynik = $(if ($script:Bledy -gt 0) { "blad" } else { "ok" })
