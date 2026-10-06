@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import os
 import re
 import sqlite3
 import threading
@@ -254,11 +255,55 @@ def context(chunk_id: int, count: int = 3, conn: sqlite3.Connection | None = Non
             conn.close()
 
 
+SOURCES = ("Claude Code", "Codex", "OpenCode")
+OPENCODE_ABSENT = "OpenCode nie jest tu używany (brak jego bazy na tej maszynie)"
+OPENCODE_UNCHECKED = "nie sprawdzono jeszcze - indekser nie przeszedł od dodania OpenCode"
+
+
+def _source(path: str, codex_dir: str) -> str:
+    """Which program a `files.path` / `chunks.file` comes from. An OpenCode session is stored as
+    `<opencode.db>#<session id>` (index.OpencodeSession.key), Codex as a file under ~/.codex/sessions;
+    everything else is a Claude Code transcript (Orca's loose ones included — the same format)."""
+    head, sep, _ = path.rpartition("#")
+    if sep and head.lower().endswith(".db"):
+        return "OpenCode"
+    if os.path.normcase(path).startswith(codex_dir):
+        return "Codex"
+    return "Claude Code"
+
+
+def _sources(conn: sqlite3.Connection) -> tuple[dict, str | None]:
+    """Files and chunks per program + the OpenCode state from meta, and the warning that has to
+    stand at the very top of the stats (None = nothing to warn about). A "BLAD ..." recorded by the
+    indexer — or any state this code does not know — is never only a field deep in the result."""
+    from .index import CODEX_SESSIONS_DIR, META_OPENCODE
+    codex_dir = os.path.normcase(str(CODEX_SESSIONS_DIR)).rstrip("\\/") + os.sep
+    out = {name: {"files": 0, "chunks": 0} for name in SOURCES}
+    for (path,) in conn.execute("SELECT path FROM files"):
+        out[_source(path, codex_dir)]["files"] += 1
+    for path, n in conn.execute("SELECT file, count(*) FROM chunks GROUP BY file"):
+        out[_source(path, codex_dir)]["chunks"] += n
+    row = conn.execute("SELECT value FROM meta WHERE key=?", (META_OPENCODE,)).fetchone()
+    state = row[0] if row else None
+    oc = out["OpenCode"]
+    oc["status"] = state
+    warning = None
+    if state is None:
+        oc["note"] = OPENCODE_UNCHECKED
+    elif state == "absent":
+        oc["note"] = OPENCODE_ABSENT
+    elif not state.startswith("ok"):
+        warning = (f"OpenCode: rozmowy NIE są indeksowane w całości - indekser zapisał: {state} "
+                   f"(szczegóły w logu indeksera)")
+    return out, warning
+
+
 def stats(conn: sqlite3.Connection | None = None) -> dict:
     own = conn is None
     if own:
         conn = connect()
     try:
+        sources, warning = _sources(conn)
         sessions, total = conn.execute("SELECT count(DISTINCT session), count(*) FROM chunks").fetchone()
         files = conn.execute("SELECT count(*) FROM files").fetchone()[0]
         per = [
@@ -269,8 +314,11 @@ def stats(conn: sqlite3.Connection | None = None) -> dict:
         last = conn.execute("SELECT value FROM meta WHERE key='last_indexed'").fetchone()
         from .db import DB_PATH
         size = DB_PATH.stat().st_size if DB_PATH.exists() else 0
+        head = {"UWAGA": warning} if warning else {}  # first key = the start of what the caller reads
         return {
+            **head,
             "sessions": sessions, "chunks": total, "files": files,
+            "sources": sources,
             "last_indexed": ts_to_local(last[0]) if last else None,
             "database": str(DB_PATH), "size_MB": round(size / 1e6, 1),
             "vectors": vector_status(conn),
