@@ -259,13 +259,16 @@ function Werdykt-Kosztu($start, $rachunek, $cykl, $zuzycie = $null, $inst = $nul
   }
   # Bez zmierzonej calosci procentu nie ma - werdykt zapada i tak (prog jest w tokenach),
   # a zdanie mowi, czemu procentu brak. Nigdy 0% i nigdy zgadniety procent.
+  # P71: liczby moga byc Codeksa (komputer z samym Codeksem) - zdanie nazywa narzedzie,
+  # ktorego otwarcie mierzono, a nie zawsze Claude'a.
+  $kto = Kto-Wczytuje $start $k
   $bezProcentu = ""
-  if (-not $w.Proc) { $bezProcentu = " Jaką to część wszystkiego, co Claude wczytuje przy otwarciu okna, nie wiem, bo $("$($o.Powod)".TrimEnd('.', ' '))." }
+  if (-not $w.Proc) { $bezProcentu = " Jaką to część wszystkiego, co $kto wczytuje przy otwarciu okna, nie wiem, bo $("$($o.Powod)".TrimEnd('.', ' '))." }
   $ile = "~$(Okolo $mr) tokenów"
   if ($mr -gt $w.Prog) {
     $w.Stan = "duzo"
     if ($w.Proc) {
-      $w.Zdanie = "MegaRuchacz kosztuje dużo: dokłada $($w.Proc) do tego, co Claude wczytuje przy każdym otwarciu nowego okna rozmowy."
+      $w.Zdanie = "MegaRuchacz kosztuje dużo: dokłada $($w.Proc) do tego, co $kto wczytuje przy każdym otwarciu nowego okna rozmowy."
       $w.Wyjasnienie = "To $ile przy każdym otwarciu okna, a drogo robi się już od ~$(Okolo $w.Prog) tokenów - warto odchudzić jego zasady albo wiedzę (co ile waży, pokazuje zakładka Szczegóły)."
     } else {
       $w.Zdanie = "MegaRuchacz kosztuje dużo: dokłada $ile przy każdym otwarciu nowego okna rozmowy."
@@ -274,7 +277,7 @@ function Werdykt-Kosztu($start, $rachunek, $cykl, $zuzycie = $null, $inst = $nul
   } else {
     $w.Stan = "malo"
     if ($w.Proc) {
-      $w.Zdanie = "MegaRuchacz kosztuje mało: dokłada $($w.Proc) do tego, co Claude wczytuje przy każdym otwarciu nowego okna rozmowy."
+      $w.Zdanie = "MegaRuchacz kosztuje mało: dokłada $($w.Proc) do tego, co $kto wczytuje przy każdym otwarciu nowego okna rozmowy."
       $w.Wyjasnienie = "Drogo byłoby, gdyby MegaRuchacz urósł o $(Wzrost-Do-Progu $mr $w.Prog) (dziś $ile przy otwarciu okna)."
     } else {
       $w.Zdanie = "MegaRuchacz kosztuje mało: dokłada $ile przy każdym otwarciu nowego okna rozmowy."
@@ -282,6 +285,19 @@ function Werdykt-Kosztu($start, $rachunek, $cykl, $zuzycie = $null, $inst = $nul
     }
   }
   return $w
+}
+
+# Kto wczytuje otwarcie okna rozmowy, o ktorym mowi werdykt (P71): glowne narzedzie tej
+# maszyny - to, ktorego otwarcie zmierzyl -Start (Sesje.Narzedzie, Narzedzie), a bez
+# pomiaru to, ktorego rachunek idzie w udzial.* (klucz "narzedzie" z -Dane). Claude Code
+# mowi o sobie krotko "Claude"; bez zadnej z tych liczb - jak dotad "Claude".
+function Kto-Wczytuje($start, $k) {
+  $n = ""
+  if ($start -and $start.Sesje -and $start.Sesje.Narzedzie) { $n = "$($start.Sesje.Narzedzie)" }
+  elseif ($start -and $start.PSObject.Properties["Narzedzie"] -and $start.Narzedzie) { $n = "$($start.Narzedzie)" }
+  if (-not $n) { $n = Tekst-Z-Klucza $k "narzedzie" }
+  if ((-not $n) -or ($n -eq "Claude Code")) { return "Claude" }
+  return $n
 }
 
 # "ok. 65%" - o ile czesc MegaRuchacza musialaby urosnac, zeby przekroczyc prog.

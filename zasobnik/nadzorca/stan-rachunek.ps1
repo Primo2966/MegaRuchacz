@@ -100,15 +100,20 @@ function Warstwy-Pamieci {
 }
 
 # OTWARCIE SESJI - CALOSC I UDZIAL MEGARUCHACZA. Calosci nie zgadujemy:
-# narzedzia\koszt-pamieci.ps1 -Start mierzy ja z transkryptow Claude Code
-# (pierwsza odpowiedz modelu w sesji, pole usage) i oddaje JSON z mediana
+# narzedzia\koszt-pamieci.ps1 -Start mierzy ja z rozmow glownego narzedzia tej
+# maszyny - Claude Code, a z samym Codeksem Codeksa (pierwsza odpowiedz modelu
+# w rozmowie, liczby tokenow z transkryptu) - i oddaje JSON z mediana
 # i liczba sesji, a obok czesc MegaRuchacza z tego samego rachunku, co reszta
 # okna. Tutaj tylko wywolanie i odczyt. Nieudany pomiar to Powod, ktory okno
 # pokazuje slowami "nie zmierzono, bo ..." - nigdy zero i nigdy 0%.
 function Pomiar-Startu {
+  # Narzedzie i Narzedzia (P71): czyje liczby stoja na wierzchu ("Claude Code", "Codex")
+  # i pomiar kazdego narzedzia z listy $NARZEDZIA_AI osobno. Stary -Start bez tych pol
+  # daje "" i pusta liste - wtedy liczby sa Claude Code, jak dotad.
   $w = [pscustomobject]@{
     Powod = ""; Sesje = $null; Workerzy = $null; Metoda = ""; Katalog = ""; DniWstecz = $null
     MrSesja = $null; MrStart = $null; MrWiadomosc = $null; MrWorker = $null; Wygenerowano = ""
+    Narzedzie = ""; Narzedzia = @()
   }
   $skrypt = Join-Path $script:NadzZrodlo "narzedzia\koszt-pamieci.ps1"
   $r = Wolaj-Skrypt $skrypt @("-KatalogDomowy", ('"' + $script:NadzDom + '"'), "-Zrodlo", ('"' + $script:NadzZrodlo + '"'), "-Start") 120
@@ -137,6 +142,8 @@ function Pomiar-Startu {
   $w.MrStart = $j.MegaRuchaczStart
   $w.MrWiadomosc = $j.MegaRuchaczWiadomosc
   $w.MrWorker = $j.MegaRuchaczWorker
+  if ($j.PSObject.Properties["Narzedzie"]) { $w.Narzedzie = "$($j.Narzedzie)" }
+  if ($j.PSObject.Properties["Narzedzia"]) { $w.Narzedzia = @($j.Narzedzia | Where-Object { $_ }) }
   if ((-not $w.Powod) -and ((-not $w.Sesje) -or ($null -eq $w.Sesje.Mediana))) {
     $w.Powod = "pomiar nie oddał mediany z rozmów (kod $($r.kod))"
   }

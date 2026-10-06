@@ -190,7 +190,7 @@ function Problemy-Narzedzi($d) {
     $spr = Tekst-Z-Klucza $k "cowiem.sprawdzone"
     $lista += Problem "pilne" "Wiedza o Tobie i firmie nie trafia do żadnego narzędzia" (
       "W żadnym pliku instrukcji nie ma sekcji `„Co wiem`” - sprawdziłem $(@($narz).Count) $(Odmiana @($narz).Count 'plik' 'pliki' 'plików'). " +
-      "Bez niej ani Claude Code, ani Codex nie wiedzą nic z tego, czego MegaRuchacz się o Tobie nauczył. " +
+      "Bez niej żadne narzędzie AI ($(Lista-Nazw @($narz | ForEach-Object { $_.Nazwa }))) nie wie nic z tego, czego MegaRuchacz się o Tobie nauczył. " +
       "Kliknij `„Zmień instalację`” i zainstaluj ponownie moduł Wiedza - założy tę sekcję.") "Sprawdzone pliki: $spr"
   }
   foreach ($n in $narz) {

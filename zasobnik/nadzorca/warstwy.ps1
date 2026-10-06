@@ -177,7 +177,9 @@ function Zdanie-Warstw($dw) {
   $nd = @($wszystkie | Where-Object { "$($_.Stan)" -eq "nie-dotyczy" })
   if ($nd.Count -gt 0) {
     $kogo = @($nd | ForEach-Object { "$($_.NarzedzieNazwa)" } | Where-Object { $_ } | Select-Object -Unique)
-    $z += " $($nd.Count) $(Odmiana $nd.Count 'warstwa nie dotyczy' 'warstwy nie dotyczą' 'warstw nie dotyczy') tego komputera - należą do narzędzia, którego tu nie używasz ($($kogo -join ', ')); zaznaczone na szaro."
+    $doKogo = "do narzędzia, którego"
+    if ($kogo.Count -gt 1) { $doKogo = "do narzędzi, których" }
+    $z += " $($nd.Count) $(Odmiana $nd.Count 'warstwa nie dotyczy' 'warstwy nie dotyczą' 'warstw nie dotyczy') tego komputera - należą $doKogo tu nie używasz ($(Lista-Nazw $kogo)); zaznaczone na szaro."
   }
   # Gdzie stoi sekcja "Co wiem" - w pliku instrukcji ktorego narzedzia (podwarstwy
   # *-globalny-stala ze stanem "jest").
@@ -203,7 +205,8 @@ function Moduly-Warstwy($wa) {
     if ($NADZ_MODULY -contains $Matches[1]) { return ,@($Matches[1]) }
     return ,@()
   }
-  if (@("claude-globalny-stala", "claude-globalny-biezace", "codex-globalny-stala", "codex-globalny-biezace", "doklejka-cykl", "wiedza") -contains $id) { return ,@("wiedza") }
+  if (@("claude-globalny-stala", "claude-globalny-biezace", "codex-globalny-stala", "codex-globalny-biezace",
+        "opencode-globalny-stala", "opencode-globalny-biezace", "doklejka-cykl", "wiedza") -contains $id) { return ,@("wiedza") }
   if ("$($wa.Rodzic)" -eq "wiedza") { return ,@("wiedza") }
   if (@("doklejka-archiwum", "lore") -contains $id) { return ,@("lore") }
   if ((@("przypomnienie", "przypomnienie-codex", "mapa", "worklog") -contains $id) -or ($id -match '^ladunek-\d+$')) { return ,@("kierownik") }

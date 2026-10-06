@@ -11,6 +11,9 @@
 #                nigdzie, wiec Przeglad nie moze mowic "Wszystko gra".
 #   codex-zle  - rozmowy Codeksa bez liczb tokenow - proba negatywna: pomiar niemozliwy dla
 #                UZYWANEGO narzedzia ma trafic do spraw wymagajacych uwagi.
+#   codex-prawdziwy - zanonimizowana probka w PRAWDZIWYM zapisie Codeksa (DomPrawdziwy nizej,
+#                z podagentem niosacym kopie rozmowy-rodzica) - od 06.10.2026.
+# Do tego werdykt i Pomiar-Startu okna: liczby Codeksa nazwane Codeksem, nie Claude'em.
 # Liczby w rozmowach sa dobrane tak, zeby wynik dalo sie policzyc na kartce: dzis przyrosty
 # 20 500 + 0 (zdarzenie powtorzone) + 25 400 = 45 900; 3 dni temu 30 000, czyli srednio
 # 30 000 / 7 = 4 286 dziennie; otwarcie dzis 20 000 - 11 znakow wiadomosci / 3 (4) = 19 996,
@@ -70,6 +73,102 @@ function Rozmowa($dom, $kiedy, [string[]]$linie) {
 }
 function Wiadomosc($kiedy, [string]$tekst) {
   return (Zapis $kiedy "response_item" @{ type = "message"; role = "user"; content = @(@{ type = "input_text"; text = $tekst }) })
+}
+
+# --- probka w PRAWDZIWYM zapisie Codeksa (zanonimizowana) ---------------------
+# Ksztalt przepisany 06.10.2026 z prawdziwych rozmow z komputera domowego (Codex
+# codex-tui, 3 pliki z 30.09-04.10, plus przeglad wszystkich 129): te same typy zapisow
+# i pola, tresci i identyfikatory zmyslone. Rzeczy, ktorych pierwsza probka nie miala:
+# pole ordinal w kazdym zapisie, world_state, token_usage_record (te same liczby co
+# token_count - nie wolno ich liczyc drugi raz), cache_write_input_tokens, obrazek
+# w wiadomosci (bloki <image>, input_image, </image>) i PODAGENT: pierwszy session_meta
+# z source.subagent, zaraz za nim session_meta rodzica i KOPIA jego rozmowy razem z jego
+# token_count (na domu 14 z 43 podagentow, sumy 18-143 mln) - wlasna historia od zapisu
+# subagent_history_start_ordinal.
+# Liczby: dzis - rozmowa 57 400 (dwa zdarzenia, przyrost 28 200 + 29 200) + podagent
+# 30 100 (kopia rodzica z 5 000 000 nie liczy sie) = 87 500; 2 dni temu rozmowa
+# "codex exec" 32 145 -> srednio 32 145 / 7 = 4 592. Otwarcie: 28 000 - 10 znakow / 3 (4) =
+# 27 996 i 32 000 - 12 / 3 (4) = 31 996 -> mediana 29 996; podagent nie jest otwarciem okna.
+function ZapisO($kiedy, [int]$nr, [string]$typ, $payload) {
+  return ([ordered]@{ timestamp = $kiedy.ToUniversalTime().ToString("yyyy-MM-ddTHH:mm:ss.fffZ"); ordinal = $nr; type = $typ; payload = $payload } | ConvertTo-Json -Compress -Depth 10)
+}
+function UzycieO($we, $buf, $wy, $roz) {
+  return [ordered]@{ input_tokens = $we; cached_input_tokens = $buf; cache_write_input_tokens = 0; output_tokens = $wy; reasoning_output_tokens = $roz; total_tokens = ($we + $wy) }
+}
+function TokenyO($kiedy, [int]$nr, $calosc, $ostatnie) {
+  return (ZapisO $kiedy $nr "event_msg" ([ordered]@{ type = "token_count"
+    info = [ordered]@{ total_token_usage = $calosc; last_token_usage = $ostatnie; model_context_window = 258400 }
+    rate_limits = [ordered]@{ limit_id = "codex"; primary = [ordered]@{ used_percent = 1.0; window_minutes = 300 } } }))
+}
+function RekordO($kiedy, [int]$nr, $uzycie) {
+  return (ZapisO $kiedy $nr "token_usage_record" ([ordered]@{ thread_id = "watek"; turn_id = "tura"; session_id = "sesja"; root_turn_id = "tura"
+    response_id = "resp_test"; usage = $uzycie; turn_token_usage = $uzycie; thread_token_usage = $uzycie }))
+}
+function MetaO($kiedy, [int]$nr, [string]$id, $zrodlo, [string]$watek, $start) {
+  $p = [ordered]@{ session_id = $id; id = $id; timestamp = $kiedy.ToUniversalTime().ToString("yyyy-MM-ddTHH:mm:ss.fffZ"); cwd = "C:\projekt"
+    originator = "codex-tui"; cli_version = "0.200.0"; source = $zrodlo; thread_source = $watek; model_provider = "openai"; history_mode = "paginated"
+    base_instructions = [ordered]@{ text = "Instrukcje bazowe (zmyslone)." } }
+  if ($null -ne $start) { $p.subagent_history_start_ordinal = $start; $p.forked_from_id = "rodzic"; $p.parent_thread_id = "rodzic" }
+  return (ZapisO $kiedy $nr "session_meta" $p)
+}
+function WiadO($kiedy, [int]$nr, [string]$rola, $bloki) {
+  return (ZapisO $kiedy $nr "response_item" ([ordered]@{ type = "message"; role = $rola; content = @($bloki) }))
+}
+function TekstO([string]$t) { return [ordered]@{ type = "input_text"; text = $t } }
+function KontekstO($kiedy, [int]$nr) {
+  return (ZapisO $kiedy $nr "turn_context" ([ordered]@{ turn_id = "tura"; cwd = "C:\projekt"; approval_policy = "on-request"; model = "gpt-test"; effort = "high"; summary = "auto" }))
+}
+function DomPrawdziwy([string]$nazwa) {
+  $dom = Join-Path $T $nazwa
+  New-Item -ItemType Directory -Force -Path (Join-Path $dom ".codex") | Out-Null
+  [System.IO.File]::WriteAllText((Join-Path $dom ".codex\AGENTS.md"), "## Co wiem`n`n- Fakt testowy.`n", $bezBom)
+  $dzis = (Get-Date).AddMinutes(-5)
+  if ($dzis.Date -ne (Get-Date).Date) { $dzis = (Get-Date) }
+  $agentsMd = TekstO "# AGENTS.md instructions for C:\projekt`n`n<INSTRUCTIONS>`nZmyslone instrukcje.`n</INSTRUCTIONS>"
+  $srodowisko = TekstO "<environment_context>`n  <cwd>C:\projekt</cwd>`n  <shell>powershell</shell>`n</environment_context>"
+  # zwykla rozmowa z obrazkiem w pierwszej wiadomosci, dwa wywolania modelu
+  $l = @(
+    (MetaO $dzis 0 "rozmowa-1" "cli" "user" $null),
+    (ZapisO $dzis 1 "event_msg" ([ordered]@{ type = "task_started"; turn_id = "tura" })),
+    (WiadO $dzis 2 "developer" @([ordered]@{ type = "input_text"; text = "<permissions instructions>zmyslone</permissions instructions>" })),
+    (WiadO $dzis 3 "user" @($agentsMd, $srodowisko)),
+    (ZapisO $dzis 4 "world_state" ([ordered]@{ full = $true; state = [ordered]@{ model = "gpt-test" } })),
+    (KontekstO $dzis 5),
+    (WiadO $dzis 6 "user" @((TekstO "<image name=[Image #1]>"), [ordered]@{ type = "input_image"; image_url = "data:image/png;base64,AAAA" }, (TekstO "</image>"), (TekstO "Policz to."))),
+    (ZapisO $dzis 7 "event_msg" ([ordered]@{ type = "item_completed"; item = [ordered]@{ type = "reasoning" } })),
+    (ZapisO $dzis 8 "response_item" ([ordered]@{ type = "reasoning"; summary = @() })),
+    (RekordO $dzis 9 (UzycieO 28000 11000 200 50)),
+    (TokenyO $dzis 10 (UzycieO 28000 11000 200 50) (UzycieO 28000 11000 200 50)),
+    (RekordO $dzis 11 (UzycieO 29000 28000 200 0)),
+    (TokenyO $dzis 12 (UzycieO 57000 39000 400 50) (UzycieO 29000 28000 200 0)),
+    (ZapisO $dzis 13 "event_msg" ([ordered]@{ type = "task_complete"; turn_id = "tura" })))
+  Rozmowa $dom $dzis $l
+  # podagent: kopia rodzica (z jego token_count na 5 mln) do zapisu nr 5, wlasna historia od 6
+  $pod = $dzis.AddSeconds(30)
+  $zrodloPod = [ordered]@{ subagent = [ordered]@{ thread_spawn = [ordered]@{ parent_thread_id = "rodzic"; depth = 1; agent_path = "/root/implementer"; agent_nickname = "Test" } } }
+  $l = @(
+    (MetaO $pod 0 "podagent-1" $zrodloPod "subagent" 6),
+    (MetaO $pod 1 "rodzic" "cli" "user" $null),
+    (WiadO $pod 2 "user" @($agentsMd, $srodowisko)),
+    (WiadO $pod 3 "user" @((TekstO "Wiadomosc rodzica."))),
+    (TokenyO $pod 4 (UzycieO 4990000 4900000 10000 0) (UzycieO 70000 69000 100 0)),
+    (KontekstO $pod 5),
+    (WiadO $pod 6 "user" @((TekstO "Zadanie dla podagenta."))),
+    (KontekstO $pod 7),
+    (RekordO $pod 8 (UzycieO 30000 29000 100 0)),
+    (TokenyO $pod 9 (UzycieO 30000 29000 100 0) (UzycieO 30000 29000 100 0)))
+  Rozmowa $dom $pod $l
+  # rozmowa "codex exec" sprzed 2 dni
+  $wcz = (Get-Date).Date.AddDays(-2).AddHours(6)
+  $l = @(
+    (MetaO $wcz 0 "exec-1" "exec" "user" $null),
+    (WiadO $wcz 1 "user" @($agentsMd, $srodowisko)),
+    (KontekstO $wcz 2),
+    (WiadO $wcz 3 "user" @((TekstO "Na wejsciu x"))),
+    (RekordO $wcz 4 (UzycieO 32000 0 145 129)),
+    (TokenyO $wcz 5 (UzycieO 32000 0 145 129) (UzycieO 32000 0 145 129)))
+  Rozmowa $dom $wcz $l
+  return $dom
 }
 
 function Dom([string]$nazwa, [bool]$zCoWiem, [bool]$zTokenami) {
@@ -267,7 +366,7 @@ Write-Output ("modul_codex_stala: " + ((Moduly-Warstwy $w["codex-globalny-stala"
   [System.IO.File]::WriteAllText($plikDanych, (Odpal $koszt @("-KatalogDomowy", $dCx, "-Zrodlo", $Zrodlo, "-Dane", "-Zwykly")).Tekst, $bezBom)
   $r = Odpal $plikW @($Zrodlo, $dCx, $plikJson, $plikDanych)
   $kw = Klucze $r.Tekst
-  Sprawdz "zakladka Warstwy: zdanie mowi, gdzie jest 'Co wiem' i co nie dotyczy" (($kw["zdanie"] -match 'Sekcja „Co wiem” jest w: AGENTS\.md \(Codex\)') -and ($kw["zdanie"] -match '\d+ warstw\w* nie dotycz\w* tego komputera - należą do narzędzia, którego tu nie używasz \(Claude Code\)')) $r.Tekst
+  Sprawdz "zakladka Warstwy: zdanie mowi, gdzie jest 'Co wiem' i co nie dotyczy" (($kw["zdanie"] -match 'Sekcja „Co wiem” jest w: AGENTS\.md \(Codex\)') -and ($kw["zdanie"] -match '\d+ warstw\w* nie dotycz\w* tego komputera - należą do narzędzi, których tu nie używasz \(Claude Code i OpenCode\)')) $r.Tekst
   Sprawdz "zakladka Warstwy: 'Co wiem' w CLAUDE.md = 'nie dotyczy', szare" (($kw["rozmiar_claude_stala"] -eq "nie dotyczy") -and ($kw["szary_claude_stala"] -eq "True") -and ($kw["szary_codex_stala"] -eq "False")) $r.Tekst
   Sprawdz "zakladka Warstwy: AGENTS.md z procentem otwarcia Codeksa, 'Co wiem' w module Wiedza" (($kw["procent_codex"] -match 'jak .*% otwarcia okna rozmowy') -and ($kw["modul_codex_stala"] -eq "wiedza")) $r.Tekst
 
@@ -276,6 +375,52 @@ Write-Output ("modul_codex_stala: " + ((Moduly-Warstwy $w["codex-globalny-stala"
   $przodZ = ($r.Tekst -csplit "SZCZEGÓŁY")[0]
   Sprawdz "negatywna okno: sprawa 'Nie umiem zmierzyć, ile tokenów zużywasz w Codeksie'" ($przodZ -match 'Nie umiem zmierzyć, ile tokenów zużywasz w Codeksie') (([regex]::Match($przodZ, '(?s)CO WYMAGA UWAGI.*?\n\n')).Value)
   Sprawdz "negatywna okno: Stan bez 'Wszystko gra'" ($przodZ -notmatch 'Wszystko gra') (([regex]::Match($przodZ, '(?s)STAN .*?\n\n')).Value)
+
+  # ------------------------------------------------------------- prawdziwy zapis Codeksa
+  # Proba negatywna wbudowana w liczby: gdyby kopia rodzica w pliku podagenta sie liczyla,
+  # dzis wyszloby ~5 mln zamiast 87 500, a otwarcie mialoby trzy rozmowy zamiast dwoch.
+  $dPr = DomPrawdziwy "codex-prawdziwy"
+  $r = Odpal $koszt @("-KatalogDomowy", $dPr, "-Zrodlo", $Zrodlo, "-Dane", "-Zwykly")
+  $kp = Klucze $r.Tekst
+  $ip = $null
+  for ($i = 1; $i -le 6; $i++) { if ($kp["narz.$i.klucz"] -eq "codex") { $ip = $i } }
+  Sprawdz "prawdziwy zapis: Codex uzywany" ($ip -and ($kp["narz.$ip.uzywane"] -eq "1")) $r.Tekst
+  if ($ip) {
+    Sprawdz "prawdziwy zapis: dzis = 87 500 (token_usage_record i kopia rodzica u podagenta nie liczone)" ($kp["narz.$ip.dzis"] -eq "87500") "dzis=$($kp["narz.$ip.dzis"]) powod=$($kp["narz.$ip.zuzycie_powod"])"
+    Sprawdz "prawdziwy zapis: srednio = 32 145 / 7 = 4 592 (rozmowa codex exec)" ($kp["narz.$ip.srednia"] -eq "4592") "srednia=$($kp["narz.$ip.srednia"])"
+    Sprawdz "prawdziwy zapis: otwarcie = 29 996 z 2 rozmow (podagent pominiety, obrazek nie liczy sie do wiadomosci)" (($kp["narz.$ip.otwarcie"] -eq "29996") -and ($kp["narz.$ip.otwarcie_sesji"] -eq "2")) "otwarcie=$($kp["narz.$ip.otwarcie"]) z $($kp["narz.$ip.otwarcie_sesji"]) powod=$($kp["narz.$ip.otwarcie_powod"])"
+  }
+  $r = Odpal $koszt @("-KatalogDomowy", $dPr, "-Zrodlo", $Zrodlo, "-Warstwy")
+  $jp = $null
+  try { $jp = $r.Tekst | ConvertFrom-Json } catch { }
+  $wo = @($jp.Warstwy | Where-Object { $_.Id -eq "opencode-globalny" })[0]
+  Sprawdz "prawdziwy zapis: AGENTS.md OpenCode bez OpenCode = 'nie dotyczy' (bez falszywego alarmu)" ($wo -and ($wo.Stan -eq "nie-dotyczy")) "$($wo.Stan): $($wo.Brak)"
+
+  # Werdykt i pomiar otwarcia w oknie mowia o Codeksie, nie o Claude (P71, poprawka 06.10):
+  # Kto-Wczytuje na danych z -Start, Pomiar-Startu oddaje pola Narzedzie i Narzedzia.
+  $kodStartu = @'
+param($zr, $dom)
+$ErrorActionPreference = "Stop"
+. (Join-Path $zr "zasobnik\stan-nadzorcy.ps1")
+Ustaw-Nadzorce $zr $dom $true
+$s = Pomiar-Startu
+Write-Output ("narzedzie: " + $s.Narzedzie)
+Write-Output ("narzedzia: " + ((@($s.Narzedzia) | ForEach-Object { $_.Klucz }) -join ","))
+Write-Output ("sesje: " + $s.Sesje.Narzedzie)
+Write-Output ("kto: " + (Kto-Wczytuje $s $null))
+Write-Output ("kto_bez_pomiaru: " + (Kto-Wczytuje $null @{ narzedzie = "Codex" }))
+Write-Output ("kto_claude: " + (Kto-Wczytuje $null @{ narzedzie = "Claude Code" }))
+$k = [ordered]@{ "udzial.prog_tokeny" = "15000"; "udzial.mr" = "206"; "udzial.start" = "8"; "narzedzie" = "Codex" }
+$w = Werdykt-Kosztu $s ([pscustomobject]@{ Klucze = $k; Linia = "x" }) $null
+Write-Output ("werdykt: " + $w.Zdanie)
+'@
+  $plikStartu = Join-Path $T "start.ps1"
+  [System.IO.File]::WriteAllText($plikStartu, $kodStartu, (New-Object System.Text.UTF8Encoding($true)))
+  $r = Odpal $plikStartu @($Zrodlo, $dCx)
+  $kst = Klucze $r.Tekst
+  Sprawdz "Pomiar-Startu: pola Narzedzie i Narzedzia z -Start nie gina" (($kst["narzedzie"] -eq "Codex") -and ($kst["narzedzia"] -eq "claude,codex,opencode") -and ($kst["sesje"] -eq "Codex")) $r.Tekst
+  Sprawdz "werdykt: 'co Codex wczytuje' na komputerze z samym Codeksem" (($kst["kto"] -eq "Codex") -and ($kst["werdykt"] -match 'co Codex wczytuje') -and ($kst["werdykt"] -notmatch 'Claude')) $r.Tekst
+  Sprawdz "werdykt: bez pomiaru nazwa z rachunku, Claude Code krotko 'Claude'" (($kst["kto_bez_pomiaru"] -eq "Codex") -and ($kst["kto_claude"] -eq "Claude")) $r.Tekst
 } finally {
   if ($Zostaw) { Write-Host "Zostawione: $T" }
   else { Remove-Item -LiteralPath $T -Recurse -Force -ErrorAction SilentlyContinue }

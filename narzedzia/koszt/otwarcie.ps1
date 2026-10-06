@@ -1,7 +1,8 @@
 # narzedzia\koszt\otwarcie.ps1 - czesc narzedzia\koszt-pamieci.ps1 (patrz BUDOWA
 # w jego naglowku). Pomiar calego otwarcia sesji Claude Code z transkryptow
 # (Pomiar-Otwarcia), od 06.10.2026 (P71) takze Codeksa: otwarcie i zuzycie dzienne
-# z ~\.codex\sessions (Pomiar-Otwarcia-Codex, Zuzycie-Codex), wybor czytnika dla
+# z ~\.codex\sessions (Pomiar-Otwarcia-Codex, Zuzycie-Codex) i OpenCode (czytnik bazy
+# w opencode.ps1), wybor czytnika dla
 # narzedzia z listy $NARZEDZIA_AI (Pomiar-Narzedzia) - i tryb -Start, ktory oddaje
 # pomiar glownego narzedzia jako JSON (Tryb-Start) - czyta go okno nadzorcy
 # (zasobnik\stan-nadzorcy.ps1, Pomiar-Startu). Etap-Ocena (alarmy.ps1) wola
@@ -30,8 +31,9 @@
 # Ten sam pomiar (same sesje, bez workerow) daje procent MegaRuchacza w otwarciu
 # sesji - do pokazania; o alarmie decyduje prog w tokenach ($AlarmCzesciOtwarcia,
 # od 30.09.2026) - patrz Rachunek-Narzedzia.
-# Codex (od 06.10.2026) - Pomiar-Codeksa nizej, ten sam ksztalt wyniku; ktorym
-# czytnikiem mierzyc narzedzie z listy $NARZEDZIA_AI (pomiar.ps1), mowi Pomiar-Narzedzia.
+# Codex (od 06.10.2026) - Pomiar-Otwarcia-Codex nizej, ten sam ksztalt wyniku; OpenCode
+# (tez od 06.10.2026) - opencode.ps1; ktorym czytnikiem mierzyc narzedzie z listy
+# $NARZEDZIA_AI (pomiar.ps1), mowi Pomiar-Narzedzia.
 
 # Ile ostatnich rozmow do mediany otwarcia (kazde narzedzie tak samo). 10, bo zestaw
 # narzedzi (serwery MCP) zmienia sie co kilka tygodni, a starsze rozmowy mierzylyby
@@ -231,9 +233,20 @@ function Pomiar-Otwarcia([bool]$zWorkerami) {
 # podrecznej, wiec "caly kontekst" to samo input_tokens (u Claude Code trzeba bylo
 # sumowac trzy pola), a zuzycie to total_tokens - te same tokeny, ktore Claude Code
 # liczy jako wejscie + bufor + wyjscie.
+# SPRAWDZONE NA PRAWDZIWYCH ROZMOWACH 06.10.2026 (Codex na komputerze domowym, 3 pliki
+# z 30.09-04.10): token_count wyglada dokladnie jak wyzej, w usage dochodzi pole
+# cache_write_input_tokens (zero), a obok stoi nowy zapis "token_usage_record" z tymi samymi
+# liczbami dla jednego wywolania - nie czytamy go, bo token_count wystarcza i liczylby sie
+# drugi raz. Pierwszy zapis pliku to session_meta; PODAGENT (worker odpalony przez inna
+# rozmowe) ma w nim payload.source.subagent i thread_source "subagent", a zaraz za nim
+# leza session_meta i wiadomosci rozmowy-rodzica (kopia jej kontekstu). Takiego pliku nie
+# liczymy do otwarcia okna (to nie Twoje okno, tylko cudzy kontekst), ale jego tokeny ida
+# do zuzycia - total_token_usage podagenta liczy sie od zera, bez rodzica. Rozmowy
+# "codex exec" (source "exec") to zwykle okna bez ekranu - liczone jak kazde inne.
 
 # Pierwsze wywolanie modelu w rozmowie Codeksa: rozmiar kontekstu i Twoja wiadomosc
-# przed nim. Czyta tylko poczatek pliku. $null = w pliku nie ma liczb tokenow.
+# przed nim. Czyta tylko poczatek pliku. $null = w pliku nie ma liczb tokenow;
+# obiekt z Podagent = $true = rozmowa podagenta (patrz wyzej), bez liczb.
 function Pierwsza-Odpowiedz-Codex($plik, $serializer) {
   $czytnik = $null
   try {
@@ -241,6 +254,7 @@ function Pierwsza-Odpowiedz-Codex($plik, $serializer) {
     $znakiUzytkownika = 0
     $model = ""
     $projekt = ""
+    $pierwszaMeta = $true
     $nr = 0
     while ((-not $czytnik.EndOfStream) -and ($nr -lt 3000)) {
       $linia = $czytnik.ReadLine(); $nr++
@@ -257,7 +271,18 @@ function Pierwsza-Odpowiedz-Codex($plik, $serializer) {
       $typ = "" + $o["type"]
       if ($typ -eq "turn_context") { if ($p["model"]) { $model = "" + $p["model"] }; continue }
       # katalog rozmowy -> nazwa projektu do tabeli w Szczegolach (jak u Claude Code)
-      if ($typ -eq "session_meta") { if ($p["cwd"]) { $projekt = [System.IO.Path]::GetFileName(("" + $p["cwd"]).TrimEnd('\', '/')) }; continue }
+      if ($typ -eq "session_meta") {
+        if ($pierwszaMeta) {
+          $pierwszaMeta = $false
+          $zrodloRozmowy = $p["source"]
+          if ((("" + $p["thread_source"]) -eq "subagent") -or
+              (($zrodloRozmowy -is [System.Collections.IDictionary]) -and $zrodloRozmowy.ContainsKey("subagent"))) {
+            return [pscustomobject]@{ Podagent = $true }
+          }
+          if ($p["cwd"]) { $projekt = [System.IO.Path]::GetFileName(("" + $p["cwd"]).TrimEnd('\', '/')) }
+        }
+        continue
+      }
       if (($typ -eq "response_item") -and (("" + $p["type"]) -eq "message") -and (("" + $p["role"]) -eq "user")) {
         $n = 0
         foreach ($b in @($p["content"])) {
@@ -280,7 +305,7 @@ function Pierwsza-Odpowiedz-Codex($plik, $serializer) {
       $bezW = $razem - [long](Tokeny $znakiUzytkownika)
       return [pscustomobject]@{
         Kiedy = ("" + $o["timestamp"]); Model = $model; Kontekst = $razem; Projekt = $projekt
-        ZnakiWiadomosci = $znakiUzytkownika; BezWiadomosci = [long][math]::Max(0, $bezW)
+        ZnakiWiadomosci = $znakiUzytkownika; BezWiadomosci = [long][math]::Max(0, $bezW); Podagent = $false
       }
     }
     return $null
@@ -297,12 +322,14 @@ function Pomiar-Otwarcia-Codex($n, $serializer) {
   }
   $pliki = @(Pliki-Rozmow $n ((Get-Date).AddDays(-$DniUzywania)))
   $lista = @()
+  $podagenci = 0
   foreach ($pl in $pliki) {
     if ($lista.Count -ge $OtwarcieSesji) { break }
     $p = $null
     try { $p = Pierwsza-Odpowiedz-Codex $pl.FullName $serializer }
     catch { $w.Bledy += "nie odczytalem $($pl.FullName) ($($_.Exception.Message))"; continue }
     if ($null -eq $p) { $w.Pominiete++; continue }
+    if ($p.Podagent) { $podagenci++; continue }
     # Plik zaczyna sie od projektu (jak u Claude Code: <projekt>\<rozmowa>) - tabela
     # w Szczegolach bierze z niego pierwszy czlon; bez projektu zostaje data RRRR\MM\DD.
     $wzgl = $pl.FullName.Substring($n.KatRozmow.Length).TrimStart('\')
@@ -316,6 +343,7 @@ function Pomiar-Otwarcia-Codex($n, $serializer) {
   Podsumuj-Otwarcia $w $lista
   if ($w.Liczba -eq 0) {
     $w.Powod = "w $($n.KatRozmow) nie ma ani jednej rozmowy z ostatnich $DniUzywania dni z liczba tokenow ($($pliki.Count) plikow przejrzanych)"
+    if ($podagenci -gt 0) { $w.Powod += "; $podagenci to rozmowy podagentow - tych nie licze do otwarcia" }
   }
   return $w
 }
@@ -347,6 +375,28 @@ function Zuzycie-Codex($n, $serializer) {
   if ($pliki.Count -eq 0) { return $z }
   $dni = @{}; $bufor = [long]0; $suma = [long]0
   $bl = @()
+  # Podagent ma na poczatku pliku KOPIE rozmowy-rodzica, razem z jej zdarzeniami token_count
+  # (sumy rodzica: na komputerze domowym 14 z 43 plikow podagentow, po 18-143 mln tokenow,
+  # z data skopiowania). Wlasna historia podagenta zaczyna sie od zapisu o numerze
+  # payload.subagent_history_start_ordinal z pierwszego session_meta - wczesniejsze
+  # zdarzenia pomijamy, bo liczylyby tokeny rodzica drugi raz.
+  $startPodagenta = @{}
+  foreach ($pl in $pliki) {
+    $czyt = $null
+    try {
+      $czyt = New-Object System.IO.StreamReader($pl.FullName, [System.Text.Encoding]::UTF8)
+      $o = $serializer.DeserializeObject($czyt.ReadLine())
+      $p = $null
+      if ($o -is [System.Collections.IDictionary]) { $p = $o["payload"] }
+      if (($p -is [System.Collections.IDictionary]) -and ((("" + $p["thread_source"]) -eq "subagent") -or
+          (($p["source"] -is [System.Collections.IDictionary]) -and $p["source"].ContainsKey("subagent"))) -and
+          ("" + $p["subagent_history_start_ordinal"]) -match '^\d+$') {
+        $startPodagenta[$pl.FullName] = [long]$p["subagent_history_start_ordinal"]
+      }
+    } catch {
+      $z.Bledy += "nie odczytalem poczatku $($pl.FullName) ($($_.Exception.Message))"
+    } finally { if ($czyt) { $czyt.Dispose() } }
+  }
   $trafienia = @(Select-String -LiteralPath @($pliki | ForEach-Object { $_.FullName }) -Pattern 'token_count' -SimpleMatch -ErrorAction SilentlyContinue -ErrorVariable +bl)
   foreach ($b in @($bl)) { $z.Bledy += "nie odczytalem pliku rozmowy ($b)" }
   $poprz = @{}
@@ -354,6 +404,7 @@ function Zuzycie-Codex($n, $serializer) {
     $o = $null
     try { $o = $serializer.DeserializeObject($t.Line) } catch { continue }
     if (-not ($o -is [System.Collections.IDictionary]) -or (("" + $o["type"]) -ne "event_msg")) { continue }
+    if ($startPodagenta.ContainsKey($t.Path) -and ([long](Pole-Liczba $o "ordinal") -lt $startPodagenta[$t.Path])) { continue }
     $p = $o["payload"]
     if (-not ($p -is [System.Collections.IDictionary]) -or (("" + $p["type"]) -ne "token_count")) { continue }
     $info = $p["info"]
@@ -431,6 +482,25 @@ function Pomiar-Narzedzia($n, [bool]$zWorkerami, [bool]$zZuzyciem) {
         $p.Workerzy = [pscustomobject]@{ Liczba = 0; Mediana = $null; Min = $null; Max = $null
           Powod = "start workera mierze tylko w Claude Code"; Pominiete = 0; Bledy = @(); Lista = @() }
       }
+      "opencode" {
+        # Rozmowy w bazie SQLite, czytanej tylko do odczytu - opencode.ps1.
+        $bladParsera = ""
+        $ser = Czytnik-Json ([ref]$bladParsera)
+        $p.Katalog = $n.Baza
+        $p.Metoda = ("pierwsza odpowiedz modelu w kazdej rozmowie OpenCode (baza opencode.db, tylko odczyt): tokens.input + cache.read + cache.write " +
+                     "z message.data, minus Twoja wiadomosc (znaki / $ZnakiNaToken); mediana z ostatnich rozmow, bez podagentow, rozmow rozwidlonych " +
+                     "i rozmow cyklu wiedzy")
+        if (-not $ser) {
+          $p.Powod = "nie zaladowal sie czytnik JSON (System.Web.Extensions): $bladParsera"
+        } else {
+          $roz = Rozmowy-OpenCode $n $ser
+          $p.Otwarcie = Pomiar-Otwarcia-OpenCode $n $roz $ser
+          $p.Powod = $p.Otwarcie.Powod
+          if ($zZuzyciem) { $p.Zuzycie = Zuzycie-OpenCode $n $roz }
+        }
+        $p.Workerzy = [pscustomobject]@{ Liczba = 0; Mediana = $null; Min = $null; Max = $null
+          Powod = "start workera mierze tylko w Claude Code"; Pominiete = 0; Bledy = @(); Lista = @() }
+      }
       default {
         $p.Powod = "nie umiem jeszcze odczytac rozmow $($n.Nazwa) - MegaRuchacz nie ma czytnika ich zapisu"
       }
@@ -460,8 +530,12 @@ function Tryb-Start {
         Powod = $wynikS.Powod; Otwarcie = $wynikS.Sesje; MegaRuchacz = [long]($tokSesja + $tokWiadomosc) }
     } else {
       $pn = Pomiar-Narzedzia $n $false $false
+      # Czesc MegaRuchacza liczy rachunek tylko dla Claude Code i Codeksa (kubelki.ps1) -
+      # u OpenCode jej nie znamy i zostaje pusta, zamiast pozyczac liczbe Codeksa.
+      $mrN = $null
+      if ($n.Narz -eq "Codex") { $mrN = [long]($tokSesjaCx + $tokWiadomoscCx) }
       $pomiary += [pscustomobject]@{ Klucz = $pn.Klucz; Nazwa = $pn.Nazwa; Uzywane = $pn.Uzywane; Ostatnio = $pn.Ostatnio
-        Powod = $pn.Powod; Otwarcie = $pn.Otwarcie; MegaRuchacz = [long]($tokSesjaCx + $tokWiadomoscCx); Pomiar = $pn }
+        Powod = $pn.Powod; Otwarcie = $pn.Otwarcie; MegaRuchacz = $mrN; Pomiar = $pn }
     }
   }
   $glowne = "Claude Code"

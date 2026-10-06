@@ -52,10 +52,16 @@
 #                            zadanie i nieuzywane - lista warstw zyje TYLKO tutaj.
 #                            Wyjscie w samym ASCII (polskie znaki jako \uXXXX), bo
 #                            przekierowane wyjscie PowerShella 5.1 psuje ogonki
-#     -Start                 JSON z POMIAREM otwarcia sesji z transkryptow Claude Code
-#                            (<dom>.claudeprojects): mediana kontekstu przy pierwszej
-#                            odpowiedzi modelu, osobno sesje i workerzy, plus czesc
-#                            MegaRuchacza z rachunku - dla okna nadzorcy. Samo ASCII
+#     -Start                 JSON z POMIAREM otwarcia okna rozmowy - dla okna nadzorcy
+#                            (zasobnik\nadzorca\stan-rachunek.ps1, Pomiar-Startu). Mediana
+#                            kontekstu przy pierwszej odpowiedzi modelu z rozmow GLOWNEGO
+#                            narzedzia tej maszyny (Claude Code: <dom>\.claude\projects,
+#                            osobno sesje i workerzy; z samym Codeksem - Codex z
+#                            <dom>\.codex\sessions), plus czesc MegaRuchacza z rachunku.
+#                            Pole Narzedzie mowi, czyje to liczby, a Narzedzia - pomiar
+#                            kazdego narzedzia z listy $NARZEDZIA_AI osobno (Claude Code,
+#                            Codex, OpenCode z <dom>\.local\share\opencode\opencode.db).
+#                            Samo ASCII
 #     -ZalozZadanie          codzienny raport o 08:15 do <dom>\.claude\wiedza\koszt-ostatni.txt
 #     -UsunZadanie           kasuje to zadanie
 #
@@ -80,10 +86,13 @@
 #   sufity.ps1          sufity (Sufit, Limit-Hooka, Ladunek-Hooka) i tryb -TylkoSufity
 #   nauka.ps1           koszt cyklu wiedzy, historia i ocena kosztu nauki
 #   baza-lore.ps1       liczby z bazy Lore (winsqlite3.dll, bez zaleznosci)
+#   opencode.ps1        rozmowy OpenCode z jego bazy (winsqlite3.dll, tylko odczyt)
 #   pomiar-dzienny.ps1  zadanie LoreKoszt w Harmonogramie i poprzedni POMIAR
-#   pomiar.ps1          etap: co leci do modelu - warstwy, hooki, ladunki, sufity
+#   pomiar.ps1          etap: co leci do modelu - warstwy, hooki, ladunki, sufity,
+#                       lista narzedzi AI ($NARZEDZIA_AI)
 #   kubelki.ps1         etap: rachunki Claude Code i Codeksa, narzedzie domyslne
-#   otwarcie.ps1        pomiar otwarcia sesji z transkryptow i tryb -Start
+#   otwarcie.ps1        pomiar otwarcia sesji i zuzycia z rozmow kazdego narzedzia,
+#                       tryb -Start
 #   tryb-warstwy.ps1    tryb -Warstwy (lista warstw dla okna nadzorcy)
 #   alarmy.ps1          etap: ocena nauki, rachunek kazdego narzedzia, alarmy, linia
 #   tryb-dane.ps1       tryb -Dane (klucz: wartosc dla nadzorcy)
@@ -240,7 +249,7 @@ if (-not $katModulowKosztu) {
 }
 $katModulowKosztu = Join-Path $katModulowKosztu "koszt"
 $script:ModulyKosztu = @{}
-foreach ($modulKosztu in @("podstawy", "warstwy", "sufity", "nauka", "baza-lore", "pomiar-dzienny", "pomiar",
+foreach ($modulKosztu in @("podstawy", "warstwy", "sufity", "nauka", "baza-lore", "opencode", "pomiar-dzienny", "pomiar",
                            "kubelki", "otwarcie", "tryb-warstwy", "alarmy", "tryb-dane", "tryb-rozbicie", "raport-pelny")) {
   $plikModuluKosztu = Join-Path $katModulowKosztu "$modulKosztu.ps1"
   try { . $plikModuluKosztu }

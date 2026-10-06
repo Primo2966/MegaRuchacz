@@ -273,7 +273,10 @@ function Odmaluj-Start {
   $script:KartaStart.Controls.Add($pod)
 
   if ($null -eq $script:Start) {
-    $script:KartaStart.Controls.Add((Etykieta-Zawijana "Liczę, ile Claude wczytuje na starcie rozmowy - to potrwa kilka sekund..." $script:CzZwykla $script:KolSzary $szer))
+    # bez pomiaru narzedzie mowi rachunek (klucz "narzedzie"), o ile juz jest
+    $ktoLiczy = "Claude"
+    try { if ($script:Dane -and $script:Dane.Rachunek) { $ktoLiczy = Kto-Wczytuje $null $script:Dane.Rachunek.Klucze } } catch { Zanotuj-Wywrotke "nazwa narzedzia przy liczeniu otwarcia" $_ }
+    $script:KartaStart.Controls.Add((Etykieta-Zawijana "Liczę, ile $ktoLiczy wczytuje na starcie rozmowy - to potrwa kilka sekund..." $script:CzZwykla $script:KolSzary $szer))
     return
   }
   if (-not $o -or -not $o.Zmierzone) {

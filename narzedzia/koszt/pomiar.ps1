@@ -20,15 +20,23 @@
 #                     RRRR\MM\DD); $false: jeden poziom (Claude Code: <projekt>\*.jsonl,
 #                     glebiej leza workerzy - ich liczy osobno Pomiar-Otwarcia),
 #   Historia        - plik dopisywany przy kazdej wiadomosci (najtanszy dowod uzywania),
+#   Baza            - rozmowy w bazie SQLite zamiast plikow (OpenCode): ostatnia rozmowa
+#                     i pomiar ida z bazy (opencode.ps1), Pliki i Rekurencja nie graja roli,
 #   Format          - czytnik transkryptow w otwarcie.ps1 (Pomiar-Narzedzia); pusty =
 #                     czytnika jeszcze nie ma i okno mowi to wprost, zamiast zgadywac.
+# OpenCode (od 06.10.2026): ~\.config\opencode\AGENTS.md czyta sam na starcie, rozmowy
+# trzyma w ~\.local\share\opencode\opencode.db, a ~\.local\state\opencode\prompt-history.jsonl
+# dopisuje przy kazdej wiadomosci wpisanej w jego oknie.
 $NARZEDZIA_AI = @(
   [pscustomobject]@{ Klucz = "claude"; Nazwa = "Claude Code"; Narz = "Claude"; Instrukcje = ".claude\CLAUDE.md"
-                     Rozmowy = ".claude\projects"; Pliki = "*.jsonl"; Rekurencja = $false
+                     Rozmowy = ".claude\projects"; Pliki = "*.jsonl"; Rekurencja = $false; Baza = ""
                      Historia = ".claude\history.jsonl"; Format = "claude" },
   [pscustomobject]@{ Klucz = "codex"; Nazwa = "Codex"; Narz = "Codex"; Instrukcje = ".codex\AGENTS.md"
-                     Rozmowy = ".codex\sessions"; Pliki = "rollout-*.jsonl"; Rekurencja = $true
-                     Historia = ".codex\history.jsonl"; Format = "codex" }
+                     Rozmowy = ".codex\sessions"; Pliki = "rollout-*.jsonl"; Rekurencja = $true; Baza = ""
+                     Historia = ".codex\history.jsonl"; Format = "codex" },
+  [pscustomobject]@{ Klucz = "opencode"; Nazwa = "OpenCode"; Narz = "OpenCode"; Instrukcje = ".config\opencode\AGENTS.md"
+                     Rozmowy = ".local\share\opencode"; Pliki = ""; Rekurencja = $false; Baza = ".local\share\opencode\opencode.db"
+                     Historia = ".local\state\opencode\prompt-history.jsonl"; Format = "opencode" }
 )
 
 # Narzedzie jest UZYWANE na tej maszynie, gdy w ostatnich tylu dniach byla w nim
@@ -65,9 +73,10 @@ function Narzedzia-Maszyny {
     $n = [pscustomobject]@{
       Klucz = $d.Klucz; Nazwa = $d.Nazwa; Narz = $d.Narz; Format = "$($d.Format)"
       Instrukcje = (Join-Path $KatalogDomowy $d.Instrukcje); KatRozmow = (Join-Path $KatalogDomowy $d.Rozmowy)
-      Pliki = $d.Pliki; Rekurencja = [bool]$d.Rekurencja
+      Pliki = $d.Pliki; Rekurencja = [bool]$d.Rekurencja; Baza = ""
       InstrukcjeJest = $false; Ostatnio = $null; Uzywane = $false; Bledy = @(); Warstwy = $null
     }
+    if ($d.Baza) { $n.Baza = Join-Path $KatalogDomowy $d.Baza }
     $n.InstrukcjeJest = Test-Path -LiteralPath $n.Instrukcje -PathType Leaf
     if ($d.Historia) {
       $hist = Join-Path $KatalogDomowy $d.Historia
@@ -76,10 +85,17 @@ function Narzedzia-Maszyny {
         catch { $n.Bledy += "nie odczytalem daty $hist ($($_.Exception.Message))" }
       }
     }
-    # Historia swieza wystarcza; inaczej najnowszy transkrypt (Codex bez history.jsonl).
+    # Historia swieza wystarcza; inaczej najnowszy transkrypt (Codex bez history.jsonl)
+    # albo najnowsza rozmowa w bazie (OpenCode). Data samego pliku bazy niczego nie
+    # dowodzi - zmienia ja takze cykl wiedzy, ktory przez OpenCode wylawia fakty.
     if ((-not $n.Ostatnio) -or ($n.Ostatnio -lt $od)) {
-      $naj = @(Pliki-Rozmow $n $od) | Select-Object -First 1
-      if ($naj -and ((-not $n.Ostatnio) -or ($naj.LastWriteTime -gt $n.Ostatnio))) { $n.Ostatnio = $naj.LastWriteTime }
+      if ($n.Baza) {
+        $naj = Ostatnia-Rozmowa-OpenCode $n
+        if ($naj -and ((-not $n.Ostatnio) -or ($naj -gt $n.Ostatnio))) { $n.Ostatnio = $naj }
+      } else {
+        $naj = @(Pliki-Rozmow $n $od) | Select-Object -First 1
+        if ($naj -and ((-not $n.Ostatnio) -or ($naj.LastWriteTime -gt $n.Ostatnio))) { $n.Ostatnio = $naj.LastWriteTime }
+      }
     }
     $n.Uzywane = ($null -ne $n.Ostatnio) -and ($n.Ostatnio -ge $od)
     $lista += $n
@@ -198,7 +214,8 @@ function Etap-Pomiar {
   # stoi w jego pliku instrukcji. "Jest" wyzej mowi, czyj rachunek liczyc; "uzywane"
   # mowi, czego brak jest usterka, a czego brak "nie dotyczy" - warstwy, pomiar tokenow
   # i sprawy w oknie pytaja o to drugie. Sekcje "## Co wiem" mierzymy w pliku instrukcji
-  # KAZDEGO narzedzia: Codex ja ma w ~\.codex\AGENTS.md, Claude Code w ~\.claude\CLAUDE.md.
+  # KAZDEGO narzedzia: Codex ja ma w ~\.codex\AGENTS.md, Claude Code w ~\.claude\CLAUDE.md,
+  # OpenCode w ~\.config\opencode\AGENTS.md.
   $narzedzia = @(Narzedzia-Maszyny)
   foreach ($n in $narzedzia) {
     if ((Klucz-Sciezki $n.Instrukcje) -eq (Klucz-Sciezki $plikClaude)) { $n.Warstwy = $w }

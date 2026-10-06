@@ -87,6 +87,36 @@ function Tryb-Warstwy {
     return $wa
   }
 
+  # Sekcja "## Co wiem" w pliku instrukcji narzedzia innego niz Claude Code (AGENTS.md
+  # Codeksa, AGENTS.md OpenCode) - te same podwarstwy, co w CLAUDE.md: tam narzedzie ma
+  # pamiec o Tobie i firmie. Pokazujemy je, gdy sekcja tam jest albo gdy narzedzia uzywasz -
+  # wtedy jej brak jest usterka. Liczby z pomiaru Etap-Pomiar (Zmierz-Warstwy na tym
+  # pliku) - nic sie nie liczy drugi raz. Id: <id pliku>-stala i <id pliku>-biezace.
+  function Podwarstwy-Co-Wiem($wa, $nN, $plikOpis, $kto, $opis) {
+    $wynik = @()
+    if (-not $nN -or -not $nN.Warstwy -or -not ($nN.Warstwy.MaSekcje -or $nN.Uzywane)) { return }
+    $wc = $nN.Warstwy
+    $wa.Trwalosc = "mieszana"
+    $brakCw = "w $($nN.Instrukcje) nie ma sekcji '## Co wiem'$(Gdzie-Indziej-Co-Wiem $nN.Instrukcje)"
+    $brakBz = $brakCw
+    if ($wc.MaSekcje) { $brakBz = "w sekcji '## Co wiem' w $($nN.Instrukcje) nie ma podsekcji '### Biezace'" }
+    foreach ($pc in @(
+        @{ Id = "$($wa.Id)-stala"; Nazwa = "Co wiem - czesc stala ($plikOpis)"; Trwalosc = "stala"; M = $wc.Stala; Tekst = $wc.StalaTekst; Brak = $brakCw },
+        @{ Id = "$($wa.Id)-biezace"; Nazwa = "Co wiem - Biezace ($plikOpis)"; Trwalosc = "tymczasowa"; M = $wc.Biezaca; Tekst = $wc.BiezacaTekst; Brak = $brakBz })) {
+      $sub = Warstwa $pc.Id $pc.Nazwa $nN.Instrukcje "start" $pc.Trwalosc $kto $opis "podwarstwa" $wa.Id $nN.Klucz
+      $sub.Istnieje = $wa.Istnieje; $sub.Bajty = $wa.Bajty; $sub.Zmieniony = $wa.Zmieniony
+      if ($pc.M.Znaki -gt 0) {
+        $sub.Stan = "jest"; $sub.Znaki = $pc.M.Znaki; $sub.Tokeny = $pc.M.Tokeny; $sub.Tresc = $pc.Tekst
+      } elseif ($wc.Blad) {
+        $sub.Stan = "blad"; $sub.Brak = $wc.Blad
+      } else {
+        $sub.Stan = "brak"; $sub.Brak = $pc.Brak
+      }
+      $wynik += $sub
+    }
+    return $wynik
+  }
+
   function Opis-Limitu($n, $plik) {
     if ($null -eq $n) { return "limitu nie znam (nie znalazlem go w $plik)" }
     return "do $n znakow"
@@ -215,33 +245,28 @@ function Tryb-Warstwy {
     if ($jsonowy) { $wa.Tresc = Ladunek-Hooka $poz.Skad }
     $lista += $wa
     $juz[(Klucz-Sciezki $poz.Skad)] = $true
-    # Sekcja "## Co wiem" w AGENTS.md - te same podwarstwy, co w CLAUDE.md (Codex ma
-    # w niej pamiec o Tobie i firmie). Pokazujemy je, gdy sekcja tam jest albo gdy
-    # Codeksa uzywasz - wtedy jej brak jest usterka. Liczby z pomiaru Etap-Pomiar
-    # (Zmierz-Warstwy na AGENTS.md) - nic sie nie liczy drugi raz.
-    $nCx = Narzedzie-Po-Kluczu "codex"
-    if (($id -eq "codex-globalny") -and $nCx -and $nCx.Warstwy -and ($nCx.Warstwy.MaSekcje -or $nCx.Uzywane)) {
-      $wc = $nCx.Warstwy
-      $wa.Trwalosc = "mieszana"
-      $brakCw = "w $($nCx.Instrukcje) nie ma sekcji '## Co wiem'$(Gdzie-Indziej-Co-Wiem $nCx.Instrukcje)"
-      $brakBz = $brakCw
-      if ($wc.MaSekcje) { $brakBz = "w sekcji '## Co wiem' w $($nCx.Instrukcje) nie ma podsekcji '### Biezace'" }
-      foreach ($pc in @(
-          @{ Id = "codex-globalny-stala"; Nazwa = "Co wiem - czesc stala (AGENTS.md)"; Trwalosc = "stala"; M = $wc.Stala; Tekst = $wc.StalaTekst; Brak = $brakCw },
-          @{ Id = "codex-globalny-biezace"; Nazwa = "Co wiem - Biezace (AGENTS.md)"; Trwalosc = "tymczasowa"; M = $wc.Biezaca; Tekst = $wc.BiezacaTekst; Brak = $brakBz })) {
-        $sub = Warstwa $pc.Id $pc.Nazwa $nCx.Instrukcje "start" $pc.Trwalosc "czlowiek recznie (kopia wiedzy dla Codeksa)" `
-          "czyta tylko Codex - wchodzi na start jego sesji razem z calym AGENTS.md (rachunek liczy caly plik jedna pozycja)" "podwarstwa" "codex-globalny" "codex"
-        $sub.Istnieje = $wa.Istnieje; $sub.Bajty = $wa.Bajty; $sub.Zmieniony = $wa.Zmieniony
-        if ($pc.M.Znaki -gt 0) {
-          $sub.Stan = "jest"; $sub.Znaki = $pc.M.Znaki; $sub.Tokeny = $pc.M.Tokeny; $sub.Tresc = $pc.Tekst
-        } elseif ($wc.Blad) {
-          $sub.Stan = "blad"; $sub.Brak = $wc.Blad
-        } else {
-          $sub.Stan = "brak"; $sub.Brak = $pc.Brak
-        }
-        $lista += $sub
-      }
+    # Sekcja "## Co wiem" w AGENTS.md (Codex ma w niej pamiec o Tobie i firmie) -
+    # podwarstwy jak w CLAUDE.md, patrz Podwarstwy-Co-Wiem.
+    if ($id -eq "codex-globalny") {
+      $lista += @(Podwarstwy-Co-Wiem $wa (Narzedzie-Po-Kluczu "codex") "AGENTS.md" "czlowiek recznie (kopia wiedzy dla Codeksa)" `
+        "czyta tylko Codex - wchodzi na start jego sesji razem z calym AGENTS.md (rachunek liczy caly plik jedna pozycja)")
     }
+  }
+
+  # OpenCode (od 06.10.2026) czyta ~\.config\opencode\AGENTS.md sam, na starcie kazdej
+  # rozmowy - to jego odpowiednik CLAUDE.md. Rachunek MegaRuchacza za OpenCode nie powstaje
+  # (kubelki.ps1 zna Claude Code i Codeksa), wiec rozmiar idzie z samego pliku, a sekcja
+  # "Co wiem" ma te same podwarstwy, co w AGENTS.md Codeksa. Brak pliku przy OpenCode,
+  # ktorego tu nie uzywasz, zamienia sie nizej w "nie dotyczy".
+  $nOc = Narzedzie-Po-Kluczu "opencode"
+  if ($nOc -and -not $juz.ContainsKey((Klucz-Sciezki $nOc.Instrukcje))) {
+    $wa = Z-Pliku (Warstwa "opencode-globalny" "instrukcje domowe OpenCode (~\.config\opencode\AGENTS.md) - czyta tylko OpenCode" $nOc.Instrukcje "start" "stala" `
+      "czlowiek recznie + straznik zasad i instalator globalny (bloki zasad MegaRuchacza)" `
+      "czyta tylko OpenCode - wczytuje go sam na starcie kazdej rozmowy; Claude Code i Codex tego pliku nie czytaja" "plik" "" "opencode")
+    $lista += $wa
+    $juz[(Klucz-Sciezki $nOc.Instrukcje)] = $true
+    $lista += @(Podwarstwy-Co-Wiem $wa $nOc "AGENTS.md OpenCode" "czlowiek recznie (kopia wiedzy dla OpenCode)" `
+      "czyta tylko OpenCode - wchodzi na start jego rozmowy razem z calym AGENTS.md")
   }
 
   # --- przy KAZDEJ wiadomosci ---------------------------------------------------
@@ -399,7 +424,8 @@ function Tryb-Warstwy {
 
   # NARZEDZIE, KTOREGO TU NIE UZYWASZ: jego warstwa bez pliku albo bez sekcji to nie
   # usterka, tylko "nie dotyczy" - na czerwono swiecilaby falszywym alarmem (komputer
-  # z samym Codeksem nie ma po co miec natywnej pamieci Claude Code). Powod braku
+  # z samym Codeksem nie ma po co miec natywnej pamieci Claude Code ani AGENTS.md
+  # OpenCode). Powod braku
   # zostaje w zdaniu, wiec nic nie znika po cichu.
   foreach ($wa in $lista) {
     if (-not $wa.Narzedzie) { continue }

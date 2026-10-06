@@ -149,8 +149,8 @@ function Dodaj-Rozbicie($s, $rozbicie, $o = $null, [string]$nazwaStartu = "Claud
 # P26: prawdziwy koszt w calosci - to samo, co karta na Przegladzie, plus liczby
 # odpowiedzi, pelne opisy, projekty i to, jak to policzone.
 function Sekcja-Kosztu($koszt, $zuzycie, $d = $null) {
-  $s = Nowa-Sekcja "Ile tokenów naprawdę zużywasz - Twoje rozmowy i workerzy" "Wszystkie tokeny z transkryptów narzędzi AI na tym komputerze: w Claude Code osobno Twoje rozmowy (okna) i workerzy, w Codeksie same rozmowy."
-  # P71: narzedzia poza Claude Code (Codex) - liczby z koszt-pamieci.ps1 -Dane. Claude
+  $s = Nowa-Sekcja "Ile tokenów naprawdę zużywasz - Twoje rozmowy i workerzy" "Wszystkie tokeny z transkryptów narzędzi AI na tym komputerze: w Claude Code osobno Twoje rozmowy (okna) i workerzy, w Codeksie i OpenCode same rozmowy."
+  # P71: narzedzia poza Claude Code (Codex, OpenCode) - liczby z koszt-pamieci.ps1 -Dane. Claude
   # Code, ktorego tu nie uzywasz, dostaje jedno spokojne zdanie zamiast "nie wiem" na zolto.
   $narz = Narzedzia-Z-Rachunku $d
   $cc = @($narz | Where-Object { $_.ZuzycieWOknie }) | Select-Object -First 1
@@ -167,8 +167,13 @@ function Sekcja-Kosztu($koszt, $zuzycie, $d = $null) {
     if (($null -ne $n.Bufor) -and ($n.Srednia -gt 0)) { $bf = "; z tego czytane ponownie z pamięci podręcznej (10× tańsze) średnio $(Tokeny-Okolo $n.Bufor) dziennie" }
     Dodaj-Wiersz $s $n.Nazwa ("dziś $(if ($n.Dzis -gt 0) { Tokeny-Okolo $n.Dzis } else { 'nic' }) tokenów, średnio $(if ($n.Srednia -gt 0) { Tokeny-Okolo $n.Srednia } else { 'nic' }) tokenów dziennie " +
       "(z $($n.ZuzycieDni) pełnych dni, rozmowy w $($n.DniZRozmowami))$bf")
-    Dodaj-Wiersz $s "" ("Jak to policzone ($($n.Nazwa)): w każdej rozmowie zdarzenia token_count, przyrost total_tokens (wejście razem z pamięcią podręczną + wyjście) " +
-      "względem poprzedniego zdarzenia tej rozmowy - powtórzone zdarzenie nie liczy się drugi raz.") "szary"
+    $jak = ("w każdej rozmowie zdarzenia token_count, przyrost total_tokens (wejście razem z pamięcią podręczną + wyjście) " +
+      "względem poprzedniego zdarzenia tej rozmowy - powtórzone zdarzenie nie liczy się drugi raz, a kopia rozmowy-rodzica w rozmowie podagenta wcale.")
+    if ($n.Klucz -eq "opencode") {
+      $jak = ("z bazy OpenCode (opencode.db, tylko odczyt) każda odpowiedź modelu raz: wejście + pamięć podręczna + wyjście + rozumowanie. " +
+        "Kopie wiadomości w rozmowach rozwidlonych i rozmowy cyklu wiedzy MegaRuchacza nie liczą się.")
+    }
+    Dodaj-Wiersz $s "" "Jak to policzone ($($n.Nazwa)): $jak" "szary"
   }
   if ($cc -and -not $cc.Uzywane) {
     Dodaj-Wiersz $s "Claude Code" "nie używasz go na tym komputerze (w ostatnich 14 dniach nie było w nim rozmowy) - nie ma tu jego rozmów ani workerów" "szary"
