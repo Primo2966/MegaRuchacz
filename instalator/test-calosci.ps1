@@ -578,8 +578,9 @@ function Przeglad([string]$etap, [hashtable]$o) {
   # Co do znaku poza pustymi liniami na koncu sekcji (zdjecie bloku pod nia moze zabrac jedna pusta linie).
   if ($o.coWiem -and $cw) { Sprawdz "${etap}: '## Co wiem' co do znaku jak po instalacji" ($cw.TrimEnd() -ceq $o.coWiem.TrimEnd()) "przed: [$($o.coWiem)] po: [$cw]" }
   Sprawdz "${etap}: AGENTS.md Codeksa - bloki lore $wl, wiedza $ww, kierownik $wk; notatka nietknieta" (((Ile $cx $KL) -eq $wl) -and ((Ile $cx $KW) -eq $ww) -and ((Ile $cx $KK) -eq $wk) -and $cx -and $cx.Contains($NotatkaCodex)) "lore $(Ile $cx $KL), wiedza $(Ile $cx $KW), kierownik $(Ile $cx $KK)"
-  $nasza = ($oc -and $oc.StartsWith($KOpencode))
-  Sprawdz "${etap}: kopia zasad dla opencode $(if ($o.kierownik) { 'jest' } else { 'nie ma' })" ($nasza -eq [bool]$o.kierownik) "pierwsza linia: $(if ($oc) { ($oc -split "`n")[0] } else { '(brak pliku)' })"
+  # Od 0.28 OpenCode ma samodzielny plik jak Codex (do 0.27: kopia CLAUDE.md z naglowkiem $KOpencode).
+  $ocBezNaglowka = (-not $oc) -or (-not $oc.StartsWith($KOpencode))
+  Sprawdz "${etap}: AGENTS.md OpenCode - bloki lore $wl, wiedza $ww, kierownik $wk; bez naglowka starej kopii" (((Ile $oc $KL) -eq $wl) -and ((Ile $oc $KW) -eq $ww) -and ((Ile $oc $KK) -eq $wk) -and $ocBezNaglowka) "lore $(Ile $oc $KL), wiedza $(Ile $oc $KW), kierownik $(Ile $oc $KK), pierwsza linia: $(if ($oc) { ($oc -split "`n")[0] } else { '(brak pliku)' })"
   $h = Hooki
   $oczS = [int][bool]$o.baza; $oczP = [int]([bool]($o.kierownik -or $o.wiedza -or $o.lore) -and $o.baza); $oczR = [int]([bool]$o.kierownik -and $o.baza)
   Sprawdz "${etap}: hooki - straznik $oczS, przypomnienie $oczP, rejestr pracy $(2 * $oczR) (po jednym), cudzy i ustawienia nietkniete" (($h.straznik -eq $oczS) -and ($h.zlyStraznik -eq 0) -and ($h.przypomnienie -eq $oczP) -and ($h.rejestr -eq 2 * $oczR) -and ($h.cudzy -eq 1) -and ($h.theme -eq 'dark')) ($h | ConvertTo-Json -Compress)

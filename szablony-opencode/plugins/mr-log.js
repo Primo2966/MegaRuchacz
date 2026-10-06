@@ -131,16 +131,22 @@ export const MrLog = async (wejscie) => {
   return {
     // Gdy AGENTS.md jest sledzony w gicie albo go nie ma, instalator go nie
     // dotyka - a wtedy opencode nie mialby skad wziac zasad. Dokladamy je jako
-    // plik instrukcji z .megaruchacz\, ale tylko wtedy, gdy w AGENTS.md ich nie
-    // ma: inaczej to samo lecialoby do modelu dwa razy.
+    // plik instrukcji z .megaruchacz\, ale tylko wtedy, gdy nie ma ich ani
+    // w AGENTS.md projektu, ani w globalnym pliku, ktory opencode czyta
+    // (~/.config/opencode/AGENTS.md, a bez niego ~/.claude/CLAUDE.md - tam
+    // blok kierownika wpisuje instalacja globalna): inaczej to samo lecialoby
+    // do modelu dwa razy.
     config: async (cfg) => {
       try {
-        const plikAgents = path.join(katalogProjektu(wejscie), "AGENTS.md")
-        let wAgents = false
-        if (fs.existsSync(plikAgents)) {
-          wAgents = fs.readFileSync(plikAgents, "utf8").includes("<!-- MegaRuchacz:start -->")
+        const maZasady = (plik) => {
+          if (!fs.existsSync(plik)) return false
+          const t = fs.readFileSync(plik, "utf8")
+          return t.includes("<!-- MegaRuchacz:start -->") || t.includes("<!-- MegaRuchacz:kierownik:start -->")
         }
-        if (wAgents) return
+        if (maZasady(path.join(katalogProjektu(wejscie), "AGENTS.md"))) return
+        const globalnyOc = path.join(os.homedir(), ".config", "opencode", "AGENTS.md")
+        const globalny = fs.existsSync(globalnyOc) ? globalnyOc : path.join(os.homedir(), ".claude", "CLAUDE.md")
+        if (maZasady(globalny)) return
         const plikZasad = path.join(katalog, "zasady-kierownika.md")
         if (!fs.existsSync(plikZasad)) return
         cfg.instructions = cfg.instructions || []

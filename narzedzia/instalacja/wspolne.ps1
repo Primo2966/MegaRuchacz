@@ -379,13 +379,16 @@ function Sedno([string]$tekst) {
 # caly blok). Wolane po kazdej zmianie rejestru. Zwraca $true, gdy przeszlo.
 function Wpisz-Zasady([string]$zrodlo, [string]$dom, [switch]$Usun) {
   $co = if ($Usun) { "zdjalby bloki zasad MegaRuchacza" } else { "dogralby bloki zasad dla AI wedlug rejestru" }
-  if ($script:MR.proba) { Plan "narzedzia\wpisz-zasady.ps1 $co (~\.claude\CLAUDE.md, ~\.codex\AGENTS.md)"; return $true }
+  if ($script:MR.proba) { Plan "narzedzia\wpisz-zasady.ps1 $co (pliki instrukcji narzedzi AI, ktore tu sa: CLAUDE.md, AGENTS.md Codeksa i OpenCode)"; return $true }
   $a = @("-Zrodlo", $zrodlo, "-KatalogDomowy", $dom)
   if ($Usun) { $a += "-Usun" }
   $w = Uruchom-Skrypt (Join-Path $zrodlo "narzedzia\wpisz-zasady.ps1") $a 180
   if ($w.Kod -ne 0) { Ostrzezenie "zasady dla AI nie zostaly uaktualnione - wpisz-zasady.ps1 zakonczyl sie kodem $($w.Kod): $(Sedno $w.Tekst)"; return $false }
   $slowo = if ($Usun) { "zdjete" } else { "uaktualnione wedlug rejestru" }
-  Krok "zasady dla AI $slowo (~\.claude\CLAUDE.md, ~\.codex\AGENTS.md)"
+  # Zadnego narzedzia AI = wpisz-zasady.ps1 konczy sie zerem z UWAGA - ta UWAGA idzie dalej, nie w cisze.
+  $uwaga = @(($w.Tekst -split "`r?`n") | Where-Object { $_ -match '^UWAGA\s+nie widze' } | Select-Object -First 1)
+  if ($uwaga.Count -gt 0) { Ostrzezenie ($uwaga[0] -replace '^UWAGA\s+', '').Trim() }
+  Krok "zasady dla AI $slowo (pliki instrukcji narzedzi AI, ktore tu sa: CLAUDE.md, AGENTS.md Codeksa i OpenCode)"
   return $true
 }
 
@@ -406,8 +409,8 @@ function Napraw-Hooki([string]$zrodlo, [string]$dom, [switch]$Usun) {
 
 # Po zmianie rejestru: hooki i bloki zasad maja odpowiadac nowemu wyborowi (straznik i wpisz-zasady
 # czytaja rejestr). Zwraca $true, gdy wszystko przeszlo; porazka kazdego to UWAGA z powodem.
-# Na koniec straznik -Dopasuj (P59a): blok kierownika i KOPIA ZASAD DLA OPENCODE (~\.config\opencode\
-# AGENTS.md - lustro CLAUDE.md) - bez tego kopia zostawala ze starymi blokami do nastepnego startu sesji
+# Na koniec straznik -Dopasuj (P59a): blok kierownika w pliku kazdego narzedzia AI (do 0.27 takze kopia
+# CLAUDE.md dla opencode) - bez tego pliki zostawaly ze starymi blokami do nastepnego startu sesji
 # (proba calosci P64: po zdjeciu Lore straznik poprawial ja dopiero przy otwarciu okna).
 function Po-Zmianie-Rejestru([string]$zrodlo, [string]$dom) {
   $h = Napraw-Hooki $zrodlo $dom
@@ -415,9 +418,9 @@ function Po-Zmianie-Rejestru([string]$zrodlo, [string]$dom) {
   if (-not $h.Ok) { $ok = $false; Ostrzezenie "hooki w ~\.claude\settings.json nie zostaly ulozone wedlug rejestru: $(Sedno $h.Tekst)" }
   elseif (-not $script:MR.proba) { Krok "hooki MegaRuchacza ulozone wedlug rejestru (~\.claude\settings.json)" }
   if (-not (Wpisz-Zasady $zrodlo $dom)) { $ok = $false }
-  if ($script:MR.proba) { Plan "straznik-zasad.ps1 -Dopasuj: blok kierownika i kopia zasad dla opencode wedlug rejestru"; return $ok }
+  if ($script:MR.proba) { Plan "straznik-zasad.ps1 -Dopasuj: blok kierownika w plikach narzedzi AI wedlug rejestru"; return $ok }
   $d = Uruchom-Skrypt (Join-Path $zrodlo "narzedzia\straznik-zasad.ps1") @("-Dopasuj", "-Zrodlo", $zrodlo, "-KatalogDomowy", $dom) 180
-  if ($d.Kod -ne 0) { $ok = $false; Ostrzezenie "blok kierownika albo kopia zasad dla opencode nie zostaly dopasowane do rejestru (straznik -Dopasuj, kod $($d.Kod)): $(Sedno $d.Tekst)" }
+  if ($d.Kod -ne 0) { $ok = $false; Ostrzezenie "blok kierownika albo zasady w plikach narzedzi AI nie zostaly dopasowane do rejestru (straznik -Dopasuj, kod $($d.Kod)): $(Sedno $d.Tekst)" }
   return $ok
 }
 

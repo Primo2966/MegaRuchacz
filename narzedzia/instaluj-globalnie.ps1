@@ -23,22 +23,20 @@
 #               Codex w Orce (CODEX_HOME Orki) dostaje ~/.codex/AGENTS.md od
 #               samej Orki, przy kazdym starcie - do katalogu Orki nic nie
 #               piszemy (szczegoly: narzedzia\kierownik-cele.ps1)
-#   zasady      blok miedzy znacznikami MegaRuchacz:kierownik, w wariancie
-#               wlasciwym dla narzedzia, ktore dany plik czyta:
+#   zasady      blok miedzy znacznikami MegaRuchacz:kierownik w pliku instrukcji
+#               KAZDEGO narzedzia AI z listy (narzedzia\kierownik-cele.ps1
+#               Narzedzia-AI), ktore tu jest - w wariancie wlasciwym dla niego:
 #               ~/.claude/CLAUDE.md  <- szablony-global\claude\zasady-kierownika.md
-#                                       (Claude Code: praca w tle, worktree);
-#                                       na maszynie, na ktorej Claude Code nie
-#                                       pracuje, wariant opencode/Codex - ten plik
-#                                       czyta wtedy tylko opencode
+#                                       (Claude Code: praca w tle, worktree)
 #               ~/.codex/AGENTS.md   <- szablony-opencode\zasady-kierownika.md
-#                                       (jak dotad, bez zmian)
-#               ~/.config/opencode/AGENTS.md <- KOPIA ~/.claude/CLAUDE.md z blokiem
-#                                       w wariancie opencode/Codex, gdy CLAUDE.md
-#                                       ma wariant Claude Code: opencode czyta
-#                                       pierwszy istniejacy z tych dwoch plikow,
-#                                       a "Co wiem" i blok Lore ma widziec dalej.
-#                                       Kopie odswieza straznik przy starcie sesji.
-#               Wymuszenie wariantu: -WariantZasad claude|opencode.
+#               ~/.config/opencode/AGENTS.md <- szablony-opencode\zasady-kierownika.md
+#                                       samodzielny plik OpenCode (do 0.27 kopia
+#                                       CLAUDE.md). Gdy go nie ma, zaczyna sie od
+#                                       tresci CLAUDE.md, ktory opencode czytal
+#                                       dotad zamiast niego (bez bloku kierownika).
+#               Zapis, po ktorym plik przekroczylby limit narzedzia (Codex 32 KiB),
+#               jest odmawiany - BLAD, plik zostaje, jaki byl.
+#               Wymuszenie wariantu w CLAUDE.md: -WariantZasad claude|opencode.
 #   znacznik    ~/.claude/.megaruchacz-global       fakt instalacji globalnej
 #
 # Stan pracy (rejestr i mapa) zostaje w PROJEKCIE, w .megaruchacz\ - zaklada go
@@ -54,8 +52,10 @@
 #                tylko tam, gdzie MegaRuchacz juz je zalozyl
 #   -KatalogDomowy <kat>   do testow (podmienia baze ~\)
 #   -WariantZasad auto|claude|opencode   wariant bloku w ~/.claude/CLAUDE.md;
-#                auto (domyslnie) = claude, gdy Claude Code na tej maszynie pracuje
-#                (sa jego wlasne pliki: ~/.claude/history.jsonl albo ~/.claude.json)
+#                auto (domyslnie) = claude - CLAUDE.md czyta tylko Claude Code, bo
+#                OpenCode dostaje wlasny ~/.config/opencode/AGENTS.md (do 0.27 auto
+#                dawalo opencode tam, gdzie Claude Code nie pracowal - wtedy CLAUDE.md
+#                czytal opencode)
 #
 # UWAGA: instalacja globalna ZASTEPUJE per-projektowa czesc rejestru. Jesli masz
 # gdzies wdroz.ps1, po instalacji globalnej uruchom go tam ponownie - wykryje
@@ -119,13 +119,18 @@ function Tak-Czy-Nie($pytanie) {
 # --- blok zasad kierownika w pliku instrukcji --------------------------------
 # Ten sam mechanizm co wpisz-zasady.ps1: wstawiamy/podmieniamy blok miedzy
 # znaczniki, reszta pliku (wlasne zapiski) zostaje nietknieta, przed zmiana kopia.
-function Wstaw-Blok($plik, $nazwa, $tresc) {
+# $n - wpis z listy narzedzi (Wykryj-Narzedzia-AI): od czego zaczac plik, ktorego jeszcze nie ma
+# (Tekst-Startowy), i limit, ponad ktory pliku nie wolno powiekszyc (Ponad-Limit).
+function Wstaw-Blok($plik, $nazwa, $tresc, $n = $null) {
   $istnieje = Test-Path $plik
   $stary = ""
-  if ($istnieje) {
-    try { $stary = Czytaj $plik }
-    catch { Write-Host "BLAD  $nazwa - nie umiem odczytac $plik jako UTF-8, nie ruszam" -ForegroundColor Red; $script:Bledy += $nazwa; return }
+  $naDysku = ""
+  $skad = $null
+  try {
+    if ($istnieje) { $naDysku = Czytaj $plik }
+    if ($n) { $st = Tekst-Startowy $n $KatalogDomowy; $stary = $st.Tekst; $skad = $st.Opis } else { $stary = $naDysku }
   }
+  catch { Write-Host "BLAD  $nazwa - nie umiem odczytac $plik (albo pliku, od ktorego sie zaczyna): $($_.Exception.Message) - nie ruszam" -ForegroundColor Red; $script:Bledy += $nazwa; return }
   $nl = if ($stary.Contains("`r`n")) { "`r`n" } else { "`n" }
   # Konce linii bloku jak w reszcie pliku - szablon w repo bywa CRLF (autocrlf),
   # a plik docelowy LF; bez tego blok mieszalby oba rodzaje w jednym pliku.
@@ -146,7 +151,12 @@ function Wstaw-Blok($plik, $nazwa, $tresc) {
   } else {
     $nowy = $stary.TrimEnd("`r", "`n") + $nl + $nl + $blok + $nl; $co = "dopisuje blok na koncu"
   }
-  if ($nowy -ceq $stary) { Write-Host "--  $nazwa - blok juz aktualny"; return }
+  if ($nowy -ceq $naDysku) { Write-Host "--  $nazwa - blok juz aktualny"; return }
+  if ($skad) { $co = "$co; $skad" }
+  if ($n) {
+    $sufit = Ponad-Limit $n $naDysku $nowy
+    if ($sufit) { Write-Host "BLAD  ODMOWA ZAPISU ($nazwa): $sufit" -ForegroundColor Red; $script:Bledy += $nazwa; return }
+  }
   if ($Proba) { Write-Host "PROBA  $nazwa - $co ($plik)"; return }
   if ($istnieje) { Kopia-Zapasowa $plik }
   else { New-Item -ItemType Directory -Force -Path (Split-Path -Parent $plik) | Out-Null }
@@ -316,16 +326,17 @@ foreach ($p in @($PlikZasadClaude, $PlikZasadOpencode)) {
 $TrescZasadClaude   = (Czytaj $PlikZasadClaude).Trim()
 $TrescZasadOpencode = (Czytaj $PlikZasadOpencode).Trim()
 
-# Czy Claude Code na tej maszynie PRACUJE. Po plikach, ktore prowadzi sam - katalog
-# ~\.claude zaklada tez MegaRuchacz (Lore, wiedza), a na domowej maszynie claude.exe
-# lezy w PATH, choc Claude Code nie jest tam uzywany. To samo rozroznienie robia
-# straznik-zasad.ps1 (Cisza-Claude-Linia) i koszt-pamieci.ps1.
-$PracujeClaude = (Test-Path (Join-Path $KatalogDomowy ".claude\history.jsonl")) -or
-                 (Test-Path (Join-Path $KatalogDomowy ".claude.json"))
 $Wariant = $WariantZasad
-if ($Wariant -eq "auto") { $Wariant = if ($PracujeClaude) { "claude" } else { "opencode" } }
-$TrescZasadDomowa = if ($Wariant -eq "claude") { $TrescZasadClaude } else { $TrescZasadOpencode }
-$PlikZasadDomowy  = if ($Wariant -eq "claude") { $PlikZasadClaude } else { $PlikZasadOpencode }
+if ($Wariant -eq "auto") { $Wariant = "claude" }
+# Pliki instrukcji narzedzi AI, ktore tu sa - z jednej listy (kierownik-cele.ps1). -Codex doklada
+# Codeksa takze wtedy, gdy go nie widac (role i hooki ida wtedy tak samo).
+$CeleZasad = @(Cele-Narzedzi $KatalogDomowy)
+if ($Codex -and -not ($CeleZasad | Where-Object { $_.Id -eq "codex" })) {
+  $CeleZasad += @(Wykryj-Narzedzia-AI $KatalogDomowy | Where-Object { $_.Id -eq "codex" })
+}
+function Wariant-Celu($n) { if ($n.Id -eq "claude") { return $Wariant } else { return $n.Wariant } }
+function Tresc-Wariantu([string]$w) { if ($w -eq "claude") { return $TrescZasadClaude } else { return $TrescZasadOpencode } }
+function Plik-Wariantu([string]$w) { if ($w -eq "claude") { return $PlikZasadClaude } else { return $PlikZasadOpencode } }
 # Hooki Claude Code uklada i naprawia straznik (tryb -NaprawGlobalne / -UsunGlobalne).
 $Straznik = Join-Path $Zrodlo "narzedzia\straznik-zasad.ps1"
 if (-not (Test-Path $Straznik)) { Write-Error "Brak straznika: $Straznik"; exit 1 }
@@ -349,17 +360,12 @@ Write-Host "Katalog domowy: $KatalogDomowy"
 Write-Host "Zrodlo:         $Zrodlo"
 Write-Host ""
 Write-Host "Zainstaluje tryb kierownika dla narzedzi, ktore widze:"
-if ($JestClaude)   { Write-Host "  - Claude Code : role w ~/.claude/agents, rejestr + hooki w ~/.claude/settings.json, zasady w ~/.claude/CLAUDE.md (wariant: $Wariant)" }
-if ($JestOpencode) {
-  $gdzieOc = if ($Wariant -eq "claude") { "kopia ~/.claude/CLAUDE.md w ~/.config/opencode/AGENTS.md (wariant: opencode)" } else { "przez ~/.claude/CLAUDE.md (wariant: $Wariant)" }
-  Write-Host "  - opencode    : role w ~/.config/opencode/agents, wtyczka rejestru w ~/.config/opencode/plugins, zasady: $gdzieOc"
-}
-if ($JestCodex) {
-  if ($RoleHookiCodex) { Write-Host "  - Codex       : role w ~/.codex/agents, rejestr + hooki w ~/.codex/hooks.json, zasady w ~/.codex/AGENTS.md (bo: $PowodCodex)" }
-  else { Write-Host "  - Codex       : zasady w ~/.codex/AGENTS.md" }
-}
+if ($JestClaude)   { Write-Host "  - Claude Code : role w ~/.claude/agents, rejestr + hooki w ~/.claude/settings.json" }
+if ($JestOpencode) { Write-Host "  - opencode    : role w ~/.config/opencode/agents, wtyczka rejestru w ~/.config/opencode/plugins" }
+if ($JestCodex -and $RoleHookiCodex) { Write-Host "  - Codex       : role w ~/.codex/agents, rejestr + hooki w ~/.codex/hooks.json (bo: $PowodCodex)" }
+foreach ($n in $CeleZasad) { Write-Host "  - zasady      : ~/$($n.Plik -replace '\\', '/') ($($n.Nazwa), wariant: $(Wariant-Celu $n); widac: $($n.Dowod))" }
 if ($DomCodexOrki) { Write-Host "  - Codex w Orce: Orka sama kopiuje ~/.codex/AGENTS.md do $DomCodexOrki przy starcie Codeksa" }
-if (-not ($JestClaude -or $JestOpencode -or $JestCodex)) { Write-Host "  (zadnego nie widze)" -ForegroundColor Yellow }
+if ($CeleZasad.Count -eq 0) { Write-Host "  (zadnego narzedzia AI nie widze - zasad nie ma gdzie wpisac; wpisze je straznik, gdy ktores sie pojawi)" -ForegroundColor Yellow }
 Write-Host ""
 Write-Host "Stan pracy (rejestr, mapa) zostaje w KAZDYM projekcie w .megaruchacz\ -"
 Write-Host "zaklada go pierwszy worker, gdy zajdzie potrzeba. Nic nie zalega bezczynnie."
@@ -376,9 +382,14 @@ $Marker = Join-Path $DomClaude ".megaruchacz-global"
 
 # =============================================================== USUWANIE =====
 if ($Usun) {
-  Usun-Blok (Join-Path $DomClaude "CLAUDE.md") "zasady w ~/.claude/CLAUDE.md"
-  Usun-Blok (Join-Path $DomCodex  "AGENTS.md") "zasady w ~/.codex/AGENTS.md"
+  # Blok kierownika z pliku KAZDEGO narzedzia z listy - takze tego, ktorego juz nie widac.
   $kopiaOc = Join-Path $DomOpencode "AGENTS.md"
+  foreach ($n in (Narzedzia-AI)) {
+    $p = Join-Path $KatalogDomowy $n.Plik
+    if (($n.Id -eq "opencode") -and (Jest-Kopia-Opencode $p)) { continue }   # stara kopia - nizej, w calosci
+    Usun-Blok $p "zasady w ~/$($n.Plik -replace '\\', '/')"
+  }
+  # Kopia CLAUDE.md dla opencode sprzed 0.28 byla w calosci nasza - znika (opencode czyta znowu CLAUDE.md).
   if (Jest-Kopia-Opencode $kopiaOc) {
     if ($Proba) { Write-Host "PROBA  usunalbym kopie dla opencode $kopiaOc" }
     else { Kopia-Zapasowa $kopiaOc; Remove-Item $kopiaOc -Force; Write-Host "OK  usunieta kopia zasad dla opencode (opencode czyta znowu ~/.claude/CLAUDE.md)" }
@@ -410,44 +421,17 @@ if ($Usun) {
 
 # =============================================================== ZASADY =======
 Write-Host "--- zasady kierownika (globalnie) ---"
-$skadWariant = if ($WariantZasad -ne "auto") { "wymuszony -WariantZasad" } elseif ($PracujeClaude) { "Claude Code tu pracuje" } else { "Claude Code tu nie pracuje" }
-Write-Host "    ~/.claude/CLAUDE.md dostaje wariant: $Wariant ($skadWariant) - $PlikZasadDomowy"
-Wstaw-Blok (Join-Path $DomClaude "CLAUDE.md") "zasady w ~/.claude/CLAUDE.md" $TrescZasadDomowa
-if ($JestCodex) {
-  Write-Host "    ~/.codex/AGENTS.md dostaje wariant: opencode/Codex - $PlikZasadOpencode"
-  Wstaw-Blok (Join-Path $DomCodex "AGENTS.md") "zasady w ~/.codex/AGENTS.md" $TrescZasadOpencode
+$skadWariant = if ($WariantZasad -ne "auto") { "wymuszony -WariantZasad" } else { "czyta go tylko Claude Code" }
+if ($CeleZasad.Count -eq 0) {
+  Write-Host "UWAGA  nie widze zadnego narzedzia AI (Claude Code, Codex, OpenCode) - bloku zasad kierownika nie ma gdzie wpisac" -ForegroundColor Yellow
+  Nie-Sprawdzono "zasady kierownika nie trafily do zadnego pliku - nie ma tu zadnego narzedzia AI; wpisze je straznik, gdy ktores sie pojawi"
 }
-# opencode czyta pierwszy istniejacy z ~/.config/opencode/AGENTS.md i ~/.claude/CLAUDE.md.
-# Gdy CLAUDE.md ma wariant Claude Code, opencode dostaje wlasny AGENTS.md - kopie
-# CLAUDE.md ("Co wiem", blok Lore) z blokiem w wariancie opencode/Codex. Istniejaca
-# nasza kopie odswiezamy zawsze. Cudzego pliku nie ruszamy - mowimy o tym.
-$PlikOpencode = Join-Path $DomOpencode "AGENTS.md"
-$KopiaOpencodePotrzebna = $JestOpencode -and (($Wariant -eq "claude") -or (Jest-Kopia-Opencode $PlikOpencode))
-if ($KopiaOpencodePotrzebna) {
-  $plikCm = Join-Path $DomClaude "CLAUDE.md"
-  if ((Test-Path $PlikOpencode) -and -not (Jest-Kopia-Opencode $PlikOpencode)) {
-    Write-Host "UWAGA  masz wlasny $PlikOpencode - opencode czyta tylko jego (nie ~/.claude/CLAUDE.md), nie ruszam go" -ForegroundColor Yellow
-    Nie-Sprawdzono "opencode czyta Twoj wlasny ~/.config/opencode/AGENTS.md - zasad kierownika i 'Co wiem' tam nie dokladam"
-    $KopiaOpencodePotrzebna = $false
-  } elseif ($Proba) {
-    Write-Host "PROBA  kopia zasad dla opencode -> $PlikOpencode"
-  } else {
-    try {
-      $zrodloCm = if (Test-Path $plikCm) { Czytaj $plikCm } else { "" }
-      $nowaKopia = Kopia-Dla-Opencode $zrodloCm $TrescZasadOpencode
-      $staraKopia = if (Test-Path $PlikOpencode) { Czytaj $PlikOpencode } else { $null }
-      if ($nowaKopia -ceq $staraKopia) { Write-Host "--  kopia zasad dla opencode - aktualna" }
-      else {
-        Kopia-Zapasowa $PlikOpencode
-        New-Item -ItemType Directory -Force -Path $DomOpencode | Out-Null
-        Zapisz $PlikOpencode $nowaKopia
-        Write-Host "OK  kopia zasad dla opencode (wariant opencode/Codex + 'Co wiem' i Lore z ~/.claude/CLAUDE.md) -> $PlikOpencode"
-      }
-    } catch {
-      Write-Host "BLAD  kopia zasad dla opencode - $($_.Exception.Message)" -ForegroundColor Red
-      $script:Bledy += "kopia zasad dla opencode"
-    }
-  }
+foreach ($n in $CeleZasad) {
+  $w = Wariant-Celu $n
+  $dlaczego = if ($n.Id -eq "claude") { " ($skadWariant)" } else { "" }
+  $nazwaPliku = "~/" + ($n.Plik -replace '\\', '/')
+  Write-Host "    $nazwaPliku dostaje wariant: $w$dlaczego - $(Plik-Wariantu $w)"
+  Wstaw-Blok $n.Sciezka "zasady w $nazwaPliku" (Tresc-Wariantu $w) $n
 }
 Write-Host ""
 
@@ -535,15 +519,23 @@ foreach ($r in $RoleClaude) {
 foreach ($r in $RoleOpencode) {
   if ($JestOpencode) { Sprawdz "~/.config/opencode/agents/$r.md" (Test-Path (Join-Path $DomOpencode "agents\$r.md")) "brak pliku" }
 }
-if ($JestClaude) {
-  $blokClaude = ""
-  if (Test-Path (Join-Path $DomClaude "CLAUDE.md")) { $blokClaude = Czytaj (Join-Path $DomClaude "CLAUDE.md") }
-  $ileBlokow = ([regex]::Matches($blokClaude, [regex]::Escape($POCZATEK))).Count
-  Sprawdz "blok zasad w ~/.claude/CLAUDE.md (dokladnie jeden)" ($ileBlokow -eq 1) "jest $ileBlokow"
+# Blok zasad w pliku kazdego narzedzia, do ktorego go wpisywalismy - dokladnie jeden, we wlasciwym wariancie.
+$TekstyCelow = @{}
+foreach ($n in $CeleZasad) {
+  $nazwaPliku = "~/" + ($n.Plik -replace '\\', '/')
+  $tx = ""
+  if (Test-Path $n.Sciezka) { try { $tx = Czytaj $n.Sciezka } catch { $tx = "" } }
+  $TekstyCelow[$n.Id] = $tx
+  $ileB = Ile-Blokow-Kierownika $tx
+  Sprawdz "blok zasad w $nazwaPliku (dokladnie jeden)" ($ileB -eq 1) "jest $ileB"
   if (-not $Proba) {
-    $pierwsza = ($TrescZasadDomowa -split "`r?`n")[0]
-    Sprawdz "blok w ~/.claude/CLAUDE.md w wariancie $Wariant" ($blokClaude.Contains($pierwsza)) "w pliku nie ma naglowka '$pierwsza'"
+    $w = Wariant-Celu $n
+    $pierwsza = ((Tresc-Wariantu $w) -split "`r?`n")[0]
+    Sprawdz "blok w $nazwaPliku w wariancie $w" ($tx.Contains($pierwsza)) "w pliku nie ma naglowka '$pierwsza'"
+    if (($n.Id -eq "opencode") -and $tx.StartsWith($KOPIA_OPENCODE_ZNACZNIK)) { Sprawdz "$nazwaPliku samodzielny (bez naglowka starej kopii CLAUDE.md)" $false "pierwsza linia to naglowek kopii" }
   }
+}
+if ($JestClaude) {
   Sprawdz "rejestr ~/.claude/megaruchacz-mr-log.js" (Test-Path (Join-Path $DomClaude "megaruchacz-mr-log.js")) "brak pliku"
   if (-not $Proba) {
     $ust = Join-Path $DomClaude "settings.json"
@@ -559,15 +551,8 @@ if ($JestClaude) {
     }
   }
 }
-if ($JestCodex) {
-  $blokCodex = ""
-  if (Test-Path (Join-Path $DomCodex "AGENTS.md")) { $blokCodex = Czytaj (Join-Path $DomCodex "AGENTS.md") }
-  $ileC = Ile-Blokow-Kierownika $blokCodex
-  Sprawdz "blok zasad w ~/.codex/AGENTS.md (dokladnie jeden)" ($ileC -eq 1) "jest $ileC"
-  if (-not $Proba) {
-    $pierwszaOc = ($TrescZasadOpencode -split "`r?`n")[0]
-    Sprawdz "blok w ~/.codex/AGENTS.md w wariancie opencode/Codex" ($blokCodex.Contains($pierwszaOc)) "w pliku nie ma naglowka '$pierwszaOc'"
-  }
+if ($TekstyCelow.ContainsKey("codex")) {
+  $blokCodex = $TekstyCelow["codex"]
   if ($DomCodexOrki -and -not $Proba) {
     $wOrce = Join-Path $DomCodexOrki "AGENTS.md"
     $tamto = $null
@@ -576,11 +561,6 @@ if ($JestCodex) {
       Nie-Sprawdzono "Codex w Orce: $wOrce jeszcze nie rowna sie ~/.codex/AGENTS.md - Orka skopiuje go sama przy najblizszym starcie Codeksa w Orce"
     }
   }
-}
-if ($KopiaOpencodePotrzebna -and -not $Proba) {
-  $kop = if (Test-Path $PlikOpencode) { Czytaj $PlikOpencode } else { "" }
-  $ileO = Ile-Blokow-Kierownika $kop
-  Sprawdz "kopia dla opencode: dokladnie jeden blok, wariant opencode/Codex" (($ileO -eq 1) -and $kop.Contains(($TrescZasadOpencode -split "`r?`n")[0])) "blokow $ileO"
 }
 if ($JestOpencode) { Sprawdz "wtyczka ~/.config/opencode/plugins/mr-log.js" (Test-Path (Join-Path $DomOpencode "plugins\mr-log.js")) "brak pliku" }
 Nie-Sprawdzono "czy narzedzia naprawde wczytaja role i hooki - to widac dopiero po zamknieciu i otwarciu okna"

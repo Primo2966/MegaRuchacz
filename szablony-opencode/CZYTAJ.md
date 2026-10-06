@@ -17,8 +17,17 @@ Wtyczka robi jeszcze dwie rzeczy: odswieza znacznik `~/.claude/.megaruchacz-open
 (dowod, ze dziala) i gdy `AGENTS.md` nie ma bloku zasad, dokłada
   `.megaruchacz/zasady-kierownika.md` jako plik instrukcji (`config.instructions`) -
   dzięki temu zasady docierają także wtedy, gdy `AGENTS.md` jest sledzony w gicie
-  i instalator go nie ruszył. Gdy blok w `AGENTS.md` jest, wtyczka nic nie dokłada
+  i instalator go nie ruszył. Gdy blok jest w `AGENTS.md` projektu albo w globalnym
+  pliku, który opencode czyta (`~/.config/opencode/AGENTS.md`, a bez niego
+  `~/.claude/CLAUDE.md` - tam wpisuje go instalacja globalna), wtyczka nic nie dokłada
   (żadnego podwójnego ładowania).
+- Instalacja globalna (`narzedzia\instaluj-globalnie.ps1`, `wpisz-zasady.ps1`, straznik)
+  traktuje `~/.config/opencode/AGENTS.md` jak plik Codeksa: bloki lore/wiedza/kierownik
+  (wariant opencode) i własna sekcja `## Co wiem`. opencode czyta TYLKO ten plik, gdy
+  istnieje - dlatego zakładany jest z treścią `~/.claude/CLAUDE.md`, który czytał dotąd
+  (bez bloku kierownika w wariancie Claude Code). Do 0.27 był kopią CLAUDE.md odświeżaną
+  przez strażnika (pierwsza linia `<!-- MegaRuchacz:kopia-dla-opencode`) - taka kopia
+  traci samą linię nagłówka i odtąd jest samodzielnym plikiem.
 - `zasady-kierownika.md` -> `<projekt>/AGENTS.md`, miedzy znaczniki
   `<!-- MegaRuchacz:start -->` i `<!-- MegaRuchacz:koniec -->`. opencode czyta
   `AGENTS.md` sam, bez zadnego hooka - ta sama droga co Codex. Gdy `AGENTS.md`

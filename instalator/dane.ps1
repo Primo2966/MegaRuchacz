@@ -96,20 +96,31 @@ function Po-Kolei($ids, $kolejnosc) {
 # Narzedzia AI - po poleceniu w PATH i po katalogu w domu (tak jak w zleceniu P59c).
 # Wolane RAZ przy starcie, zanim instalator cokolwiek zapisze: dziennik nie lezy w .claude,
 # wiec nie tworzy folderu, ktory potem udawalby zainstalowane Claude Code.
+# Lista narzedzi - ta sama, z ktorej wpisz-zasady.ps1 i straznik biora pliki instrukcji
+# (narzedzia\kierownik-cele.ps1 Narzedzia-AI: polecenie, slady w domu). Folder .claude sam w sobie nie
+# jest sladem Claude Code (zaklada go tez MegaRuchacz) - Claude Code zdradza .claude.json albo historia.
+$script:PlikListyNarzedzi = Join-Path (Split-Path -Parent $PSScriptRoot) 'narzedzia\kierownik-cele.ps1'
 function Wykryj-Narzedzia {
   $wynik = @()
-  foreach ($n in @(
-      @{ Id = 'claude';   Nazwa = 'Claude Code'; Polecenie = 'claude';   Katalog = '.claude' },
-      @{ Id = 'codex';    Nazwa = 'Codex';       Polecenie = 'codex';    Katalog = '.codex' },
-      @{ Id = 'opencode'; Nazwa = 'opencode';    Polecenie = 'opencode'; Katalog = '.config\opencode' })) {
+  $lista = $null
+  try {
+    if (-not (Get-Command Narzedzia-AI -ErrorAction SilentlyContinue)) { . $script:PlikListyNarzedzi }
+    $lista = @(Narzedzia-AI)
+  } catch { Zapisz-Dziennik "lista narzedzi AI ($($script:PlikListyNarzedzi)): $($_.Exception.Message) - wykrywam po starej liscie" }
+  if (-not $lista) {
+    $lista = @(
+      [pscustomobject]@{ Id = 'claude';   Nazwa = 'Claude Code'; Polecenie = 'claude';   Slady = @('.claude') },
+      [pscustomobject]@{ Id = 'codex';    Nazwa = 'Codex';       Polecenie = 'codex';    Slady = @('.codex') },
+      [pscustomobject]@{ Id = 'opencode'; Nazwa = 'OpenCode';    Polecenie = 'opencode'; Slady = @('.config\opencode') })
+  }
+  foreach ($n in $lista) {
     $pol = $null
     try { $pol = Get-Command $n.Polecenie -ErrorAction SilentlyContinue | Select-Object -First 1 }
     catch { Zapisz-Dziennik "wykrywanie polecenia $($n.Polecenie): $($_.Exception.Message)" }
-    $jestKat = Test-Path -LiteralPath (Join-Path $script:Dom $n.Katalog)
     $slady = @()
     if ($pol) { $slady += "polecenie $($n.Polecenie)" }
-    if ($jestKat) { $slady += "folder $($n.Katalog)" }
-    $wynik += [pscustomobject]@{ Id = $n.Id; Nazwa = $n.Nazwa; Jest = [bool]($pol -or $jestKat); Slady = ($slady -join ', ') }
+    foreach ($s in $n.Slady) { if (Test-Path -LiteralPath (Join-Path $script:Dom $s)) { $slady += $s } }
+    $wynik += [pscustomobject]@{ Id = $n.Id; Nazwa = $n.Nazwa; Jest = ($slady.Count -gt 0); Slady = ($slady -join ', ') }
   }
   return $wynik
 }

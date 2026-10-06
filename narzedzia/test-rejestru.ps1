@@ -1,6 +1,6 @@
 ﻿# Proba rejestru instalacji (P59a): dla kazdego rodzaju rejestru - brak pliku, wszystko, tylko wiedza,
-# tylko lore, tylko kierownik, sama baza, plik wyzerowany - sprawdza bloki w CLAUDE.md i AGENTS.md
-# Codeksa, kopie dla opencode, hooki w settings.json, start cyklu wiedzy i wyjscie przypomnienia.
+# tylko lore, tylko kierownik, sama baza, plik wyzerowany - sprawdza bloki w CLAUDE.md, AGENTS.md
+# Codeksa i OpenCode (stara kopia CLAUDE.md zamieniona na samodzielny plik), hooki w settings.json, start cyklu wiedzy i wyjscie przypomnienia.
 # Do tego: straznik dwa razy z rzedu nic nie zmienia, migracja starego bloku na dwa z "Co wiem" co do
 # bajtu, wylaczenie modulu zdejmuje jego blok i hook, wlaczenie przywraca, a rejestr nieczytelny
 # (proba negatywna) nie zdejmuje niczego i daje alarm.
@@ -142,7 +142,7 @@ $kierOpencode = (Czytaj (Join-Path $Z "szablony-opencode\zasady-kierownika.md"))
 $zrodloUkosniki = $Z.Replace("\", "/")
 
 # Stan "sprzed P59a": stary wspolny blok MegaRuchacz:start pod "Co wiem", blok kierownika na koncu,
-# kopia dla opencode, komplet czterech hookow plus cudze (Orka), cykl wczoraj, rachunek bez przeliczania.
+# kopia CLAUDE.md dla opencode (format do 0.27), komplet czterech hookow plus cudze (Orka), cykl wczoraj, rachunek bez przeliczania.
 # Nazwy stalych nie moga sie zderzyc z innymi zmiennymi - PowerShell nie rozroznia wielkosci liter
 # (pierwsza wersja tego testu nadpisala "Co wiem" odciskiem plikow przez $przed / $PRZED).
 $COWIEM = "# Ustalenia globalne`n`n## Co wiem`n`n### O użytkowniku`n`n- Pisze po polsku: zażółć gęślą jaźń.`n`n### Bieżące`n`n- [2026-10-01] Fakt testowy.`n`n"
@@ -157,7 +157,8 @@ function Nowy-Dom([string]$nazwa, $moduly) {
   Zapisz (Join-Path $kc "CLAUDE.md") $cm
   $ag = ($STARY + "`n`n" + "$KCM`n$kierOpencode`n<!-- MegaRuchacz:kierownik:koniec -->" + "`n") -replace "`n", "`r`n"
   Zapisz (Join-Path $dom ".codex\AGENTS.md") $ag
-  Zapisz (Join-Path $dom ".config\opencode\AGENTS.md") (Kopia-Dla-Opencode $cm (Czytaj (Join-Path $Z "szablony-opencode\zasady-kierownika.md")))
+  # kopia CLAUDE.md dla opencode w formacie do 0.27 - straznik ma ja zamienic na samodzielny plik
+  Zapisz (Join-Path $dom ".config\opencode\AGENTS.md") ("$KOPIA_OPENCODE_ZNACZNIK - plik zaklada i odswieza MegaRuchacz. Nie edytuj. -->`n`n" + (Z-Blokiem-Kierownika $cm (Czytaj (Join-Path $Z "szablony-opencode\zasady-kierownika.md"))))
   Zapisz (Join-Path $kc ".megaruchacz-global") "zrodlo: $Z`r`nwariant: claude`r`n"
   Zapisz (Join-Path $kc "history.jsonl") "{}`n"
   Copy-Item (Join-Path $Z ".claude\orchestrator-reminder.json") (Join-Path $kc "mr\orchestrator-reminder.json")
@@ -225,12 +226,26 @@ function Sprawdz-Dom([string]$co, [string]$dom, $ocz, [bool]$migracja) {
       Sprawdz "${co}: zostalo samo 'Co wiem' (bez pustych linii na koncu)" ($cm -ceq ($COWIEM.TrimEnd("`n") + "`n")) $cm
     }
   }
-  $oc = Join-Path $dom ".config\opencode\AGENTS.md"
-  if ($ocz.kierownik) {
-    $ok = (Test-Path -LiteralPath $oc) -and ((Czytaj $oc) -ceq (Kopia-Dla-Opencode $cm (Czytaj (Join-Path $Z "szablony-opencode\zasady-kierownika.md"))))
-    Sprawdz "${co}: kopia dla opencode zgodna z CLAUDE.md (wariant opencode)" $ok
-  } else {
-    Sprawdz "${co}: kopii dla opencode nie ma (kierownik wylaczony)" (-not (Test-Path -LiteralPath $oc))
+  if ($ocz.wiedza) {
+    Sprawdz "${co}: szkielet '## Co wiem' w AGENTS.md Codeksa (modul wiedza), nad blokami" (($ag -match "(?m)^## Co wiem") -and ($ag.IndexOf("## Co wiem") -lt $ag.IndexOf("<!-- MegaRuchacz:"))) $ag.Substring(0, [Math]::Min(300, $ag.Length))
+  }
+  # OpenCode od 0.28: samodzielny plik jak AGENTS.md Codeksa (stara kopia CLAUDE.md traci naglowek),
+  # bloki wedlug rejestru, kierownik w wariancie opencode, "Co wiem" z dawnej kopii co do bajtu.
+  $oc = Czytaj (Join-Path $dom ".config\opencode\AGENTS.md")
+  Sprawdz "${co}: OpenCode - samodzielny plik (bez naglowka starej kopii)" ($oc -and -not $oc.StartsWith($KOPIA_OPENCODE_ZNACZNIK)) $(if ($oc) { ($oc -split "`n")[0] } else { "(brak pliku)" })
+  if ($oc) {
+    foreach ($n in @("lore", "wiedza")) {
+      Sprawdz "${co}: blok $n w AGENTS.md OpenCode $(if ($ocz[$n]) { 'jest' } else { 'nie ma' })" ((Ma $oc "<!-- MegaRuchacz:${n}:start -->") -eq [bool]$ocz[$n])
+    }
+    $kierOk = ((Ma $oc $KCM) -eq [bool]$ocz.kierownik) -and ((-not $ocz.kierownik) -or ((Ma $oc $kierOpencode) -and -not (Ma $oc (($kierClaude -split "`n")[0]))))
+    Sprawdz "${co}: blok kierownika w AGENTS.md OpenCode $(if ($ocz.kierownik) { 'jest, wariant opencode' } else { 'nie ma' })" $kierOk
+    if ($migracja) {
+      if ($ocz.lore -or $ocz.wiedza -or $ocz.kierownik) {
+        Sprawdz "${co}: OpenCode - 'Co wiem' z dawnej kopii co do bajtu" ((Przed-Znacznikiem $oc) -ceq $COWIEM) (Przed-Znacznikiem $oc)
+      } else {
+        Sprawdz "${co}: OpenCode - zostalo samo 'Co wiem'" ($oc -ceq ($COWIEM.TrimEnd("`n") + "`n")) $oc
+      }
+    }
   }
   $h = Hooki (Join-Path $dom ".claude\settings.json")
   $chciane = @("SessionStart/straznik", "SessionStart/terminy")

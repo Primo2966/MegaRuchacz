@@ -26,7 +26,7 @@
 # Od P59a samonaprawa slucha rejestru instalacji (~\.claude\mr\instalacja.json, umowa:
 # narzedzia\instalacja\stan.ps1): dogrywa TYLKO to, co nalezy do wlaczonych modulow, i zdejmuje
 # NASZE bloki i hooki modulow wylaczonych - bloki zasad lore/wiedza (Pilnuj-Zasad), blok
-# kierownika i kopie dla opencode (Pilnuj-Kierownika), hooki globalne (Pilnuj-Hookow-Globalnych),
+# kierownika (Pilnuj-Kierownika), hooki globalne (Pilnuj-Hookow-Globalnych),
 # cykl wiedzy (Ruszaj-Cykl). Brak rejestru = jak przed nim (wszystko poza kopia wlaczone).
 # Rejestr nieczytelny = wszystko wlaczone, jedna linia alarmu i ZADNEGO zdejmowania.
 #
@@ -60,7 +60,7 @@
 #       zdejmuje hooki MegaRuchacza z ~\.claude\settings.json (cudze zostaja).
 #   powershell -NoProfile -File narzedzia\straznik-zasad.ps1 -Dopasuj
 #       dopasowuje pliki do rejestru instalacji od razu, bez czekania na nastepna sesje:
-#       bloki zasad, blok kierownika, kopia dla opencode, hooki globalne. Bez sieci, cyklu
+#       bloki zasad, blok kierownika, szkielet "Co wiem", hooki globalne. Bez sieci, cyklu
 #       i rachunku. Dla instalatora po zmianie modulow. Kod 1 = cos sie nie udalo.
 #   -KatalogDomowy  podstawiony katalog domowy - do testow
 
@@ -125,8 +125,8 @@ if ($Moduly) {
 # sesji jest wazniejszy niz to sprawdzenie.
 $plikSufitu = Join-Path $PSScriptRoot "sufit-ladunku.ps1"
 if (Test-Path $plikSufitu) { . $plikSufitu }
-# Cele bloku zasad kierownika (warianty, Codex w Orce, kopia dla opencode) - ten
-# sam kod co w instaluj-globalnie.ps1. Brak pliku melduje Pilnuj-Kierownika.
+# Lista narzedzi AI i cele zasad (warianty, Codex w Orce, plik OpenCode, szkielet "Co wiem", limit) -
+# ten sam kod co w instaluj-globalnie.ps1 i wpisz-zasady.ps1. Brak pliku melduje Pilnuj-Kierownika.
 $plikCeliKierownika = Join-Path $PSScriptRoot "kierownik-cele.ps1"
 if (Test-Path $plikCeliKierownika) { . $plikCeliKierownika }
 # Zapis odporny na zanik pradu i rozpoznawanie wyzerowanych plikow pamieci (awaria
@@ -361,7 +361,7 @@ function Usun-Klucze($sciezka, [string[]]$nazwy) {
 $GODZIN_CISZY = 24
 $WYWROTEK_NAJWYZEJ = 5
 $script:Wywrotki = @()
-# Ile napraw sie nie udalo (zasady, blok kierownika, kopia dla opencode) - z tego bierze sie
+# Ile napraw sie nie udalo (zasady, blok kierownika) - z tego bierze sie
 # kod wyjscia trybu -Dopasuj; hook startowy konczy sie zerem zawsze.
 $script:Niepowodzenia = 0
 
@@ -647,7 +647,7 @@ function Sprawdz-Zera {
   $script:Wyzerowane = Wyzerowane-Pliki $KatalogDomowy
   if ($script:Wyzerowane.Count -eq 0) { return }
   Mow ("MegaRuchacz: " + (Opis-Wyzerowanych $script:Wyzerowane $KatalogDomowy $Zrodlo) +
-       " Do czasu przywrocenia nie wpisuje zasad, nie odswiezam kopii dla opencode i nie ruszam cyklu wiedzy.")
+       " Do czasu przywrocenia nie wpisuje zasad i nie ruszam cyklu wiedzy.")
 }
 
 # Rejestr instalacji nieczytelny (pusty, wyzerowany po zaniku pradu, zly JSON) - jedna linia
@@ -2224,18 +2224,21 @@ function Przewin-Zrodlo($cyt) {
 }
 
 # --------------------------------------------------------- 1. zasady globalne
-# Pliki instrukcji do pilnowania. Claude Code czyta ~\.claude\CLAUDE.md, Codex
-# ~\.codex\AGENTS.md - i to jest jedyna droga zasad na maszynie bez Claude Code,
-# bo Codex wczytuje AGENTS.md sam, bez zadnego hooka. Zapisuje wpisz-zasady.ps1
-# (oba pliki naraz), tu tylko sprawdzamy, czy bloki nadal tam siedza i sa swieze.
+# Pliki instrukcji do pilnowania - KAZDEGO narzedzia AI z listy (kierownik-cele.ps1 Narzedzia-AI:
+# Claude Code ~\.claude\CLAUDE.md, Codex ~\.codex\AGENTS.md, OpenCode ~\.config\opencode\AGENTS.md),
+# ktore tu jest. Codex i OpenCode wczytuja swoj plik sami, bez zadnego hooka - to jedyna droga zasad
+# na maszynie bez Claude Code. Zapisuje wpisz-zasady.ps1 (wszystkie pliki naraz), tu tylko
+# sprawdzamy, czy bloki (i przy module wiedza szkielet "Co wiem") nadal tam siedza i sa swieze.
 function Cele-Zasad {
-  $cele = @(
-    [ordered]@{ nazwa = "Claude Code"; plik = $plikDomowy; limit = 0 }
-  )
-  # Codeksa uznajemy za obecnego po jego katalogu domowym - tak samo jak robia
-  # to wpisz-zasady.ps1 i instaluj-lore.ps1.
-  if (Test-Path (Split-Path -Parent $plikCodex)) {
-    $cele += [ordered]@{ nazwa = "Codex"; plik = $plikCodex; limit = $LIMIT_AGENTS }
+  $cele = @()
+  if (-not (Get-Command Cele-Narzedzi -ErrorAction SilentlyContinue)) {
+    # starsza kopia kierownik-cele.ps1 - jak do 0.27: sam CLAUDE.md i AGENTS.md Codeksa
+    $cele += [ordered]@{ nazwa = "Claude Code"; plik = $plikDomowy; limit = 0; n = $null }
+    if (Test-Path (Split-Path -Parent $plikCodex)) { $cele += [ordered]@{ nazwa = "Codex"; plik = $plikCodex; limit = $LIMIT_AGENTS; n = $null } }
+    return ,$cele
+  }
+  foreach ($n in (Cele-Narzedzi $KatalogDomowy)) {
+    $cele += [ordered]@{ nazwa = $n.Nazwa; plik = $n.Sciezka; limit = $n.Limit; n = $n }
   }
   # przecinek z premedytacja: bez niego lista jednoelementowa wraca jako goly
   # slownik, a nie tablica - ta sama pulapka, ktora zlapala rejestr modulow
@@ -2263,7 +2266,13 @@ function Pilnuj-Zasad {
   }
   $zdejmij = @()
   if ($chciane.Zdejmuj) { $zdejmij = @(Bloki-Zasad | Where-Object { $chciane.Nazwy -notcontains $_ }) }
+  # Szkielet "Co wiem" w kazdym pliku przy wlaczonym module wiedza - ta sama regula co w wpisz-zasady.ps1.
+  $szkielet = ($chciane.Nazwy -contains "wiedza") -and [bool](Get-Command Zloz-Plik-Narzedzia -ErrorAction SilentlyContinue)
   $cele = Cele-Zasad
+  if ($cele.Count -eq 0) {
+    Notuj "zasady pamieci: nie widze zadnego narzedzia AI (Claude Code, Codex, OpenCode) - nie ma gdzie ich pilnowac"
+    return
+  }
 
   $doNaprawy = @()
   foreach ($c in $cele) {
@@ -2273,10 +2282,19 @@ function Pilnuj-Zasad {
       catch { Mow "MegaRuchacz: $($c.plik) nie czyta sie jako UTF-8 - nie pilnuje w nim zasad pamieci."; $script:Niepowodzenia++; continue }
     }
     $oczekiwany = $null
-    try { $oczekiwany = Zloz-Plik-Zasad $tekst $tresci $zdejmij }
+    $start = [pscustomobject]@{ Tekst = $tekst; Istnieje = (Test-Path -LiteralPath $c.plik); Opis = $null }
+    try {
+      # Plik narzedzia zaczyna sie tak samo jak w wpisz-zasady.ps1 (Tekst-Startowy): OpenCode bez
+      # wlasnego pliku - od tresci CLAUDE.md, stara kopia dla opencode - bez linii naglowka.
+      if ($c.n) { $start = Tekst-Startowy $c.n $KatalogDomowy; $oczekiwany = Zloz-Plik-Narzedzia $start $tresci $zdejmij $szkielet }
+      else { $oczekiwany = Zloz-Plik-Zasad $tekst $tresci $zdejmij }
+    }
     catch { Mow "MegaRuchacz: zasady pamieci w $($c.plik): $($_.Exception.Message) - nie ruszam, popraw znaczniki recznie."; $script:Niepowodzenia++; continue }
     if ($oczekiwany -ceq $tekst) { continue }
-    $doNaprawy += [ordered]@{ nazwa = $c.nazwa; plik = $c.plik; opis = ((Roznice-Zasad $tekst $tresci $zdejmij) -join ", ") }
+    $opisy = @(Roznice-Zasad $start.Tekst $tresci $zdejmij)
+    if ($szkielet -and -not (Ma-Co-Wiem $start.Tekst)) { $opisy += "brakowalo szkieletu 'Co wiem'" }
+    if ($start.Opis) { $opisy = @($start.Opis) + $opisy }
+    $doNaprawy += [ordered]@{ nazwa = $c.nazwa; plik = $c.plik; opis = ($opisy -join ", "); n = $c.n }
   }
 
   if ($doNaprawy.Count -eq 0) {
@@ -2293,11 +2311,17 @@ function Pilnuj-Zasad {
     return
   }
   $kod = 1
+  $wyjscie = @()
   try {
     $global:LASTEXITCODE = 0
-    & $wpisz -Zrodlo $Zrodlo -KatalogDomowy $KatalogDomowy *>&1 | Out-Null
+    $wyjscie = @(& $wpisz -Zrodlo $Zrodlo -KatalogDomowy $KatalogDomowy *>&1 | ForEach-Object { "$_" })
     $kod = $LASTEXITCODE
-  } catch { $kod = 1 }
+  } catch { $kod = 1; $wyjscie += "$($_.Exception.Message)" }
+  # Odmowa zapisu z sufitu (plik przekroczylby limit narzedzia) - na POCZATKU meldunku: to jedyny
+  # powod, dla ktorego naprawa nie wyszla, a ktory naprawia czlowiek, nie straznik.
+  $odmowy = @($wyjscie | Where-Object { $_ -match '^BLAD\s+ODMOWA ZAPISU' } | ForEach-Object { ($_ -replace '^BLAD\s+', '').Trim() })
+  foreach ($o in $odmowy) { Mow "MegaRuchacz: UWAGA - $o" }
+  $pierwszyBlad = @($wyjscie | Where-Object { $_ -match '^BLAD\s' -and $_ -notmatch 'ODMOWA ZAPISU' } | Select-Object -First 1)
 
   # Po naprawie skladamy wszystko jeszcze raz z dysku - to, co wpisz-zasady.ps1
   # wypisalo o sobie, nie jest dowodem.
@@ -2306,7 +2330,10 @@ function Pilnuj-Zasad {
     $tekst = ""
     try { if (Test-Path -LiteralPath $c.plik) { $tekst = [System.IO.File]::ReadAllText($c.plik, (New-Object System.Text.UTF8Encoding($false, $true))) } }
     catch { $nadal += $c.nazwa; continue }
-    try { if ((Zloz-Plik-Zasad $tekst $tresci $zdejmij) -cne $tekst) { $nadal += $c.nazwa } }
+    try {
+      $ocz = if ($c.n) { Zloz-Plik-Narzedzia (Tekst-Startowy $c.n $KatalogDomowy) $tresci $zdejmij $szkielet } else { Zloz-Plik-Zasad $tekst $tresci $zdejmij }
+      if ($ocz -cne $tekst) { $nadal += $c.nazwa }
+    }
     catch { $nadal += $c.nazwa }
   }
   if ($kod -eq 0 -and $nadal.Count -eq 0) {
@@ -2316,6 +2343,8 @@ function Pilnuj-Zasad {
   } else {
     $ogon = ""
     if ($nadal.Count -gt 0) { $ogon = ", nadal niezgodne: " + ($nadal -join ", ") }
+    if ($pierwszyBlad.Count -gt 0) { $ogon += "; " + ($pierwszyBlad[0] -replace '^BLAD\s+', '').Trim() }
+    if ($odmowy.Count -gt 0) { $ogon += "; odmowa zapisu ponad limit - powod wyzej" }
     Mow "MegaRuchacz: zasady pamieci ($opis), a poprawka nie wyszla (kod ${kod}${ogon}) - uruchom $wpisz recznie."
     $script:Niepowodzenia++
   }
@@ -2329,15 +2358,27 @@ function Pilnuj-Zasad {
 # aktualizacja tresci to robota instalatora (tu nie wiemy, czy wariant nie byl
 # wymuszony). Tylko przy instalacji globalnej - wdrozenie per projekt tego bloku
 # w plikach globalnych nie ma i miec nie ma.
-# Od P59a modul kierownik wylaczony w rejestrze instalacji = blok zdejmujemy (Zdejmij-Kierownika)
-# razem z nasza kopia zasad dla opencode, ktora istnieje wylacznie dla wariantu bloku.
+# Pliki: kazde narzedzie AI z listy (kierownik-cele.ps1 Narzedzia-AI), ktore tu jest, w wariancie
+# z listy - CLAUDE.md w wariancie zapisanym przez instalator (moze byc wymuszony -WariantZasad).
+# Do 0.27 opencode dostawal kopie CLAUDE.md (Pilnuj-Kopii-Opencode) - dzis ma samodzielny plik jak
+# Codex, a stara kopie zamienia na samodzielny plik Pilnuj-Zasad (Tekst-Startowy).
+# Od P59a modul kierownik wylaczony w rejestrze instalacji = blok zdejmujemy (Zdejmij-Kierownika).
 function Powiedz-Kierownik([string]$tekst) {
   Mow $tekst
   # W tle nikt nie czyta ekranu - zdanie czeka na najblizszy przebieg z widownia.
   if ($Tlo) { Odloz-Wiadomosc $tekst }
 }
 
-# Wycina NASZ blok kierownika (po znacznikach) z ~/.claude/CLAUDE.md i ~/.codex/AGENTS.md. Dubel
+# Pliki instrukcji wszystkich narzedzi z listy (takze tych, ktorych juz nie widac - zdejmowanie jest
+# bezpieczne), a przy starszej kopii kierownik-cele.ps1 - CLAUDE.md i AGENTS.md Codeksa jak dotad.
+function Pliki-Wszystkich-Narzedzi {
+  if (Get-Command Narzedzia-AI -ErrorAction SilentlyContinue) {
+    return ,@(Narzedzia-AI | ForEach-Object { [ordered]@{ nazwa = "~/" + ($_.Plik -replace '\\', '/'); plik = (Join-Path $KatalogDomowy $_.Plik) } })
+  }
+  return ,@([ordered]@{ nazwa = "~/.claude/CLAUDE.md"; plik = $plikDomowy }, [ordered]@{ nazwa = "~/.codex/AGENTS.md"; plik = $plikCodex })
+}
+
+# Wycina NASZ blok kierownika (po znacznikach) z pliku instrukcji kazdego narzedzia AI. Dubel
 # albo samotny znacznik - jedna linia do czlowieka, plik zostaje (nie zgadujemy, co jest czyje).
 function Zdejmij-Kierownika {
   if (-not (Get-Command Bez-Bloku-Kierownika -ErrorAction SilentlyContinue)) {
@@ -2345,7 +2386,7 @@ function Zdejmij-Kierownika {
     return
   }
   $stempel = Get-Date -Format "yyyyMMdd-HHmmss"
-  foreach ($c in @([ordered]@{ nazwa = "~/.claude/CLAUDE.md"; plik = $plikDomowy }, [ordered]@{ nazwa = "~/.codex/AGENTS.md"; plik = $plikCodex })) {
+  foreach ($c in (Pliki-Wszystkich-Narzedzi)) {
     if (-not (Test-Path -LiteralPath $c.plik)) { continue }
     try { $tekst = Czytaj-Utf8 $c.plik }
     catch { Powiedz-Kierownik "MegaRuchacz: $($c.nazwa) nie czyta sie jako UTF-8 - nie zdejmuje z niego bloku zasad kierownika."; $script:Niepowodzenia++; continue }
@@ -2371,101 +2412,63 @@ function Pilnuj-Kierownika {
   }
   if (Modul-Wylaczony "kierownik") {
     Zdejmij-Kierownika
-    Pilnuj-Kopii-Opencode (Join-Path $Zrodlo "szablony-opencode\zasady-kierownika.md")
+    return
+  }
+  if (-not (Get-Command Cele-Narzedzi -ErrorAction SilentlyContinue)) {
+    Powiedz-Kierownik "MegaRuchacz: $plikCeliKierownika nie ma listy narzedzi AI (starsza kopia) - nie pilnuje bloku zasad kierownika; uruchom narzedzia\instaluj-globalnie.ps1."
     return
   }
   $szablony = [ordered]@{
     claude   = Join-Path $Zrodlo "szablony-global\claude\zasady-kierownika.md"
     opencode = Join-Path $Zrodlo "szablony-opencode\zasady-kierownika.md"
   }
-  # Wariant dla ~/.claude/CLAUDE.md: taki, jaki zapisal instalator; gdy go nie
-  # zapisal (instalacje sprzed 0.21.1) - to samo rozroznienie co instalator.
+  # Wariant dla ~/.claude/CLAUDE.md: taki, jaki zapisal instalator (moze byc wymuszony); gdy go
+  # nie zapisal (instalacje sprzed 0.21.1) - wariant z listy narzedzi.
   $wariantDomowy = (Czytaj-Klucze $PlikZnacznikaGlobalnego)["wariant"]
-  if ($wariantDomowy -notin @("claude", "opencode")) {
-    $wariantDomowy = if (Pracuje-Claude $KatalogDomowy) { "claude" } else { "opencode" }
-  }
-  $cele = @([ordered]@{ nazwa = "~/.claude/CLAUDE.md"; plik = $plikDomowy; wariant = $wariantDomowy })
-  if ($JestCodex -or (Katalog-Codex-Orki $KatalogDomowy)) {
-    $cele += [ordered]@{ nazwa = "~/.codex/AGENTS.md"; plik = $plikCodex; wariant = "opencode" }
-  }
   $stempel = Get-Date -Format "yyyyMMdd-HHmmss"
-  foreach ($c in $cele) {
+  foreach ($n in (Cele-Narzedzi $KatalogDomowy)) {
+    $wariant = $n.Wariant
+    if (($n.Id -eq "claude") -and ($wariantDomowy -in @("claude", "opencode"))) { $wariant = $wariantDomowy }
+    $nazwa = "~/" + ($n.Plik -replace '\\', '/')
     $tekst = ""
-    if (Test-Path $c.plik) {
-      try { $tekst = Czytaj-Utf8 $c.plik }
-      catch { Powiedz-Kierownik "MegaRuchacz: $($c.nazwa) nie czyta sie jako UTF-8 - nie sprawdzam w nim bloku zasad kierownika."; continue }
+    if (Test-Path -LiteralPath $n.Sciezka) {
+      try { $tekst = Czytaj-Utf8 $n.Sciezka }
+      catch { Powiedz-Kierownik "MegaRuchacz: $nazwa nie czyta sie jako UTF-8 - nie sprawdzam w nim bloku zasad kierownika."; continue }
     }
     $ile = Ile-Blokow-Kierownika $tekst
     if ($ile -eq 1) { continue }
     if ($ile -gt 1) {
-      Powiedz-Kierownik "MegaRuchacz: w $($c.nazwa) jest $ile blokow zasad kierownika (dubel) - nie ruszam, usun nadmiarowe."
+      Powiedz-Kierownik "MegaRuchacz: w $nazwa jest $ile blokow zasad kierownika (dubel) - nie ruszam, usun nadmiarowe."
       continue
     }
-    $szablon = $szablony[$c.wariant]
+    $szablon = $szablony[$wariant]
     if (-not (Test-Path $szablon)) {
-      Powiedz-Kierownik "MegaRuchacz: w $($c.nazwa) brakuje bloku zasad kierownika, a nie umiem go wpisac - brak szablonu $szablon. Uruchom narzedzia\instaluj-globalnie.ps1."
+      Powiedz-Kierownik "MegaRuchacz: w $nazwa brakuje bloku zasad kierownika, a nie umiem go wpisac - brak szablonu $szablon. Uruchom narzedzia\instaluj-globalnie.ps1."
       continue
     }
     try {
       $tresc = Czytaj-Utf8 $szablon
-      $nowy = Z-Blokiem-Kierownika $tekst $tresc
-      Kopia-Zapasowa $c.plik $stempel
-      Zapisz-Tekst $c.plik $nowy
+      # Plik, ktorego jeszcze nie ma, zaczyna sie tak samo jak w wpisz-zasady.ps1 (Tekst-Startowy).
+      $start = Tekst-Startowy $n $KatalogDomowy
+      $nowy = Z-Blokiem-Kierownika $start.Tekst $tresc
+      $sufit = Ponad-Limit $n $tekst $nowy
+      if ($sufit) {
+        Powiedz-Kierownik "MegaRuchacz: UWAGA - w $nazwa brakuje bloku zasad kierownika i NIE wpisalem go: $sufit"
+        $script:Niepowodzenia++
+        continue
+      }
+      Kopia-Zapasowa $n.Sciezka $stempel
+      Zapisz-Tekst $n.Sciezka $nowy
       # Dowodem jest dysk, nie to, ze zapis nie rzucil wyjatkiem.
-      $po = Czytaj-Utf8 $c.plik
+      $po = Czytaj-Utf8 $n.Sciezka
       $naglowek = ($tresc.Trim() -split "`r?`n")[0]
-      if ((Ile-Blokow-Kierownika $po) -ne 1 -or -not $po.Contains($naglowek)) { throw "po zapisie w pliku nie ma dokladnie jednego bloku w wariancie $($c.wariant)" }
-      Powiedz-Kierownik "MegaRuchacz: w $($c.nazwa) brakowalo bloku zasad kierownika - wpisalem go (wariant $($c.wariant))."
+      if ((Ile-Blokow-Kierownika $po) -ne 1 -or -not $po.Contains($naglowek)) { throw "po zapisie w pliku nie ma dokladnie jednego bloku w wariancie $wariant" }
+      $skad = if ($start.Opis) { "; $($start.Opis)" } else { "" }
+      Powiedz-Kierownik "MegaRuchacz: w $nazwa brakowalo bloku zasad kierownika - wpisalem go (wariant $wariant$skad)."
     } catch {
-      Powiedz-Kierownik "MegaRuchacz: w $($c.nazwa) brakuje bloku zasad kierownika, a wpisanie nie wyszlo ($($_.Exception.Message)). Uruchom narzedzia\instaluj-globalnie.ps1."
+      Powiedz-Kierownik "MegaRuchacz: w $nazwa brakuje bloku zasad kierownika, a wpisanie nie wyszlo ($($_.Exception.Message)). Uruchom narzedzia\instaluj-globalnie.ps1."
       $script:Niepowodzenia++
     }
-  }
-  Pilnuj-Kopii-Opencode $szablony["opencode"]
-}
-
-# opencode czyta ~/.config/opencode/AGENTS.md zamiast ~/.claude/CLAUDE.md, gdy ten
-# pierwszy istnieje. Nasza kopia (Kopia-Dla-Opencode) ma nadazac za CLAUDE.md,
-# bo "Co wiem" zmienia sie codziennie. Zakladamy ja, gdy CLAUDE.md ma blok
-# w wariancie innym niz opencode; istniejaca nasza kopie odswiezamy zawsze.
-# Przy module kierownik wylaczonym kopia nie ma po co istniec (jej jedyna roznica wobec CLAUDE.md
-# to wariant bloku kierownika) - NASZA (po znaczniku w pierwszej linii) kasujemy i opencode czyta
-# wprost ~/.claude/CLAUDE.md: to samo "Co wiem" i te same bloki zasad pamieci.
-function Pilnuj-Kopii-Opencode($szablonOpencode) {
-  if (-not $JestOpencode) { return }
-  $plikOc = Join-Path $KatalogDomowy ".config\opencode\AGENTS.md"
-  $nasza = Jest-Kopia-Opencode $plikOc
-  if ((Test-Path $plikOc) -and -not $nasza) { Notuj "opencode: wlasny $plikOc uzytkownika - nie ruszam"; return }
-  if (Modul-Wylaczony "kierownik") {
-    if (-not $nasza) { return }
-    try {
-      Remove-Item -LiteralPath $plikOc -Force -ErrorAction Stop
-      Powiedz-Kierownik "MegaRuchacz: modul kierownik wylaczony - zdjalem kopie zasad dla opencode ($plikOc); opencode czyta teraz wprost ~/.claude/CLAUDE.md."
-    } catch {
-      Powiedz-Kierownik "MegaRuchacz: modul kierownik wylaczony, a kopii zasad dla opencode ($plikOc) nie udalo sie zdjac - $($_.Exception.Message)."
-      $script:Niepowodzenia++
-    }
-    return
-  }
-  if (-not (Test-Path $plikDomowy)) { return }
-  try { $cm = Czytaj-Utf8 $plikDomowy } catch { Powiedz-Kierownik "MegaRuchacz: ~/.claude/CLAUDE.md nie czyta sie jako UTF-8 - nie odswiezam kopii zasad dla opencode."; return }
-  if (-not (Test-Path $szablonOpencode)) {
-    if ($nasza) { Powiedz-Kierownik "MegaRuchacz: nie ma szablonu $szablonOpencode - kopia zasad dla opencode ($plikOc) nie jest odswiezana." }
-    return
-  }
-  $tresc = Czytaj-Utf8 $szablonOpencode
-  $naglowekOc = ($tresc.Trim() -split "`r?`n")[0]
-  $blok = Blok-Kierownika $cm
-  if (-not $nasza -and $blok -and $blok.Contains($naglowekOc)) { return }   # CLAUDE.md juz ma wariant opencode
-  try {
-    $nowa = Kopia-Dla-Opencode $cm $tresc
-    $stara = if ($nasza) { Czytaj-Utf8 $plikOc } else { $null }
-    if ($nowa -ceq $stara) { return }
-    Zapisz-Tekst $plikOc $nowa
-    if ($nasza) { Notuj "opencode: odswiezona kopia zasad $plikOc" }
-    else { Powiedz-Kierownik "MegaRuchacz: opencode dostal wlasna kopie zasad ($plikOc) - wariant dla opencode, z 'Co wiem' i blokami zasad pamieci." }
-  } catch {
-    Powiedz-Kierownik "MegaRuchacz: kopia zasad dla opencode ($plikOc) nie dala sie zlozyc - $($_.Exception.Message)."
   }
 }
 
@@ -3357,7 +3360,7 @@ try {
   }
 
   # Tryb dla instalatora po zmianie modulow - pliki dopasowane do rejestru instalacji od razu,
-  # a nie przy nastepnym otwarciu okna: bloki zasad pamieci, blok kierownika z kopia dla opencode
+  # a nie przy nastepnym otwarciu okna: bloki zasad pamieci (z szkieletem "Co wiem"), blok kierownika
   # i hooki globalne. Bez pobierania z gita, cyklu wiedzy i rachunku. Wyzerowane pliki pamieci
   # blokuja zapis tak samo jak przy starcie sesji. Kod 1 = cos sie nie udalo (opis na ekranie).
   if ($Dopasuj) {

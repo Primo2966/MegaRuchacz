@@ -1,10 +1,20 @@
-# Wpisuje zasady pamieci MegaRuchacza do plikow instrukcji narzedzi AI uzytkownika.
+# Wpisuje zasady pamieci MegaRuchacza do plikow instrukcji narzedzi AI uzytkownika - KAZDEGO
+# narzedzia z listy narzedzi (kierownik-cele.ps1 Narzedzia-AI: Claude Code ~\.claude\CLAUDE.md,
+# Codex ~\.codex\AGENTS.md, OpenCode ~\.config\opencode\AGENTS.md), ktore jest na tej maszynie
+# (polecenie w PATH, slad w domu albo nasze bloki juz w jego pliku). Zadnego = nic do zrobienia
+# i glosna UWAGA.
 # Od P59a dwa bloki, kazdy dla wlasnego modulu instalatora (regula skladania: zasady-bloki.ps1):
 #   lore    zasady-lore.md   -> <!-- MegaRuchacz:lore:start -->   ... <!-- MegaRuchacz:lore:koniec -->
 #   wiedza  zasady-wiedza.md -> <!-- MegaRuchacz:wiedza:start --> ... <!-- MegaRuchacz:wiedza:koniec -->
 # Zrodlo tresci: tylko to, co w pliku stoi pod linia-znacznikiem. Stary wspolny blok
 # <!-- MegaRuchacz:start --> (do P59a) zamieniany jest na nowe NA SWOIM MIEJSCU - "Co wiem"
 # nad nim i reszta pliku zostaja co do bajtu.
+# Przy wlaczonym module wiedza kazdy plik dostaje tez pusty szkielet sekcji "## Co wiem", jesli
+# jej nie ma (cykl wiedzy pisze fakty do kazdego pliku z ta sekcja); istniejacej nie ruszamy.
+# Plik, ktorego narzedzie jeszcze nie ma, zaczyna sie od Tekst-Startowy: OpenCode - od tresci
+# CLAUDE.md, ktory czytal dotad zamiast wlasnego; stara kopia dla opencode traci linie naglowka.
+# Plik, ktory po zapisie przekroczylby limit narzedzia (Codex: 32 KiB), NIE jest zapisywany -
+# ostrzezenie stoi w PIERWSZEJ linii wyjscia, kod 1.
 #
 # Uzycie:
 #   powershell -File C:\dev\claude-worker\narzedzia\wpisz-zasady.ps1
@@ -46,6 +56,10 @@ if (-not (Test-Path $plikZapisu)) { Write-Error "Nie ma $plikZapisu - bez niego 
 $plikBlokow = Join-Path $PSScriptRoot "zasady-bloki.ps1"
 if (-not (Test-Path $plikBlokow)) { Write-Error "Nie ma $plikBlokow - bez niego nie wiem, jak skladac bloki zasad."; exit 1 }
 . $plikBlokow
+# Lista narzedzi AI, poczatek pliku, szkielet "Co wiem", limit - wspolne ze straznikiem.
+$plikCeli = Join-Path $PSScriptRoot "kierownik-cele.ps1"
+if (-not (Test-Path $plikCeli)) { Write-Error "Nie ma $plikCeli - bez niego nie wiem, ktore narzedzia AI tu sa."; exit 1 }
+. $plikCeli
 
 function Czytaj($sciezka) {
   return [System.IO.File]::ReadAllText($sciezka, $Utf8Odczyt)
@@ -53,17 +67,6 @@ function Czytaj($sciezka) {
 
 function Zapisz($sciezka, $tekst) {
   Zapisz-Trwale $sciezka $tekst $Utf8Zapis
-}
-
-# Bajt 0x00 w pliku zasad to slad zepsutego zapisu, nie tresc uzytkownika: taki plik
-# zostaje nietkniety i bez kopii, a uzytkownik dostaje adres zdrowej kopii.
-function Wyzerowany($plik, $nazwa) {
-  if (-not (Ma-Zera $plik)) { return $false }
-  $opis = Opis-Wyzerowanych (Wyzerowane-Pliki-Z @($plik)) $KatalogDomowy $Zrodlo
-  Write-Host "BLAD  $nazwa - $opis" -ForegroundColor Red
-  $script:Bledy++
-  $script:Raport += "$nazwa : NIETKNIETY - plik ma bajty 0x00"
-  return $true
 }
 
 function Wyzerowane-Pliki-Z($pliki) {
@@ -86,7 +89,7 @@ function Kopia-Zapasowa($sciezka) {
 # Odczyt kontrolny po zapisie - najczestsza cicha wpadka na Windowsie to rozsypane polskie
 # znaki, wiec porownujemy to, co wyszlo, z tym, co mialo wejsc: kazdy blok, ktory ma stac,
 # stoi co do znaku, a po blokach zdjetych nie zostal ani jeden znacznik.
-function Sprawdz-Zapis($plik, $nazwa, $bloki, $zdjete) {
+function Sprawdz-Zapis($plik, $nazwa, $bloki, $zdjete, [bool]$szkielet) {
   try { $sprawdzony = Czytaj $plik }
   catch {
     Write-Host "BLAD  $nazwa - po zapisie $plik nie daje sie odczytac jako UTF-8" -ForegroundColor Red
@@ -114,6 +117,11 @@ function Sprawdz-Zapis($plik, $nazwa, $bloki, $zdjete) {
       }
     }
   }
+  if ($szkielet -and -not (Ma-Co-Wiem $sprawdzony)) {
+    Write-Host "BLAD  $nazwa - po zapisie w $plik nie ma sekcji '## Co wiem'" -ForegroundColor Red
+    $script:Bledy++
+    return $false
+  }
   return $true
 }
 
@@ -140,63 +148,89 @@ function Ktore-Bloki($obecne) {
   return $w
 }
 
-function Popraw-Plik($plik, $nazwa) {
-  $istnieje = Test-Path $plik
-  $stary = ""
-  if ($istnieje -and (Wyzerowany $plik $nazwa)) { return }
-  if ($istnieje) {
-    try { $stary = Czytaj $plik }
-    catch {
-      Write-Host "BLAD  $nazwa - nie umiem odczytac $plik jako UTF-8, nie ruszam go" -ForegroundColor Red
-      $script:Bledy++
-      return
-    }
+# Plan dla jednego narzedzia - bez zapisu. .Blad (powod, dla ktorego pliku nie ruszamy) albo .Nowy
+# (tekst do zapisu; rowny .Stary = nic do zrobienia). .Limit - powod odmowy z sufitu albo $null.
+function Planuj-Plik($n) {
+  $p = [pscustomobject]@{ N = $n; Nazwa = $n.Nazwa; Plik = $n.Sciezka; Istnieje = $false; Stary = ""; Nowy = ""; Co = ""
+                          Tresci = [ordered]@{}; Zdjac = @(); Szkielet = $false; Blad = $null; Limit = $null; Start = $null }
+  $p.Istnieje = Test-Path -LiteralPath $n.Sciezka -PathType Leaf
+  if ($p.Istnieje -and (Ma-Zera $n.Sciezka)) {
+    $p.Blad = Opis-Wyzerowanych (Wyzerowane-Pliki-Z @($n.Sciezka)) $KatalogDomowy $Zrodlo
+    $p.Co = "NIETKNIETY - plik ma bajty 0x00"
+    return $p
   }
-  $znalezione = Znajdz-Bloki-Zasad $stary
+  try {
+    $start = Tekst-Startowy $n $KatalogDomowy
+    if ($p.Istnieje) { $p.Stary = Czytaj $n.Sciezka }
+  } catch {
+    $p.Blad = "nie umiem odczytac $($n.Sciezka) (albo pliku, od ktorego sie zaczyna): $($_.Exception.Message) - nie ruszam go"
+    $p.Co = "NIETKNIETY - blad odczytu"
+    return $p
+  }
+  $p.Start = $start
+  $znalezione = Znajdz-Bloki-Zasad $start.Tekst
   if ($znalezione.Blad) {
-    Write-Host "BLAD  $nazwa - w $plik $($znalezione.Blad), nie ruszam go" -ForegroundColor Red
+    $p.Blad = "w $($n.Sciezka) $($znalezione.Blad), nie ruszam go"
+    $p.Co = "NIETKNIETY - zle znaczniki"
+    return $p
+  }
+  $plan = Ktore-Bloki @(Obecne-Bloki-Zasad $start.Tekst)
+  $chciane = @($plan.Chciane)
+  $p.Zdjac = @($plan.Zdjac)
+  foreach ($b in (Bloki-Zasad)) { if ($chciane -contains $b) { $p.Tresci[$b] = $script:Tresci[$b] } }
+  $p.Szkielet = $script:Szkielet
+  $p.Nowy = Zloz-Plik-Narzedzia $start $p.Tresci $p.Zdjac $p.Szkielet
+  if ($p.Nowy -ceq $p.Stary) { return $p }
+  $opisy = @(Roznice-Zasad $start.Tekst $p.Tresci $p.Zdjac)
+  if ($p.Szkielet -and -not (Ma-Co-Wiem $start.Tekst)) { $opisy += "szkielet sekcji '## Co wiem'" }
+  if ($start.Opis) { $opisy = @($start.Opis) + $opisy }
+  $p.Co = $opisy -join "; "
+  if (-not $p.Istnieje) { $p.Co = "zakladam plik ($($p.Co))" }
+  $p.Limit = Ponad-Limit $n $p.Stary $p.Nowy
+  return $p
+}
+
+function Wykonaj-Plan($p) {
+  $nazwa = $p.Nazwa; $plik = $p.Plik
+  if ($p.Blad) {
+    Write-Host "BLAD  $nazwa - $($p.Blad)" -ForegroundColor Red
     $script:Bledy++
+    $script:Raport += "$nazwa : $($p.Co)"
     return
   }
-
-  $plan = Ktore-Bloki @(Obecne-Bloki-Zasad $stary)
-  $chciane = @($plan.Chciane)
-  $zdjac = @($plan.Zdjac)
-  $tresci = [ordered]@{}
-  foreach ($n in (Bloki-Zasad)) { if ($chciane -contains $n) { $tresci[$n] = $script:Tresci[$n] } }
-
-  $nowy = Zloz-Plik-Zasad $stary $tresci $zdjac
-  if ($nowy -ceq $stary) {
-    if ($istnieje) { Write-Host "--  $nazwa - bloki zasad juz sa aktualne: $plik" }
+  if ($p.Nowy -ceq $p.Stary) {
+    if ($p.Istnieje) { Write-Host "--  $nazwa - bloki zasad juz sa aktualne: $plik" }
     else { Write-Host "--  $nazwa - nie ma pliku $plik i nie ma czego do niego wpisac" }
     $script:Raport += "$nazwa : bez zmian"
     return
   }
-  $co = (Roznice-Zasad $stary $tresci $zdjac) -join "; "
-  if (-not $istnieje) { $co = "zakladam plik ($co)" }
-
+  if ($p.Limit) {
+    # ostrzezenie poszlo juz w pierwszych liniach wyjscia - tu tylko slad w podsumowaniu
+    $script:Raport += "$nazwa : ODMOWA ZAPISU - ponad limit"
+    return
+  }
   if ($Proba) {
-    Write-Host "PROBA  $nazwa - $co w $plik"
-    if ($istnieje) { Write-Host "PROBA  $nazwa - kopia trafilaby do $plik.bak-$Stempel" }
-    $script:Raport += "$nazwa : PROBA, $co"
+    Write-Host "PROBA  $nazwa - $($p.Co) w $plik"
+    if ($p.Istnieje) { Write-Host "PROBA  $nazwa - kopia trafilaby do $plik.bak-$Stempel" }
+    $script:Raport += "$nazwa : PROBA, $($p.Co)"
     return
   }
 
   $katalog = Split-Path -Parent $plik
   if (-not (Test-Path $katalog)) { New-Item -ItemType Directory -Force -Path $katalog | Out-Null }
   $bak = $null
-  if ($istnieje) { $bak = Kopia-Zapasowa $plik }
-  Zapisz $plik $nowy
+  if ($p.Istnieje) { $bak = Kopia-Zapasowa $plik }
+  Zapisz $plik $p.Nowy
 
   $nl = "`r`n"
-  if (-not $nowy.Contains("`r`n") -and $nowy.Contains("`n")) { $nl = "`n" }
-  $bloki = @($tresci.Keys | ForEach-Object { Tekst-Bloku-Zasad $_ $tresci[$_] $nl })
+  if (-not $p.Nowy.Contains("`r`n") -and $p.Nowy.Contains("`n")) { $nl = "`n" }
+  $bloki = @($p.Tresci.Keys | ForEach-Object { Tekst-Bloku-Zasad $_ $p.Tresci[$_] $nl })
   # stary wspolny blok po zlozeniu nie zostaje nigdy - zamieniony albo zdjety
-  $zdjete = @($zdjac | Where-Object { -not $tresci.Contains($_) }) + @("stary")
-  if (-not (Sprawdz-Zapis $plik $nazwa $bloki $zdjete)) { return }
+  $zdjete = @($p.Zdjac | Where-Object { -not $p.Tresci.Contains($_) }) + @("stary")
+  if (-not (Sprawdz-Zapis $plik $nazwa $bloki $zdjete $p.Szkielet)) { return }
 
-  Write-Host "OK  $nazwa - ${co}: $plik"
-  $wpis = "$nazwa : $co"
+  Write-Host "OK  $nazwa - $($p.Co): $plik"
+  $wpis = "$nazwa : $($p.Co)"
   if ($bak) {
     Write-Host "    kopia: $bak"
     $wpis = "$wpis, kopia $bak"
@@ -221,15 +255,20 @@ foreach ($n in $Blok) {
   }
 }
 
+# Naglowek przebiegu wypisujemy DOPIERO po planie - pierwsze linie wyjscia naleza do odmow
+# z sufitu (ktos, kto czyta tylko poczatek, ma je zobaczyc zawsze).
+$script:Naglowek = @()
 $script:Chciane = Chciane-Bloki-Zasad $KatalogDomowy
 if (($Blok.Count -eq 0) -and -not $Usun) {
   if ($script:Chciane.Blad) {
-    Write-Host "UWAGA  $($script:Chciane.Blad) - wpisuje oba bloki zasad i niczego nie zdejmuje." -ForegroundColor Yellow
+    $script:Naglowek += [pscustomobject]@{ T = "UWAGA  $($script:Chciane.Blad) - wpisuje oba bloki zasad i niczego nie zdejmuje."; K = "Yellow" }
   } else {
     $opis = if ($script:Chciane.Nazwy.Count -gt 0) { $script:Chciane.Nazwy -join ", " } else { "zaden" }
-    Write-Host "Bloki wedlug rejestru instalacji ($($script:Chciane.Zrodlo)): $opis"
+    $script:Naglowek += [pscustomobject]@{ T = "Bloki wedlug rejestru instalacji ($($script:Chciane.Zrodlo)): $opis"; K = $null }
   }
 }
+# Szkielet "Co wiem" idzie tylko w przebiegu wedlug rejestru, przy wlaczonym module wiedza.
+$script:Szkielet = ($Blok.Count -eq 0) -and (-not $Usun) -and ($script:Chciane.Nazwy -contains "wiedza")
 
 # Tresci ze zrodla - potrzebne zawsze poza pelnym -Usun (przy -Usun -Blok stary blok zamienia
 # sie na bloki, ktore maja zostac, wiec ich tresc tez musi byc pod reka).
@@ -240,26 +279,42 @@ if ($Blok.Count -gt 0 -or -not $Usun) {
   foreach ($n in (Bloki-Zasad)) {
     try { $script:Tresci[$n] = Tresc-Zrodla-Zasad $Zrodlo $n }
     catch { Write-Error "Zasady ${n}: $($_.Exception.Message)"; exit 1 }
-    Write-Host "Zrodlo: $(Join-Path $Zrodlo "zasady-$n.md") ($(@($script:Tresci[$n]).Count) linii tresci)"
+    $script:Naglowek += [pscustomobject]@{ T = "Zrodlo: $(Join-Path $Zrodlo "zasady-$n.md") ($(@($script:Tresci[$n]).Count) linii tresci)"; K = $null }
+  }
+}
+if ($Proba) { $script:Naglowek += [pscustomobject]@{ T = "TRYB PROBY - nic nie zostanie zapisane"; K = "Yellow" } }
+
+# Pliki narzedzi, ktore tu sa - z jednej listy (kierownik-cele.ps1 Narzedzia-AI).
+$Wszystkie = Wykryj-Narzedzia-AI $KatalogDomowy
+$Cele = @($Wszystkie | Where-Object { $_.Jest })
+$Plany = @()
+foreach ($c in $Cele) {
+  try { $Plany += Planuj-Plik $c }
+  catch {
+    $Plany += [pscustomobject]@{ N = $c; Nazwa = $c.Nazwa; Plik = $c.Sciezka; Istnieje = $false; Stary = ""; Nowy = ""; Co = "NIETKNIETY - wyjatek"
+                                 Tresci = [ordered]@{}; Zdjac = @(); Szkielet = $false; Blad = $_.Exception.Message; Limit = $null; Start = $null }
   }
 }
 
-if ($Proba) { Write-Host "TRYB PROBY - nic nie zostanie zapisane" -ForegroundColor Yellow }
+foreach ($p in @($Plany | Where-Object { $_.Limit -and -not $_.Blad -and ($_.Nowy -cne $_.Stary) })) {
+  Write-Host "BLAD  ODMOWA ZAPISU ($($p.Nazwa)): $($p.Limit)" -ForegroundColor Red
+  $script:Bledy++
+}
+foreach ($l in $script:Naglowek) { if ($l.K) { Write-Host $l.T -ForegroundColor $l.K } else { Write-Host $l.T } }
 
-$Cele = @(
-  @{ Nazwa = "Claude Code"; Katalog = (Join-Path $KatalogDomowy ".claude"); Plik = "CLAUDE.md"; Zakladaj = $true  },
-  @{ Nazwa = "Codex";       Katalog = (Join-Path $KatalogDomowy ".codex");  Plik = "AGENTS.md"; Zakladaj = $false }
-)
-
-foreach ($cel in $Cele) {
-  if (-not (Test-Path $cel.Katalog) -and -not $cel.Zakladaj) {
-    Write-Host "--  $($cel.Nazwa) - nie ma $($cel.Katalog), czyli nie ma tego narzedzia na tej maszynie: pomijam"
-    $script:Raport += "$($cel.Nazwa) : pominiete (brak narzedzia)"
-    continue
-  }
-  try { Popraw-Plik (Join-Path $cel.Katalog $cel.Plik) $cel.Nazwa }
+if ($Cele.Count -eq 0) {
+  Write-Host ("UWAGA  nie widze tu zadnego narzedzia AI (" + (($Wszystkie | ForEach-Object { $_.Nazwa }) -join ", ") +
+              ") - zasad nie ma gdzie wpisac. Wpisze je straznik zasad, gdy ktores sie pojawi.") -ForegroundColor Yellow
+  $script:Raport += "zadne narzedzie AI : pominiete"
+}
+foreach ($n in @($Wszystkie | Where-Object { -not $_.Jest })) {
+  Write-Host "--  $($n.Nazwa) - nie widze go na tej maszynie: pomijam $($n.Sciezka)"
+  $script:Raport += "$($n.Nazwa) : pominiete (brak narzedzia)"
+}
+foreach ($p in $Plany) {
+  try { Wykonaj-Plan $p }
   catch {
-    Write-Host "BLAD  $($cel.Nazwa) - $($_.Exception.Message)" -ForegroundColor Red
+    Write-Host "BLAD  $($p.Nazwa) - $($_.Exception.Message)" -ForegroundColor Red
     $script:Bledy++
   }
 }
@@ -277,5 +332,6 @@ if ($script:Bledy -gt 0) {
 Write-Host ""
 if ($Proba)    { Write-Host "Proba zakonczona - zaden plik nie ruszony." }
 elseif ($Usun) { Write-Host "Gotowe - bloki zasad MegaRuchacza usuniete, reszta plikow bez zmian." }
+elseif ($Cele.Count -eq 0) { Write-Host "Gotowe - nic do wpisania (zadnego narzedzia AI)." }
 else           { Write-Host "Gotowe - zasady wpisane. Zamknij i otworz narzedzie na nowo." }
 exit 0

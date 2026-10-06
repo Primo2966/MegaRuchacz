@@ -1,5 +1,7 @@
-# narzedzia\instalacja\modul-wiedza.ps1 - modul "wiedza": sekcja "Co wiem" w ~\.claude\CLAUDE.md,
-# katalog ~\.claude\wiedza\ i codzienne czytanie rozmow (cykl wiedzy: wylawianie faktow + weryfikacja).
+# narzedzia\instalacja\modul-wiedza.ps1 - modul "wiedza": sekcja "Co wiem" w pliku instrukcji kazdego
+# narzedzia AI, ktore tu jest (lista: narzedzia\kierownik-cele.ps1 Narzedzia-AI - ~\.claude\CLAUDE.md,
+# ~\.codex\AGENTS.md, ~\.config\opencode\AGENTS.md), katalog ~\.claude\wiedza\ i codzienne czytanie
+# rozmow (cykl wiedzy: wylawianie faktow + weryfikacja).
 #
 # Co zaklada:
 #   - rdzen Lore: srodowisko Pythona (uv sync), baze rozmow lore.db i zadanie LoreIndex. Cykl czyta
@@ -7,7 +9,11 @@
 #     jest WYLACZONY, indeks chodzi w trybie "tylko tekst" (lore.index --text-only): bez modelu
 #     wektorow (~496 MB) i bez wyszukiwania po sensie - cykl wiedzy wektorow nie uzywa.
 #   - szkielet sekcji "## Co wiem" (O uzytkowniku / O firmie / Nad czym pracuje / Jak pracuje /
-#     Biezace / Dane referencyjne - puste), jesli jej nie ma. Bez niej weryfikacja niczego nie zapisze.
+#     Biezace / Dane referencyjne - puste) w pliku KAZDEGO obecnego narzedzia, ktory jej nie ma; istniejacej
+#     nie rusza. Bez niej weryfikacja niczego do tego pliku nie zapisze (verify.py pisze do kazdego pliku
+#     z ta sekcja). Plik, ktorego narzedzie jeszcze nie ma, zaczyna sie od Tekst-Startowy (OpenCode - od
+#     tresci CLAUDE.md, ktory czytal dotad). Zapis ponad limit narzedzia (Codex 32 KiB) = odmowa z UWAGA.
+#     Zadnego narzedzia AI = UWAGA (fakty czekaja w wiedza\kandydaci.md), nie odmowa.
 #     Stoi nad PIERWSZYM znacznikiem <!-- MegaRuchacz: (bloki lore, wiedza, kierownik): lore\lore\verify.py
 #     (section_bounds, GUARD_PREFIX od P59a) konczy sekcje na "## " albo na kazdym takim znaczniku, wiec
 #     fakty nie trafia do srodka zadnego bloku. Bez znacznikow - na koncu pliku (bloki dopisza sie pod nim).
@@ -16,7 +22,8 @@
 #     przebieg to tokeny z planu uzytkownika). Brak = UWAGA, nie odmowa.
 # Usun: wylacza modul w rejestrze; rdzen Lore (zadanie LoreIndex, srodowisko) zdejmuje tylko wtedy,
 #   gdy modul lore tez jest wylaczony. Dane zostaja: wiedza\, "Co wiem", kopie dzienne, lore.db.
-#   -UsunDane: wiedza\, kopie dzienne, sekcja "Co wiem" (kopia CLAUDE.md obok) i lore.db (gdy lore wylaczony).
+#   -UsunDane: wiedza\, kopie dzienne, sekcja "Co wiem" z pliku kazdego narzedzia (kopia obok) i lore.db
+#   (gdy lore wylaczony).
 #
 # Uzycie (umowa wyjscia - naglowek wspolne.ps1):
 #   powershell -NoProfile -ExecutionPolicy Bypass -File narzedzia\instalacja\modul-wiedza.ps1
@@ -34,52 +41,24 @@ param(
 $ErrorActionPreference = "Stop"
 . (Join-Path $PSScriptRoot "wspolne.ps1")
 . (Join-Path (Split-Path -Parent $PSScriptRoot) "zapis-trwaly.ps1")
+# Lista narzedzi AI, szkielet "Co wiem", poczatek pliku i limit - wspolne z wpisz-zasady.ps1 i straznikiem.
+. (Join-Path (Split-Path -Parent $PSScriptRoot) "kierownik-cele.ps1")
 if (-not $Zrodlo) { $Zrodlo = Split-Path -Parent (Split-Path -Parent $PSScriptRoot) }
 $s0 = Start-Modul "wiedza" $Akcja ([bool]$Proba) $Zrodlo $KatalogDomowy
 $Zrodlo = $s0.Zrodlo; $KatalogDomowy = $s0.KatalogDomowy
 Lore-Przygotuj
 
 $Claude    = Join-Path $KatalogDomowy ".claude"
-$PlikCm    = Join-Path $Claude "CLAUDE.md"
 $Wiedza    = Join-Path $Claude "wiedza"
 $KopieDz   = Join-Path $Claude "mr\kopie-dzienne"
 $StanCyklu = Join-Path $Wiedza ".cykl-stan"
 $Naglowek  = "## Co wiem"
-$Znacznik  = "<!-- MegaRuchacz:"   # = GUARD_PREFIX w lore\lore\verify.py
 $Utf8      = New-Object System.Text.UTF8Encoding($false)
 $Utf8Scisly = New-Object System.Text.UTF8Encoding($false, $true)
 
-# Podsekcje "Co wiem" - DOKLADNIE te same naglowki co w lore\lore\verify.py (STABLE_SUBSECTIONS,
-# CURRENT_SUBSECTION, REFERENCE_SUBSECTION). Polskie litery skladane ze znakow - plik zostaje ASCII.
-$zz = [char]0x017C; $aa = [char]0x0105
-$Podsekcje = @("### O u${zz}ytkowniku", "### O firmie", "### Nad czym pracuje", "### Jak pracuje", "### Bie${zz}${aa}ce", "### Dane referencyjne")
-
+# Szkielet "Co wiem" (Ma-Co-Wiem, Z-Szkieletem-Co-Wiem - podsekcje DOKLADNIE jak w lore\lore\verify.py)
+# lezy w kierownik-cele.ps1: ta sama regula sklada go w wpisz-zasady.ps1 i sprawdza straznik.
 function Koniec-Linii([string]$t) { if ($t.Contains("`r`n")) { return "`r`n" } elseif ($t.Contains("`n")) { return "`n" } else { return "`r`n" } }
-
-function Ma-Co-Wiem([string]$tekst) {
-  foreach ($l in ($tekst -split "`r?`n")) { if ($l.Trim().StartsWith($Naglowek)) { return $true } }
-  return $false
-}
-
-# Tekst CLAUDE.md po dolozeniu szkieletu (albo $null, gdy sekcja juz jest): nad pierwszym znacznikiem
-# MegaRuchacza (verify.py konczy na nim sekcje), a bez znacznikow - na koncu pliku.
-function Z-Szkieletem([string]$stary) {
-  if (Ma-Co-Wiem $stary) { return $null }
-  $nl = Koniec-Linii $stary
-  $szkielet = (@($Naglowek, "") + @($Podsekcje | ForEach-Object { $_, "" })) -join $nl
-  $linie = @($stary -split "`r?`n")
-  $iPierwszy = -1
-  for ($i = 0; $i -lt $linie.Count; $i++) { if ($linie[$i].Trim().StartsWith($Znacznik)) { $iPierwszy = $i; break } }
-  if ($iPierwszy -ge 0) {
-    $przed = (@($linie | Select-Object -First $iPierwszy) -join $nl).TrimEnd()
-    $po = @($linie | Select-Object -Skip $iPierwszy) -join $nl
-    $sklejka = if ($przed) { $przed + $nl + $nl } else { "" }
-    return ($sklejka + $szkielet + $po)
-  }
-  $cialo = $stary.TrimEnd()
-  if (-not $cialo) { $cialo = "# Ustalenia globalne" }
-  return ($cialo + $nl + $nl + $szkielet.TrimEnd() + $nl)
-}
 
 # Tekst bez sekcji "Co wiem" (do -UsunDane): od naglowka do nastepnego "## " albo znacznika
 # MegaRuchacza - nigdy w glab bloku.
@@ -98,9 +77,22 @@ function Bez-Co-Wiem([string]$stary) {
   return ((@($przed) + @($po)) -join $nl)
 }
 
-function Czytaj-Cm {
-  if (-not (Test-Path -LiteralPath $PlikCm)) { return "" }
-  return [System.IO.File]::ReadAllText($PlikCm, $Utf8Scisly)
+function Czytaj-Plik([string]$sciezka) {
+  if (-not (Test-Path -LiteralPath $sciezka)) { return "" }
+  return [System.IO.File]::ReadAllText($sciezka, $Utf8Scisly)
+}
+
+# Stan sekcji "Co wiem" w plikach narzedzi, ktore tu sa: .Brak (pliki bez sekcji), .Bledy (opisy),
+# .Cele (lista z Cele-Narzedzi).
+function Stan-Co-Wiem {
+  $w = [pscustomobject]@{ Cele = @(Cele-Narzedzi $KatalogDomowy); Brak = @(); Bledy = @() }
+  foreach ($n in $w.Cele) {
+    $tx = $null
+    try { $tx = Czytaj-Plik $n.Sciezka } catch { $w.Bledy += "nie umiem odczytac $($n.Sciezka) ($($_.Exception.Message))"; continue }
+    if ((Test-Path -LiteralPath $n.Sciezka) -and (Ma-Zera $n.Sciezka)) { $w.Bledy += "$($n.Sciezka) ma bajty 0x00 (uszkodzony zapis) - przywroc: narzedzia\kopie-dzienne.ps1 -Przywroc"; continue }
+    if (-not (Ma-Co-Wiem $tx)) { $w.Brak += $n.Sciezka }
+  }
+  return $w
 }
 
 # Zalogowanie poznajemy po plikach, ktore CLI zostawia po logowaniu, i po kluczach w srodowisku -
@@ -137,10 +129,8 @@ function Zbierz-Stan($rej, [hashtable]$prog) {
   $sr = Lore-Srodowisko-Jest
   $ind = Lore-Stan-Indeksu
   $baza = if ($sr) { Lore-Stan-Bazy } else { [pscustomobject]@{ Ok = $false; Jest = (Test-Path $script:Baza); Tryb = $null; Fragmentow = 0; Wektorow = 0; Opis = "" } }
-  $cm = ""
-  $cmBlad = $null
-  try { $cm = Czytaj-Cm } catch { $cmBlad = $_.Exception.Message }
-  $coWiem = (-not $cmBlad) -and (Ma-Co-Wiem $cm)
+  $scw = Stan-Co-Wiem
+  $coWiem = ($scw.Cele.Count -gt 0) -and ($scw.Brak.Count -eq 0) -and ($scw.Bledy.Count -eq 0)
   $cli = @(Zalogowane-Cli $prog)
   $cykl = Stan-Cyklu
   if ($zainst) {
@@ -148,9 +138,9 @@ function Zbierz-Stan($rej, [hashtable]$prog) {
     if (-not $ind.Ok) { Problem "indeks rozmow: $($ind.Opis)" }
     elseif ((-not $lore) -and $ind.TylkoTekst -ne $true) { Problem "zadanie $($script:NazwaZadania) chodzi z wektorami, choc modul lore jest wylaczony - pobierze niepotrzebny model (~496 MB)" }
     if (-not $baza.Jest) { Problem "nie ma bazy rozmow $($script:Baza)" }
-    if ($cmBlad) { Problem "nie umiem odczytac $PlikCm ($cmBlad)" }
-    elseif (Ma-Zera $PlikCm) { Problem "$PlikCm ma bajty 0x00 (uszkodzony zapis) - przywroc: narzedzia\kopie-dzienne.ps1 -Przywroc" }
-    elseif (-not $coWiem) { Problem "w $PlikCm nie ma sekcji '$Naglowek' - cykl nie ma gdzie zapisywac faktow" }
+    foreach ($b in $scw.Bledy) { Problem $b }
+    foreach ($b in $scw.Brak) { Problem "w $b nie ma sekcji '$Naglowek' - cykl nie zapisze tam faktow" }
+    if ($scw.Cele.Count -eq 0) { Problem "nie widze zadnego narzedzia AI (Claude Code, Codex, OpenCode) - sekcji '$Naglowek' nie ma gdzie trzymac, fakty czekaja w wiedza\kandydaci.md" }
     if (-not (Test-Path -LiteralPath $Wiedza)) { Problem "nie ma katalogu $Wiedza" }
     if ($cli.Count -eq 0) { Problem "nie widze zalogowanego Claude Code ani Codeksa - wylawianie faktow nie ma czym czytac rozmow" }
     if (@("odlozony", "wyzerowane", "nie nadaza") -contains $cykl.Status) { Problem "ostatni cykl wiedzy ($($cykl.Data)): $($cykl.Status)$(if ($cykl.Powod) { ' - ' + $cykl.Powod })" }
@@ -183,8 +173,12 @@ try {
     if ($wyzerowane.Count -gt 0) {
       Zakoncz $false ("nic nie zmieniam: " + (Opis-Wyzerowanych $wyzerowane $KatalogDomowy $Zrodlo))
     }
-    $cm = $null
-    try { $cm = Czytaj-Cm } catch { Zakoncz $false "nie umiem odczytac $PlikCm jako UTF-8 ($($_.Exception.Message)) - nie ruszam go" }
+    # Poczatek pliku kazdego narzedzia - przed czymkolwiek, co kosztuje: plik nie po UTF-8 = odmowa.
+    $plany = @()
+    foreach ($n in (Cele-Narzedzi $KatalogDomowy)) {
+      try { $plany += [pscustomobject]@{ N = $n; Start = (Tekst-Startowy $n $KatalogDomowy); NaDysku = (Czytaj-Plik $n.Sciezka) } }
+      catch { Zakoncz $false "nie umiem odczytac $($n.Sciezka) albo pliku, od ktorego sie zaczyna ($($_.Exception.Message)) - nie ruszam go" }
+    }
 
     # 1. rdzen Lore
     $tylkoTekst = -not $loreWlaczony
@@ -196,19 +190,27 @@ try {
     if ($tylkoTekst) { Krok "modul lore jest wylaczony - indeks bez modelu wektorow (nie pobieram ~496 MB, wyszukiwania po sensie nie ma)" }
     Lore-Indeksuj-W-Tle $tylkoTekst
 
-    # 2. szkielet "Co wiem"
-    $nowy = Z-Szkieletem $cm
-    if ($null -eq $nowy) { Krok "sekcja '$Naglowek' juz jest w $PlikCm - zostawiam jak jest" }
-    elseif ($Proba) { Plan "dopisalbym pusty szkielet sekcji '$Naglowek' do $PlikCm (nad blokiem zasad MegaRuchacza)" }
-    else {
-      if (Test-Path -LiteralPath $PlikCm) {
-        $kopia = "$PlikCm.bak-" + (Get-Date -Format "yyyyMMdd-HHmmss")
-        Kopiuj-Trwale $PlikCm $kopia
+    # 2. szkielet "Co wiem" - w pliku kazdego narzedzia AI, ktore tu jest
+    if ($plany.Count -eq 0) { Ostrzezenie "nie widze zadnego narzedzia AI (Claude Code, Codex, OpenCode) - sekcji '$Naglowek' nie ma gdzie zalozyc; fakty poczekaja w wiedza\kandydaci.md, a szkielet dolozy straznik, gdy narzedzie sie pojawi" }
+    foreach ($pl in $plany) {
+      $plik = $pl.N.Sciezka
+      $nowy = Z-Szkieletem-Co-Wiem $pl.Start.Tekst
+      if ($null -eq $nowy) {
+        if ($pl.Start.Tekst -ceq $pl.NaDysku) { Krok "sekcja '$Naglowek' juz jest w $plik - zostawiam jak jest" }
+        else { Krok "sekcja '$Naglowek' w $plik przyjdzie z poczatkiem pliku ($($pl.Start.Opis)) - zapisze go krok zasad" }
+        continue
       }
-      New-Item -ItemType Directory -Force -Path $Claude | Out-Null
-      Zapisz-Trwale $PlikCm $nowy $Utf8
-      if (-not (Ma-Co-Wiem (Czytaj-Cm))) { Zakoncz $false "zapisalem $PlikCm, ale sekcji '$Naglowek' w nim nie widze" }
-      Krok "w $PlikCm jest pusty szkielet sekcji '$Naglowek' (O uzytkowniku, O firmie, Nad czym pracuje, Jak pracuje, Biezace, Dane referencyjne)"
+      $sufit = Ponad-Limit $pl.N $pl.NaDysku $nowy
+      if ($sufit) { Ostrzezenie "ODMOWA ZAPISU szkieletu '$Naglowek' ($($pl.N.Nazwa)): $sufit"; continue }
+      if ($Proba) { Plan "dopisalbym pusty szkielet sekcji '$Naglowek' do $plik (nad blokiem zasad MegaRuchacza)"; continue }
+      if (Test-Path -LiteralPath $plik) {
+        $kopia = "$plik.bak-" + (Get-Date -Format "yyyyMMdd-HHmmss")
+        Kopiuj-Trwale $plik $kopia
+      }
+      New-Item -ItemType Directory -Force -Path (Split-Path -Parent $plik) | Out-Null
+      Zapisz-Trwale $plik $nowy $Utf8
+      if (-not (Ma-Co-Wiem (Czytaj-Plik $plik))) { Zakoncz $false "zapisalem $plik, ale sekcji '$Naglowek' w nim nie widze" }
+      Krok "w $plik ($($pl.N.Nazwa)) jest pusty szkielet sekcji '$Naglowek' (O uzytkowniku, O firmie, Nad czym pracuje, Jak pracuje, Biezace, Dane referencyjne)"
     }
 
     # 3. katalog wiedzy i kopie dzienne
@@ -256,18 +258,21 @@ try {
   if ($UsunDane) {
     if (-not (Usun-Katalog-Danych $Wiedza "katalog wiedzy")) { $ok = $false }
     if (-not (Usun-Katalog-Danych $KopieDz "kopie dzienne plikow pamieci")) { $ok = $false }
-    $cm = $null
-    try { $cm = Czytaj-Cm } catch { $ok = $false; Ostrzezenie "nie umiem odczytac $PlikCm ($($_.Exception.Message)) - sekcji '$Naglowek' nie ruszam" }
-    if ($null -ne $cm) {
+    foreach ($nz in (Narzedzia-AI)) {
+      $plikN = Join-Path $KatalogDomowy $nz.Plik
+      if (-not (Test-Path -LiteralPath $plikN)) { continue }
+      $cm = $null
+      try { $cm = Czytaj-Plik $plikN } catch { $ok = $false; Ostrzezenie "nie umiem odczytac $plikN ($($_.Exception.Message)) - sekcji '$Naglowek' nie ruszam" }
+      if ($null -eq $cm) { continue }
       $bez = Bez-Co-Wiem $cm
-      if ($null -eq $bez) { Krok "sekcji '$Naglowek' w $PlikCm nie ma" }
-      elseif (Ma-Zera $PlikCm) { $ok = $false; Ostrzezenie "$PlikCm ma bajty 0x00 - nie ruszam go" }
-      elseif ($Proba) { Plan "wycialbym sekcje '$Naglowek' z $PlikCm (kopia obok)" }
+      if ($null -eq $bez) { Krok "sekcji '$Naglowek' w $plikN nie ma" }
+      elseif (Ma-Zera $plikN) { $ok = $false; Ostrzezenie "$plikN ma bajty 0x00 - nie ruszam go" }
+      elseif ($Proba) { Plan "wycialbym sekcje '$Naglowek' z $plikN (kopia obok)" }
       else {
-        $kopia = "$PlikCm.bak-" + (Get-Date -Format "yyyyMMdd-HHmmss")
-        Kopiuj-Trwale $PlikCm $kopia
-        Zapisz-Trwale $PlikCm $bez $Utf8
-        Krok "wycieta sekcja '$Naglowek' z $PlikCm (poprzednia wersja: $kopia)"
+        $kopia = "$plikN.bak-" + (Get-Date -Format "yyyyMMdd-HHmmss")
+        Kopiuj-Trwale $plikN $kopia
+        Zapisz-Trwale $plikN $bez $Utf8
+        Krok "wycieta sekcja '$Naglowek' z $plikN (poprzednia wersja: $kopia)"
       }
     }
     if ($loreWlaczony) { Krok "baza rozmow zostaje - uzywa jej modul lore" }
