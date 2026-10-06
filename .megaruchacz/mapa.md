@@ -404,6 +404,15 @@ inwentarz warstw z 25.09, budowa okna sprzed podzialu, pomiary P23/P30 w calosci
   (`Znajdz-Skill` zwraca `@($s, $null)`, `$s.spoza`); przyciski `$script:BSkillSpakuj` / `BSkillSpakujWszystkie`
   (okno.ps1, zmienne w wyglad.ps1) widac tylko przy "Twoj wlasny" - wtedy cztery zwykle sa ukryte.
   Test okna P49: scratchpad 1ca517cc `p49\test-okno.ps1` + `scenariusz-p49.ps1` (wzor P43).
+- Rozpoznanie 06.10 (pod zmiane "wbudowane vs inne"): w bazie NIE MA pojecia wbudowane/polecane vs dopisane -
+  wszystkie 7 zrodel `katalog.psd1` (superpowers, impeccable, taste-skill, ponytail, mattpocock, vibecode, obsidian)
+  sa rowne i wszystkie objete `-Tryb codziennie` (`Aktualizuj-Skill` w petli po `$wybrane`, narzedzia\skille.ps1 ~1885).
+  nexu-io/open-design jest POZA bazie od 0.22.1 (commit a265ff6, byl `Rodzaj='aplikacja'`; `Rodzaj` wciaz obslugiwany
+  w skille.ps1 ~388/1081 i okno.ps1 `Grupa-Zrodla`). Repo open-design: 163 `skills/<nazwa>/SKILL.md` (sprawdzone gh api
+  06.10; wg P18 139 to stuby-odsylacze), + `plugins/` 257, `design-templates/`. Link do repo w oknie: tylko tekst
+  "Zrodlo: nazwa - adres" w `Pokaz-Info-Skilla` (skille.ps1 okna ~542), bez klikalnego linku, nie ma go w naglowku grupy;
+  dla spoza bazy tylko pole `Skad`. Testy skilli: `narzedzia/instalacja/test-moduly.ps1` (`Scenariusz-Skille` ~618,
+  modul instalacji) - testow samej zakladki/skille.ps1 w repo nie ma poza scenariuszem P49 w scratchpadzie.
   `$script:BSkillUsun` ("Usun u mnie") w miejscu "Aktualizuj teraz". Dalej `Wiersz-Skilla`,
   `Pokaz-Info-Skilla`, `Podglad-Skilla`, `Wybierz-Skill`, `Rusz-Operacje-Skilli` +
   `Sprawdz-Operacje-Skilli` (zegar 2 s na `operacja.txt`).
@@ -453,10 +462,20 @@ inwentarz warstw z 25.09, budowa okna sprzed podzialu, pomiary P23/P30 w calosci
 
 - Codex 0.157 na biurowej: `C:\Users\<uzytkownik>\.codex\packages\standalone\` (+ npm w `C:\dev\tools\node\`);
   `~\.codex\AGENTS.md` pisze straznik (blok Lore + kierownik w wariancie opencode/Codex; "Co wiem"
-  do Codeksa NIE trafia). Rol `~\.codex\agents` i hookow `~\.codex\hooks.json` tu nie ma (instalator
+  do Codeksa trafia od 0.28.0 - patrz "Wiele CLI (0.28.0)"). Rol `~\.codex\agents` i hookow `~\.codex\hooks.json` tu nie ma (instalator
   zaklada je tylko z `-Codex` albo gdy juz sa). Zywe logowanie trzyma Orka
   (`...\orca\codex-runtime-home\home\auth.json`). Co Codex dostaje na start, bez logowania:
   `codex debug prompt-input` (z `CODEX_HOME=<kat>`).
+- [NIEAKTUALNE od 0.28.0 - patrz "Wiele CLI (0.28.0)"] Okno MegaRuchacza pod Codeksem (rozpoznanie 06.10, kod): pomiar otwarcia sesji (`narzedzia/koszt/otwarcie.ps1`
+  `Pomiar-Otwarcia`) czyta TYLKO `~\.claude\projects` - `~\.codex\sessions` czyta wylacznie Lore (`lore/lore/index.py`
+  `CODEX_SESSIONS_DIR`) => bez Claude Code "nie zmierzono, bo nie ma katalogu z transkryptami". Wiersze "Co wiem -
+  stala/Biezace" (`narzedzia/koszt/tryb-warstwy.ps1` podwarstwy) i MEMORY.md szukaja WYLACZNIE w `~\.claude\CLAUDE.md`;
+  AGENTS.md Codeksa jest jednym plikiem "czyta tylko Codex" bez podwarstw. Cykl wiedzy (`lore/lore/verify.py`
+  `INSTRUCTION_PATHS`) pisze fakty do kazdego z CLAUDE.md/AGENTS.md, ktory ma sekcje `## Co wiem` (brak sekcji = fakty
+  zostaja w poczekalni `wiedza/kandydaci.md`); szkielet `## Co wiem` zaklada tylko `modul-wiedza.ps1` i tylko w CLAUDE.md.
+  "Wszystko gra" = `Ile-Wymaga-Uwagi` (`zasobnik/nadzorca/przeglad-tresc.ps1`) liczy tylko alarmy/cykl/wywrotki/skille -
+  czerwone warstwy i "nie zmierzono" w to nie wchodza. Limit 8000 zn. (`verify.py STABLE_LIMIT`) dotyczy sekcji "Co wiem",
+  nie calego pliku; sufit Codeksa z `Narzedzia-AI` (Limit; 0 = bez limitu i bez wiersza w pomiarze, od 0.28.0).
 - Hook na Windows Codex odpala przez `powershell.exe -NoProfile -Command "<commandWindows>"`:
   `$zmienna` rozwija opakowanie (przypisania psuja hook), `||` nie dziala (PS 5.1). Bezpiecznie:
   `node "<skrypt>" "<arg>"` albo `powershell ... -File "<skrypt>"` - bez `$`. Codex bez konsoli daje
@@ -560,3 +579,32 @@ Calosc: `.megaruchacz/raporty/P63.md` (inwentarz sprzed instalatora), `P59a..d.m
   podstawiony dom bez `AppData\Local` = PowerShell pisze `Microsoft\...\ModuleAnalysisCache` do katalogu roboczego;
   `return ,@()` + `@(f)` = tablica w tablicy; „ ” w napisie "..." koncza napis (trzeba `„ `”); narzedzie Bash halvuje
   `\\` w heredocach i `sed -i` zdejmuje CR.
+
+## Domowa maszyna - stan zywy 2026-10-06 (SSH, tylko odczyt)
+
+- Dom: repo `D:\OrcaSpace\MegaRuchacz` = c9a0fea (to samo co biuro), status czysty; nadzorca (zadanie `MegaRuchaczNadzorca`, od 06:42) i `LoreIndex` (co 10 min) dzialaja; `C:\dev\claude-worker` w domu NIE ISTNIEJE.
+- Dom: `~\.claude\projects` NIE ISTNIEJE (Claude Code nieuzywany). Lore indeksuje Codex: `~\.codex\sessions` 129 plikow (najnowszy 04.10), `lore.db` 35 MB, 130 plikow / 5117 fragmentow. Brak `koszt-ostatni.txt` w `wiedza\` domu.
+## OpenCode (rozpoznanie 2026-10-06, biuro 1.18.33, dom 1.17.9; zrodla: opencode.ai/docs/{rules,skills,plugins,cli,mcp-servers})
+
+- Jest na OBU maszynach: biuro `C:\dev\tools\node\opencode.cmd`, dom `C:\Users\przem\AppData\Roaming\npm\opencode.cmd`. Konfiguracja `~\.config\opencode\` (opencode.json z `mcp.lore` type=local, `plugins\mr-log.js`, `agents\` 4 role, `AGENTS.md` = kopia CLAUDE.md 35 KB biuro).
+- ROZMOWY: SQLite `~\.local\share\opencode\opencode.db` (WAL; biuro 95 MB, 7 sesji / 598 wiadomosci / 2303 czesci; dom tez opencode.db, a `storage\` ma tylko `migration`, `session_diff` - stary format plikowy porzucony). Tabele `session` (id `ses_*`, directory, title, agent, model JSON, `cost`, `tokens_input/output/reasoning/cache_read/cache_write` - sumy na sesje), `message` (data JSON: role user|assistant, agent, modelID, `tokens{total,input,output,reasoning,cache{read,write}}`, cost, time), `part` (data JSON: type text|reasoning|tool|step-start|step-finish|patch; text = `{"type":"text","text":...}`, tool = `state.input/output`, step-finish niesie tokens+cost). `session_message` pusta. Zadnych jsonl - indeks Lore (`index.find_files`) tego nie czyta.
+- Zuzycie tokenow JEST zapisane (tokens na message i step-finish + sumy w session) - do licznika okna bez parsowania transkryptow: `select` z bazy (tylko odczyt, uwaga na WAL).
+- INSTRUKCJE: `~/.config/opencode/AGENTS.md` pierwszenstwo przed `~/.claude/CLAUDE.md` (fallback, wylaczenie `OPENCODE_DISABLE_CLAUDE_CODE[_PROMPT|_SKILLS]`); projekt: AGENTS.md > CLAUDE.md; `instructions` w opencode.json tylko dokladaja pliki (globy). Limitu rozmiaru w docs brak (niepotwierdzone); znacznikow blokow nie interpretuje - plik to zwykly tekst.
+- SKILLE: tak, SKILL.md przez narzedzie `skill`; laduje `.opencode/skills`, `~/.config/opencode/skills`, `.claude/skills`, `~/.claude/skills`, `.agents/skills`, `~/.agents/skills` (+ po drodze od cwd w gore). Dubel nazwy = ostrzezenie. Dlatego `skille.ps1` nie ma celu opencode. Codex: `$CWD/.agents/skills` ... `$HOME/.agents/skills` + system `~\.codex\skills\.system` (developers.openai.com/codex/skills); biuro `~\.agents\skills` ma tylko `orchestration`.
+- WTYCZKI (JS/TS, `~/.config/opencode/plugins/` lub npm w configu): zdarzenia `session.created|idle|deleted|updated|status|error|compacted`, `message.updated|part.updated`, `tool.execute.before|after`, `shell.env`, `experimental.session.compacting`, hook `config`. Odpowiednika SessionStart/UserPromptSubmit w docs NIE ma (mr-log.js woła straznika `-Tlo` sam, raz na proces). Hook doklejania tekstu do kazdej wiadomosci - niepotwierdzone.
+- MCP: `mcp.<nazwa>` w opencode.json (`type local|remote`, `command[]`, `enabled`, `environment`, `timeout` 5000 ms); `opencode mcp add|list|debug`.
+- [czesciowo NIEAKTUALNE - patrz "Wiele CLI (0.28.0)"] BEZ OKNA: `opencode run [message..] --format json [-m provider/model] [--agent] [--dir] [--auto] [--pure]` (1.18.33 --help potwierdzone); prompt z stdin i odpowiednik `--output-last-message` - niepotwierdzone. Modele u uzytkownika: openrouter/deepseek (nie Anthropic/OpenAI).
+- [NIEAKTUALNE od 0.28.0 - patrz "Wiele CLI (0.28.0)"] W repo opencode jest TYLKO w: zasadach (`szablony-opencode/`, `kierownik-cele.ps1`, `Pilnuj-Kopii-Opencode`), rolach+wtyczce (`instaluj-globalnie.ps1`), MCP (`narzedzia/instalacja/lore-czesci.ps1`), kopii zapasowej, `instalator/dane.ps1`. NIE ma: indeksu rozmow, `verify.INSTRUCTION_PATHS` (tylko CLAUDE.md i .codex\AGENTS.md), `facts.MODEL_CLIS` (claude, codex), `cykl-dzienny.ps1` (wykrywa claude/codex), licznika tokenow okna (`koszt/*`, `stan-zuzycie`), `skille.ps1` celow.
+
+- [NAPRAWIONE 06.10: smieci zastapione 7 zdaniami, kopia AGENTS.md.bak-20261006-czyszczenie] Dom: `~\.codex\AGENTS.md` 25 KB - bloki lore/wiedza/kierownik OK, ale PO bloku kierownika osobna sekcja `## Co wiem` + `### Biezace` z 43 wpisami (wpisy z 22.09-02.10), czesc to SUROWY JSON (`{"warstwa":...}`, `{"fakty":[],"uzyte":[]}`) - wadliwy zapis cyklu pod Codeksem. `~\.claude\CLAUDE.md` 14 KB: tylko 3 bloki, bez wlasnej sekcji "Co wiem".
+
+## Wiele CLI (0.28.0, 2026-10-06)
+
+- Jedna lista narzedzi: `narzedzia/kierownik-cele.ps1` `Narzedzia-AI` (claude: ~/.claude/CLAUDE.md; codex: ~/.codex/AGENTS.md, Limit=0 - Codex czyta globalny plik w calosci, dowod `codex debug prompt-input` 0.157.0, `project_doc_max_bytes` dotyczy tylko AGENTS.md w projekcie; opencode: ~/.config/opencode/AGENTS.md, samodzielny plik, nie kopia CLAUDE.md). Pola: plik, wykrywanie, wariant, Limit, Skille (katalogi w kolejnosci wczytywania). `Wykryj-Narzedzia-AI` + rejestr instalacji (`Narzedzia-Z-Rejestru`). Czwarte CLI = jeden wpis.
+- Zasady i szkielet "Co wiem": wpisz-zasady / straznik / instaluj-globalnie / modul-wiedza do pliku kazdego obecnego CLI. Test: `narzedzia/test-narzedzia-ai.ps1`.
+- Synchronizacja "Co wiem": `Synchronizuj-Co-Wiem` (kierownik-cele), stan `~/.claude/mr/co-wiem-sync.json` (pole `nadpisane`). Dopisy sie sumuja, ta sama linia rozna -> wygrywa plik zmieniony pozniej, BEZ meldunku (decyzja uzytkownika 06.10), kopia .bak. Wolana przez straznika (Pilnuj-Zasad, kazdy start okna) i wpisz-zasady; `-WzorCoWiem` reczne.
+- Lore: `index.index_opencode` czyta opencode.db (mode=ro, klucz `<db>#<sesja>`, meta `opencode_status`); `lore_stats` ma `sources` per CLI i `UWAGA` przy bledzie. Testy: lore/tests/test_opencode.py, test_stats_zrodla.py.
+- Cykl wiedzy: `verify.INSTRUCTION_PATHS` = 3 pliki; `facts.MODEL_CLIS` claude, codex (`--output-schema`, `--ephemeral`, `--disable hooks`), opencode (`opencode run --format json --pure`, prompt na stdin, izolacja przez XDG_CONFIG_HOME + OPENCODE_DISABLE_*, sesja kasowana po przebiegu, model `LORE_OPENCODE_MODEL`). Straznik surowej struktury (JSON nie trafia do plikow; liczniki `surowa_struktura_*` w .wiedza-stan.txt). Test: narzedzia/test-cykl-opencode.ps1.
+- Okno/koszt: `$NARZEDZIA_AI` w narzedzia/koszt/pomiar.ps1, czytnik OpenCode `narzedzia/koszt/opencode.ps1` (winsqlite3, mode=ro), Codex z rollout-*.jsonl (kopie rozmowy-rodzica w plikach podagentow pomijane). Narzedzie "uzywane" = rozmowa w ostatnich 14 dniach. Rachunek MR w kazdym CLI = tylko bloki MR + "Co wiem" (`Pozycje-MegaRuchacza`, kubelki.ps1). Testy: zasobnik/test-codex.ps1, zasobnik/test-opencode.ps1.
+- Skille: `Wbudowane = $true` w skille/katalog.psd1 dla 6 zrodel (superpowers, impeccable, taste-skill, ponytail, mattpocock, open-design - 21 samodzielnych, reszta w `Pominiete`); codzienna auto-aktualizacja tylko wbudowanych, inne recznie (`Operacja-Na-Zrodle`). Cele: ~/.claude/skills (Claude Code lub OpenCode bez Codeksa), ~/.agents/skills (Codex); OpenCode bez wlasnej kopii (dubel nazwy = ostrzezenie w jego logu, wygrywa pozniej czytany katalog). Przykrycie w ~/.config/opencode/skills: `Przykrycia-Skilli`, ~/.claude/mr/skille/przykryte.json, karta na Przegladzie (`Problemy-Skilli`).
+- Pliki wolane przez hook SessionStart prosto z repo (straznik-zasad, kierownik-cele, wpisz-zasady): zmieniac na kopii i podmieniac jednym krokiem - 06.10 edycja w miejscu zmienila prawdziwe pliki uzytkownika.

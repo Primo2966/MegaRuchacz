@@ -4,6 +4,40 @@ Każda zmiana wypychana na gita dostaje tu wpis. Numer rośnie wg zasady:
 pierwsza cyfra — przebudowa łamiąca zgodność, druga — nowa funkcja,
 trzecia — poprawka.
 
+## 0.28.0 — 2026-10-06
+
+- **Claude Code, Codex i OpenCode w dowolnym zestawie.** MegaRuchacz sam rozpoznaje, które z tych programów są
+  na komputerze (jedna lista w `narzedzia\kierownik-cele.ps1`), i do każdego wgrywa zasady, sekcję „Co wiem”
+  i wbudowane skille. OpenCode dostaje własny `~\.config\opencode\AGENTS.md` zamiast kopii `CLAUDE.md`;
+  jego wtyczka nie dokłada już zasad drugi raz.
+- **„Co wiem” takie samo we wszystkich programach.** Pusta sekcja dostaje treść najpełniejszej, zmiana w jednym
+  programie sama trafia do pozostałych, dopiski z kilku miejsc się łączą. Przy różnych wersjach tego samego
+  wpisu wygrywa plik zmieniony później — bez żadnego komunikatu; przegrana wersja zostaje w kopii `.bak`
+  i w `~\.claude\mr\co-wiem-sync.json`.
+- **Codex czyta cały swój plik.** Próg 32 KiB dla `~\.codex\AGENTS.md` był fałszywy (sprawdzone
+  `codex debug prompt-input`, Codex 0.157.0: plik 40 KB i 200 KB wczytany w całości) — zdjęty, więc Codex
+  dostaje całe „Co wiem”.
+- **Cykl wiedzy na Codeksie zapisywał surowy JSON zamiast zdań.** Codex dostaje teraz schemat odpowiedzi,
+  odczyt odpowiedzi jest wspólny dla wszystkich programów, a strażnik nie wpuszcza do plików instrukcji
+  niczego, co wygląda na JSON — zatrzymuje to i melduje w stanie cyklu. Codex przy cyklu nie odpala hooków
+  użytkownika (`--disable hooks`). Naprawione też znikanie zatwierdzonych faktów z poczekalni, gdy żaden plik
+  nie miał sekcji „Co wiem”.
+- **Cykl wiedzy i Lore z OpenCode.** Lore czyta rozmowy z `~\.local\share\opencode\opencode.db` (tylko odczyt,
+  przyrostowo), `lore_stats` pokazuje rozmowy osobno dla każdego programu, a błąd odczytu OpenCode stoi na
+  początku wyniku. Cykl wiedzy wpisuje fakty także do pliku OpenCode i potrafi użyć `opencode run` jako
+  ostatniego wyboru.
+- **Okno na komputerze bez Claude Code.** U góry Przeglądu stoi, na jakich programach pracujesz. „Co wiem”
+  okno znajduje w pliku każdego programu, warstwy nieużywanego programu są szare („nie dotyczy”), a „Wszystko
+  gra” znika, gdy naprawdę czegoś brakuje. Tokeny liczone są także z rozmów Codeksa (sprawdzone na prawdziwych
+  rozmowach — naprawione podwójne liczenie rozmów pomocników) i OpenCode. Rachunek MegaRuchacza w każdym
+  programie liczy tylko jego zasady i „Co wiem”, bez Twoich własnych instrukcji.
+- **Skille: wbudowane i inne.** Wbudowane w MegaRuchacza są skille z sześciu źródeł (Superpowers, Impeccable,
+  Taste Skill, Ponytail, Matt Pocock, OpenDesign — z niego 21 skilli działających samodzielnie) i tylko one
+  aktualizują się same. Inne wykryte (np. Vibecode, Obsidian) okno pokazuje z klikalnym linkiem do źródła,
+  aktualizacja tylko ręczna. Wbudowane trafiają do Claude Code (`~\.claude\skills`) i Codeksa
+  (`~\.agents\skills`); OpenCode czyta je stamtąd. Gdy OpenCode bierze inną wersję skilla ze swojego folderu,
+  na Przeglądzie jest karta z instrukcją.
+
 ## 0.27.0 — 2026-10-02
 
 - **Instalator z oknem: `instaluj.bat`.** Dwuklik otwiera okno instalatora (bez migającej konsoli, nic do
