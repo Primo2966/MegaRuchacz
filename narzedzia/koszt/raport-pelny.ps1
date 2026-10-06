@@ -306,7 +306,14 @@ function Raport-Pelny {
   if (-not $jestCodex) {
     Linia "  $($rCx.Brak) - nie ma czego liczyc."
   } else {
-    Wypisz-Kubelek $kubSesjaCx $tokSesjaCx "Nie ma czego mierzyc."
+    # Od 06.10.2026 z ~\.codex\AGENTS.md tylko bloki MegaRuchacza i "Co wiem" (kubelki.ps1),
+    # jak u Claude Code i OpenCode - reszta pliku to Twoje wlasne instrukcje, wymienione obok.
+    $brakCx = "Nie ma czego mierzyc - w $plikAgents nie ma ani blokow zasad MegaRuchacza, ani sekcji '## Co wiem'."
+    if ($wCx -and $wCx.Blad) { $brakCx = "Nie ma czego mierzyc - $($wCx.Blad)" }
+    Wypisz-Kubelek $kubSesjaCx $tokSesjaCx $brakCx
+    if ($null -ne $wlasneCxZnaki) {
+      Linia "  (nie doliczam Twoich wlasnych instrukcji z $plikAgents - $(Liczba $wlasneCxZnaki) znakow, ~$(Liczba (Tokeny $wlasneCxZnaki)) tokenow: Codex je czyta, ale to nie MegaRuchacz)"
+    }
     Linia ("  POMIAR narzedzie=codex tokenow={0} znakow={1}" -f $rCx.TokS, $rCx.ZnakiS)
     Wypisz-Porownanie $rCx
   }

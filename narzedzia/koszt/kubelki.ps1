@@ -16,6 +16,52 @@ function Szablon-Kierownika($tekstBloku) {
   return "szablony-global\claude\zasady-kierownika.md"
 }
 
+# Pozycje MegaRuchacza w pliku instrukcji narzedzia innego niz Claude Code (AGENTS.md
+# Codeksa, plik, ktory czyta OpenCode): bloki zasad (znaczniki MegaRuchacz:...:start/koniec)
+# i sekcja "Co wiem" (stala i biezaca) - to samo, co u Claude Code w CLAUDE.md. Reszta
+# pliku to Twoje wlasne instrukcje, a nie koszt MegaRuchacza - do rachunku nie wchodzi.
+# $wX - wynik Zmierz-Warstwy na tym pliku, $gdzie - jak nazwac plik w nazwie pozycji.
+function Pozycje-MegaRuchacza($wX, $plikX, $gdzie, $uwagaBiezacej) {
+  $poz = @()
+  if (-not $wX -or -not $wX.Jest) { return $poz }
+  if ($wX.Blok.Znaki -gt 0) {
+    $poz += Pozycja "blok zasad MegaRuchacza w $gdzie (stary, wspolny)" $wX.Blok.Znaki $plikX `
+      "ten blok nalezy do narzedzia - straznik zamieni go na bloki lore i wiedza przy najblizszym przebiegu" `
+      "zasady globalne"
+  }
+  if ($wX.Stala.Znaki -gt 0) {
+    $poz += Pozycja "warstwa STALA (Co wiem) w $gdzie" $wX.Stala.Znaki $plikX `
+      "przenies najdluzsze zestawienie do pliku w $katWiedzy i zostaw tu jedna linie odsylacza - warstwa referencyjna nie kosztuje nic" `
+      "warstwa stala" "  nie wygasa"
+  }
+  if ($wX.Biezaca.Znaki -gt 0) {
+    $poz += Pozycja "warstwa BIEZACA w $gdzie" $wX.Biezaca.Znaki $plikX `
+      "skasuj wpisy starsze niz $DniWaznosci dni albo przenies te trwale do warstwy stalej" `
+      "warstwa biezaca" $uwagaBiezacej
+  }
+  foreach ($b in @($wX.Bloki)) {
+    if ($b.Znaki -le 0) { continue }
+    if ($b.Nazwa -eq "kierownik") {
+      $poz += Pozycja "zasady kierownika w $gdzie (blok kierownik)" $b.Znaki $plikX `
+        "ten blok wgrywa narzedzia\instaluj-globalnie.ps1 - skracaj go w $(Szablon-Kierownika $b.Tekst) i wgraj ponownie, nie recznie" `
+        "zasady kierownika"
+    } elseif ($b.Nazwa -eq "lore") {
+      $poz += Pozycja "zasady Lore w $gdzie (blok lore)" $b.Znaki $plikX `
+        "ten blok wpisuje straznik (narzedzia\wpisz-zasady.ps1) z zasady-lore.md - skracaj go w zrodle, nie recznie" `
+        "zasady Lore"
+    } elseif ($b.Nazwa -eq "wiedza") {
+      $poz += Pozycja "zasady wiedzy w $gdzie (blok wiedza)" $b.Znaki $plikX `
+        "ten blok wpisuje straznik (narzedzia\wpisz-zasady.ps1) z zasady-wiedza.md - skracaj go w zrodle, nie recznie" `
+        "zasady wiedzy"
+    } else {
+      $poz += Pozycja "blok '$($b.Nazwa)' w $gdzie" $b.Znaki $plikX `
+        "ten blok nalezy do narzedzia - skracaj go w zrodle i wgraj ponownie, nie recznie" `
+        (Skroc "blok $($b.Nazwa)" 20)
+    }
+  }
+  return $poz
+}
+
 # Etap-Kubelki - dwa rachunki kazdego narzedzia i narzedzie domyslne.
 # Wola go koszt-pamieci.ps1 KROPKA (". Etap-Kubelki"), wiec biegnie w zasiegu skryptu
 # glownego: zmienne i funkcje, ktore tu powstaja, widzi dalszy przebieg - tak samo,
@@ -126,15 +172,30 @@ function Etap-Kubelki {
     }
   }
 
-  # Codex czyta AGENTS.md SAM, bez zadnego hooka - to jego odpowiednik CLAUDE.md
-  # i najwiekszy staly koszt jego sesji. Do 2026-09-17 nie bylo go w ZADNYM
-  # kubelku, a do 2026-09-28 wpadal do kubelka Claude Code, ktory go nie czyta.
-  # Teraz stoi w rachunku Codeksa i tylko tam.
+  # Codex czyta ~\.codex\AGENTS.md SAM, bez zadnego hooka - to jego odpowiednik CLAUDE.md.
+  # Do 2026-09-17 nie bylo go w ZADNYM kubelku, do 2026-09-28 wpadal do kubelka Claude
+  # Code, ktory go nie czyta, a do 06.10.2026 rachunek Codeksa liczyl CALY plik - razem
+  # z Twoimi wlasnymi instrukcjami, czyli zawyzal koszt MegaRuchacza i liczyl inaczej niz
+  # Claude Code i OpenCode. Teraz tak samo jak tam: bloki MegaRuchacza i "Co wiem"
+  # (Pozycje-MegaRuchacza); reszta pliku to Twoje wlasne instrukcje ($wlasneCxZnaki -
+  # pokazuje je pelny raport). Caly plik dalej widac jako warstwe "codex-globalny" w
+  # -Warstwy (tryb-warstwy.ps1 bierze jej rozmiar z samego pliku, nie z rachunku).
   $kubSesjaCx = @()
+  $wCx = $null; $wpisyStareCx = @(); $wlasneCxZnaki = $null
   if ($jestCodex) {
-    $kubSesjaCx += Pozycja "instrukcje domowe Codeksa (~\.codex\AGENTS.md)" $agentsTresc.Length $plikAgents `
-      "to odpowiednik CLAUDE.md po stronie Codeksa - skracaj go tak samo, warstwami" `
-      "AGENTS.md domowy"
+    $nCx = Narzedzie-Po-Kluczu "codex"
+    if ($nCx -and $nCx.Warstwy -and ((Klucz-Sciezki $nCx.Instrukcje) -eq (Klucz-Sciezki $plikAgents))) { $wCx = $nCx.Warstwy }
+    else { $wCx = Zmierz-Warstwy $plikAgents }
+    $wpisyCx = @($wCx.Wpisy)
+    $wpisyStareCx = @($wpisyCx | Where-Object { $_.Stary })
+    $uwagaBiezacaCx = "  tymczasowa, $($wpisyCx.Count) wpisow"
+    if ($wpisyStareCx.Count -gt 0) { $uwagaBiezacaCx += ", $($wpisyStareCx.Count) po terminie" }
+    $kubSesjaCx += @(Pozycje-MegaRuchacza $wCx $plikAgents "AGENTS.md Codeksa" $uwagaBiezacaCx)
+    if ($wCx.Jest -and ($null -ne $agentsTresc)) {
+      $mrCx = 0
+      foreach ($p in $kubSesjaCx) { $mrCx += [long]$p.Znaki }
+      $wlasneCxZnaki = [math]::Max(0, [long]$agentsTresc.Length - $mrCx)
+    }
     if ($Projekt) {
       $plikAgentsProjektu = Join-Path $Projekt "AGENTS.md"
       $agentsProjektu = Czytaj-Cicho $plikAgentsProjektu
@@ -178,41 +239,7 @@ function Etap-Kubelki {
     $wpisyStareOc = @($wpisyOc | Where-Object { $_.Stary })
     $uwagaBiezacaOc = "  tymczasowa, $($wpisyOc.Count) wpisow"
     if ($wpisyStareOc.Count -gt 0) { $uwagaBiezacaOc += ", $($wpisyStareOc.Count) po terminie" }
-    if ($wOc.Blok.Znaki -gt 0) {
-      $kubSesjaOc += Pozycja "blok zasad MegaRuchacza w $gdzieOc (stary, wspolny)" $wOc.Blok.Znaki $plikOc `
-        "ten blok nalezy do narzedzia - straznik zamieni go na bloki lore i wiedza przy najblizszym przebiegu" `
-        "zasady globalne"
-    }
-    if ($wOc.Stala.Znaki -gt 0) {
-      $kubSesjaOc += Pozycja "warstwa STALA (Co wiem) w $gdzieOc" $wOc.Stala.Znaki $plikOc `
-        "przenies najdluzsze zestawienie do pliku w $katWiedzy i zostaw tu jedna linie odsylacza - warstwa referencyjna nie kosztuje nic" `
-        "warstwa stala" "  nie wygasa"
-    }
-    if ($wOc.Biezaca.Znaki -gt 0) {
-      $kubSesjaOc += Pozycja "warstwa BIEZACA w $gdzieOc" $wOc.Biezaca.Znaki $plikOc `
-        "skasuj wpisy starsze niz $DniWaznosci dni albo przenies te trwale do warstwy stalej" `
-        "warstwa biezaca" $uwagaBiezacaOc
-    }
-    foreach ($b in @($wOc.Bloki)) {
-      if ($b.Znaki -le 0) { continue }
-      if ($b.Nazwa -eq "kierownik") {
-        $kubSesjaOc += Pozycja "zasady kierownika w $gdzieOc (blok kierownik)" $b.Znaki $plikOc `
-          "ten blok wgrywa narzedzia\instaluj-globalnie.ps1 - skracaj go w $(Szablon-Kierownika $b.Tekst) i wgraj ponownie, nie recznie" `
-          "zasady kierownika"
-      } elseif ($b.Nazwa -eq "lore") {
-        $kubSesjaOc += Pozycja "zasady Lore w $gdzieOc (blok lore)" $b.Znaki $plikOc `
-          "ten blok wpisuje straznik (narzedzia\wpisz-zasady.ps1) z zasady-lore.md - skracaj go w zrodle, nie recznie" `
-          "zasady Lore"
-      } elseif ($b.Nazwa -eq "wiedza") {
-        $kubSesjaOc += Pozycja "zasady wiedzy w $gdzieOc (blok wiedza)" $b.Znaki $plikOc `
-          "ten blok wpisuje straznik (narzedzia\wpisz-zasady.ps1) z zasady-wiedza.md - skracaj go w zrodle, nie recznie" `
-          "zasady wiedzy"
-      } else {
-        $kubSesjaOc += Pozycja "blok '$($b.Nazwa)' w $gdzieOc" $b.Znaki $plikOc `
-          "ten blok nalezy do narzedzia - skracaj go w zrodle i wgraj ponownie, nie recznie" `
-          (Skroc "blok $($b.Nazwa)" 20)
-      }
-    }
+    $kubSesjaOc += @(Pozycje-MegaRuchacza $wOc $plikOc $gdzieOc $uwagaBiezacaOc)
   }
   # AGENTS.md projektu - OpenCode czyta go sam, tak jak Codex (a bez niego CLAUDE.md
   # projektu). Liczymy caly plik, tak samo jak w rachunku Codeksa - tylko przy -Projekt.

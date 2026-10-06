@@ -131,7 +131,10 @@ function Tryb-Rozbicie {
       $brakWiadomosc = "nie ma gotowego przypomnienia Codeksa - ani w projekcie, ani $(Sciezka-Ludzka $plikPrzypWzor)"
     }
     $b += Kubelek-Rozbicia "Codex - przy KAZDEJ wiadomosci (Claude Code tego nie dostaje)" $kubWiadomoscCx $tokWiadomoscCx $brakWiadomosc
-    $b += Kubelek-Rozbicia "Codex - RAZ, przy starcie sesji (Claude Code tego nie czyta)" $kubSesjaCx $tokSesjaCx "nie ma czego liczyc"
+    # Od 06.10.2026 z ~\.codex\AGENTS.md tylko bloki MegaRuchacza i "Co wiem" (kubelki.ps1).
+    $brakSesjaCx = "w $(Sciezka-Ludzka $plikAgents) nie ma ani blokow zasad MegaRuchacza, ani sekcji '## Co wiem'"
+    if ($wCx -and $wCx.Blad) { $brakSesjaCx = $wCx.Blad }
+    $b += Kubelek-Rozbicia "Codex - RAZ, przy starcie sesji (Claude Code tego nie czyta)" $kubSesjaCx $tokSesjaCx $brakSesjaCx
     # Od 06.10.2026 calosc otwarcia sesji Codeksa jest mierzona z jego transkryptow
     # (Pomiar-Narzedzia w otwarcie.ps1) - wtedy ta sama linia, co u Claude Code.
     if ($null -ne $rCx.Calosc) {
@@ -144,6 +147,14 @@ function Tryb-Rozbicie {
     if ($Projekt -and (Test-Path -LiteralPath (Join-Path $Projekt ".megaruchacz")) -and
         -not (Test-Path -LiteralPath (Join-Path $Projekt "AGENTS.md"))) {
       $b += ("  {0,-20} {1}" -f "", "AGENTS.md projektu: nie ma go - zasady kierownika ida do Codeksa wylacznie hookiem.")
+    }
+    if ($wCx) {
+      foreach ($nb in @($wCx.BlokiBezKonca)) {
+        $b += ("  {0,-20} {1}" -f "", "UWAGA: blok '$nb' w $(Sciezka-Ludzka $plikAgents) nie ma znacznika konca - nie umiem go policzyc.")
+      }
+    }
+    if ($wpisyStareCx.Count -gt 0) {
+      $b += ("  {0,-20} {1}" -f "", "Do zrobienia: $(Ile-Wpisow $wpisyStareCx.Count) w $(Sciezka-Ludzka $plikAgents) starsze niz $DniWaznosci dni - przejrzyj albo odswiez date.")
     }
     return $b
   }

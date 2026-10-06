@@ -227,30 +227,44 @@ function Tryb-Warstwy {
     $lista += $wa
     $juz[(Klucz-Sciezki $poz.Skad)] = $true
   }
-  # Rachunek Codeksa za start sesji - osobne pozycje, bo Claude Code tych plikow
+  # ~\.codex\AGENTS.md - Codex czyta go sam na starcie kazdej sesji. Warstwa to CALY plik,
+  # a rozmiar idzie z samego pliku: rachunek Codeksa (kubelki.ps1, od 06.10.2026) liczy
+  # w nim tylko bloki zasad MegaRuchacza i "Co wiem", reszta to Twoje wlasne instrukcje.
+  # Do 06.10.2026 ta warstwa powstawala z pozycji rachunku "AGENTS.md domowy" (caly plik) -
+  # dzis takiej pozycji nie ma, wiec warstwa nie moze od niej zalezec.
+  if ($jestCodex) {
+    $opisCx = "czyta tylko Codex - Claude Code tego pliku nie wczytuje. Wchodzi na start sesji Codeksa w calosci; " +
+      "rachunek MegaRuchacza liczy w nim tylko bloki zasad i sekcje 'Co wiem'"
+    if ($null -ne $wlasneCxZnaki) {
+      $opisCx += " (~$(Liczba (Tokeny ([long]$agentsTresc.Length - $wlasneCxZnaki))) tokenow), reszta (~$(Liczba (Tokeny $wlasneCxZnaki)) tokenow) to Twoje wlasne instrukcje"
+    } else {
+      $opisCx += ", reszta to Twoje wlasne instrukcje"
+    }
+    $wa = Z-Pliku (Warstwa "codex-globalny" "instrukcje domowe Codeksa (~\.codex\AGENTS.md) - czyta tylko Codex" $plikAgents "start" "stala" `
+      "czlowiek recznie + instalator globalny (narzedzia\instaluj-globalnie.ps1, blok zasad)" $opisCx "plik" "" "codex")
+    $lista += $wa
+    $juz[(Klucz-Sciezki $plikAgents)] = $true
+    # Sekcja "## Co wiem" w AGENTS.md (Codex ma w niej pamiec o Tobie i firmie) -
+    # podwarstwy jak w CLAUDE.md, patrz Podwarstwy-Co-Wiem.
+    $lista += @(Podwarstwy-Co-Wiem $wa (Narzedzie-Po-Kluczu "codex") "AGENTS.md" "czlowiek recznie (kopia wiedzy dla Codeksa)" `
+      "czyta tylko Codex - wchodzi na start jego sesji razem z calym AGENTS.md; rachunek MegaRuchacza liczy ja w calosci")
+  }
+  # Reszta rachunku Codeksa za start sesji - osobne pozycje, bo Claude Code tych plikow
   # nie czyta. Nazwa i opis mowia to wprost, zeby nikt nie doliczal ich do
-  # startu sesji Claude Code (do 2026-09-28 robil to sam rachunek).
+  # startu sesji Claude Code (do 2026-09-28 robil to sam rachunek). Pozycje z AGENTS.md
+  # (bloki, "Co wiem") stoja juz wyzej jako warstwa codex-globalny i jej podwarstwy.
   foreach ($poz in @($kubSesjaCx)) {
     if ($juz.ContainsKey((Klucz-Sciezki $poz.Skad))) { continue }
     $nr++
     $jsonowy = ("$($poz.Skad)" -like "*.json")
     $rodzaj = "plik"
     if ($jsonowy) { $rodzaj = "ladunek" }
-    $kto = "instalator MegaRuchacza (wdroz.ps1)"
-    $id = "sesja-$nr"
-    if ($poz.Krotka -eq "AGENTS.md domowy") { $kto = "czlowiek recznie + instalator globalny (narzedzia\instaluj-globalnie.ps1, blok zasad)"; $id = "codex-globalny" }
-    $wa = Z-Pliku (Warstwa $id "$($poz.Nazwa) - czyta tylko Codex" $poz.Skad "start" "stala" $kto `
+    $wa = Z-Pliku (Warstwa "sesja-$nr" "$($poz.Nazwa) - czyta tylko Codex" $poz.Skad "start" "stala" "instalator MegaRuchacza (wdroz.ps1)" `
       "czyta tylko Codex - Claude Code tego pliku nie wczytuje. Wchodzi na start sesji Codeksa (pozycja rachunku Codeksa: $($poz.Krotka))" $rodzaj "" "codex")
     $wa.Znaki = $poz.Znaki; $wa.Tokeny = $poz.Tokeny
     if ($jsonowy) { $wa.Tresc = Ladunek-Hooka $poz.Skad }
     $lista += $wa
     $juz[(Klucz-Sciezki $poz.Skad)] = $true
-    # Sekcja "## Co wiem" w AGENTS.md (Codex ma w niej pamiec o Tobie i firmie) -
-    # podwarstwy jak w CLAUDE.md, patrz Podwarstwy-Co-Wiem.
-    if ($id -eq "codex-globalny") {
-      $lista += @(Podwarstwy-Co-Wiem $wa (Narzedzie-Po-Kluczu "codex") "AGENTS.md" "czlowiek recznie (kopia wiedzy dla Codeksa)" `
-        "czyta tylko Codex - wchodzi na start jego sesji razem z calym AGENTS.md (rachunek liczy caly plik jedna pozycja)")
-    }
   }
 
   # OpenCode (od 06.10.2026) czyta ~\.config\opencode\AGENTS.md sam, na starcie kazdej

@@ -171,13 +171,24 @@ function DomPrawdziwy([string]$nazwa) {
   return $dom
 }
 
-function Dom([string]$nazwa, [bool]$zCoWiem, [bool]$zTokenami) {
+# Rachunek MegaRuchacza w Codeksie (od 06.10.2026) - tak jak u Claude Code i OpenCode: z
+# ~\.codex\AGENTS.md tylko bloki MegaRuchacza i "Co wiem", bez Twoich wlasnych instrukcji.
+# Dom "codex-wlasne": "Co wiem" (stala 21 + Biezace 14 tokenow), blok kierownika (6 000
+# znakow tresci) i wlasne instrukcje obok (10 000 znakow - poza rachunkiem). Start na
+# kartce = ceil(dlugosc bloku / 3) + 21 + 14; caly plik bylby o ~3 300 tokenow wiekszy.
+$BlokK = "<!-- MegaRuchacz:kierownik:start -->`n# MegaRuchacz - kierownik projektu (opencode / Codex CLI)`n`n" +
+         ("Rozdaj zadania workerom. " * 240) + "`n<!-- MegaRuchacz:kierownik:koniec -->"
+$Wlasne = "## Moje instrukcje`n`n" + ("Pisz krotko i po polsku. " * 400) + "`n"
+$StartCx = [int][math]::Ceiling($BlokK.Length / 3.0) + 21 + 14
+
+function Dom([string]$nazwa, [bool]$zCoWiem, [bool]$zTokenami, [string]$dopisek = "") {
   $dom = Join-Path $T $nazwa
   New-Item -ItemType Directory -Force -Path (Join-Path $dom ".codex") | Out-Null
   $agents = "# Instrukcje`n`nPisz po polsku.`n"
   if ($zCoWiem) {
     $agents = "## Co wiem`n`n### O użytkowniku`n`n- Sprzedaje olejki zapachowe.`n`n### Bieżące`n`n- [$((Get-Date).ToString('yyyy-MM-dd'))] Fakt testowy.`n`n## Zasady`n`nPisz po polsku.`n"
   }
+  $agents += $dopisek
   [System.IO.File]::WriteAllText((Join-Path $dom ".codex\AGENTS.md"), $agents, $bezBom)
   # dzis - kilka minut temu (zeby "dzis" nie wypadlo na wczoraj tuz po polnocy)
   $dzis = (Get-Date).AddMinutes(-5)
@@ -259,6 +270,37 @@ try {
     Sprawdz "-Start: glowne narzedzie Codex, mediana 24 498 z 2 rozmow" (($js.Narzedzie -eq "Codex") -and ($js.Sesje.Narzedzie -eq "Codex") -and ($js.Sesje.Mediana -eq 24498) -and ($js.Sesje.Liczba -eq 2)) ($js | ConvertTo-Json -Depth 3 -Compress)
     Sprawdz "-Start: czesc MegaRuchacza Codeksa = start + wiadomosc" (($null -ne $js.MegaRuchaczSesja) -and ($js.MegaRuchaczSesja -eq ($js.MegaRuchaczStart + $js.MegaRuchaczWiadomosc)) -and -not $js.Powod) "sesja $($js.MegaRuchaczSesja), powod '$($js.Powod)'"
   }
+
+  # ------------------------------------------------------------- rachunek bez wlasnych instrukcji
+  # Od 06.10.2026 rachunek Codeksa liczy z AGENTS.md tylko bloki MegaRuchacza i "Co wiem",
+  # a caly plik zostaje widoczny jako warstwa codex-globalny (rozmiar z pliku, nie z rachunku).
+  $dWl = Dom "codex-wlasne" $true $true ("`n" + $BlokK + "`n`n" + $Wlasne)
+  $agentsWl = Join-Path $dWl ".codex\AGENTS.md"
+  $calyWl = [System.IO.File]::ReadAllText($agentsWl)
+  $r = Odpal $koszt @("-KatalogDomowy", $dWl, "-Zrodlo", $Zrodlo, "-Dane", "-Zwykly")
+  $k = Klucze $r.Tekst
+  $iw = $null
+  for ($i = 1; $i -le 6; $i++) { if ($k["narz.$i.klucz"] -eq "codex") { $iw = $i } }
+  Sprawdz "rachunek Codeksa: start = blok kierownika + 'Co wiem' = $StartCx (na kartce)" (($k["narzedzie"] -eq "Codex") -and ($k["udzial.start"] -eq "$StartCx")) "narzedzie=$($k['narzedzie']) start=$($k['udzial.start']) powod=$($k['udzial.powod'])"
+  Sprawdz "rachunek Codeksa: czesc MegaRuchacza w Codeksie (narz.mr_start) = $StartCx" ($iw -and ($k["narz.$iw.mr_start"] -eq "$StartCx")) "mr_start=$($k["narz.$iw.mr_start"])"
+  Sprawdz "negatywna rachunek Codeksa: Twoje wlasne instrukcje (~3 300 tokenow) nie licza sie jako MegaRuchacz" ([int]$k["udzial.start"] -lt ($StartCx + 100)) "start=$($k['udzial.start']) (gdyby liczyl caly plik: ~$([int][math]::Ceiling($calyWl.Length / 3.0)))"
+  # AGENTS.md z samymi wlasnymi instrukcjami (dom codex-bez): MegaRuchacz nie doklada nic.
+  # Do 06.10.2026 rachunek liczyl tu caly plik.
+  $r = Odpal $koszt @("-KatalogDomowy", $dBez, "-Zrodlo", $Zrodlo, "-Dane", "-Zwykly")
+  $kb = Klucze $r.Tekst
+  Sprawdz "negatywna rachunek Codeksa: AGENTS.md bez blokow i bez 'Co wiem' -> start 0" (($kb["narzedzie"] -eq "Codex") -and ($kb["udzial.start"] -eq "0")) "narzedzie=$($kb['narzedzie']) start=$($kb['udzial.start'])"
+  $r = Odpal $koszt @("-KatalogDomowy", $dWl, "-Zrodlo", $Zrodlo, "-Warstwy")
+  $jw = $null
+  try { $jw = $r.Tekst | ConvertFrom-Json } catch { }
+  $wg = @($jw.Warstwy | Where-Object { $_.Id -eq "codex-globalny" })[0]
+  $wgs = @($jw.Warstwy | Where-Object { $_.Id -eq "codex-globalny-stala" })[0]
+  Sprawdz "-Warstwy: codex-globalny to caly AGENTS.md (z wlasnymi instrukcjami), nie pozycja rachunku" ($wg -and ($wg.Stan -eq "jest") -and ($wg.Znaki -eq $calyWl.Length) -and ($wg.Sciezka -eq $agentsWl)) "$($wg.Stan) znaki=$($wg.Znaki) plik=$($calyWl.Length)"
+  Sprawdz "-Warstwy: opis codex-globalny mowi, ze reszta to Twoje wlasne instrukcje" ($wg.Opis -match 'reszta \(~[\d ]+ tokenow\) to Twoje wlasne instrukcje') "$($wg.Opis)"
+  Sprawdz "-Warstwy: 'Co wiem' w AGENTS.md dalej jako podwarstwa codex-globalny" ($wgs -and ($wgs.Stan -eq "jest") -and ($wgs.Rodzic -eq "codex-globalny")) ($wgs | ConvertTo-Json -Compress)
+  $dubel = @($jw.Warstwy | Where-Object { ($_.Sciezka -eq $agentsWl) -and ($_.Rodzaj -ne "podwarstwa") })
+  Sprawdz "negatywna -Warstwy: AGENTS.md raz, bez warstw 'sesja-N' z pozycji blokow" (($dubel.Count -eq 1) -and ($dubel[0].Id -eq "codex-globalny")) (@($dubel | ForEach-Object { $_.Id }) -join ", ")
+  $r = Odpal $koszt @("-KatalogDomowy", $dWl, "-Zrodlo", $Zrodlo)
+  Sprawdz "pelny raport: POMIAR Codeksa = $StartCx i linia o wlasnych instrukcjach poza rachunkiem" (($r.Tekst -match "POMIAR narzedzie=codex tokenow=$StartCx ") -and ($r.Tekst -match 'nie doliczam Twoich wlasnych instrukcji')) (([regex]::Match($r.Tekst, '(?s)Codex \(osobny rachunek.*?POMIAR narzedzie=codex[^\n]*')).Value)
 
   # ------------------------------------------------------------- okno (-Raport)
   $r = Odpal $nadz @("-Zrodlo", $Zrodlo, "-KatalogDomowy", $dCx, "-Raport", "-Proba", "-Cicho")
