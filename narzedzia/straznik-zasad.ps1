@@ -2229,7 +2229,8 @@ function Przewin-Zrodlo($cyt) {
 # ktore tu jest. Codex i OpenCode wczytuja swoj plik sami, bez zadnego hooka - to jedyna droga zasad
 # na maszynie bez Claude Code. Zapisuje wpisz-zasady.ps1 (wszystkie pliki naraz), tu tylko
 # sprawdzamy, czy bloki (i przy module wiedza szkielet "Co wiem") nadal tam siedza i sa swieze, czy
-# pusta "Co wiem" dostala juz tresc z najbogatszego pliku (zasiew) i czy wiedza jest wszedzie ta sama.
+# pusta "Co wiem" dostala juz tresc z najbogatszego pliku (zasiew); zanim to sprawdzimy, wyrownujemy
+# "Co wiem" miedzy plikami (Zglos-Synchronizacje-Co-Wiem).
 function Cele-Zasad {
   $cele = @()
   if (-not (Get-Command Cele-Narzedzi -ErrorAction SilentlyContinue)) {
@@ -2272,6 +2273,9 @@ function Pilnuj-Zasad {
   # Zasiew pustej "Co wiem" trescia najbogatszej sekcji - ten sam plan co w wpisz-zasady.ps1
   # (Plan-Pliku-Narzedzia); starsza kopia kierownik-cele.ps1 go nie ma - wtedy jak dotad.
   $maPlan = [bool](Get-Command Plan-Pliku-Narzedzia -ErrorAction SilentlyContinue)
+  # Najpierw synchronizacja "Co wiem" - plan i zasiew nizej biora juz wyrownana tresc.
+  $synchro = $szkielet -and [bool](Get-Command Synchronizuj-Co-Wiem -ErrorAction SilentlyContinue)
+  if ($synchro) { Zglos-Synchronizacje-Co-Wiem }
   $zrodloCw = $null
   if ($szkielet -and $maPlan) { $zrodloCw = Zrodlo-Co-Wiem $KatalogDomowy }
   $cele = Cele-Zasad
@@ -2319,7 +2323,6 @@ function Pilnuj-Zasad {
     Usun-Klucze $plikStanu @("zrodlo", "blok", "blok.codex")
     Notuj ("zasady pamieci: aktualne (" + (($cele | ForEach-Object { $_.nazwa }) -join ", ") + ")")
     Pilnuj-Limitu $cele
-    if ($szkielet -and $maPlan) { Zglos-Rozjazd-Co-Wiem }
     return
   }
 
@@ -2333,7 +2336,10 @@ function Pilnuj-Zasad {
   $wyjscie = @()
   try {
     $global:LASTEXITCODE = 0
-    $wyjscie = @(& $wpisz -Zrodlo $Zrodlo -KatalogDomowy $KatalogDomowy *>&1 | ForEach-Object { "$_" })
+    # "Co wiem" juz zsynchronizowana wyzej - druga synchronizacja powtorzylaby tylko jej meldunki
+    $dod = @{}
+    if ($synchro) { $dod.BezSynchronizacji = $true }
+    $wyjscie = @(& $wpisz -Zrodlo $Zrodlo -KatalogDomowy $KatalogDomowy @dod *>&1 | ForEach-Object { "$_" })
     $kod = $LASTEXITCODE
   } catch { $kod = 1; $wyjscie += "$($_.Exception.Message)" }
   # Odmowa zapisu z sufitu (plik przekroczylby limit narzedzia) - na POCZATKU meldunku: to jedyny
@@ -2368,15 +2374,36 @@ function Pilnuj-Zasad {
     Mow "MegaRuchacz: zasady pamieci ($opis), a poprawka nie wyszla (kod ${kod}${ogon}) - uruchom $wpisz recznie."
     $script:Niepowodzenia++
   }
-  if ($szkielet -and $maPlan) { Zglos-Rozjazd-Co-Wiem }
 }
 
-# "Co wiem" ma byc ta sama w kazdym CLI. Rozne sekcje (np. reczny dopis tylko do CLAUDE.md) - jedna
-# linia przy kazdym przebiegu, dopoki ktos ich nie wyrowna. Bez scalania: co jest czyje, wie czlowiek.
-function Zglos-Rozjazd-Co-Wiem {
-  $r = $null
-  try { $r = Rozjazd-Co-Wiem $KatalogDomowy } catch { $r = "nie umiem porownac sekcji 'Co wiem' w plikach narzedzi AI ($($_.Exception.Message))" }
-  if ($r) { Mow "MegaRuchacz: $r" }
+# "Co wiem" ma byc ta sama w kazdym CLI, a kazde edytuje ja we wlasnym pliku - wiec przy kazdym przebiegu
+# synchronizujemy (kierownik-cele.ps1 Synchronizuj-Co-Wiem). Do 06.10 stal tu meldunek o roznicy przy
+# KAZDYM starcie okna - przy codziennych roznicach falszywy alarm, ktory uczy ignorowac ostrzezenia.
+# Meldunki:
+#   - zapis - jedna linia (co skad dokad); nic do zrobienia - cisza;
+#   - odmowa ponad limit narzedzia - UWAGA przy kazdym przebiegu, na poczatku (to narzedzie nie ma
+#     najnowszej wiedzy, dopoki czlowiek nie skroci pliku);
+#   - sprzeczne zmiany tej samej linii - RAZ na stan plikow; bez widowni (-Tlo) odlozone do najblizszego
+#     przebiegu, ktory ma komu mowic. Konflikt to sprawa dla czlowieka, nie nieudana naprawa - nie
+#     liczy sie do kodu -Dopasuj;
+#   - wywrotka - glosno i do kodu -Dopasuj (pliki zostaja, jakie byly).
+function Zglos-Synchronizacje-Co-Wiem {
+  $s = $null
+  try { $s = Synchronizuj-Co-Wiem $KatalogDomowy }
+  catch {
+    Mow "MegaRuchacz: synchronizacja sekcji 'Co wiem' miedzy narzedziami AI sie wywrocila ($($_.Exception.Message)) - pliki zostaja, jakie sa."
+    $script:Niepowodzenia++
+    return
+  }
+  foreach ($o in $s.Odmowy) { Mow "MegaRuchacz: UWAGA - $o"; $script:Niepowodzenia++ }
+  if ($s.Opis) { Mow "MegaRuchacz: $($s.Opis)." }
+  foreach ($u in $s.Uwagi) { Notuj "Co wiem: $u" }
+  if ($s.Konflikt) {
+    if ($s.KonfliktNowy) {
+      Mow "MegaRuchacz: UWAGA - $($s.Konflikt)"
+      if ($Tlo) { Odloz-Wiadomosc "MegaRuchacz: UWAGA - $($s.Konflikt)" }
+    } else { Notuj "Co wiem: sprzeczne zmiany bez zmian od ostatniego meldunku - nie powtarzam" }
+  }
 }
 
 # ------------------------------------------------ 1b. blok zasad kierownika

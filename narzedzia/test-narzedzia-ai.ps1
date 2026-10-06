@@ -6,12 +6,16 @@
 # dla opencode (do 0.27) zamieniona na samodzielny plik, wlasny plik opencode uzytkownika, istniejaca
 # sekcja "Co wiem" nietknieta, instalator globalny, wtyczka opencode bez podwojnego ladowania.
 # Ta sama wiedza w kazdym CLI: pusta "Co wiem" (zakladana i zastana) zasiana trescia najbogatszej
-# sekcji, niepusta nietknieta, rozne sekcje = meldunek (wpisz-zasady i straznik), Pliki-Pamieci
+# sekcji, niepusta nietknieta przez zasiew; synchronizacja (Synchronizuj-Co-Wiem): zmiana w jednym
+# pliku idzie do pozostalych (w obie strony), dopisy w kilku plikach polaczone na swoich miejscach,
+# ta sama linia zmieniona inaczej - jeden meldunek (nie przy kazdym przebiegu), rozstrzygniecie
+# poprawka albo -WzorCoWiem, pierwsza synchronizacja bez stanu - same dopisy; Pliki-Pamieci
 # (zapis-trwaly.ps1) z listy narzedzi - takze czwartego.
 # Proby negatywne: plik, ktory przekroczylby limit Codeksa (32 KiB) - odmowa zapisu z ostrzezeniem
 # w PIERWSZEJ linii, plik co do bajtu, bez kopii (a ten sam plik ponizej limitu - zapisany); zasiew
 # "Co wiem" ponad limit - odmowa w PIERWSZEJ linii, sekcja pusta, reszta pliku zapisana (a mniejszy
-# zasiew - przechodzi).
+# zasiew - przechodzi); synchronizacja ponad limit Codeksa - odmowa w PIERWSZEJ linii przy kazdym
+# przebiegu, Codex co do bajtu, pozostale pliki zsynchronizowane, zalegly Codex niczego nie kasuje.
 #
 # Wszystko w kopii w %TEMP%: katalogi domowe, projekt, katalog zrodlowy (bez .git). Procesy potomne
 # dostaja PATH bez claude/codex/opencode (wykrywanie ma widziec tylko to, co test polozyl w domu)
@@ -173,7 +177,7 @@ try {
   Sprawdz "wszystkie trzy: OpenCode - notatka i fakt po jednym razie (nic zdublowane)" (((Ile $oc $notatka) -eq 1) -and ((Ile $oc $fakt) -eq 1))
   Sprawdz "wszystkie trzy: Codex dostal 'Co wiem' z CLAUDE.md (fakt raz), a nie tekst spoza sekcji" (((Ile $cx $fakt) -eq 1) -and -not $cx.Contains($notatka)) $cx
   $w = Wpisz $dom
-  Sprawdz "wszystkie trzy: ta sama wiedza wszedzie - bez meldunku o rozjezdzie" ($w.Tekst -notmatch "nie jest ta sama") $w.Tekst
+  Sprawdz "wszystkie trzy: ta sama wiedza wszedzie - bez meldunku o rozjezdzie ani synchronizacji" ($w.Tekst -notmatch "nie jest ta sama|sprzeczne|zsynchronizowana") $w.Tekst
 
   # ------------------------------------------------------------ zadne
   $dom = Nowy-Dom "zadne" @()
@@ -267,21 +271,140 @@ try {
   $d2 = Dopasuj $dom; $w2 = Wpisz $dom
   Sprawdz "zasiew: drugi straznik i wpisz-zasady nic nie zmieniaja, bez meldunku o rozjezdzie" (($d2.Kod -eq 0) -and ($w2.Kod -eq 0) -and ((Odcisk $dom) -eq $odc) -and ((Ile-Bak $dom) -eq $bak) -and ($d2.Tekst + $w2.Tekst) -notmatch "nie jest ta sama") ($d2.Tekst + " | " + $w2.Tekst)
 
-  # ------------------------------------------------------------ ta sama wiedza: niepusta nietknieta, roznica = meldunek
-  # Reczny dopis tylko do CLAUDE.md (zapis w stalej) i wpis tylko w Codeksie: niczego nie nadpisujemy
-  # i nie scalamy, ale mowimy o tym - w wpisz-zasady i przy starcie okna.
-  $dom = Nowy-Dom "rozjazd" @("claude", "codex")
+  # ------------------------------------------------------------ synchronizacja: zmiana w jednym pliku
+  # Agent w rozmowie poprawia "Co wiem" we WLASNYM pliku (dopis w O firmie, poprawka w Biezace). Straznik
+  # przy starcie okna (tu -Dopasuj) przenosi sekcje do pozostalych plikow: kopia .bak przed zapisem, reszta
+  # plikow co do znaku, jedna linia meldunku; drugi przebieg nic nie zmienia i o "Co wiem" milczy.
+  $dom = Nowy-Dom "sync" @("claude", "codex", "opencode")
+  $pCx = Join-Path $dom ".codex\AGENTS.md"; $pCm = Join-Path $dom ".claude\CLAUDE.md"; $pOc = Join-Path $dom ".config\opencode\AGENTS.md"
+  Zapisz $pCm ("# Ustalenia globalne`r`n`r`n" + $wiedzaCm)
+  [void](Zainstaluj "synchronizacja - przygotowanie" $dom)
+  Sprawdz "synchronizacja: przygotowanie - trzy pliki z ta sama wiedza" (((Linie-Sekcji (Czytaj $pCx)) -ceq (Linie-Sekcji (Czytaj $pCm))) -and ((Linie-Sekcji (Czytaj $pOc)) -ceq (Linie-Sekcji (Czytaj $pCm))))
+  $cx0 = Czytaj $pCx; $oc0 = Czytaj $pOc; $bak = Ile-Bak $dom
+  Zapisz $pCm ((Czytaj $pCm).Replace("- Marka testowa, zapachy z numerami.", "- Marka testowa, zapachy z numerami.`r`n- Dopis w CLAUDE.md.").Replace("- [2026-10-05] Fakt biezacy z CLAUDE.md.", "- [2026-10-05] Fakt biezacy z CLAUDE.md, poprawiony."))
+  $przedCm = Skrot $pCm
+  $d = Dopasuj $dom
+  $cm = Czytaj $pCm; $cx = Czytaj $pCx; $oc = Czytaj $pOc
+  Sprawdz "jeden plik: straznik kod 0, jedna linia: zsynchronizowana, skad i dokad" (($d.Kod -eq 0) -and ($d.Tekst -match "sekcja 'Co wiem' zsynchronizowana \(zmiany z ~/\.claude/CLAUDE\.md\), zapisana w: ~/\.codex/AGENTS\.md, ~/\.config/opencode/AGENTS\.md")) $d.Tekst
+  Sprawdz "jeden plik: Codex i OpenCode maja sekcje CLAUDE.md (linia w linie, z dopisem i poprawka)" (((Linie-Sekcji $cx) -ceq (Linie-Sekcji $cm)) -and ((Linie-Sekcji $oc) -ceq (Linie-Sekcji $cm)) -and $cx.Contains("- Dopis w CLAUDE.md.") -and $oc.Contains("poprawiony.") -and -not $cx.Contains("z CLAUDE.md.`r`n")) $cx
+  Sprawdz "jeden plik: CLAUDE.md nietkniety" ((Skrot $pCm) -eq $przedCm)
+  Sprawdz "jeden plik: reszta plikow Codeksa i OpenCode co do znaku" (((Poza-Sekcja $cx) -ceq (Poza-Sekcja $cx0)) -and ((Poza-Sekcja $oc) -ceq (Poza-Sekcja $oc0)))
+  Sprawdz "jeden plik: kopia .bak przed zapisem kazdego z dwoch plikow" ((Ile-Bak $dom) -eq ($bak + 2)) "$(Ile-Bak $dom) zamiast $($bak + 2)"
+  $odc = Odcisk $dom; $bak = Ile-Bak $dom
+  $d2 = Dopasuj $dom; $w2 = Wpisz $dom
+  Sprawdz "jeden plik: drugi przebieg nic nie zmienia i o 'Co wiem' milczy" (($d2.Kod -eq 0) -and ($w2.Kod -eq 0) -and ((Odcisk $dom) -eq $odc) -and ((Ile-Bak $dom) -eq $bak) -and (($d2.Tekst + $w2.Tekst) -notmatch "zsynchronizowana|sprzeczne|nie jest ta sama")) ($d2.Tekst + " | " + $w2.Tekst)
+  # w druga strone: agent Codeksa poprawia linie - CLAUDE.md i OpenCode dostaja poprawke, stara wersja znika
+  Zapisz $pCx ((Czytaj $pCx).Replace("- Sprzedaje na Amazonie i eBayu.", "- Sprzedaje na Amazonie i eBayu (glownie DE)."))
+  $d = Dopasuj $dom
+  $cm = Czytaj $pCm; $oc = Czytaj $pOc; $cx = Czytaj $pCx
+  Sprawdz "w druga strone: poprawka z Codeksa w CLAUDE.md i OpenCode, starej wersji nie ma" (($d.Kod -eq 0) -and ($d.Tekst -match "zmiany z ~/\.codex/AGENTS\.md") -and $cm.Contains("(glownie DE).") -and -not $cm.Contains("eBayu.`r`n") -and ((Linie-Sekcji $oc) -ceq (Linie-Sekcji $cx)) -and ((Linie-Sekcji $cm) -ceq (Linie-Sekcji $cx))) $d.Tekst
+
+  # ------------------------------------------------------------ synchronizacja: dopisy w kilku plikach
+  # Trzy CLI dopisuja rozne linie: CLAUDE.md w "O firmie", Codex i OpenCode w tym samym miejscu "Biezace".
+  # Wszystkie wchodza do kazdego pliku, kazda raz i w swojej podsekcji.
+  $fCm = "- Dopis A w CLAUDE.md do firmy."; $fCx = "- [2026-10-06] Dopis B w Codeksie."; $fOc = "- [2026-10-06] Dopis C w OpenCode."
+  Zapisz $pCm ((Czytaj $pCm).Replace("- Dopis w CLAUDE.md.", "- Dopis w CLAUDE.md.`r`n$fCm"))
+  Zapisz $pCx ((Czytaj $pCx).Replace("- [2026-10-05] Fakt biezacy z CLAUDE.md, poprawiony.", "- [2026-10-05] Fakt biezacy z CLAUDE.md, poprawiony.`r`n$fCx"))
+  Zapisz $pOc ((Czytaj $pOc).Replace("- [2026-10-05] Fakt biezacy z CLAUDE.md, poprawiony.", "- [2026-10-05] Fakt biezacy z CLAUDE.md, poprawiony.`r`n$fOc"))
+  $d = Dopasuj $dom
+  $cm = Czytaj $pCm; $cx = Czytaj $pCx; $oc = Czytaj $pOc
+  Sprawdz "dopisy: straznik kod 0, zmiany z trzech plikow" (($d.Kod -eq 0) -and ($d.Tekst -match "zmiany z ~/\.claude/CLAUDE\.md, ~/\.codex/AGENTS\.md, ~/\.config/opencode/AGENTS\.md")) $d.Tekst
+  Sprawdz "dopisy: wszystkie trzy pliki z ta sama sekcja" (((Linie-Sekcji $cx) -ceq (Linie-Sekcji $cm)) -and ((Linie-Sekcji $oc) -ceq (Linie-Sekcji $cm))) $cm
+  Sprawdz "dopisy: kazdy dopis dokladnie raz" (((Ile $cm $fCm) -eq 1) -and ((Ile $cm $fCx) -eq 1) -and ((Ile $cm $fOc) -eq 1)) $cm
+  $iF = $cm.IndexOf("### O firmie"); $iB = $cm.IndexOf($BIEZACE); $iD = $cm.IndexOf("### Dane referencyjne")
+  Sprawdz "dopisy: kazdy w swojej podsekcji (A w O firmie, B i C w Biezace, B przed C)" (($cm.IndexOf($fCm) -gt $iF) -and ($cm.IndexOf($fCm) -lt $iB) -and ($cm.IndexOf($fCx) -gt $iB) -and ($cm.IndexOf($fOc) -gt $cm.IndexOf($fCx)) -and ($cm.IndexOf($fOc) -lt $iD)) $cm
+
+  # ------------------------------------------------------------ synchronizacja: ta sama linia zmieniona inaczej
+  # Konflikt: nic nie zapisane, meldunek z konkretami (pliki, obie wersje, jak rozstrzygnac) - RAZ, nie przy
+  # kazdym przebiegu; wpisz-zasady (przebieg reczny) mowi zawsze; zmiana stanu plikow - meldunek znowu raz.
+  $linia = "- Marka testowa, zapachy z numerami."
+  Zapisz $pCm ((Czytaj $pCm).Replace($linia, "- Marka testowa AROMA, zapachy z numerami."))
+  Zapisz $pCx ((Czytaj $pCx).Replace($linia, "- Marka testowa NATURO, zapachy z numerami."))
+  $odc = Odcisk $dom; $bak = Ile-Bak $dom
+  $d = Dopasuj $dom
+  Sprawdz "konflikt: straznik kod 0, meldunek z plikami, obiema wersjami i rozstrzygnieciem" (($d.Kod -eq 0) -and ($d.Tekst -match "UWAGA - sekcja 'Co wiem' - sprzeczne zmiany") -and ($d.Tekst -match "~/\.claude/CLAUDE\.md -> '- Marka testowa AROMA") -and ($d.Tekst -match "~/\.codex/AGENTS\.md -> '- Marka testowa NATURO") -and ($d.Tekst -match "linia '- Marka testowa, zapachy") -and ($d.Tekst -match "-WzorCoWiem")) $d.Tekst
+  Sprawdz "konflikt: nic nie zapisane (pliki co do bajtu, bez kopii)" (((Odcisk $dom) -eq $odc) -and ((Ile-Bak $dom) -eq $bak))
+  $d2 = Dopasuj $dom
+  Sprawdz "konflikt: drugi przebieg straznika milczy (meldunek raz)" (($d2.Kod -eq 0) -and ($d2.Tekst -notmatch "sprzeczne") -and ((Odcisk $dom) -eq $odc)) $d2.Tekst
+  $w = Wpisz $dom
+  Sprawdz "konflikt: wpisz-zasady (przebieg reczny) mowi zawsze - UWAGA, kod 0, nic nie zapisane" (($w.Kod -eq 0) -and ($w.Tekst -match "UWAGA\s+sekcja 'Co wiem' - sprzeczne") -and ((Odcisk $dom) -eq $odc)) $w.Tekst
+  $d3 = Dopasuj $dom
+  Sprawdz "konflikt: po wpisz-zasady straznik dalej milczy" ($d3.Tekst -notmatch "sprzeczne") $d3.Tekst
+  $fOc2 = "- [2026-10-06] Dopis w OpenCode w trakcie konfliktu."
+  Zapisz $pOc ((Czytaj $pOc).Replace($fOc, "$fOc`r`n$fOc2"))
+  $d4 = Dopasuj $dom; $d5 = Dopasuj $dom
+  Sprawdz "konflikt: pliki sie zmienily - meldunek znowu, ale tylko raz" (($d4.Tekst -match "sprzeczne") -and ($d5.Tekst -notmatch "sprzeczne")) ($d4.Tekst + " | " + $d5.Tekst)
+  # rozstrzygniecie: czlowiek poprawia linie w Codeksie tak jak w CLAUDE.md - reszta wyrownuje sie sama
+  Zapisz $pCx ((Czytaj $pCx).Replace("NATURO", "AROMA"))
+  $d = Dopasuj $dom
+  $cm = Czytaj $pCm; $cx = Czytaj $pCx; $oc = Czytaj $pOc
+  Sprawdz "konflikt rozstrzygniety: zsynchronizowane, AROMA wszedzie, dopis z OpenCode wszedzie" (($d.Kod -eq 0) -and ($d.Tekst -match "zsynchronizowana") -and ((Linie-Sekcji $cx) -ceq (Linie-Sekcji $cm)) -and ((Linie-Sekcji $oc) -ceq (Linie-Sekcji $cm)) -and $oc.Contains("testowa AROMA") -and -not $cm.Contains("NATURO") -and $cm.Contains($fOc2)) ($d.Tekst + " | " + $cm)
+  # rozstrzygniecie wzorem: znow sprzeczne, wpisz-zasady -WzorCoWiem codex - sekcja Codeksa wszedzie
+  Zapisz $pCx ((Czytaj $pCx).Replace("testowa AROMA", "testowa NATURO"))
+  Zapisz $pCm ((Czytaj $pCm).Replace("testowa AROMA", "testowa ZAPACH"))
+  $w = Wpisz $dom @("-WzorCoWiem", "codex")
+  $cm = Czytaj $pCm; $cx = Czytaj $pCx; $oc = Czytaj $pOc
+  Sprawdz "wzor: wpisz-zasady -WzorCoWiem codex - kod 0, sekcja Codeksa w CLAUDE.md i OpenCode" (($w.Kod -eq 0) -and ($w.Tekst -match "wedlug wzoru") -and ((Linie-Sekcji $cm) -ceq (Linie-Sekcji $cx)) -and ((Linie-Sekcji $oc) -ceq (Linie-Sekcji $cx)) -and $cm.Contains("testowa NATURO") -and -not $cm.Contains("ZAPACH")) $w.Tekst
+  $d = Dopasuj $dom
+  Sprawdz "wzor: potem straznik milczy o 'Co wiem'" (($d.Kod -eq 0) -and ($d.Tekst -notmatch "sprzeczne|zsynchronizowana")) $d.Tekst
+  $w = Wpisz $dom @("-WzorCoWiem", "nieznane")
+  Sprawdz "wzor: nieznane narzedzie - kod 1" ($w.Kod -eq 1) $w.Tekst
+
+  # ------------------------------------------------------------ synchronizacja: pierwsza, bez stanu
+  # Bez zapisanego stanu nie wiadomo, czy linii brakuje, bo ja skasowano, czy bo jej nie dopisano - wiec
+  # tylko dopisujemy: linia tylko w Codeksie trafia do CLAUDE.md, a linia, ktorej w Codeksie brak, wraca.
+  $dom = Nowy-Dom "sync-pierwsza" @("claude", "codex")
   $pCx = Join-Path $dom ".codex\AGENTS.md"; $pCm = Join-Path $dom ".claude\CLAUDE.md"
   Zapisz $pCm ("# Ustalenia globalne`r`n`r`n" + $wiedzaCm)
-  [void](Zainstaluj "rozjazd - przygotowanie" $dom)
-  Sprawdz "rozjazd: przygotowanie - Codex zalozony z ta sama wiedza" ((Linie-Sekcji (Czytaj $pCx)) -ceq (Linie-Sekcji (Czytaj $pCm)))
-  Zapisz $pCm ((Czytaj $pCm).Replace("- Marka testowa, zapachy z numerami.", "- Marka testowa, zapachy z numerami.`r`n- Reczny dopis tylko w CLAUDE.md."))
-  Zapisz $pCx ((Czytaj $pCx).Replace("- [2026-10-05] Fakt biezacy z CLAUDE.md.", "- [2026-10-05] Fakt biezacy z CLAUDE.md.`r`n- [2026-10-06] Wpis tylko w Codeksie."))
-  $odc = Odcisk $dom; $bak = Ile-Bak $dom
-  $w = Wpisz $dom; $d = Dopasuj $dom
-  Sprawdz "rozjazd: wpisz-zasady i straznik kod 0, oba pliki co do bajtu (nic nadpisane ani scalone)" (($w.Kod -eq 0) -and ($d.Kod -eq 0) -and ((Odcisk $dom) -eq $odc) -and ((Ile-Bak $dom) -eq $bak)) ($w.Tekst + " | " + $d.Tekst)
-  Sprawdz "rozjazd: wpisz-zasady melduje (UWAGA) - czego brakuje i czego nie ma w drugim pliku" (($w.Tekst -match "UWAGA\s+sekcja 'Co wiem' nie jest ta sama") -and ($w.Tekst -match "brakuje 1 linii") -and ($w.Tekst -match "jest 1 linii, ktorych w ~/.codex/AGENTS.md nie ma") -and ($w.Tekst -match "Reczny dopis")) $w.Tekst
-  Sprawdz "rozjazd: straznik melduje przy starcie okna" ($d.Tekst -match "MegaRuchacz: sekcja 'Co wiem' nie jest ta sama") $d.Tekst
+  [void](Zainstaluj "pierwsza synchronizacja - przygotowanie" $dom)
+  $pStan = Join-Path $dom ".claude\mr\co-wiem-sync.json"
+  Sprawdz "pierwsza: przygotowanie - stan synchronizacji zapisany" (Test-Path -LiteralPath $pStan)
+  Remove-Item -LiteralPath $pStan
+  Zapisz $pCx ((Czytaj $pCx).Replace("- Marka testowa, zapachy z numerami.`r`n", "").Replace("- [2026-10-05] Fakt biezacy z CLAUDE.md.", "- [2026-10-05] Fakt biezacy z CLAUDE.md.`r`n- [2026-10-06] Tylko w Codeksie."))
+  $d = Dopasuj $dom
+  $cm = Czytaj $pCm; $cx = Czytaj $pCx
+  Sprawdz "pierwsza: kod 0, 'pierwsza synchronizacja - same dopisy'" (($d.Kod -eq 0) -and ($d.Tekst -match "pierwsza synchronizacja sekcji 'Co wiem' - same dopisy")) $d.Tekst
+  Sprawdz "pierwsza: oba pliki maja obie linie (nic nie skasowane), sekcje rowne" ($cm.Contains("Tylko w Codeksie") -and $cm.Contains("- Marka testowa,") -and $cx.Contains("- Marka testowa,") -and ((Linie-Sekcji $cx) -ceq (Linie-Sekcji $cm))) ($cm + " | " + $cx)
+  # stan nieczytelny - jak pierwsza synchronizacja (same dopisy), z uwaga, bez wywrotki
+  Zapisz $pStan "{ to nie jest json"
+  Zapisz $pCx ((Czytaj $pCx).Replace("- [2026-10-06] Tylko w Codeksie.", "- [2026-10-06] Tylko w Codeksie.`r`n- [2026-10-06] Po zepsutym stanie."))
+  $w = Wpisz $dom
+  Sprawdz "stan nieczytelny: wpisz-zasady kod 0, uwaga o stanie, dopis przeniesiony" (($w.Kod -eq 0) -and ($w.Tekst -match "UWAGA\s+Co wiem - stan synchronizacji") -and (Czytaj $pCm).Contains("Po zepsutym stanie.")) $w.Tekst
+
+  # ------------------------------------------------------------ proba negatywna: synchronizacja ponad sufit Codeksa
+  # AGENTS.md Codeksa z wlasna trescia uzytkownika tuz pod 32 KiB, a CLAUDE.md dostaje duzy dopis: Codeksowi
+  # NIE zapisujemy (odmowa w PIERWSZEJ linii, przy kazdym przebiegu), OpenCode i tak dostaje swoje. Zalegly
+  # Codex nie kasuje niczego, czego nie dostal, a jego wlasny dopis idzie do pozostalych.
+  $dom = Nowy-Dom "sync-sufit" @("claude", "codex", "opencode")
+  $pCx = Join-Path $dom ".codex\AGENTS.md"; $pCm = Join-Path $dom ".claude\CLAUDE.md"; $pOc = Join-Path $dom ".config\opencode\AGENTS.md"
+  Zapisz $pCm ("# Ustalenia globalne`r`n`r`n" + $wiedzaCm)
+  [void](Zainstaluj "sufit synchronizacji - przygotowanie" $dom)
+  $cx = Czytaj $pCx
+  $ileLinii = [int][Math]::Floor((32768 - 1200 - $Utf8.GetByteCount($cx)) / 57)
+  $wyp = (1..$ileLinii | ForEach-Object { "- linia uzytkownika Codeksa do wypelnienia, numer {0:D5}`r`n" -f $_ }) -join ""
+  Zapisz $pCx ("# Moje zasady Codeksa`r`n`r`n" + $wyp + "`r`n" + $cx)
+  $d = Dopasuj $dom
+  $ileB = (Get-Item $pCx).Length
+  Sprawdz "sufit synchronizacji: przygotowanie - Codex ponizej 32 KiB, ponad 31 KiB, straznik kod 0" (($ileB -lt 32768) -and ($ileB -gt 31000) -and ($d.Kod -eq 0)) "$ileB B | $($d.Tekst)"
+  $duzo = (1..30 | ForEach-Object { "- [2026-10-06] Duzy dopis numer {0:D3} do sekcji, ktory nie zmiesci sie w pliku Codeksa." -f $_ }) -join "`r`n"
+  Zapisz $pCm ((Czytaj $pCm).Replace("- [2026-10-05] Fakt biezacy z CLAUDE.md.", "- [2026-10-05] Fakt biezacy z CLAUDE.md.`r`n$duzo"))
+  $przedCx = Skrot $pCx; $bak = Ile-Bak $dom
+  $d = Dopasuj $dom
+  Sprawdz "sufit synchronizacji: straznik kod 1, odmowa w PIERWSZEJ linii (Codex, 'Co wiem', limit)" (($d.Kod -eq 1) -and ((Pierwsza $d.Tekst) -match "^MegaRuchacz: UWAGA - ODMOWA ZAPISU \(Codex\): synchronizacja sekcji 'Co wiem'.*32768 B - NIE zapisalem")) $d.Tekst
+  Sprawdz "sufit synchronizacji: Codex co do bajtu, ponizej 32 KiB" (((Skrot $pCx) -eq $przedCx) -and ((Get-Item $pCx).Length -le 32768))
+  Sprawdz "sufit synchronizacji: OpenCode i tak zsynchronizowany (jedna kopia .bak - tylko jego)" (((Linie-Sekcji (Czytaj $pOc)) -ceq (Linie-Sekcji (Czytaj $pCm))) -and ((Ile-Bak $dom) -eq ($bak + 1))) "$(Ile-Bak $dom) kopii"
+  $d2 = Dopasuj $dom
+  Sprawdz "sufit synchronizacji: drugi przebieg - odmowa znowu w PIERWSZEJ linii (sufit krzyczy)" (($d2.Kod -eq 1) -and ((Pierwsza $d2.Tekst) -match "^MegaRuchacz: UWAGA - ODMOWA ZAPISU \(Codex\)")) $d2.Tekst
+  Sprawdz "sufit synchronizacji: zalegly Codex nie skasowal duzego dopisu z CLAUDE.md" (Czytaj $pCm).Contains("numer 030")
+  $fZal = "- Dopis z Codeksa przy zaleglej sekcji."
+  Zapisz $pCx ((Czytaj $pCx).Replace("- Marka testowa, zapachy z numerami.", "- Marka testowa, zapachy z numerami.`r`n$fZal"))
+  $d3 = Dopasuj $dom
+  $cm = Czytaj $pCm; $oc = Czytaj $pOc
+  Sprawdz "sufit synchronizacji: dopis zaleglego Codeksa w CLAUDE.md i OpenCode, duzy dopis zostaje" ($cm.Contains($fZal) -and $oc.Contains($fZal) -and $cm.Contains("numer 030") -and $oc.Contains("numer 030") -and ((Ile $cm $fZal) -eq 1)) $d3.Tekst
+  Zapisz $pCm ((Czytaj $pCm).Replace("`r`n$duzo", ""))
+  $d4 = Dopasuj $dom
+  $cm = Czytaj $pCm; $cx = Czytaj $pCx; $oc = Czytaj $pOc
+  Sprawdz "sufit synchronizacji: po skroceniu CLAUDE.md kod 0, trzy pliki rowne, Codex ponizej 32 KiB" (($d4.Kod -eq 0) -and ((Linie-Sekcji $cx) -ceq (Linie-Sekcji $cm)) -and ((Linie-Sekcji $oc) -ceq (Linie-Sekcji $cm)) -and $cx.Contains($fZal) -and -not $cm.Contains("Duzy dopis") -and ((Get-Item $pCx).Length -le 32768)) $d4.Tekst
 
   # ------------------------------------------------------------ Pliki-Pamieci (zapis-trwaly.ps1) z listy narzedzi
   # Kopie dzienne i alarm o zerach biora pliki z Pliki-Pamieci. Wolajacy bez listy (kopie-dzienne) - lista

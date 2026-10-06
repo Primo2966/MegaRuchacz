@@ -12,8 +12,10 @@
 # Przy wlaczonym module wiedza kazdy plik dostaje tez pusty szkielet sekcji "## Co wiem", jesli
 # jej nie ma (cykl wiedzy pisze fakty do kazdego pliku z ta sekcja); istniejacej nie ruszamy.
 # Sekcja pusta (same naglowki - zakladana teraz albo zastana) dostaje tresc "Co wiem" z najbogatszego
-# pliku z listy (kierownik-cele.ps1 Zrodlo-Co-Wiem) - wiedza ma byc ta sama w kazdym CLI. Sekcji
-# z wpisami nie nadpisujemy; rozne sekcje w roznych plikach = UWAGA na koncu, bez scalania.
+# pliku z listy (kierownik-cele.ps1 Zrodlo-Co-Wiem) - wiedza ma byc ta sama w kazdym CLI. Sekcje
+# z wpisami wyrownuje synchronizacja (kierownik-cele.ps1 Synchronizuj-Co-Wiem) - przed planem, wiec
+# zasiew bierze juz wyrownana tresc: zmiany jednego pliku ida do pozostalych, rozne dopisy w kilku
+# plikach sa laczone, ta sama linia zmieniona inaczej = UWAGA z konkretami i nic nie zapisane.
 # Plik, ktorego narzedzie jeszcze nie ma, zaczyna sie od Tekst-Startowy: OpenCode - od tresci
 # CLAUDE.md, ktory czytal dotad zamiast wlasnego; stara kopia dla opencode traci linie naglowka.
 # Plik, ktory po zapisie przekroczylby limit narzedzia (Codex: 32 KiB), NIE jest zapisywany -
@@ -28,6 +30,10 @@
 #     -Blok lore,wiedza       tylko te bloki (wpisz albo odswiez); pozostale zostaja, jakie sa
 #     -Usun                   wycina bloki razem ze znacznikami (z -Blok - tylko te)
 #     -Proba                  wypisuje, co by zrobil, ale nic nie zapisuje
+#     -WzorCoWiem <id>        sekcja "Co wiem" narzedzia <id> (claude, codex, opencode) idzie do
+#                             plikow wszystkich obecnych narzedzi bez laczenia - rozstrzygniecie
+#                             sprzecznych zmian albo wyrownanie od czysta
+#     -BezSynchronizacji      wewnetrzne: bez synchronizacji "Co wiem" (straznik zrobil ja przed wywolaniem)
 #     -Zrodlo <katalog>       katalog glowny repo (domyslnie katalog nad narzedzia\)
 #     -KatalogDomowy <kat>    wewnetrzne: podmiana bazy sciezek docelowych (testy)
 #
@@ -38,7 +44,9 @@ param(
   [string]$KatalogDomowy = $HOME,
   [string[]]$Blok = @(),
   [switch]$Usun,
-  [switch]$Proba
+  [switch]$Proba,
+  [string]$WzorCoWiem = "",
+  [switch]$BezSynchronizacji
 )
 
 $Stempel = Get-Date -Format "yyyyMMdd-HHmmss"
@@ -285,6 +293,18 @@ if (($Blok.Count -eq 0) -and -not $Usun) {
 }
 # Szkielet "Co wiem" idzie tylko w przebiegu wedlug rejestru, przy wlaczonym module wiedza.
 $script:Szkielet = ($Blok.Count -eq 0) -and (-not $Usun) -and ($script:Chciane.Nazwy -contains "wiedza")
+# Synchronizacja "Co wiem" miedzy plikami narzedzi - przed planem (zasiew i plan biora wyrownana tresc).
+# Wynik wypisujemy z reszta: odmowy w pierwszych liniach, opis i konflikt pod naglowkiem.
+$script:Sync = $null
+$script:SyncBlad = $null
+if ($WzorCoWiem) {
+  $WzorCoWiem = $WzorCoWiem.Trim().ToLowerInvariant()
+  if (-not (Narzedzie-AI $WzorCoWiem)) { Write-Error "Nie znam narzedzia '$WzorCoWiem' - sa: $((Narzedzia-AI | ForEach-Object { $_.Id }) -join ', ')."; exit 1 }
+}
+if (($script:Szkielet -or $WzorCoWiem) -and -not $BezSynchronizacji -and -not $Usun) {
+  try { $script:Sync = Synchronizuj-Co-Wiem $KatalogDomowy $WzorCoWiem ([bool]$Proba) }
+  catch { $script:SyncBlad = $_.Exception.Message }
+}
 # Skad tresc dla pustych sekcji "Co wiem": najbogatsza sekcja z plikow narzedzi, przed zapisem.
 $script:ZrodloCoWiem = $null
 if ($script:Szkielet) { $script:ZrodloCoWiem = Zrodlo-Co-Wiem $KatalogDomowy }
@@ -324,7 +344,29 @@ foreach ($p in @($Plany | Where-Object { $_.OdmowaZasiewu -and -not $_.Blad -and
   Write-Host "BLAD  ODMOWA ZAPISU ($($p.Nazwa)): $($p.OdmowaZasiewu)" -ForegroundColor Red
   $script:Bledy++
 }
+if ($script:Sync) {
+  foreach ($o in $script:Sync.Odmowy) { Write-Host "BLAD  $o" -ForegroundColor Red; $script:Bledy++ }
+}
 foreach ($l in $script:Naglowek) { if ($l.K) { Write-Host $l.T -ForegroundColor $l.K } else { Write-Host $l.T } }
+if ($script:SyncBlad) {
+  Write-Host "BLAD  Co wiem - synchronizacja miedzy narzedziami nie wyszla: $($script:SyncBlad)" -ForegroundColor Red
+  $script:Bledy++
+  $script:Raport += "Co wiem : synchronizacja NIE wyszla - BLAD wyzej"
+}
+if ($script:Sync) {
+  if ($script:Sync.Opis) {
+    $tag = if ($Proba) { "PROBA" } else { "OK" }
+    Write-Host "$tag  Co wiem - $($script:Sync.Opis)"
+    $script:Raport += "Co wiem : $($script:Sync.Opis)"
+  }
+  foreach ($u in $script:Sync.Uwagi) { Write-Host "UWAGA  Co wiem - $u" -ForegroundColor Yellow }
+  if ($script:Sync.Konflikt) {
+    # Przebieg reczny ma widownie - konflikt mowimy zawsze (straznik przy starcie okna - raz).
+    Write-Host "UWAGA  $($script:Sync.Konflikt)" -ForegroundColor Yellow
+    $script:Raport += "Co wiem : sprzeczne zmiany miedzy narzedziami - UWAGA wyzej"
+  }
+  if ($script:Sync.Odmowy.Count -gt 0) { $script:Raport += "Co wiem : ODMOWA ZAPISU synchronizacji - ponad limit" }
+}
 
 if ($Cele.Count -eq 0) {
   Write-Host ("UWAGA  nie widze tu zadnego narzedzia AI (" + (($Wszystkie | ForEach-Object { $_.Nazwa }) -join ", ") +
@@ -340,16 +382,6 @@ foreach ($p in $Plany) {
   catch {
     Write-Host "BLAD  $($p.Nazwa) - $($_.Exception.Message)" -ForegroundColor Red
     $script:Bledy++
-  }
-}
-
-# Po zapisie: czy "Co wiem" jest wszedzie ta sama. Roznica to meldunek, nie blad - scala czlowiek.
-if ($script:Szkielet) {
-  $rozjazd = $null
-  try { $rozjazd = Rozjazd-Co-Wiem $KatalogDomowy } catch { $rozjazd = "nie umiem porownac sekcji 'Co wiem' ($($_.Exception.Message))" }
-  if ($rozjazd) {
-    Write-Host "UWAGA  $rozjazd" -ForegroundColor Yellow
-    $script:Raport += "Co wiem : rozni sie miedzy narzedziami - UWAGA wyzej"
   }
 }
 

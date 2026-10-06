@@ -155,13 +155,29 @@ function Zbierz-Alarmy($cykl, $rachunek, $inst = $null) {
 # zostawił CLAUDE.md i jedenaście plików wiedzy z pełną długością i samymi zerami - i nic
 # tego nie zgłosiło. Żaden nasz plik tekstowy nie ma prawa mieć zera, więc próg to jedno
 # zero (fałszywego alarmu z tego nie będzie). Lista plików ta sama, co w
-# narzedzia\zapis-trwaly.ps1 (Pliki-Pamieci) - tu przepisana, bo moduły nadzorcy nie
-# wczytują narzędzi. Cykl i strażnik i tak nic na takich plikach nie robią; to jest
-# głos do człowieka, który musi je przywrócić.
+# narzedzia\zapis-trwaly.ps1 (Pliki-Pamieci): pliki instrukcji z JEDNEJ listy narzędzi AI
+# (narzedzia\kierownik-cele.ps1 Narzedzia-AI - czwarte CLI dopisane tam trafia tu samo),
+# plus wiedza\. Moduły nadzorcy nie wczytują narzędzi, więc listę dołączamy tu, w zasięgu
+# funkcji; bez niej (starsza kopia, wywrotka) - trzy pliki jak dotąd, a wywrotka idzie do
+# stanu. Cykl i strażnik i tak nic na takich plikach nie robią; to jest głos do człowieka,
+# który musi je przywrócić.
+function Pliki-Instrukcji-Z-Listy {
+  $lista = $null
+  try {
+    if (-not (Get-Command Narzedzia-AI -ErrorAction SilentlyContinue)) {
+      $plikListy = Join-Path $script:NadzZrodlo "narzedzia\kierownik-cele.ps1"
+      if (Test-Path -LiteralPath $plikListy) { . $plikListy }
+    }
+    if (Get-Command Narzedzia-AI -ErrorAction SilentlyContinue) { $lista = @(Narzedzia-AI | ForEach-Object { $_.Plik }) }
+  } catch { Zanotuj-Wywrotke "lista narzedzi AI do alarmu o zerach" $_ }
+  if (-not $lista) { $lista = @(".claude\CLAUDE.md", ".codex\AGENTS.md", ".config\opencode\AGENTS.md") }
+  return ,$lista
+}
+
 function Alarm-Wyzerowanej-Pamieci {
   $dom = $script:NadzDom
   $pliki = @()
-  foreach ($w in @(".claude\CLAUDE.md", ".codex\AGENTS.md", ".config\opencode\AGENTS.md")) {
+  foreach ($w in (Pliki-Instrukcji-Z-Listy)) {
     $p = Join-Path $dom $w
     if (Test-Path -LiteralPath $p -PathType Leaf) { $pliki += $p }
   }

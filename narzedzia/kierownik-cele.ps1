@@ -8,7 +8,8 @@
 #
 # Kazdy plik jest SAMODZIELNY: bloki zasad (lore, wiedza, kierownik) i wlasna sekcja "## Co wiem",
 # do ktorej cykl wiedzy (lore\lore\verify.py INSTRUCTION_PATHS) dopisuje fakty - ta sama wiedza
-# w kazdym pliku (pusta sekcja zasiewana z najbogatszej, rozjazd meldowany: Zrodlo-Co-Wiem). Do 0.27 plik
+# w kazdym pliku (pusta sekcja zasiewana z najbogatszej: Zrodlo-Co-Wiem; zmiany jednego pliku ida do
+# pozostalych: Synchronizuj-Co-Wiem). Do 0.27 plik
 # opencode byl kopia CLAUDE.md odswiezana przez straznika (pierwsza linia
 # <!-- MegaRuchacz:kopia-dla-opencode ...); taka kopie zamieniamy na samodzielny plik, zdejmujac
 # sama linie naglowka - tresc (z "Co wiem") zostaje (Tekst-Startowy).
@@ -179,8 +180,9 @@ function Z-Szkieletem-Co-Wiem([string]$stary) {
 #   - sekcja pusta (same naglowki, zero wpisow) - zasiewamy ja trescia sekcji z NAJBOGATSZEGO pliku
 #     z listy (Zrodlo-Co-Wiem, Zasiej-Co-Wiem); zasiew ponad limit narzedzia - odmowa (sam zasiew,
 #     reszta pliku idzie), powod w pierwszej linii;
-#   - sekcji z wpisami nie nadpisujemy nigdy. Rozne sekcje w roznych plikach (np. reczny dopis tylko
-#     do CLAUDE.md) - meldunek (Rozjazd-Co-Wiem), bez scalania: co jest czyje, rozstrzyga czlowiek.
+#   - sekcji z wpisami zasiew nie nadpisuje nigdy. Rozne sekcje w roznych plikach (np. reczny dopis tylko
+#     do CLAUDE.md) wyrownuje synchronizacja (Synchronizuj-Co-Wiem, nizej); Rozjazd-Co-Wiem zostaje
+#     jako jednorazowy opis roznic przy instalacji modulu wiedza.
 # Granice sekcji jak lore\lore\verify.py section_bounds: od "## Co wiem" do nastepnego "## " albo
 # znacznika MegaRuchacza.
 
@@ -261,15 +263,22 @@ function Zrodlo-Co-Wiem([string]$dom) {
 # zostaja co do bajtu; konce linii jak w pliku docelowym.
 function Z-Zasiewem-Co-Wiem([string]$stary, $zrodlo) {
   if (($null -eq $zrodlo) -or ($null -eq $zrodlo.Cialo) -or -not (Pusta-Co-Wiem $stary)) { return $null }
-  $nl = if ($stary.Contains("`r`n")) { "`r`n" } elseif ($stary.Contains("`n")) { "`n" } else { "`r`n" }
-  $linie = @($stary -split "`r?`n")
-  $g = Granice-Co-Wiem $linie
   $cialo = @($zrodlo.Cialo)
   $a = 0; $b = $cialo.Count - 1
   while (($a -le $b) -and -not $cialo[$a].Trim()) { $a++ }
   while (($b -ge $a) -and -not $cialo[$b].Trim()) { $b-- }
   if ($a -gt $b) { return $null }
-  $nowe = @($linie | Select-Object -First ($g[0] + 1)) + @("") + @($cialo[$a..$b]) + @("")
+  return (Z-Cialem-Co-Wiem $stary @($cialo[$a..$b]))
+}
+
+# Tekst z cialem sekcji "Co wiem" zastapionym liniami $cialo (bez pustych linii na brzegach); $null, gdy
+# sekcji nie ma. Linia "## Co wiem" i reszta pliku zostaja co do bajtu; konce linii jak w pliku.
+function Z-Cialem-Co-Wiem([string]$stary, [string[]]$cialo) {
+  $nl = if ($stary.Contains("`r`n")) { "`r`n" } elseif ($stary.Contains("`n")) { "`n" } else { "`r`n" }
+  $linie = @($stary -split "`r?`n")
+  $g = Granice-Co-Wiem $linie
+  if ($null -eq $g) { return $null }
+  $nowe = @($linie | Select-Object -First ($g[0] + 1)) + @("") + @($cialo) + @("")
   $po = @($linie | Select-Object -Skip $g[1])
   # sekcja na koncu pliku konczy go jednym koncem linii; inaczej pusta linia przed tym, co za nia
   if ($po.Count -gt 0) { $nowe += $po }
@@ -325,12 +334,372 @@ function Rozjazd-Co-Wiem([string]$dom) {
   }
   if ($czesci.Count -eq 0) { return $null }
   return ("sekcja 'Co wiem' nie jest ta sama we wszystkich narzedziach AI: " + ($czesci -join "; ") +
-          ". Nie scalam sam - przenies brakujace wpisy recznie, tak zeby kazde CLI wiedzialo to samo.")
+          ". Wyrowna ja synchronizacja przy najblizszym starcie okna (straznik zasad) - sprzeczne zmiany " +
+          "tej samej linii zamelduje osobno.")
 }
 
 function Skrot-Linii([string]$l) {
   if ($l.Length -le 60) { return $l }
   return $l.Substring(0, 57) + "..."
+}
+
+# ------------------------------------------------------------ synchronizacja "Co wiem"
+# Kazde CLI edytuje "Co wiem" we WLASNYM pliku (agent w rozmowie: poprawka, zapis na prosbe
+# uzytkownika), a cykl wiedzy pisze do wszystkich naraz - roznica miedzy plikami jest wiec
+# codziennoscia, nie awaria. Meldowanie jej przy kazdym starcie okna bylo falszywym alarmem, ktory
+# uczy ignorowac ostrzezenia - zamiast tego synchronizujemy (Synchronizuj-Co-Wiem; wola ja straznik
+# w Pilnuj-Zasad przy kazdym starcie okna kazdego CLI i wpisz-zasady.ps1):
+#   - stan po ostatniej synchronizacji: ~\.claude\mr\co-wiem-sync.json - tresc sekcji (baza) i skrot
+#     sekcji kazdego pliku; plik, ktorego sekcja zostala inna niz baza (zapis odmowiony), ma tam
+#     tez wlasna tresc - jego zmiany liczymy wzgledem niej, a nie bazy;
+#   - zmienil sie jeden plik (albo kilka tak samo - cykl wiedzy) - jego sekcja idzie do pozostalych;
+#   - kilka roznie - zmiany laczymy linia po linii wzgledem bazy: rozne dopisane linie wchodza
+#     wszystkie, kazda na swoim miejscu (w swojej podsekcji). Ta sama linia zmieniona inaczej =
+#     KONFLIKT: nic nie zapisujemy, meldunek z konkretami (pliki, linie), a w stanie odcisk plikow -
+#     wolajacy melduje RAZ, nastepny raz dopiero, gdy pliki sie zmienia;
+#   - plik bez wpisu w stanie (pierwsza synchronizacja, nowe CLI) wnosi tylko DOPISANE linie: bez
+#     bazy nie da sie odroznic linii skasowanej od niedopisanej, a kasowac wiedzy na zgadywanie nie
+#     wolno. Baza pierwszej synchronizacji = najbogatsza sekcja (jak przy zasiewie);
+#   - zapis ponad limit narzedzia (Codex 32 KiB) - odmowa z powodem, pozostale pliki i tak dostaja
+#     swoje; przed kazdym zapisem kopia .bak-<stempel>, a tuz przed nim plik czytamy jeszcze raz -
+#     zmieniony w miedzyczasie (cykl wiedzy) zostaje do nastepnego przebiegu.
+# Puste sekcje i pliki bez sekcji nie biora udzialu - te zaklada i zasiewa Plan-Pliku-Narzedzia.
+$PLIK_SYNC_CO_WIEM = ".claude\mr\co-wiem-sync.json"
+
+# Sekcja jako linie do porownan i zapisu: bez koncowych spacji, bez pustych linii na brzegach.
+# Jedna tablica (przecinek) - bierz przypisaniem.
+function Linie-Co-Wiem($cialo) {
+  $l = @(@($cialo) | ForEach-Object { "$_".TrimEnd() })
+  $a = 0; $b = $l.Count - 1
+  while (($a -le $b) -and -not $l[$a]) { $a++ }
+  while (($b -ge $a) -and -not $l[$b]) { $b-- }
+  if ($a -gt $b) { return ,([string[]]@()) }
+  return ,([string[]]@($l[$a..$b]))
+}
+
+function Odcisk-Co-Wiem([string[]]$linie) {
+  $sha = [System.Security.Cryptography.SHA256]::Create()
+  try { $h = $sha.ComputeHash((New-Object System.Text.UTF8Encoding($false)).GetBytes((@($linie) -join "`n"))) } finally { $sha.Dispose() }
+  return [System.BitConverter]::ToString($h).Replace("-", "")
+}
+
+function Rowne-Linie([string[]]$a, [string[]]$b) { return ((@($a) -join "`n") -ceq (@($b) -join "`n")) }
+
+# Dopasowanie linii $a do $b - najdluzszy wspolny podciag (rowny poczatek i koniec zdjete z gory, bo
+# zmiana to zwykle kilka linii w srodku): tablica dlugosci $a z indeksem linii w $b albo -1.
+function Dopasowanie-Linii([string[]]$a, [string[]]$b) {
+  $n = @($a).Count; $m = @($b).Count
+  $mapa = New-Object 'int[]' $n
+  for ($i = 0; $i -lt $n; $i++) { $mapa[$i] = -1 }
+  $p = 0
+  while (($p -lt $n) -and ($p -lt $m) -and ($a[$p] -ceq $b[$p])) { $mapa[$p] = $p; $p++ }
+  $k = 0
+  while (($k -lt ($n - $p)) -and ($k -lt ($m - $p)) -and ($a[$n - 1 - $k] -ceq $b[$m - 1 - $k])) { $mapa[$n - 1 - $k] = $m - 1 - $k; $k++ }
+  $n2 = $n - $p - $k; $m2 = $m - $p - $k
+  if (($n2 -le 0) -or ($m2 -le 0)) { return ,$mapa }
+  $w = $m2 + 1
+  $L = New-Object 'int[]' (($n2 + 1) * $w)
+  for ($i = $n2 - 1; $i -ge 0; $i--) {
+    $ai = $a[$p + $i]
+    for ($j = $m2 - 1; $j -ge 0; $j--) {
+      if ($ai -ceq $b[$p + $j]) { $L[$i * $w + $j] = $L[($i + 1) * $w + $j + 1] + 1 }
+      else { $L[$i * $w + $j] = [Math]::Max($L[($i + 1) * $w + $j], $L[$i * $w + $j + 1]) }
+    }
+  }
+  $i = 0; $j = 0
+  while (($i -lt $n2) -and ($j -lt $m2)) {
+    if ($a[$p + $i] -ceq $b[$p + $j]) { $mapa[$p + $i] = $p + $j; $i++; $j++ }
+    elseif ($L[($i + 1) * $w + $j] -ge $L[$i * $w + $j + 1]) { $i++ }
+    else { $j++ }
+  }
+  return ,$mapa
+}
+
+# Zmiany $b wzgledem $a (z dopasowania $mapa): Od, Do - zakres linii $a do zastapienia (Od = Do:
+# wstawka przed linia Od), Nowe - linie z $b.
+function Zmiany-Linii([string[]]$a, [string[]]$b, $mapa) {
+  $wynik = @()
+  $n = @($a).Count
+  $pa = -1; $pb = -1
+  for ($i = 0; $i -le $n; $i++) {
+    if ($i -lt $n) { if ($mapa[$i] -lt 0) { continue }; $ca = $i; $cb = $mapa[$i] }
+    else { $ca = $n; $cb = @($b).Count }
+    if (($ca -gt $pa + 1) -or ($cb -gt $pb + 1)) {
+      $nowe = [string[]]@()
+      if ($cb -gt $pb + 1) { $nowe = [string[]]@($b[($pb + 1)..($cb - 1)]) }
+      $wynik += [pscustomobject]@{ Od = $pa + 1; Do = $ca; Nowe = $nowe }
+    }
+    $pa = $ca; $pb = $cb
+  }
+  return ,$wynik
+}
+
+# Zmiany liczone wzgledem wlasnej tresci pliku ($a - inna niz baza, gdy jego zapis byl odmowiony,
+# albo same linie pliku obecne w bazie, gdy pliku nie ma w stanie) przeniesione na baze przez
+# dopasowanie $mapa ($a -> baza). Wstawka idzie za najblizsza wczesniejsza linia, ktora w bazie jest;
+# zmiana linii, ktorych w bazie nie ma (albo nie leza obok siebie), dostaje Od = -1 - konflikt.
+function Na-Baze($zmiany, $mapa) {
+  $wynik = @()
+  foreach ($z in $zmiany) {
+    if ($z.Od -lt $z.Do) {
+      $ok = $true
+      for ($k = $z.Od; $k -lt $z.Do; $k++) {
+        if (($mapa[$k] -lt 0) -or (($k -gt $z.Od) -and ($mapa[$k] -ne $mapa[$k - 1] + 1))) { $ok = $false; break }
+      }
+      if ($ok) { $wynik += [pscustomobject]@{ Od = $mapa[$z.Od]; Do = $mapa[$z.Do - 1] + 1; Nowe = $z.Nowe } }
+      else { $wynik += [pscustomobject]@{ Od = -1; Do = -1; Nowe = $z.Nowe } }
+      continue
+    }
+    $poz = 0
+    for ($k = $z.Od - 1; $k -ge 0; $k--) { if ($mapa[$k] -ge 0) { $poz = $mapa[$k] + 1; break } }
+    $wynik += [pscustomobject]@{ Od = $poz; Do = $poz; Nowe = $z.Nowe }
+  }
+  return ,$wynik
+}
+
+function Czy-Podciag([string[]]$maly, [string[]]$duzy) {
+  $j = 0
+  foreach ($x in @($duzy)) { if (($j -lt @($maly).Count) -and ($x -ceq $maly[$j])) { $j++ } }
+  return ($j -eq @($maly).Count)
+}
+
+# Laczy zmiany kilku plikow na bazie. $zestawy - lista @{ Plik (~/...); Zmiany (Od, Do, Nowe na bazie) }.
+# Wynik: .Linie (tresc po polaczeniu) albo .Konflikty (opisy po ludzku). Te same zmiany z kilku plikow
+# licza sie raz; wstawki w tym samym miejscu wchodza wszystkie (kolejnosc listy narzedzi), linia
+# niepusta, ktora w wyniku juz jest, drugi raz nie wchodzi. Zamiana tych samych linii - jedna wersja
+# zawierajaca druga (ta sama zmiana plus dopis) wygrywa; inaczej konflikt.
+function Polacz-Zmiany-Co-Wiem([string[]]$baza, $zestawy) {
+  $baza = [string[]]@($baza)
+  $wszystkie = @()
+  $konflikty = @()
+  foreach ($zs in $zestawy) {
+    foreach ($z in $zs.Zmiany) {
+      if ($z.Od -lt 0) {
+        $co = if (@($z.Nowe).Count -gt 0) { "'$(Skrot-Linii $z.Nowe[0])'" } else { "skasowanie linii" }
+        $konflikty += "w $($zs.Plik) zmiana ($co) linii, ktorych w pozostalych plikach juz nie ma w tym miejscu"
+        continue
+      }
+      $klucz = "$($z.Od)|$($z.Do)|" + (@($z.Nowe) -join "`n")
+      $byl = @($wszystkie | Where-Object { $_.Klucz -ceq $klucz })
+      if ($byl.Count -gt 0) { $byl[0].Pliki += $zs.Plik; continue }
+      $wszystkie += [pscustomobject]@{ Od = $z.Od; Do = $z.Do; Nowe = [string[]]@($z.Nowe); Klucz = $klucz; Pliki = @($zs.Plik); Odpada = $false }
+    }
+  }
+  $zamiany = @($wszystkie | Where-Object { $_.Od -lt $_.Do })
+  $wstawki = @($wszystkie | Where-Object { $_.Od -eq $_.Do })
+  for ($x = 0; $x -lt $zamiany.Count; $x++) {
+    for ($y = $x + 1; $y -lt $zamiany.Count; $y++) {
+      $h1 = $zamiany[$x]; $h2 = $zamiany[$y]
+      if ($h1.Odpada -or $h2.Odpada) { continue }
+      if (-not (($h1.Od -lt $h2.Do) -and ($h2.Od -lt $h1.Do))) { continue }
+      if (($h1.Od -eq $h2.Od) -and ($h1.Do -eq $h2.Do)) {
+        if (Czy-Podciag $h1.Nowe $h2.Nowe) { $h1.Odpada = $true; continue }
+        if (Czy-Podciag $h2.Nowe $h1.Nowe) { $h2.Odpada = $true; continue }
+      }
+      $wersje = @($h1, $h2 | ForEach-Object {
+        $na = if (@($_.Nowe).Count -gt 0) { "'$(Skrot-Linii (@($_.Nowe) -join ' / '))'" } else { "(skasowana)" }
+        "w $(@($_.Pliki) -join ' i ') -> $na" })
+      $konflikty += "linia '$(Skrot-Linii $baza[[Math]::Max($h1.Od, $h2.Od)])': " + ($wersje -join ", ")
+    }
+  }
+  foreach ($h in $zamiany) {
+    if ($h.Odpada) { continue }
+    foreach ($s in $wstawki) {
+      if (($h.Od -lt $s.Od) -and ($s.Od -lt $h.Do)) {
+        $konflikty += ("w $(@($h.Pliki) -join ' i ') zmieniona linia '$(Skrot-Linii $baza[$h.Od])', a w $(@($s.Pliki) -join ' i ') " +
+                       "dopisane w jej srodku '$(Skrot-Linii (@($s.Nowe) -join ' / '))'")
+      }
+    }
+  }
+  if ($konflikty.Count -gt 0) { return [pscustomobject]@{ Linie = $null; Konflikty = $konflikty } }
+
+  $zamiany = @($zamiany | Where-Object { -not $_.Odpada })
+  # linie niepuste, ktore w wyniku zostana - wstawka ich nie dubluje
+  $obecne = New-Object 'System.Collections.Generic.HashSet[string]' ([System.StringComparer]::Ordinal)
+  for ($i = 0; $i -lt $baza.Count; $i++) {
+    if (@($zamiany | Where-Object { ($_.Od -le $i) -and ($i -lt $_.Do) }).Count -eq 0) { if ($baza[$i]) { [void]$obecne.Add($baza[$i]) } }
+  }
+  foreach ($h in $zamiany) { foreach ($l in $h.Nowe) { if ($l) { [void]$obecne.Add($l) } } }
+  $wynik = New-Object 'System.Collections.Generic.List[string]'
+  $i = 0
+  while ($true) {
+    foreach ($s in @($wstawki | Where-Object { $_.Od -eq $i })) {
+      $dodaj = @($s.Nowe | Where-Object { (-not $_) -or -not $obecne.Contains($_) })
+      if (@($dodaj | Where-Object { $_ }).Count -eq 0) { continue }
+      foreach ($l in $dodaj) { $wynik.Add($l); if ($l) { [void]$obecne.Add($l) } }
+    }
+    if ($i -ge $baza.Count) { break }
+    $h = @($zamiany | Where-Object { $_.Od -eq $i }) | Select-Object -First 1
+    if ($h) { foreach ($l in $h.Nowe) { $wynik.Add($l) }; $i = $h.Do; continue }
+    $wynik.Add($baza[$i]); $i++
+  }
+  return [pscustomobject]@{ Linie = (Linie-Co-Wiem $wynik.ToArray()); Konflikty = @() }
+}
+
+# Stan ostatniej synchronizacji albo $null (pierwsza). Plik nieczytelny = wyjatek (wolajacy liczy to
+# jak pierwsza synchronizacje - same dopisy, nic nie ginie - i mowi o tym).
+function Czytaj-Stan-Co-Wiem([string]$dom) {
+  $p = Join-Path $dom $PLIK_SYNC_CO_WIEM
+  if (-not (Test-Path -LiteralPath $p -PathType Leaf)) { return $null }
+  $j = (Czytaj-Utf8 $p) | ConvertFrom-Json
+  if ((-not $j) -or ($null -eq $j.baza) -or ($null -eq $j.pliki)) { throw "brak pol baza/pliki" }
+  $s = [pscustomobject]@{ Baza = [string[]]@($j.baza | ForEach-Object { "$_" }); Pliki = @{}; Konflikt = "$($j.konflikt)"; Tekst = "" }
+  foreach ($w in $j.pliki.PSObject.Properties) {
+    $linie = $null
+    if ($null -ne $w.Value.linie) { $linie = [string[]]@($w.Value.linie | ForEach-Object { "$_" }) }
+    $s.Pliki[$w.Name] = [pscustomobject]@{ Skrot = "$($w.Value.skrot)"; Linie = $linie }
+  }
+  return $s
+}
+
+function Zapisz-Stan-Co-Wiem([string]$dom, [string[]]$baza, $pliki, [string]$konflikt, [string]$poprzedni) {
+  $o = [ordered]@{ wersja = 1; baza = [string[]]@($baza); pliki = [ordered]@{}; konflikt = $konflikt }
+  foreach ($id in $pliki.Keys) {
+    $w = [ordered]@{ skrot = $pliki[$id].Skrot }
+    if ($null -ne $pliki[$id].Linie) { $w.linie = [string[]]@($pliki[$id].Linie) }
+    $o.pliki[$id] = $w
+  }
+  $tekst = $o | ConvertTo-Json -Depth 6
+  if ($tekst -ceq $poprzedni) { return }   # nic nowego - bez zapisu przy kazdym starcie okna
+  $p = Join-Path $dom $PLIK_SYNC_CO_WIEM
+  Zapisz-Trwale $p $tekst (New-Object System.Text.UTF8Encoding($false))
+}
+
+# Synchronizacja "Co wiem" miedzy plikami obecnych narzedzi AI (regula wyzej). $wzor - Id narzedzia,
+# ktorego sekcja idzie do wszystkich bez laczenia (wpisz-zasady.ps1 -WzorCoWiem: rozstrzygniecie
+# konfliktu albo synchronizacja od czysta). $proba - sam plan: bez zapisu plikow i stanu.
+# Zapis wymaga zapis-trwaly.ps1 (Zapisz-Trwale, Kopiuj-Trwale). Wynik:
+#   .Opis      jedno zdanie o tym, co zrobiono, albo $null (nic do zrobienia)
+#   .Odmowy    "ODMOWA ZAPISU (<narzedzie>): ..." - sufit; wolajacy stawia je na poczatku meldunku
+#   .Konflikt  meldunek o sprzecznych zmianach albo $null; .KonfliktNowy - $false, gdy ten sam stan
+#              plikow byl juz zgloszony (wolajacy przy starcie okna wtedy milczy)
+#   .Uwagi     rzeczy do dziennika (stan nieczytelny, plik zmieniony w trakcie, plik pominiety)
+#   .Zapisane  pliki zapisane (albo, z $proba, do zapisu)
+function Synchronizuj-Co-Wiem([string]$dom, [string]$wzor = "", [bool]$proba = $false) {
+  $w = [pscustomobject]@{ Opis = $null; Odmowy = @(); Konflikt = $null; KonfliktNowy = $false; Uwagi = @(); Zapisane = @() }
+  if (-not $proba -and -not (Get-Command Zapisz-Trwale -ErrorAction SilentlyContinue)) { throw "nie ma zapis-trwaly.ps1 (Zapisz-Trwale) - nie synchronizuje 'Co wiem'" }
+  $obecne = @(Cele-Narzedzi $dom | ForEach-Object { $_.Id })
+  $udzial = @()
+  foreach ($s in (Sekcje-Co-Wiem $dom)) {
+    if ($obecne -notcontains $s.Id) { continue }
+    if ($s.Blad) { $w.Uwagi += "$($s.Plik) pominiety w synchronizacji 'Co wiem' ($($s.Blad))"; continue }
+    if (($null -eq $s.Cialo) -or ($s.Wpisy.Count -eq 0)) { continue }
+    $l = Linie-Co-Wiem $s.Cialo
+    $udzial += [pscustomobject]@{ S = $s; N = (Narzedzie-AI $s.Id); Linie = $l; Odcisk = (Odcisk-Co-Wiem $l) }
+  }
+  $stan = $null; $poprzedni = $null
+  try {
+    $stan = Czytaj-Stan-Co-Wiem $dom
+    if ($stan) { $poprzedni = Czytaj-Utf8 (Join-Path $dom $PLIK_SYNC_CO_WIEM) }
+  } catch {
+    $w.Uwagi += "stan synchronizacji 'Co wiem' ($PLIK_SYNC_CO_WIEM) nieczytelny ($($_.Exception.Message)) - licze jak pierwsza synchronizacje: same dopisy, nic nie kasuje"
+    $stan = $null
+  }
+  if ($udzial.Count -eq 0) { return $w }
+
+  # --- tresc docelowa
+  $baza = $null; $cel = $null; $zrodla = @(); $pierwsza = $false
+  if ($wzor) {
+    $wz = @($udzial | Where-Object { $_.S.Id -eq $wzor })
+    if ($wz.Count -eq 0) { throw "w pliku narzedzia '$wzor' nie ma sekcji 'Co wiem' z wpisami (albo narzedzia tu nie ma) - nie moze byc wzorem" }
+    $cel = $wz[0].Linie; $zrodla = @($wz[0].S.Plik)
+  } else {
+    if ($stan) { $baza = $stan.Baza }
+    else {
+      $pierwsza = $true
+      $naj = $udzial[0]
+      foreach ($u in $udzial) { if ($u.S.Znakow -gt $naj.S.Znakow) { $naj = $u } }
+      $baza = $naj.Linie
+    }
+    $wBazie = New-Object 'System.Collections.Generic.HashSet[string]' ([System.StringComparer]::Ordinal)
+    foreach ($l in $baza) { [void]$wBazie.Add($l) }
+    $zestawy = @()
+    foreach ($u in $udzial) {
+      $wpis = $null
+      if ($stan -and $stan.Pliki.ContainsKey($u.S.Id)) { $wpis = $stan.Pliki[$u.S.Id] }
+      if ($wpis -and ($wpis.Skrot -eq $u.Odcisk)) { continue }          # bez zmian od ostatniej synchronizacji
+      $wlasna = $null
+      if ($wpis) { $wlasna = if ($null -ne $wpis.Linie) { $wpis.Linie } else { $baza } }
+      else { $wlasna = [string[]]@($u.Linie | Where-Object { $wBazie.Contains($_) }) }   # bez stanu: same dopisy
+      if (Rowne-Linie $wlasna $u.Linie) { continue }
+      $zm = Zmiany-Linii $wlasna $u.Linie (Dopasowanie-Linii $wlasna $u.Linie)
+      if (-not (Rowne-Linie $wlasna $baza)) { $zm = Na-Baze $zm (Dopasowanie-Linii $wlasna $baza) }
+      if ($zm.Count -gt 0) { $zestawy += [pscustomobject]@{ Plik = $u.S.Plik; Zmiany = $zm } }
+    }
+    if ($zestawy.Count -eq 0) { $cel = $baza }
+    else {
+      $zrodla = @($zestawy | ForEach-Object { $_.Plik })
+      $pol = Polacz-Zmiany-Co-Wiem $baza $zestawy
+      if ($pol.Konflikty.Count -gt 0) {
+        $odcisk = Odcisk-Co-Wiem @($udzial | ForEach-Object { "$($_.S.Id)=$($_.Odcisk)" })
+        $w.KonfliktNowy = (-not $stan) -or ($stan.Konflikt -ne $odcisk)
+        $wpisz = Join-Path $PSScriptRoot "wpisz-zasady.ps1"
+        $w.Konflikt = ("sekcja 'Co wiem' - sprzeczne zmiany tej samej linii w plikach narzedzi AI, NIE synchronizuje (" +
+                       ($pol.Konflikty -join "; ") + "). Popraw te linie recznie tak, zeby brzmialy tak samo - reszte " +
+                       "zmian wyrownam sam przy nastepnym starcie okna - albo wybierz plik-wzor dla wszystkich: " +
+                       "powershell -File `"$wpisz`" -WzorCoWiem <" + (($udzial | ForEach-Object { $_.S.Id }) -join "|") + ">.")
+        if (-not $proba) {
+          $pl = @{}
+          if ($stan) { $pl = $stan.Pliki }
+          Zapisz-Stan-Co-Wiem $dom $(if ($stan) { $stan.Baza } else { $baza }) $pl $odcisk $poprzedni
+        }
+        return $w
+      }
+      $cel = $pol.Linie
+    }
+  }
+
+  # --- zapis do plikow, ktore maja inna tresc
+  $stempel = Get-Date -Format "yyyyMMdd-HHmmss"
+  $koncowe = @{}
+  $kopie = @()
+  foreach ($u in $udzial) {
+    $koncowe[$u.S.Id] = $u.Linie
+    if (Rowne-Linie $u.Linie $cel) { continue }
+    try {
+      $tekst = Czytaj-Utf8 $u.S.Sciezka
+      if (-not (Rowne-Linie (Linie-Co-Wiem (Cialo-Co-Wiem $tekst)) $u.Linie)) {
+        $w.Uwagi += "$($u.S.Plik) zmienil sie w trakcie synchronizacji 'Co wiem' - zostawiam go do nastepnego przebiegu"
+        continue
+      }
+      $nowy = Z-Cialem-Co-Wiem $tekst $cel
+      $sufit = Ponad-Limit $u.N $tekst $nowy
+      if ($sufit) {
+        $ile = (New-Object System.Text.UTF8Encoding($false)).GetByteCount($nowy)
+        $w.Odmowy += ("ODMOWA ZAPISU ($($u.N.Nazwa)): synchronizacja sekcji 'Co wiem' dalaby $($u.S.Plik) $ile B, a " +
+                      "$($u.N.Nazwa) czyta najwyzej $($u.N.Limit) B - NIE zapisalem, $($u.N.Nazwa) nie ma najnowszej wiedzy " +
+                      "(pozostale pliki zsynchronizowane). Skroc 'Co wiem' (np. zestawienia do wiedza\) albo reszte $($u.S.Plik).")
+        continue
+      }
+      if ($proba) { $w.Zapisane += $u.S.Plik; continue }
+      $bak = "$($u.S.Sciezka).bak-$stempel"
+      Kopiuj-Trwale $u.S.Sciezka $bak
+      Zapisz-Trwale $u.S.Sciezka $nowy (New-Object System.Text.UTF8Encoding($false))
+      $po = Linie-Co-Wiem (Cialo-Co-Wiem (Czytaj-Utf8 $u.S.Sciezka))
+      if (-not (Rowne-Linie $po $cel)) { throw "po zapisie sekcja w pliku nie zgadza sie z tym, co mialo wejsc" }
+      $koncowe[$u.S.Id] = $cel
+      $w.Zapisane += $u.S.Plik
+      $kopie += $bak
+    } catch {
+      $w.Odmowy += "ODMOWA ZAPISU ($($u.N.Nazwa)): synchronizacja sekcji 'Co wiem' do $($u.S.Plik) nie wyszla - $($_.Exception.Message)"
+    }
+  }
+  if ($w.Zapisane.Count -gt 0) {
+    $skad = if ($zrodla.Count -gt 0) { " (zmiany z " + ($zrodla -join ", ") + ")" } else { "" }
+    $co = if ($proba) { "zapisalbym" } else { "zapisana" }
+    $jak = if ($pierwsza) { "pierwsza synchronizacja sekcji 'Co wiem' - same dopisy, nic nie skasowane" } elseif ($wzor) { "sekcja 'Co wiem' wedlug wzoru" } else { "sekcja 'Co wiem' zsynchronizowana" }
+    $w.Opis = "$jak$skad, $co w: " + ($w.Zapisane -join ", ")
+    if ($kopie.Count -gt 0) { $w.Opis += " (kopie .bak-$stempel obok)" }
+  }
+  if (-not $proba) {
+    $pl = [ordered]@{}
+    foreach ($u in $udzial) {
+      $k = $koncowe[$u.S.Id]
+      $pl[$u.S.Id] = [pscustomobject]@{ Skrot = (Odcisk-Co-Wiem $k); Linie = $(if (Rowne-Linie $k $cel) { $null } else { $k }) }
+    }
+    Zapisz-Stan-Co-Wiem $dom $cel $pl "" $poprzedni
+  }
+  return $w
 }
 
 # ------------------------------------------------------------ sufit pliku
