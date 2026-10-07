@@ -1,6 +1,7 @@
 ﻿# Sprawdzenie okna aktualizacji MegaRuchacza (2026-10-07): pasek z czterema krokami w karcie
 # Stan, linia wyniku, sprawa na Przegladzie przy bledzie, nieswiezy wynik i przycisk, ktory
-# uruchamia aktualizacje w tle i nie czeka.
+# uruchamia aktualizacje w tle i nie czeka. Brak sieci / pobieranie zajete: szara linia bez
+# sprawy do doby od udanego sprawdzenia, z sabotazami na kopii stan-wersja.ps1.
 #   powershell -ExecutionPolicy Bypass -File zasobnik\test-aktualizacja-okno.ps1 [-Zasobnik <kat zasobnik>] [-Zrodlo <repo>] [-Zrzuty <kat>] [-BezOkna]
 # Wszystko na sztucznym katalogu domowym (atrapa ~\.claude\mr\aktualizacja.json w kazdym etapie)
 # i na atrapie narzedzia\aktualizuj-megaruchacza.ps1 w sztucznym zrodle - prawdziwego domu,
@@ -116,6 +117,112 @@ Wynik "negatywna: blad bez powodu -> mowi, ze powodu nie podano" (($o.Waga -eq "
 Atrapa @{ etap = "gotowe"; wynik = ""; koniec = (Iso $kon) }
 $o = O
 Wynik "negatywna: gotowe bez wyniku -> sprawa zolta" (($o.Waga -eq "uwaga") -and ($o.Problem.Waga -eq "uwaga")) $o.Linia
+
+# brak sieci / pobieranie zajete (2026-10-07): szara linia bez sprawy, dopoki od ostatniego
+# UDANEGO sprawdzenia nie minie doba; martwy zegar (3 h bez proby) dalej widac; inne przyczyny czerwone.
+# Kazda proba to funkcja - te same proby ida nizej na sabotowanej kopii stan-wersja.ps1.
+$POWOD_SIEC = "Nie udało się połączyć z serwerem z nowymi wersjami (brak internetu albo dostępu). Spróbuję znowu za godzinę."
+function Proba-BezSieciSwieza {
+  $spr = (Get-Date).AddHours(-2)
+  Atrapa @{ etap = "blad"; wynik = "blad"; przyczyna = "bez-sieci"; koniec = (Iso (Get-Date).AddMinutes(-1)); sprawdzone = (Iso $spr); powod = $POWOD_SIEC }
+  $o = O (Get-Date).AddHours(-5)
+  $p = Przod
+  $ok = (-not $o.Problem) -and ($o.Waga -eq "szary") -and (-not $o.Znak) -and
+        ($o.Linia -eq "Nie sprawdziłem aktualizacji - brak internetu. Spróbuję sam za godzinę. Ostatnio sprawdzone: dziś $(Godz $spr).") -and
+        ((Uwagi) -eq 0) -and ($p -match 'Wszystko gra') -and ($p -notmatch '\(czerwony napis\)')
+  return [pscustomobject]@{ Ok = $ok; Opis = "$($o.Znak) $($o.Linia) [$($o.Waga)] uwagi=$(Uwagi) sprawa=$($o.Problem.Tytul)" }
+}
+function Proba-BezSieciNigdy {
+  Bez-Pliku
+  Atrapa @{ etap = "blad"; wynik = "blad"; przyczyna = "bez-sieci"; koniec = (Iso (Get-Date)); sprawdzone = ""; powod = $POWOD_SIEC }
+  [System.IO.File]::SetCreationTime($plikAkt, (Get-Date).AddMinutes(-30))
+  $o = O (Get-Date).AddHours(-5)
+  $ok = (-not $o.Problem) -and ($o.Waga -eq "szary") -and ($o.Linia -match 'Ostatnio sprawdzone: jeszcze nigdy\.$')
+  return [pscustomobject]@{ Ok = $ok; Opis = "$($o.Linia) [$($o.Waga)] sprawa=$($o.Problem.Tytul)" }
+}
+function Proba-Zajete {
+  Atrapa @{ etap = "blad"; wynik = "blad"; przyczyna = "zajete"; koniec = (Iso (Get-Date).AddMinutes(-1)); sprawdzone = (Iso (Get-Date).AddHours(-1)); powod = "Inny przebieg właśnie pobierał nową wersję." }
+  $o = O (Get-Date).AddHours(-5)
+  $ok = (-not $o.Problem) -and ($o.Waga -eq "szary") -and ($o.Linia -eq "Aktualizację właśnie pobiera inny proces - sprawdzę za godzinę.") -and ((Uwagi) -eq 0)
+  return [pscustomobject]@{ Ok = $ok; Opis = "$($o.Linia) [$($o.Waga)] uwagi=$(Uwagi)" }
+}
+function Proba-BezSieciDoba {
+  $spr = (Get-Date).AddHours(-25)
+  Atrapa @{ etap = "blad"; wynik = "blad"; przyczyna = "bez-sieci"; koniec = (Iso (Get-Date).AddMinutes(-1)); sprawdzone = (Iso $spr); powod = $POWOD_SIEC }
+  $o = O (Get-Date).AddHours(-30)
+  $p = Przod
+  $ok = ($o.Waga -eq "pilne") -and ($o.Znak -eq $ZNAKZLE) -and ($o.Linia -match '^Od ponad doby nie mogę sprawdzić aktualizacji - brak połączenia z GitHubem') -and
+        ($o.Problem.Waga -eq "pilne") -and ($o.Problem.Tytul -eq "Od ponad doby nie mogę sprawdzić aktualizacji MegaRuchacza") -and ($o.Problem.Porada -match 'Sprawdź internet') -and
+        ((Uwagi) -eq 1) -and ($p -notmatch 'Wszystko gra') -and ($p -match '\[!\] Od ponad doby')
+  return [pscustomobject]@{ Ok = $ok; Opis = "$($o.Znak) $($o.Linia) | $($o.Problem.Tytul) | uwagi=$(Uwagi)" }
+}
+function Proba-BezSieciNigdyDoba {
+  Atrapa @{ etap = "blad"; wynik = "blad"; przyczyna = "bez-sieci"; koniec = (Iso (Get-Date)); sprawdzone = ""; powod = $POWOD_SIEC }
+  [System.IO.File]::SetCreationTime($plikAkt, (Get-Date).AddHours(-25))
+  $o = O (Get-Date).AddHours(-30)
+  $ok = ($o.Problem.Waga -eq "pilne") -and ($o.Linia -match 'ostatnio sprawdzone: jeszcze nigdy')
+  [System.IO.File]::SetCreationTime($plikAkt, (Get-Date))
+  return [pscustomobject]@{ Ok = $ok; Opis = "$($o.Linia) | $($o.Problem.Tytul)" }
+}
+function Proba-BezSieciPrawieDoba {
+  Atrapa @{ etap = "blad"; wynik = "blad"; przyczyna = "bez-sieci"; koniec = (Iso (Get-Date).AddMinutes(-1)); sprawdzone = (Iso (Get-Date).AddHours(-23)); powod = $POWOD_SIEC }
+  $o = O (Get-Date).AddHours(-30)
+  return [pscustomobject]@{ Ok = ((-not $o.Problem) -and ($o.Waga -eq "szary")); Opis = "$($o.Linia) [$($o.Waga)] sprawa=$($o.Problem.Tytul)" }
+}
+function Proba-BezSieciMartwyZegar {
+  $prob = (Get-Date).AddHours(-4)
+  Atrapa @{ etap = "blad"; wynik = "blad"; przyczyna = "bez-sieci"; start = (Iso $prob); koniec = (Iso $prob); sprawdzone = (Iso (Get-Date).AddHours(-6)); powod = $POWOD_SIEC }
+  $o = O (Get-Date).AddHours(-5)
+  $ok = ($o.Problem.Waga -eq "uwaga") -and ($o.Problem.Tytul -match 'nie próbowała sprawdzać serwera od') -and ($o.Dopisek -match 'Od ponad 3 godzin') -and ((Uwagi) -eq 1)
+  return [pscustomobject]@{ Ok = $ok; Opis = "$($o.Problem.Tytul) | $($o.Dopisek)" }
+}
+function Proba-InnaPrzyczynaCzerwona {
+  Atrapa @{ etap = "blad"; wynik = "blad"; przyczyna = "nanoszenie"; koniec = (Iso (Get-Date).AddMinutes(-1)); sprawdzone = (Iso (Get-Date).AddMinutes(-2)); powod = "Nowa wersja jest pobrana, ale nie udało się jej wgrać." }
+  $o = O (Get-Date).AddHours(-5)
+  $ok = ($o.Waga -eq "pilne") -and ($o.Problem.Waga -eq "pilne") -and ($o.Linia -eq "Nie udało się zaktualizować: Nowa wersja jest pobrana, ale nie udało się jej wgrać.") -and ((Uwagi) -eq 1)
+  return [pscustomobject]@{ Ok = $ok; Opis = "$($o.Znak) $($o.Linia) [$($o.Waga)]" }
+}
+$PROBY_SIECI = [ordered]@{
+  "bez-sieci swieze (sprawdzone 2 h temu) -> szara linia, bez sprawy, 'Wszystko gra'" = "Proba-BezSieciSwieza"
+  "bez-sieci, udanego sprawdzenia nie bylo nigdy (plik od 30 min) -> szara linia 'jeszcze nigdy'" = "Proba-BezSieciNigdy"
+  "zajete -> szara linia 'inny proces', bez sprawy" = "Proba-Zajete"
+  "bez-sieci 23 h od udanego sprawdzenia -> jeszcze bez sprawy" = "Proba-BezSieciPrawieDoba"
+  "negatywna: bez-sieci 25 h od udanego sprawdzenia -> czerwona sprawa 'Od ponad doby', bez 'Wszystko gra'" = "Proba-BezSieciDoba"
+  "negatywna: bez-sieci, nigdy udane, pierwsza proba 25 h temu -> czerwona sprawa" = "Proba-BezSieciNigdyDoba"
+  "negatywna: bez-sieci, ale ostatnia proba 4 h temu (martwy zegar) -> zolta sprawa" = "Proba-BezSieciMartwyZegar"
+  "negatywna: blad z inna przyczyna (nanoszenie) -> dalej czerwono" = "Proba-InnaPrzyczynaCzerwona"
+}
+foreach ($nazwa in $PROBY_SIECI.Keys) {
+  $w = & $PROBY_SIECI[$nazwa]
+  Wynik $nazwa $w.Ok $w.Opis
+}
+
+# Sabotaz: kopia stan-wersja.ps1 z wylaczonym jednym warunkiem, wczytana w miejsce prawdziwej.
+# Wlasciwa proba MUSI wtedy paść - inaczej nie pilnuje niczego. Kotwica sprawdzana przed podmiana
+# (brak kotwicy = porazka testu, a nie sabotaz, ktory po cichu niczego nie zmienil).
+$plikWersji = Join-Path $Zasobnik "nadzorca\stan-wersja.ps1"
+$oryginal = [System.IO.File]::ReadAllText($plikWersji, [System.Text.Encoding]::UTF8)
+$sabotaze = @(
+  @{ Nazwa = "warunek doby wylaczony"; Proba = "Proba-BezSieciDoba"
+     Kotwica = '(($teraz - $odKiedy).TotalHours -ge $GODZIN_BEZ_UDANEGO_SPRAWDZENIA)'; Zamiana = '$false' },
+  @{ Nazwa = "kazda przyczyna uznana za chwilowa"; Proba = "Proba-InnaPrzyczynaCzerwona"
+     Kotwica = '($PRZYCZYNY_CHWILOWE -contains $a.Przyczyna)'; Zamiana = '$true' },
+  @{ Nazwa = "bez-sieci znowu czerwone co godzine"; Proba = "Proba-BezSieciSwieza"
+     Kotwica = '$PRZYCZYNY_CHWILOWE = @("bez-sieci", "zajete")'; Zamiana = '$PRZYCZYNY_CHWILOWE = @()' },
+  @{ Nazwa = "martwy zegar przy bez-sieci niewidoczny"; Proba = "Proba-BezSieciMartwyZegar"
+     Kotwica = '(($teraz - $proba).TotalHours -ge $GODZIN_BEZ_SPRAWDZENIA_AKTUALIZACJI)'; Zamiana = '$false' })
+$kopiaSabotazu = Join-Path $tmp "stan-wersja-sabotaz.ps1"
+foreach ($s in $sabotaze) {
+  if (-not $oryginal.Contains($s.Kotwica)) { Wynik "sabotaz '$($s.Nazwa)' wylapany" $false "kotwicy nie ma w ${plikWersji}: $($s.Kotwica)"; continue }
+  [System.IO.File]::WriteAllText($kopiaSabotazu, $oryginal.Replace($s.Kotwica, $s.Zamiana), (New-Object System.Text.UTF8Encoding($true)))
+  . $kopiaSabotazu
+  $pod = $null
+  try { $pod = & $s.Proba } catch { $pod = [pscustomobject]@{ Ok = $false; Opis = "WYWROTKA: $($_.Exception.Message)" } }
+  . $plikWersji
+  $po = & $s.Proba
+  Wynik "sabotaz '$($s.Nazwa)' wylapany przez $($s.Proba)" ((-not $pod.Ok) -and $po.Ok) "z sabotazem: $($pod.Opis) || po przywroceniu: Ok=$($po.Ok)"
+}
+. $plikWersji
 
 # nieswiezy wynik
 $stary = $teraz.AddHours(-4)
@@ -330,6 +437,14 @@ public class OknoTestoweAktualizacji : System.Windows.Forms.Form {
     Wynik "negatywna okno: blad -> czerwona linia, karta 'Wymaga działania' na gorze, bez 'Wszystko gra'" ($czerw -and ($t -notmatch 'Wszystko gra') -and $script:PanelProblemy.Visible -and
       ($tp -match 'WYMAGA DZIAŁANIA') -and ($tp -match 'Nie udało się zaktualizować MegaRuchacza') -and ((Ile-Wymaga-Uwagi $script:Problemy) -ge 1)) "$t || $tp"
     Wynik "zrzut bledu" $true (Zrzut "4-blad")
+
+    Atrapa @{ etap = "blad"; wynik = "blad"; przyczyna = "bez-sieci"; koniec = (Iso $kon); sprawdzone = (Iso (Get-Date).AddHours(-2)); powod = $POWOD_SIEC }
+    Krok-Okna
+    $t = (Teksty $script:PanelStan) -join " | "
+    $szara = $false
+    foreach ($c in $script:PanelStan.Controls) { foreach ($x in $c.Controls) { foreach ($y in $x.Controls) { if (("$($y.Text)" -like "Nie sprawdziłem aktualizacji*") -and ($y.ForeColor.ToArgb() -eq $script:KolSzary.ToArgb())) { $szara = $true } } } }
+    Wynik "okno: bez-sieci -> szara linia, bez karty spraw, 'Wszystko gra'" ($szara -and ($t -match 'brak internetu') -and ($t -match 'Wszystko gra') -and (-not $script:PanelProblemy.Visible)) $t
+    [void](Zrzut "4b-bez-sieci")
 
     $st = (Get-Date).AddHours(-4)
     Atrapa @{ etap = "gotowe"; wynik = "aktualne"; koniec = (Iso $st); sprawdzone = (Iso $st) }

@@ -129,6 +129,10 @@ function Opis-Wersji($w) {
 #   krok, krokow  1..4 z 4;  opis - zdanie pod paskiem
 #   wynik         "" | zaktualizowano | aktualne | blad;  powod - przy bledzie, po ludzku
 #   wersja_przed, wersja_po, start, koniec, sprawdzone (ISO, czas lokalny), reczna
+#   sprawdzone    ostatni UDANY kontakt z serwerem - brak sieci zostawia poprzedni
+#   przyczyna     przy bledzie: wynik straznika (bez-sieci, zajete, zablokowane, rozjechane,
+#                 nieudane, kopia, bez-zdalnej, nie-repo, bez-gita) albo krok (brak-zrodla,
+#                 straznik, git, rejestr, nanoszenie, restart, blokada-pomocnika, wywrotka)
 # Tu jest tylko odczyt tego pliku (Stan-Aktualizacji) i jego ocena po ludzku
 # (Ocena-Aktualizacji) - wspolna dla okna (pasek i karta Stan), listy spraw na
 # Przegladzie i wydruku -Raport. Przycisk (Aktualizuj) tylko uruchamia skrypt w tle
@@ -148,7 +152,15 @@ $OPISY_ETAPOW = @{ sprawdzam = "Sprawdzam, czy jest coś nowego..."; pobieram = 
 #   do narzedzi AI) trwaja minuty; 20 min bez zadnego zapisu = proces nie zyje albo wisi.
 # - 30 s po kliknieciu: skrypt zapisuje "sprawdzam" w pierwszej sekundzie; 30 s bez sladu
 #   = nie ruszyl (np. zly PowerShell, blokada) i trzeba to powiedziec, a nie krecic paskiem.
+# - 24 h od ostatniego UDANEGO sprawdzenia przy przyczynie chwilowej (brak sieci, pobieranie
+#   zajete przez inny przebieg): nadzorca probuje co godzine, wiec doba to 24 nieudane proby
+#   z rzedu - juz nie chwilowa przerwa (laptop w pociagu), tylko cos, co trzeba naprawic.
+#   Wczesniej taki wynik to szara linia bez sprawy: czerwona karta co godzine na laptopie bez
+#   sieci bylaby falszywym alarmem, a ten uczy ignorowac prawdziwe. Prog 3 h liczy sie wtedy
+#   od ostatniej PROBY (koniec), nie od udanego sprawdzenia - lapie martwy zegar, nie brak sieci.
 $GODZIN_BEZ_SPRAWDZENIA_AKTUALIZACJI = 3
+$GODZIN_BEZ_UDANEGO_SPRAWDZENIA = 24
+$PRZYCZYNY_CHWILOWE = @("bez-sieci", "zajete")
 $MINUT_PO_STARCIE_NADZORCY = 15
 $MINUT_BEZ_RUCHU_AKTUALIZACJI = 20
 $SEKUND_NA_START_AKTUALIZACJI = 30
@@ -165,11 +177,14 @@ function Stan-Aktualizacji {
   $plik = Plik-Aktualizacji
   $a = [pscustomobject]@{ Plik = $plik; Jest = $false; Blad = ""; Zapis = $null; Etap = ""; Krok = 0; Krokow = 4
     Opis = ""; Wynik = ""; WersjaPrzed = ""; WersjaPo = ""; Start = $null; Koniec = $null; Sprawdzone = $null
-    Powod = ""; Reczna = $false }
+    Powod = ""; Reczna = $false; Przyczyna = ""; Utworzony = $null }
   $fi = New-Object System.IO.FileInfo($plik)
   if (-not $fi.Exists) { return $a }
   $a.Jest = $true
   $a.Zapis = $fi.LastWriteTime
+  # Pierwszy zapis pliku = pierwsza proba w ogole: skrypt podmienia plik przez File.Replace,
+  # a ta zachowuje date utworzenia. Liczy od niej dobe, gdy udanego sprawdzenia nie bylo nigdy.
+  $a.Utworzony = $fi.CreationTime
   $j = $null
   try {
     $txt = [System.IO.File]::ReadAllText($plik, [System.Text.Encoding]::UTF8)
@@ -196,6 +211,7 @@ function Stan-Aktualizacji {
   $a.Koniec = Data-Aktualizacji $j.koniec
   $a.Sprawdzone = Data-Aktualizacji $j.sprawdzone
   $a.Powod = "$($j.powod)".Trim()
+  $a.Przyczyna = "$($j.przyczyna)".Trim().ToLower()
   $a.Reczna = (("$($j.reczna)" -eq "True") -or ("$($j.reczna)" -eq "1"))
   return $a
 }
@@ -296,7 +312,46 @@ function Ocena-Aktualizacji($a, $teraz, $nadzorcaOd = $null, $klik = $null, [str
   if (-not $wersja) { $wersja = $a.WersjaPrzed }
   if (-not $wersja) { $wersja = $lokalna }
   if (-not $wersja) { $wersja = "(numer nieznany)" }
-  if (($a.Etap -eq "blad") -or ($a.Wynik -eq "blad")) {
+  $grace = ($null -ne $nadzorcaOd) -and (-not $poStarcie)
+  $bladAkt = ($a.Etap -eq "blad") -or ($a.Wynik -eq "blad")
+  if ($bladAkt -and ($PRZYCZYNY_CHWILOWE -contains $a.Przyczyna)) {
+    # Brak sieci albo pobieranie zajete przez inny przebieg - szara linia bez sprawy, dopoki
+    # od ostatniego UDANEGO sprawdzenia nie minela doba (prog z uzasadnieniem wyzej).
+    $bezSieci = ($a.Przyczyna -eq "bez-sieci")
+    $udane = $a.Sprawdzone
+    $odKiedy = $udane
+    if (-not $odKiedy) { $odKiedy = $a.Utworzony }
+    $ostatnio = $(if ($udane) { Kiedy-Krotko $udane } else { "jeszcze nigdy" })
+    $proba = $a.Koniec
+    if (-not $proba) { $proba = $a.Zapis }
+    $pelne = "przyczyna: $($a.Przyczyna); ostatnia próba: $(if ($proba) { $proba } else { 'nie wiadomo' }); ostatnie udane sprawdzenie: $(if ($udane) { $udane } else { 'nigdy' }); plik: $($a.Plik)$(if ($a.Powod) { '; ' + $a.Powod })"
+    if ($odKiedy -and (($teraz - $odKiedy).TotalHours -ge $GODZIN_BEZ_UDANEGO_SPRAWDZENIA) -and (-not $grace)) {
+      if ($bezSieci) {
+        & $zle "Od ponad doby nie mogę sprawdzić aktualizacji - brak połączenia z GitHubem (ostatnio sprawdzone: $ostatnio)." "Od ponad doby nie mogę sprawdzić aktualizacji MegaRuchacza" (
+          "Brak połączenia z GitHubem - ostatnie udane sprawdzenie: $ostatnio. Sprawdź internet; aktualizacja próbuje sama co godzinę.") $pelne
+      } else {
+        & $zle "Od ponad doby nie mogę sprawdzić aktualizacji - pobieranie ciągle zajmuje inny proces (ostatnio sprawdzone: $ostatnio)." "Od ponad doby nie mogę sprawdzić aktualizacji MegaRuchacza" (
+          "Pobieranie nowej wersji od doby blokuje inny proces - ostatnie udane sprawdzenie: $ostatnio. Uruchom komputer ponownie; jeśli to wraca, przekaż ten opis.") $pelne
+      }
+      return $o
+    }
+    $o.Znak = ""; $o.Waga = "szary"
+    if ($bezSieci) {
+      $o.Linia = "Nie sprawdziłem aktualizacji - brak internetu. Spróbuję sam za godzinę. Ostatnio sprawdzone: $ostatnio."
+    } else {
+      $o.Linia = "Aktualizację właśnie pobiera inny proces - sprawdzę za godzinę."
+    }
+    # Martwy zegar: nawet nieudanej proby nie bylo od 3 h (prog liczony od proby, nie od udanego).
+    if ($proba -and (($teraz - $proba).TotalHours -ge $GODZIN_BEZ_SPRAWDZENIA_AKTUALIZACJI) -and (-not $grace)) {
+      $o.Znak = "!"; $o.Waga = "uwaga"
+      $o.Dopisek = "Od ponad $GODZIN_BEZ_SPRAWDZENIA_AKTUALIZACJI godzin nie próbowałem sprawdzić, czy jest coś nowszego - powinienem co godzinę."
+      $o.Problem = [pscustomobject]@{ Waga = "uwaga"; Tytul = "Aktualizacja MegaRuchacza nie próbowała sprawdzać serwera od $(Kiedy-Krotko $proba)"
+        Porada = "Sprawdzanie ma iść samo co godzinę, a ostatnia próba była $(Kiedy-Krotko $proba). Kliknij $przyc na dole okna, żeby sprawdzić teraz."
+        Pelne = $pelne }
+    }
+    return $o
+  }
+  if ($bladAkt) {
     $pw = $a.Powod
     if (-not $pw) { $pw = "aktualizacja nie podała powodu - to samo w sobie jest usterką. Kliknij $przyc, żeby spróbować jeszcze raz" }
     $pw = $pw.TrimEnd('.', ' ')
@@ -323,7 +378,6 @@ function Ocena-Aktualizacji($a, $teraz, $nadzorcaOd = $null, $klik = $null, [str
     return $o
   }
   if (-not $kiedy) { $kiedy = $a.Zapis }
-  $grace = ($null -ne $nadzorcaOd) -and (-not $poStarcie)
   if ($kiedy -and (($teraz - $kiedy).TotalHours -ge $GODZIN_BEZ_SPRAWDZENIA_AKTUALIZACJI) -and (-not $grace)) {
     $o.Znak = "!"; $o.Waga = "uwaga"
     $o.Dopisek = "Od ponad $GODZIN_BEZ_SPRAWDZENIA_AKTUALIZACJI godzin nie sprawdziłem, czy jest coś nowszego - powinienem co godzinę."
