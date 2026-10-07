@@ -62,6 +62,13 @@
 #       dopasowuje pliki do rejestru instalacji od razu, bez czekania na nastepna sesje:
 #       bloki zasad, blok kierownika, szkielet "Co wiem", hooki globalne. Bez sieci, cyklu
 #       i rachunku. Dla instalatora po zmianie modulow. Kod 1 = cos sie nie udalo.
+#   powershell -NoProfile -File narzedzia\straznik-zasad.ps1 -TylkoPobierz
+#       SAMO pobranie nowszej wersji narzedzia (Odswiez-Zrodlo) i nic poza tym - dla
+#       narzedzia\aktualizuj-megaruchacza.ps1 (aktualizacja automatyczna z nadzorcy i przycisk).
+#       Jak -Tlo: bez dlawika 60 min, limity gita z -Tlo, prosby do czlowieka odkladane na
+#       najblizsza sesje. Na wyjsciu: "aktualizacja.wynik: <wynik>" i "aktualizacja.powod: <zdanie>"
+#       (te same, co w pliku stanu), potem linie "dziennik: ..." (zamiast .megaruchacz-tlo.log);
+#       wynik "zajete" = inny przebieg pobieral dluzej, niz czekamy na blokade. Kod zawsze 0.
 #   -KatalogDomowy  podstawiony katalog domowy - do testow
 
 param(
@@ -76,10 +83,16 @@ param(
   [switch]$NaprawGlobalne,
   [switch]$UsunGlobalne,
   [switch]$Dopasuj,
+  [switch]$TylkoPobierz,
   [switch]$Proba
 )
 
 $ErrorActionPreference = "Stop"
+# -TylkoPobierz to -Tlo okrojone do samego pobrania: wola go proces w tle (nikt nie czyta
+# ekranu), wiec dostaje wszystko, co -Tlo zmienia w pobieraniu - brak dlawika, dluzsze limity
+# gita, Mow do dziennika, prosby odkladane na sesje. Odrebny jest tylko slad obecnosci
+# ("byl.pobierz", Nazwa-Trybu): "byl.tlo" swiadczy, ze chodzi hook Codeksa, i nie wolno go podrobic.
+if ($TylkoPobierz) { $Tlo = [switch]$true }
 if (-not $Zrodlo)  { $Zrodlo  = Split-Path -Parent $PSScriptRoot }
 if (-not $Projekt) { $Projekt = (Get-Location).Path }
 
@@ -231,6 +244,14 @@ $DNI_KOSZT_CYKLU_STARY = 2
 # W tle nikt nie czeka na otwarcie okna, wiec git dostaje wiecej czasu niz
 # w hooku, gdzie caly przebieg ma sie zmiescic w kilkunastu sekundach.
 if ($Tlo) { $CZAS_GIT = 30; $CZAS_GIT_FETCH = 60 } else { $CZAS_GIT = 5; $CZAS_GIT_FETCH = 6 }
+# Ile czekamy na blokade pobierania, gdy pobiera juz inny przebieg. Hook: 2 s - start sesji nie
+# czeka, a tamten i tak pobiera. -TylkoPobierz (aktualizacja automatyczna) ma oddac PRAWDZIWY wynik,
+# wiec czeka, az tamten skonczy: przebieg -Tlo to fetch (60 s) + merge (60 s, przy plikach roboczych
+# drugi raz) + kilka komend po 30 s - typowo kilka sekund, a 120 s pokrywa fetch i merge na limicie.
+# Kto czeka dluzej, dostaje wynik "zajete" i probuje przy nastepnym przebiegu.
+$CZEKAJ_NA_ZRODLO_MS = 2000
+if ($TylkoPobierz) { $CZEKAJ_NA_ZRODLO_MS = 120000 }
+$script:WynikPobrania = $null
 
 # Jedyne wyjscie straznika. W hooku idzie na ekran (Claude Code wciaga to do
 # kontekstu sesji), w tle - do dziennika, bo Write-Host nie trafia tam do nikogo.
@@ -366,6 +387,7 @@ $script:Niepowodzenia = 0
 # "byl.<tryb>". CLAUDE_PROJECT_DIR ustawia samo Claude Code, wolajac hooka; bez
 # niej to uruchomienie z reki, ktore o zdrowiu hookow nie mowi nic.
 function Nazwa-Trybu {
+  if ($TylkoPobierz) { return "pobierz" }  # aktualizuj-megaruchacza.ps1 (nadzorca, przycisk)
   if ($Tlo)        { return "tlo" }      # hook SessionStart Codeksa, bezobslugowy
   if ($KosztCodex) { return "codex" }    # hook Codeksa od rachunku za pamiec
   if ($env:CLAUDE_PROJECT_DIR) { return "claude" }
@@ -1821,6 +1843,9 @@ function Powiedz-Wazne([string]$zdanie) {
 #   pliki  - pelna lista plikow, przez ktore git odmowil (zablokowane, nieudane)
 #   kopia  - katalog z kopia plikow roboczych, ktorej nie dalo sie oddac
 function Zapisz-Wynik-Pobrania([string]$wynik, [string]$powod, $pliki = @(), [string]$kopia = "") {
+  # Ten sam wynik zostaje w przebiegu - tryb -TylkoPobierz oddaje go na wyjscie (gdyby zapis
+  # do pliku stanu sie wywrocil, wolajacy i tak wie, czym sie skonczylo).
+  $script:WynikPobrania = [pscustomobject]@{ wynik = $wynik; powod = ($powod -replace '[\r\n]+', ' ') }
   try {
     $stan = Czytaj-Klucze $plikStanu
     foreach ($k in @($stan.Keys)) { if ($k -like "aktualizacja.*") { $stan.Remove($k) } }
@@ -2046,7 +2071,7 @@ function Odswiez-Zrodlo {
   $m = New-Object System.Threading.Mutex($false, "Local\MegaRuchacz-zrodlo")
   $mam = $false
   try {
-    try { $mam = $m.WaitOne(2000) }
+    try { $mam = $m.WaitOne($CZEKAJ_NA_ZRODLO_MS) }
     catch {
       # Porzucona blokada (poprzedni przebieg padl, trzymajac ja) jest juz nasza -
       # to, co po sobie zostawil, oddaje Dokoncz-Przerwane.
@@ -2055,7 +2080,13 @@ function Odswiez-Zrodlo {
       if (-not $wew) { throw }
       $mam = $true
     }
-    if (-not $mam) { Notuj "zrodlo: inny przebieg straznika wlasnie pobiera nowsza wersje - tym razem odpuszczam"; return }
+    if (-not $mam) {
+      Notuj "zrodlo: inny przebieg straznika wlasnie pobiera nowsza wersje - tym razem odpuszczam"
+      # Do pliku stanu nie piszemy nic: wynik zapisze ten, ktory pobiera. Wolajacy -TylkoPobierz
+      # dostaje go na wyjscie, zeby nie wzial cudzego, starego wyniku za swoj.
+      $script:WynikPobrania = [pscustomobject]@{ wynik = "zajete"; powod = "inny przebieg straznika pobieral nowsza wersje dluzej niz $([int]($CZEKAJ_NA_ZRODLO_MS / 1000)) s - tym razem odpuscilem" }
+      return
+    }
     Przewin-Zrodlo $cyt
   } finally {
     if ($mam) { $m.ReleaseMutex() }
@@ -3451,6 +3482,28 @@ try {
     # i bez tego nie zostawilaby po sobie ani sladu - a cisza w tym miejscu
     # wygladalaby jak sprawnie zlozony rachunek.
     if ($script:Wywrotki.Count -gt 0) { Zapisz-Obecnosc "codex" }
+    exit 0
+  }
+
+  # Samo pobranie dla aktualizuj-megaruchacza.ps1 - naniesienie (instaluj-globalnie, -Dopasuj,
+  # skille) i restart nadzorcy robi tamten skrypt sam, wedlug rejestru instalacji. Wynik idzie
+  # na wyjscie w formacie "klucz: wartosc"; brak wyniku (Odswiez-Zrodlo wywrocilo sie przed
+  # zapisem) to tez wynik - "nieudane" z powodem, nigdy cisza.
+  if ($TylkoPobierz) {
+    try { Odswiez-Zrodlo } catch { Zanotuj-Wywrotke "odswiezanie zrodla" $_ }
+    $w = $script:WynikPobrania
+    if (-not $w) {
+      $pw = "straznik nie zapisal wyniku pobrania"
+      if ($script:Wywrotki.Count -gt 0) { $pw += " - wywrocilo sie: " + ($script:Wywrotki -join "; ") }
+      $w = [pscustomobject]@{ wynik = "nieudane"; powod = $pw }
+    }
+    Write-Output ("aktualizacja.wynik: " + $w.wynik)
+    Write-Output ("aktualizacja.powod: " + $w.powod)
+    # Dziennik przebiegu idzie na wyjscie, nie do .megaruchacz-tlo.log: wolajacy zapisuje cale
+    # wyjscie we wlasnym dzienniku (~\.claude\mr\aktualizacja.log), a co godzine linia "bez zmian"
+    # wypychalaby z dziennika tla jedyny slad hooka Codeksa (200 linii to ~8 dni przy tym rytmie).
+    foreach ($l in $script:Dziennik) { Write-Output ("dziennik: " + $l) }
+    Zapisz-Obecnosc "pobierz"
     exit 0
   }
 

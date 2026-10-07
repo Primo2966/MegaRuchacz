@@ -3,10 +3,13 @@
 # -Raz), decyzje na gotowych danych (Dozor-Po-Danych: cykl wiedzy i skille - tylko
 # z ich modulem w rejestrze instalacji, przypomnienia z terminem, alarmy, slad obecnosci), dozor co kwadrans
 # w tle (Rusz-Dozor -> Po-Dozorze; kroki
-# i watki sa w w-tle.ps1) i podpowiedz przy ikonie (Podpowiedz).
+# i watki sa w w-tle.ps1), podpowiedz przy ikonie (Podpowiedz) i aktualizacja
+# automatyczna MegaRuchacza (Zaplanuj-Aktualizacje -> Ruszaj-Aktualizacje: ~1 min po
+# starcie i co 60 min narzedzia\aktualizuj-megaruchacza.ps1 w tle; alarm o jej ciszy
+# w stan-zbieranie.ps1 Alarm-Aktualizacji).
 # Skad wolane: tryb -Raz i zegar dozoru w nadzorca.ps1, Po-Kroku w w-tle.ps1
 # (Podpowiedz). Wczytuje go nadzorca.ps1 kropka PRZED trybami bez GUI - tu sa
-# same definicje.
+# same definicje i stale.
 
 # -------------------------------------------------------------------- dozor
 
@@ -87,6 +90,9 @@ function Dozor-Po-Danych($d, $pokazDymek) {
 # Dozor co kwadrans: dane w tle, decyzje po powrocie (Dozor-Po-Danych). Gdy
 # poprzedni przebieg jeszcze trwa, ten jest pomijany - dwa naraz nie maja sensu.
 function Rusz-Dozor {
+  # Zegar aktualizacji wstaje przy pierwszym dozorze (5 s po starcie ikony) - tylko w ikonie,
+  # nie w trybach -Raz/-Raport, ktore koncza sie po jednym przebiegu.
+  try { Zaplanuj-Aktualizacje } catch { Zanotuj-Wywrotke "zegar aktualizacji automatycznej" $_ }
   if (Krok-Trwa $script:KrokDozoru) {
     Notuj "dozor: poprzedni przebieg jeszcze trwa (od $($script:KrokDozoru.Od)) - ten pomijam"
     return
@@ -117,6 +123,61 @@ function Po-Dozorze($k) {
   try {
     if ($script:Okno -and (-not $script:Okno.IsDisposed) -and $script:Okno.Visible -and (Nieswiezy-Kawalek "koszt")) { [void](Rusz-Krok "koszt") }
   } catch { Zanotuj-Wywrotke "odswiezenie prawdziwego kosztu po dozorze" $_ }
+}
+
+# ------------------------------------------- aktualizacja automatyczna (2026-10-07)
+# Decyzja uzytkownika: aktualizacja MegaRuchacza zawsze sama, bez klikania - przy starcie
+# nadzorcy (= zalogowanie) i potem okresowo. Cala robota (pobranie, naniesienie, restart
+# nadzorcy) jest w narzedzia\aktualizuj-megaruchacza.ps1; tu tylko zegar i start w tle.
+# Pierwszy raz po minucie, nie od razu: zaraz po zalogowaniu dysk i siec maja co robic,
+# a pierwszy dozor (5 s po starcie) liczy rachunek - aktualizacja nie ma zwalniac logowania.
+# Potem co 60 min: tak samo czesto zaglada do sieci hook straznika (dlawik 60 min
+# w Odswiez-Zrodlo), a nowe wersje wychodza najwyzej kilka razy dziennie.
+$SEKUNDY_DO_PIERWSZEJ_AKTUALIZACJI = 60
+$MINUT_MIEDZY_AKTUALIZACJAMI = 60
+$script:ZegarAutoAktualizacji = $null
+
+function Skrypt-Aktualizacji { return (Join-Path $script:NadzZrodlo "narzedzia\aktualizuj-megaruchacza.ps1") }
+
+# Slady "bylem tu" w pliku stanu nadzorcy: zegar wstal (aktualizacja.zaplanowana) i odpala
+# (aktualizacja.zlecona). Ich nieswiezosc przy zywym nadzorcy to alarm (Alarm-Aktualizacji).
+function Odnotuj-Aktualizacje([string]$klucz) {
+  if ($script:NadzProba) { return }
+  try { Dopisz-Klucze $script:NadzPlikStanu @{ "aktualizacja.$klucz" = (Get-Date -Format 'yyyy-MM-dd HH:mm:ss') } }
+  catch { Zanotuj-Wywrotke "slad aktualizacji ($klucz) w pliku stanu nadzorcy" $_ }
+}
+
+function Zaplanuj-Aktualizacje {
+  if ($script:ZegarAutoAktualizacji) { return }
+  $script:ZegarAutoAktualizacji = New-Object System.Windows.Forms.Timer
+  $script:ZegarAutoAktualizacji.Interval = [math]::Max(1, $SEKUNDY_DO_PIERWSZEJ_AKTUALIZACJI) * 1000
+  $script:ZegarAutoAktualizacji.Add_Tick({
+    $script:ZegarAutoAktualizacji.Interval = [math]::Max(1, $MINUT_MIEDZY_AKTUALIZACJAMI) * 60 * 1000
+    try {
+      if (-not (Ruszaj-Aktualizacje)) { Zanotuj-Wywrotke "start aktualizacji automatycznej" "Odpal-W-Tle nie wystartowal narzedzia\aktualizuj-megaruchacza.ps1" }
+    } catch { Zanotuj-Wywrotke "start aktualizacji automatycznej" $_ }
+  })
+  $script:ZegarAutoAktualizacji.Start()
+  Odnotuj-Aktualizacje "zaplanowana"
+  Notuj "aktualizacja automatyczna: pierwsza za $SEKUNDY_DO_PIERWSZEJ_AKTUALIZACJI s, potem co $MINUT_MIEDZY_AKTUALIZACJAMI min"
+}
+
+# Start w tle przez conhost --headless (Odpal-W-Tle). Jeden przebieg naraz pilnuje sam skrypt
+# (blokada) - start w trakcie dlugiej aktualizacji konczy sie u niego od razu, bez zapisu.
+function Ruszaj-Aktualizacje {
+  $skrypt = Skrypt-Aktualizacji
+  $arg = '-Zrodlo "' + $script:NadzZrodlo + '" -KatalogDomowy "' + $script:NadzDom + '"'
+  if ($script:NadzProba) {
+    Write-Host "[proba] NIE startuje aktualizacji: powershell -File ${skrypt} ${arg}"
+    return $true
+  }
+  if (-not (Test-Path -LiteralPath $skrypt)) { throw "nie ma $skrypt" }
+  $poszlo = Odpal-W-Tle $skrypt $arg
+  if ($poszlo) {
+    Odnotuj-Aktualizacje "zlecona"
+    Notuj "wystartowala aktualizacja automatyczna MegaRuchacza"
+  }
+  return $poszlo
 }
 
 # Podpowiedz przy ikonie. NotifyIcon.Text ma twardy sufit 63 znakow, wiec tekst
