@@ -105,6 +105,15 @@ inwentarz warstw z 25.09, budowa okna sprzed podzialu, pomiary P23/P30 w calosci
   `wynik` = pobrane | aktualne | zablokowane | rozjechane | nieudane | kopia | bez-sieci |
   bez-zdalnej | nie-repo | bez-gita. Zdania do czlowieka: `Powiedz-Wazne` (w `-Tlo` tez `mow.*` ->
   ladunek Codeksa). Przycisk w oknie jeszcze tego nie czyta (spec: raport P36 pkt 6, zadanie P37).
+- Rozpoznanie 2026-10-07 (aktualizacja automatyczna): wolajacy `Odswiez-Zrodlo` = hook SessionStart
+  Claude (`straznik-zasad.ps1:3562`, dlawik 60 min), `-Tlo` (`:3470`; hook Codeksa z `szablony-codex\hooks.json`
+  tylko z `-Codex`, wtyczka OpenCode `szablony-opencode\plugins\mr-log.js:88`). [NIEAKTUALNE od 0.29.0 - patrz "Aktualizacja automatyczna (0.29.0)"] NADZORCA SAM NIGDY nie wola
+  straznika (`zasobnik\nadzorca\*` tylko `Stan-Wersji` = fetch+licznik, `stan-wersja.ps1:32`; wola go tylko przycisk
+  `Aktualizuj` `stan-wersja.ps1:129` z `okno.ps1:702` - synchronicznie, bez paska, wynik = nowe linie
+  `.megaruchacz-tlo.log`, NIE czyta `aktualizacja.*`). Po pobraniu nikt nie robi restartu nadzorcy ani
+  `instaluj-globalnie`; znacznik `.megaruchacz-global` `wersja:` pisze TYLKO `instaluj-globalnie.ps1:509`
+  (stad stale 0.21.3 w domu). Wzorzec dlugiej operacji w oknie: `skille.ps1:875 Rusz-Operacje-Skilli` (zegar 2 s,
+  `operacja.txt`) i pasek `ladowanie.ps1` (`$script:PostepLadowania`, `$script:CzasyKrokow`).
 - Zadnego `reset --hard`, `checkout -f`, `clean`, `stash`. Udane przewiniecie = jedna linia (stara ->
   nowa wersja). Limit 6 s na `merge` w trybie okna moglby przy duzej aktualizacji zostawic
   `index.lock` (dzis < 1 s).
@@ -608,3 +617,13 @@ Calosc: `.megaruchacz/raporty/P63.md` (inwentarz sprzed instalatora), `P59a..d.m
 - Okno/koszt: `$NARZEDZIA_AI` w narzedzia/koszt/pomiar.ps1, czytnik OpenCode `narzedzia/koszt/opencode.ps1` (winsqlite3, mode=ro), Codex z rollout-*.jsonl (kopie rozmowy-rodzica w plikach podagentow pomijane). Narzedzie "uzywane" = rozmowa w ostatnich 14 dniach. Rachunek MR w kazdym CLI = tylko bloki MR + "Co wiem" (`Pozycje-MegaRuchacza`, kubelki.ps1). Testy: zasobnik/test-codex.ps1, zasobnik/test-opencode.ps1.
 - Skille: `Wbudowane = $true` w skille/katalog.psd1 dla 6 zrodel (superpowers, impeccable, taste-skill, ponytail, mattpocock, open-design - 21 samodzielnych, reszta w `Pominiete`); codzienna auto-aktualizacja tylko wbudowanych, inne recznie (`Operacja-Na-Zrodle`). Cele: ~/.claude/skills (Claude Code lub OpenCode bez Codeksa), ~/.agents/skills (Codex); OpenCode bez wlasnej kopii (dubel nazwy = ostrzezenie w jego logu, wygrywa pozniej czytany katalog). Przykrycie w ~/.config/opencode/skills: `Przykrycia-Skilli`, ~/.claude/mr/skille/przykryte.json, karta na Przegladzie (`Problemy-Skilli`).
 - Pliki wolane przez hook SessionStart prosto z repo (straznik-zasad, kierownik-cele, wpisz-zasady): zmieniac na kopii i podmieniac jednym krokiem - 06.10 edycja w miejscu zmienila prawdziwe pliki uzytkownika.
+
+## Aktualizacja automatyczna (0.29.0, 2026-10-07)
+
+- Jedno wejscie: `narzedzia\aktualizuj-megaruchacza.ps1 [-Zrodlo] [-KatalogDomowy] [-Reczna]` (nadzorca i przycisk w oknie). Blokada `Local\MegaRuchacz-aktualizacja-<md5 sciezki>` (drugi przebieg kod 3, bez zapisu). Stan na biezaco `~\.claude\mr\aktualizacja.json` (etap/krok/krokow/opis/wynik/wersja_przed/po/start/koniec/sprawdzone/powod/reczna/przyczyna/uwagi/zrodlo/pid, zapis atomowy), dziennik `~\.claude\mr\aktualizacja.log`.
+- Kroki: 1 `straznik-zasad.ps1 -TylkoPobierz` (Odswiez-Zrodlo bez dlawika, slad `byl.pobierz`, czeka do 120 s na blokade pobierania, potem `zajete`); 2 wersja przed/po; 3 naniesienie wg rejestru (instaluj-globalnie -BezPytania przy instalacji globalnej i kierowniku, wpisz-zasady, straznik -Dopasuj, skille -Tryb instaluj -Wbudowane - porazka skilli = uwaga); 4 restart nadzorcy. Nanosi wobec znacznika `~\.claude\mr\aktualizacja-naniesione.txt` (naniesione, naniesione.wersja, nadzorca = commit), wiec wersja pobrana wczesniej przez hook tez jest nanoszona; pierwszy przebieg po wdrozeniu zawsze raz nanosi i restartuje.
+- Restart: pomocnik `-Restart` startowany WMI (Win32_Process.Create, poza drzewem nadzorcy), przejmuje blokade, zamyka TYLKO powershell.exe z `<zrodlo>\zasobnik\nadzorca.ps1`, `Start-ScheduledTask MegaRuchaczNadzorca` (test: `-ZadanieNadzorcy MRTEST-AKT-*`), zapas: start wprost, nowy proces musi przezyc 5 s.
+- Zegar: `dozor.ps1` `$script:ZegarAutoAktualizacji` (Zaplanuj-/Ruszaj-Aktualizacje) - 60 s po pierwszym dozorze, potem co 60 min, Odpal-W-Tle; slady `aktualizacja.zaplanowana`/`.zlecona` w `.megaruchacz-zasobnik.txt`. Alarm: `stan-zbieranie.ps1` `Alarm-Aktualizacji` (zlecona bez sladu 15 min, zegar cichy 3 h przy zywym nadzorcy; nie dubluje karty Stan).
+- Okno: `stan-wersja.ps1` `Stan-Aktualizacji`/`Ocena-Aktualizacji`, zegar okna `Sprawdz-Aktualizacje` co 1,5 s (`okno.ps1`, `$script:ZegarAktualizacji` - NIE mylic z zegarem automatu), blok `Wiersz-Aktualizacji` w karcie Stan (`przeglad.ps1`: pasek 4 krokow albo linia wyniku). Progi: brak sprawdzenia 3 h, zlecona bez sladu 15 min, urwana 20 min bez zapisu, klik bez sladu 30 s; brak sieci / zajete - patrz ZMIANY 0.29.0.
+- Testy: `narzedzia\test-aktualizacji.ps1` (~6 min, `-BezCzekaniaNaBlokade` ~3,5 min), `zasobnik\test-aktualizacja-okno.ps1`.
+- Pulapki: git z samego `mingw64\bin` w PATH pada przy fetch (0xC0000005) - testy potrzebuja tez `usr\bin`. W `-File` wartosc `-` nie przechodzi jako argument. Najdluzsze kroki: skille (limit 900 s) i straznik (600 s) - malo zapasu wobec progu 20 min przy pierwszym klonie skilli.

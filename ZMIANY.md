@@ -4,6 +4,20 @@ Każda zmiana wypychana na gita dostaje tu wpis. Numer rośnie wg zasady:
 pierwsza cyfra — przebudowa łamiąca zgodność, druga — nowa funkcja,
 trzecia — poprawka.
 
+## 0.29.0 — 2026-10-07
+
+- **Aktualizacja MegaRuchacza zawsze sama.** Nadzorca minutę po starcie i potem co godzinę sprawdza, czy jest
+  nowa wersja, pobiera ją, wgrywa do Claude Code, Codeksa i OpenCode (zasady, „Co wiem”, wbudowane skille)
+  i uruchamia się ponownie na nowym kodzie. Nie trzeba niczego klikać; przycisk w oknie robi to samo od ręki.
+  Wersja pobrana wcześniej przy starcie rozmowy też jest wgrywana. Postęp w `~\.claude\mr\aktualizacja.json`,
+  pełny dziennik w `~\.claude\mr\aktualizacja.log`.
+- **Widać, co się dzieje.** Karta Stan na Przeglądzie pokazuje w trakcie pasek z czterema krokami (Sprawdzam /
+  Pobieram / Wgrywam / Uruchamiam ponownie), a po wszystkim „Zaktualizowano do najnowszej wersji X” albo
+  „Masz najnowszą wersję X”. Błąd to czerwona karta z powodem i tym, co zrobić.
+- **Brak internetu to nie alarm.** Gdy nie ma sieci, karta Stan pokazuje spokojną szarą linię i spróbuje
+  za godzinę; czerwona karta pojawia się dopiero, gdy przez ponad dobę nie udało się ani razu sprawdzić
+  aktualizacji.
+
 ## 0.28.0 — 2026-10-06
 
 - **Claude Code, Codex i OpenCode w dowolnym zestawie.** MegaRuchacz sam rozpoznaje, które z tych programów są
