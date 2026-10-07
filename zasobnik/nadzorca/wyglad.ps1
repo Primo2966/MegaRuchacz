@@ -90,6 +90,23 @@ $script:Instalacja     = $null
 $script:ProcesInstalatora = $null   # instalator uruchomiony z okna - drugi naraz nie rusza
 $script:ZegarInstalatora  = $null
 $script:NapisInstalacji   = ""      # odpowiedz na klikniecie pod przyciskiem (tryb probny, blad startu)
+# Aktualizacja MegaRuchacza (2026-10-07): chodzi sama w tle, okno co 1,5 s zaglada do
+# ~\.claude\mr\aktualizacja.json (Sprawdz-Aktualizacje w okno.ps1) i pokazuje pasek albo wynik.
+$script:Aktualizacja          = $null   # ostatni dobry odczyt (Stan-Aktualizacji w stan-wersja.ps1)
+$script:AktualizacjaSygnatura = ""      # czas zapisu i dlugosc pliku - czytamy go tylko po zmianie
+$script:AktualizacjaWidok     = ""      # to, co jest na ekranie - odmalowanie tylko po zmianie
+$script:AktualizacjaBladOd    = $null   # od kiedy plik jest nieczytelny (moze byc w trakcie zapisu)
+$script:AktualizacjaTrwala    = $false
+$script:AktualizacjaKlik      = $null   # klikniecie przycisku, na ktore plik jeszcze nie odpowiedzial
+$script:AktualizacjaKlikPowod = ""      # dlaczego skrypt nie ruszyl
+$script:NapisAktualizacji     = ""      # odpowiedz pod przyciskiem (tryb probny)
+$script:ZegarAktualizacji     = $null
+$script:PostepAktualizacji    = 0.0
+# Od kiedy chodzi nadzorca: w pierwszym kwadransie stary wynik aktualizacji (komputer byl
+# wylaczony) to jeszcze nie alarm - pierwsza aktualizacja wlasnie rusza (stan-wersja.ps1).
+$script:NadzorcaOd = $null
+try { $script:NadzorcaOd = [System.Diagnostics.Process]::GetCurrentProcess().StartTime }
+catch { Zanotuj-Wywrotke "odczyt czasu startu nadzorcy" $_ }
 $script:PanelZmian     = $null   # linie zmian w pamieci, schowane pod "pokaz zmiany"
 $script:LinkZmian      = $null
 # Rozwiniecie listy zmian przezywa przeliczenie okna - inaczej lista zwijalaby

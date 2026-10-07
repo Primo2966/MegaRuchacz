@@ -2,7 +2,8 @@
 # w jego naglowku). Karty zakladki Przeglad: werdykt na gorze (Odmaluj-Werdykt),
 # "Ile tokenow naprawde zuzywasz" (Odmaluj-Koszt), otwarcie okna rozmowy z paskiem
 # (Odmaluj-Start), podtytul, karty problemow, nauka z rozmow (Odmaluj-Liczby),
-# stan jednym rzutem oka ze zmianami w pamieci (Odmaluj-Stan), przyciski na dole
+# stan jednym rzutem oka ze zmianami w pamieci (Odmaluj-Stan; od 2026-10-07 z paskiem
+# albo wynikiem aktualizacji MegaRuchacza - Wiersz-Aktualizacji), przyciski na dole
 # (Odmaluj-Przyciski) i calosc (Odmaluj-Okno). Od P59d karty i linie modulow, ktorych
 # nie ma w rejestrze instalacji ($script:Instalacja), sa niewidoczne albo nie
 # powstaja - bez dziur w ukladzie. Tresc (co pokazac) jest
@@ -517,6 +518,77 @@ function Wiersz-Stanu([string]$linia, $kolorWartosci) {
   return $w
 }
 
+# --- aktualizacja MegaRuchacza w karcie Stan (2026-10-07) --------------------
+# Te same dwie kolumny co reszta karty: po lewej "Aktualizacja MegaRuchacza", po prawej
+# w trakcie pasek z opisem kroku i lista czterech krokow (zrobione - znaczek, trwa -
+# wielokropek, czekajace szare), w spoczynku sama linia wyniku w kolorze wagi.
+# Tresc sklada Ocena-Aktualizacji (stan-wersja.ps1), ta sama co w wydruku -Raport.
+function Rysuj-Pasek-Aktualizacji($g, $rozmiar) {
+  try {
+    $w = [int]$rozmiar.Width; $h = [int]$rozmiar.Height
+    $tlo = New-Object System.Drawing.SolidBrush($script:KolCc)
+    $pel = New-Object System.Drawing.SolidBrush($script:KolMr)
+    try {
+      $g.FillRectangle($tlo, 0, 0, $w, $h)
+      $g.FillRectangle($pel, 0, 0, [int]($w * [math]::Min(1.0, [math]::Max(0.0, [double]$script:PostepAktualizacji))), $h)
+    } finally { $tlo.Dispose(); $pel.Dispose() }
+  } catch {
+    if (-not $script:RysowanieZawiodlo) { $script:RysowanieZawiodlo = $true; Zanotuj-Wywrotke "rysowanie paska aktualizacji" $_ }
+  }
+}
+
+function Wiersz-Aktualizacji($oa) {
+  $szer = $script:SzerKarty - 44
+  $szerW = $szer - $script:SzerEtykiety
+  $w = Poziomy
+  $w.Margin = New-Object System.Windows.Forms.Padding(0, 0, 0, 5)
+  $e = Etykieta-Zawijana $oa.Etykieta $script:CzZwykla $script:KolSzary $script:SzerEtykiety
+  $e.MinimumSize = New-Object System.Drawing.Size($script:SzerEtykiety, 0)
+  $w.Controls.Add($e)
+  $p = Pionowy $szerW
+  if ($oa.Trwa) {
+    $gora = Poziomy
+    $gora.Margin = New-Object System.Windows.Forms.Padding(0, 0, 0, 4)
+    $script:PostepAktualizacji = $oa.Postep
+    $pasek = New-Object System.Windows.Forms.PictureBox
+    $pasek.Size = New-Object System.Drawing.Size(240, 10)
+    $pasek.Margin = New-Object System.Windows.Forms.Padding(0, 6, 12, 0)
+    $pasek.Add_Paint({ param($nadawca, $ev) Rysuj-Pasek-Aktualizacji $ev.Graphics $nadawca.ClientSize })
+    $gora.Controls.Add($pasek)
+    $n = Etykieta-Zawijana $oa.Naglowek $script:CzZwyklaGruba $script:KolTekst ($szerW - 252)
+    $n.UseMnemonic = $false
+    $gora.Controls.Add($n)
+    $p.Controls.Add($gora)
+    $nr = 1
+    foreach ($k in $oa.Kroki) {
+      $r = Poziomy
+      $r.Margin = New-Object System.Windows.Forms.Padding(0, 0, 0, 1)
+      $kol = $script:KolTekst; $czc = $script:CzZwykla; $zn = ""; $kolZn = $script:KolTekst
+      switch ($k.Stan) {
+        "zrobione" { $zn = [string][char]0x2713; $kolZn = $script:KolDobrze }
+        "trwa"     { $zn = "..."; $czc = $script:CzZwyklaGruba }
+        default    { $kol = $script:KolSzary }
+      }
+      $r.Controls.Add((Etykieta-Stala "$nr. $($k.Napis)" $czc $kol ([math]::Min(380, $szerW - 60))))
+      $r.Controls.Add((Etykieta-Stala $zn $script:CzZwyklaGruba $kolZn 40))
+      $p.Controls.Add($r)
+      $nr++
+    }
+  } else {
+    $t = Etykieta-Zawijana ((@($oa.Znak, $oa.Linia) | Where-Object { $_ }) -join " ") $script:CzZwyklaGruba (Kolor-Wagi $oa.Waga) $szerW
+    $t.UseMnemonic = $false
+    $p.Controls.Add($t)
+    if ($oa.Dopisek) {
+      $dd = Etykieta-Zawijana $oa.Dopisek $script:CzMala $script:KolUwaga $szerW
+      $dd.UseMnemonic = $false
+      $dd.Margin = New-Object System.Windows.Forms.Padding(0, 2, 0, 0)
+      $p.Controls.Add($dd)
+    }
+  }
+  $w.Controls.Add($p)
+  return $w
+}
+
 function Odmaluj-Stan {
   if (-not $script:PanelStan -or $script:PanelStan.IsDisposed) { return }
   Wyczysc-Panel $script:PanelStan
@@ -533,7 +605,17 @@ function Odmaluj-Stan {
     try { $linie = Linie-Stanu $script:Dane.Wersja $script:Dane.Cykl $script:Dane.Przeliczanie $script:Instalacja }
     catch { Zanotuj-Wywrotke "zlozenie linii stanu" $_ }
   }
-  foreach ($l in $linie) { $script:PanelStan.Controls.Add((Wiersz-Stanu $l $script:KolTekst)) }
+  # Aktualizacja (2026-10-07) w miejscu wiersza "Wersja MegaRuchacza" - takze przed
+  # pierwszymi danymi, bo nowe okno po restarcie ma od razu pokazac, jak poszla.
+  $oa = $null
+  try { $oa = Ocena-Aktualizacji-Teraz $(if ($script:Dane -and $script:Dane.Wersja) { "$($script:Dane.Wersja.Lokalna)" } else { "" }) }
+  catch { Zanotuj-Wywrotke "stan aktualizacji w karcie Stan" $_ }
+  $wstawiona = $false
+  foreach ($l in $linie) {
+    if ($oa -and $oa.ZPliku -and (Wiersz-Wersji $l)) { $script:PanelStan.Controls.Add((Wiersz-Aktualizacji $oa)); $wstawiona = $true; continue }
+    $script:PanelStan.Controls.Add((Wiersz-Stanu $l $script:KolTekst))
+  }
+  if ($oa -and $oa.ZPliku -and -not $wstawiona) { $script:PanelStan.Controls.Add((Wiersz-Aktualizacji $oa)) }
   # Kopia zapasowa (P62): jedna linia, kolor z oceny (progi w stan-kopia.ps1). Tylko
   # z modulem Kopia (P59d).
   if ($script:Dane -and (Modul-Jest $script:Instalacja "kopia")) {
@@ -613,6 +695,9 @@ function Odmaluj-Przyciski {
   $n = Napisy-Przyciskow $script:Dane $script:Zuzycie $script:Instalacja
   $script:BAktualizuj.Text = $n.Aktualizuj
   $script:LAktualizuj.Text = $n.AktualizujOpis
+  # w trakcie aktualizacji wyszarzony (Napisy-Przyciskow) - druga naraz nic by nie dala
+  $script:BAktualizuj.Enabled = $n.AktualizujWlaczony
+  if ($script:NapisAktualizacji -and $n.AktualizujWlaczony) { $script:LAktualizuj.Text = $script:NapisAktualizacji }
   $script:BCykl.Text       = $n.Cykl
   $script:LCykl.Text       = $n.CyklOpis
   $script:BCykl.Enabled    = $n.CyklWlaczony

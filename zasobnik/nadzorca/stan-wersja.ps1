@@ -1,10 +1,12 @@
 ﻿# zasobnik\nadzorca\stan-wersja.ps1 - czesc zasobnik\stan-nadzorcy.ps1 (patrz
 # BUDOWA w jego naglowku). Wersja narzedzia: numer z ZMIANY.md (Wersja-Narzedzia),
 # porownanie z serwerem przez gita (Stan-Wersji), wiersze dla okna (Wiersz,
-# Opis-Wersji) i przycisk aktualizacji (Aktualizuj -> straznik-zasad.ps1 -Tlo).
+# Opis-Wersji), stan aktualizacji z ~\.claude\mr\aktualizacja.json (Stan-Aktualizacji,
+# Ocena-Aktualizacji) i przycisk (Aktualizuj -> narzedzia\aktualizuj-megaruchacza.ps1 w tle).
 # Wiersz to klocek wierszy Szczegolow uzywany we wszystkich modulach.
 # Skad wolane: stan-zbieranie.ps1 (Stan-Wersji), szczegoly.ps1 (Opis-Wersji),
-# okno.ps1 (Aktualizuj). Wczytuje go stan-nadzorcy.ps1 kropka - same definicje.
+# okno.ps1 (Aktualizuj, Stan-Aktualizacji), przeglad.ps1 i przeglad-tresc.ps1
+# (Ocena-Aktualizacji-Teraz). Wczytuje go stan-nadzorcy.ps1 kropka - same definicje.
 
 # ----------------------------------------------------------------- numer wersji
 
@@ -120,48 +122,256 @@ function Opis-Wersji($w) {
 
 # ------------------------------------------------------------------ aktualizacja
 
-# Przycisk [Aktualizuj] robi DOKLADNIE to, co dzis robi hook Codeksa: wola
-# narzedzia\straznik-zasad.ps1 -Tlo. Nie ma tu drugiej implementacji pobierania
-# (fetch + merge --ff-only, nigdy reset --hard) ani drugiego kompletu warunkow
-# odmowy - straznik ma je u siebie i to on jest jedynym zrodlem prawdy.
-# Straznik w tym trybie milczy na ekran i pisze do ~\.claude\.megaruchacz-tlo.log,
-# wiec bierzemy stad roznice: to, co dopisal, jest odpowiedzia dla czlowieka.
+# Od 2026-10-07 aktualizacja chodzi SAMA: narzedzia\aktualizuj-megaruchacza.ps1 przy
+# starcie nadzorcy i co 60 min (rusza ja dozor), a na koniec restartuje nadzorce.
+# Swoj postep zapisuje w ~\.claude\mr\aktualizacja.json (UTF-8):
+#   etap          sprawdzam | pobieram | nanosze | restart | gotowe | blad
+#   krok, krokow  1..4 z 4;  opis - zdanie pod paskiem
+#   wynik         "" | zaktualizowano | aktualne | blad;  powod - przy bledzie, po ludzku
+#   wersja_przed, wersja_po, start, koniec, sprawdzone (ISO, czas lokalny), reczna
+# Tu jest tylko odczyt tego pliku (Stan-Aktualizacji) i jego ocena po ludzku
+# (Ocena-Aktualizacji) - wspolna dla okna (pasek i karta Stan), listy spraw na
+# Przegladzie i wydruku -Raport. Przycisk (Aktualizuj) tylko uruchamia skrypt w tle
+# i NIE czeka - do 0.28.0 wolal straznika synchronicznie do 180 s i okno zamarzalo.
+
+$ETAPY_AKTUALIZACJI = @("sprawdzam", "pobieram", "nanosze", "restart")
+$KROKI_AKTUALIZACJI = @("Sprawdzam, czy jest coś nowego", "Pobieram", "Wgrywam do Claude Code / Codeksa / OpenCode", "Uruchamiam ponownie")
+$OPISY_ETAPOW = @{ sprawdzam = "Sprawdzam, czy jest coś nowego..."; pobieram = "Pobieram nową wersję..."
+                   nanosze = "Wgrywam nową wersję..."; restart = "Uruchamiam MegaRuchacza ponownie..." }
+# PROGI Z UZASADNIENIEM:
+# - 3 h bez sprawdzenia: aktualizacja ma chodzic co 60 min, wiec 3 h to co najmniej dwa
+#   przebiegi z rzedu, ktore przepadly. Jeden przepadly przebieg (uspiony komputer) to
+#   jeszcze nie usterka - a nieudany konczy sie bledem w pliku, nie cisza.
+# - 15 min po starcie nadzorcy: pierwszy przebieg idzie przy starcie, wiec stary wynik
+#   z wczoraj (komputer byl wylaczony) w pierwszym kwadransie to nie alarm, tylko czekanie.
+# - 20 min bez zapisu w trakcie: najdluzsze kroki (pobranie przy wolnej sieci, wgranie
+#   do narzedzi AI) trwaja minuty; 20 min bez zadnego zapisu = proces nie zyje albo wisi.
+# - 30 s po kliknieciu: skrypt zapisuje "sprawdzam" w pierwszej sekundzie; 30 s bez sladu
+#   = nie ruszyl (np. zly PowerShell, blokada) i trzeba to powiedziec, a nie krecic paskiem.
+$GODZIN_BEZ_SPRAWDZENIA_AKTUALIZACJI = 3
+$MINUT_PO_STARCIE_NADZORCY = 15
+$MINUT_BEZ_RUCHU_AKTUALIZACJI = 20
+$SEKUND_NA_START_AKTUALIZACJI = 30
+
+function Plik-Aktualizacji { return (Join-Path $script:NadzDom ".claude\mr\aktualizacja.json") }
+
+function Data-Aktualizacji($v) {
+  if ($v -is [datetime]) { return $v }
+  return (Data-Lub-Nic "$v")
+}
+
+# Odczyt pliku stanu. Zawsze komplet pol; nieczytelny plik = Blad z powodem, brak = Jest $false.
+function Stan-Aktualizacji {
+  $plik = Plik-Aktualizacji
+  $a = [pscustomobject]@{ Plik = $plik; Jest = $false; Blad = ""; Zapis = $null; Etap = ""; Krok = 0; Krokow = 4
+    Opis = ""; Wynik = ""; WersjaPrzed = ""; WersjaPo = ""; Start = $null; Koniec = $null; Sprawdzone = $null
+    Powod = ""; Reczna = $false }
+  $fi = New-Object System.IO.FileInfo($plik)
+  if (-not $fi.Exists) { return $a }
+  $a.Jest = $true
+  $a.Zapis = $fi.LastWriteTime
+  $j = $null
+  try {
+    $txt = [System.IO.File]::ReadAllText($plik, [System.Text.Encoding]::UTF8)
+    if (-not "$txt".Trim()) { throw "plik jest pusty" }
+    $j = $txt | ConvertFrom-Json
+    if ($null -eq $j) { throw "w pliku nie ma żadnych danych" }
+  } catch {
+    $a.Blad = "nie da się odczytać ${plik}: $($_.Exception.Message)"
+    return $a
+  }
+  $a.Etap = "$($j.etap)".Trim().ToLower()
+  if (($ETAPY_AKTUALIZACJI + @("gotowe", "blad")) -notcontains $a.Etap) {
+    $a.Blad = "w ${plik} stoi nieznany etap '$($a.Etap)'"
+    return $a
+  }
+  $n = 0
+  if ([int]::TryParse("$($j.krok)", [ref]$n)) { $a.Krok = $n }
+  if ([int]::TryParse("$($j.krokow)", [ref]$n) -and ($n -gt 0)) { $a.Krokow = $n }
+  $a.Opis = "$($j.opis)".Trim()
+  $a.Wynik = "$($j.wynik)".Trim().ToLower()
+  $a.WersjaPrzed = "$($j.wersja_przed)".Trim()
+  $a.WersjaPo = "$($j.wersja_po)".Trim()
+  $a.Start = Data-Aktualizacji $j.start
+  $a.Koniec = Data-Aktualizacji $j.koniec
+  $a.Sprawdzone = Data-Aktualizacji $j.sprawdzone
+  $a.Powod = "$($j.powod)".Trim()
+  $a.Reczna = (("$($j.reczna)" -eq "True") -or ("$($j.reczna)" -eq "1"))
+  return $a
+}
+
+# "dziś 08:12", "wczoraj 08:12", "05.10 08:12" - tak jak w uzgodnionym wygladzie.
+function Kiedy-Krotko($data) {
+  if (-not $data) { return "nie wiem kiedy" }
+  $dzis = [datetime]::Now.Date
+  if ($data.Date -eq $dzis) { return "dziś $($data.ToString('HH:mm'))" }
+  if ($data.Date -eq $dzis.AddDays(-1)) { return "wczoraj $($data.ToString('HH:mm'))" }
+  return $data.ToString('dd.MM HH:mm')
+}
+
+# Ocena po ludzku. $a = Stan-Aktualizacji; $nadzorcaOd = start dzialajacego nadzorcy
+# ($null = nie wiadomo, np. wydruk -Raport: wtedy brak pliku nie jest sprawa, bo nie wiemy,
+# czy nadzorca w ogole chodzi); $klik / $klikPowod = klikniecie przycisku w tym oknie
+# i ewentualny powod, dla ktorego skrypt nie ruszyl. Zwraca:
+#   Trwa, Postep (0..1), Naglowek ("Pobieram nową wersję... (2 z 4)"), Kroki (Napis, Stan:
+#   zrobione/trwa/czeka), Znak, Linia, Waga (dobrze/pilne/uwaga/szary), Dopisek,
+#   ZPliku ($false = nic nie wiadomo, okno zostawia stara linie "Wersja MegaRuchacza"),
+#   Problem ($null albo Waga/Tytul/Porada/Pelne), Przycisk (wlaczony), PrzyciskOpis.
+function Ocena-Aktualizacji($a, $teraz, $nadzorcaOd = $null, $klik = $null, [string]$klikPowod = "", [string]$lokalna = "") {
+  $przyc = "`„Sprawdź i pobierz nowszą wersję MegaRuchacza`”"
+  $o = [pscustomobject]@{ Etykieta = "Aktualizacja MegaRuchacza"; Trwa = $false; Postep = 0.0; Naglowek = ""; Kroki = @()
+    Znak = ""; Linia = ""; Waga = "szary"; Dopisek = ""; ZPliku = $true; Problem = $null; Przycisk = $true; PrzyciskOpis = "" }
+  $poStarcie = ($null -ne $nadzorcaOd) -and (($teraz - $nadzorcaOd).TotalMinutes -ge $MINUT_PO_STARCIE_NADZORCY)
+  $zle = {
+    param([string]$linia, [string]$tytul, [string]$porada, [string]$pelne)
+    $o.Znak = [string][char]0x2717; $o.Linia = $linia; $o.Waga = "pilne"
+    $o.Problem = [pscustomobject]@{ Waga = "pilne"; Tytul = $tytul; Porada = $porada; Pelne = $pelne }
+  }
+  $wTrakcie = $a -and $a.Jest -and (-not $a.Blad) -and ($ETAPY_AKTUALIZACJI -contains $a.Etap)
+  $ruch = $null
+  if ($wTrakcie) { $ruch = $a.Zapis; if ($a.Start -and ((-not $ruch) -or ($a.Start -gt $ruch))) { $ruch = $a.Start } }
+  $zyje = $wTrakcie -and $ruch -and (($teraz - $ruch).TotalMinutes -lt $MINUT_BEZ_RUCHU_AKTUALIZACJI)
+  # klikniecie, na ktore plik jeszcze nie odpowiedzial (start w pliku sprzed klikniecia)
+  $czekaNaKlik = $klik -and -not ($a -and $a.Jest -and (-not $a.Blad) -and $a.Start -and ($a.Start -ge $klik.AddSeconds(-2)))
+
+  if ($zyje -or ($czekaNaKlik -and (-not $klikPowod) -and (($teraz - $klik).TotalSeconds -lt $SEKUND_NA_START_AKTUALIZACJI))) {
+    $krok = 1; $krokow = 4; $opis = ""
+    if ($zyje) {
+      $krok = $a.Krok
+      if ($krok -lt 1) { $krok = [array]::IndexOf($ETAPY_AKTUALIZACJI, $a.Etap) + 1 }
+      $krokow = [math]::Max($a.Krokow, $krok)
+      $opis = $a.Opis
+      if (-not $opis) { $opis = $OPISY_ETAPOW[$a.Etap] }
+    } else { $opis = $OPISY_ETAPOW["sprawdzam"] }
+    $o.Trwa = $true
+    $o.Postep = [math]::Min(1.0, [math]::Max(0.0, ($krok - 0.5) / $krokow))
+    $o.Naglowek = "$opis ($krok z $krokow)"
+    for ($i = 1; $i -le [math]::Max($krokow, $KROKI_AKTUALIZACJI.Count); $i++) {
+      $napis = $(if ($i -le $KROKI_AKTUALIZACJI.Count) { $KROKI_AKTUALIZACJI[$i - 1] } else { "Krok $i" })
+      $st = $(if ($i -lt $krok) { "zrobione" } elseif ($i -eq $krok) { "trwa" } else { "czeka" })
+      $o.Kroki += [pscustomobject]@{ Napis = $napis; Stan = $st }
+    }
+    $o.Waga = ""
+    $o.Przycisk = $false
+    $o.PrzyciskOpis = "Aktualizacja trwa - postęp widać w karcie Stan na Przeglądzie."
+    return $o
+  }
+
+  if ($czekaNaKlik) {
+    $pw = $klikPowod
+    if (-not $pw) { $pw = "przez $SEKUND_NA_START_AKTUALIZACJI s po kliknięciu nie zapisała ani śladu postępu" }
+    & $zle "Nie udało się uruchomić aktualizacji: $pw." "Nie udało się uruchomić aktualizacji MegaRuchacza" (
+      "Kliknięcie o $($klik.ToString('HH:mm')) nie uruchomiło aktualizacji: $pw. Spróbuj kliknąć $przyc jeszcze raz; jeśli to się powtórzy, ślad jest w dzienniku nadzorcy.") "plik: $(Plik-Aktualizacji)"
+    return $o
+  }
+
+  if (-not $a -or -not $a.Jest) {
+    $o.ZPliku = $false
+    if ($poStarcie) {
+      $o.Problem = [pscustomobject]@{ Waga = "uwaga"; Tytul = "Aktualizacja MegaRuchacza jeszcze ani razu nie ruszyła sama"
+        Porada = "Powinna sprawdzać serwer sama przy starcie i co godzinę, a od uruchomienia ikony przy zegarze ($(Kiedy-Krotko $nadzorcaOd)) nie zostawiła śladu. Kliknij $przyc na dole okna."
+        Pelne = "brak pliku $(Plik-Aktualizacji)" }
+    }
+    return $o
+  }
+
+  if ($a.Blad) {
+    $o.Znak = "!"; $o.Waga = "uwaga"
+    $o.Linia = "Nie umiem odczytać, jak poszła ostatnia aktualizacja - plik z jej postępem jest uszkodzony."
+    $o.Problem = [pscustomobject]@{ Waga = "uwaga"; Tytul = "Nie umiem odczytać, jak poszła aktualizacja MegaRuchacza"
+      Porada = "Plik, w którym aktualizacja zapisuje swój postęp, jest uszkodzony. Kliknij $przyc na dole okna - aktualizacja zapisze go od nowa."
+      Pelne = $a.Blad }
+    return $o
+  }
+
+  if ($wTrakcie) {
+    $nr = $a.Krok; if ($nr -lt 1) { $nr = [array]::IndexOf($ETAPY_AKTUALIZACJI, $a.Etap) + 1 }
+    $nap = $(if (($nr -ge 1) -and ($nr -le $KROKI_AKTUALIZACJI.Count)) { $KROKI_AKTUALIZACJI[$nr - 1] } else { $a.Etap })
+    $pw = "aktualizacja stanęła na kroku $nr z $([math]::Max($a.Krokow, $nr)) (`„$nap`”) i od $(Kiedy-Krotko $ruch) nic nie zapisała. Kliknij $przyc, żeby spróbować jeszcze raz"
+    & $zle "Nie udało się zaktualizować: $pw." "Nie udało się zaktualizować MegaRuchacza" "$(Z-Wielkiej $pw)." "plik: $($a.Plik); start: $($a.Start); ostatni zapis: $($a.Zapis)"
+    return $o
+  }
+
+  $wersja = $a.WersjaPo
+  if (-not $wersja) { $wersja = $a.WersjaPrzed }
+  if (-not $wersja) { $wersja = $lokalna }
+  if (-not $wersja) { $wersja = "(numer nieznany)" }
+  if (($a.Etap -eq "blad") -or ($a.Wynik -eq "blad")) {
+    $pw = $a.Powod
+    if (-not $pw) { $pw = "aktualizacja nie podała powodu - to samo w sobie jest usterką. Kliknij $przyc, żeby spróbować jeszcze raz" }
+    $pw = $pw.TrimEnd('.', ' ')
+    & $zle "Nie udało się zaktualizować: $pw." "Nie udało się zaktualizować MegaRuchacza" "$(Z-Wielkiej $pw)." "$(Kiedy-Krotko $(if ($a.Koniec) { $a.Koniec } else { $a.Zapis })); plik: $($a.Plik)"
+    return $o
+  }
+
+  $kiedy = $null
+  if ($a.Wynik -eq "zaktualizowano") {
+    $kiedy = $a.Koniec; if (-not $kiedy) { $kiedy = $a.Sprawdzone }
+    $o.Znak = [string][char]0x2713; $o.Waga = "dobrze"
+    $o.Linia = "Zaktualizowano do najnowszej wersji $wersja ($(Kiedy-Krotko $kiedy))"
+    if ($a.Sprawdzone -and ((-not $kiedy) -or ($a.Sprawdzone -gt $kiedy))) { $kiedy = $a.Sprawdzone }
+  } elseif ($a.Wynik -eq "aktualne") {
+    $kiedy = $a.Sprawdzone; if (-not $kiedy) { $kiedy = $a.Koniec }
+    $o.Znak = [string][char]0x2713; $o.Waga = "dobrze"
+    $o.Linia = "Masz najnowszą wersję $wersja (sprawdzone $(Kiedy-Krotko $kiedy))"
+  } else {
+    $o.Znak = "!"; $o.Waga = "uwaga"
+    $o.Linia = "Aktualizacja skończyła się, ale nie zapisała, czy coś pobrała."
+    $o.Problem = [pscustomobject]@{ Waga = "uwaga"; Tytul = "Aktualizacja MegaRuchacza nie zapisała wyniku"
+      Porada = "Ostatnia aktualizacja doszła do końca, ale nie zapisała, czy coś pobrała. Kliknij $przyc na dole okna, żeby sprawdzić jeszcze raz."
+      Pelne = "wynik '$($a.Wynik)' w $($a.Plik)" }
+    return $o
+  }
+  if (-not $kiedy) { $kiedy = $a.Zapis }
+  $grace = ($null -ne $nadzorcaOd) -and (-not $poStarcie)
+  if ($kiedy -and (($teraz - $kiedy).TotalHours -ge $GODZIN_BEZ_SPRAWDZENIA_AKTUALIZACJI) -and (-not $grace)) {
+    $o.Znak = "!"; $o.Waga = "uwaga"
+    $o.Dopisek = "Od ponad $GODZIN_BEZ_SPRAWDZENIA_AKTUALIZACJI godzin nie sprawdziłem, czy jest coś nowszego - powinienem co godzinę."
+    $o.Problem = [pscustomobject]@{ Waga = "uwaga"; Tytul = "Aktualizacja MegaRuchacza nie sprawdzała serwera od $(Kiedy-Krotko $kiedy)"
+      Porada = "Sprawdzanie ma iść samo co godzinę, a ostatnie było $(Kiedy-Krotko $kiedy). Kliknij $przyc na dole okna, żeby sprawdzić teraz."
+      Pelne = "ostatnie sprawdzenie: $kiedy; plik: $($a.Plik)" }
+  }
+  return $o
+}
+
+# Ocena na teraz: stan z okna ($script:Aktualizacja, odswiezany zegarem w okno.ps1) albo
+# - w wydruku -Raport, gdzie okna nie ma - prosto z pliku.
+function Ocena-Aktualizacji-Teraz([string]$lokalna = "") {
+  $a = $script:Aktualizacja
+  if (-not $a) { $a = Stan-Aktualizacji }
+  return (Ocena-Aktualizacji $a ([datetime]::Now) $script:NadzorcaOd $script:AktualizacjaKlik "$($script:AktualizacjaKlikPowod)" $lokalna)
+}
+
+# Przycisk: skrypt aktualizacji w osobnym, ukrytym procesie z -Reczna - i powrot od razu.
+# Postep pokazuje zegar okna z pliku stanu. Nie ma tu drugiej implementacji pobierania ani
+# warunkow odmowy (brudne drzewo, rozjechana historia) - ma je skrypt aktualizacji.
+# Zwraca Ok / Powod / Pid; tryb probny niczego nie uruchamia (Proba = $true).
 function Aktualizuj {
-  $skrypt = Join-Path $script:NadzZrodlo "narzedzia\straznik-zasad.ps1"
-  $plikLogu = Join-Path $script:NadzDom ".claude\.megaruchacz-tlo.log"
-  $przed = @()
-  $raw = Czytaj-Tekst $plikLogu
-  if ($raw) { $przed = @(($raw -split '\r?\n') | Where-Object { $_.Trim() }) }
-
-  if ($script:NadzProba) { return ,@("[proba] NIE wolam straznika: ${skrypt} -Tlo") }
-
-  $r = Wolaj-Skrypt $skrypt @("-Tlo", "-Zrodlo", ('"' + $script:NadzZrodlo + '"'), "-KatalogDomowy", ('"' + $script:NadzDom + '"')) 180
-  if (-not $r.ok) {
-    Zanotuj-Wywrotke "aktualizacja przez straznika" $r.powod
-    return ,@("NIE UDALO SIE: $($r.powod)",
-             "sprobuj recznie: powershell -ExecutionPolicy Bypass -File ${skrypt} -Tlo")
+  $w = [pscustomobject]@{ Ok = $false; Proba = $false; Powod = ""; Pid = $null }
+  $skrypt = Join-Path $script:NadzZrodlo "narzedzia\aktualizuj-megaruchacza.ps1"
+  if (-not (Test-Path -LiteralPath $skrypt -PathType Leaf)) {
+    $w.Powod = "brakuje pliku $skrypt"
+    Zanotuj-Wywrotke "aktualizacja z okna" $w.Powod
+    return $w
   }
-
-  $po = @()
-  $raw = Czytaj-Tekst $plikLogu
-  if ($raw) { $po = @(($raw -split '\r?\n') | Where-Object { $_.Trim() }) }
-
-  # Dziennik jest obcinany z gory do stalej liczby linii, wiec porownujemy
-  # tresc, a nie indeksy - inaczej po obcieciu "nowe" wyszlyby stare linie.
-  $nowe = @()
-  if ($po.Count -gt 0) {
-    $zbior = @{}
-    foreach ($l in $przed) { $zbior[$l] = $true }
-    foreach ($l in $po) { if (-not $zbior.ContainsKey($l)) { $nowe += $l } }
+  if ($script:NadzProba) { $w.Proba = $true; $w.Powod = "tryb próbny - aktualizacji nie uruchamiam"; return $w }
+  try {
+    $psi = New-Object System.Diagnostics.ProcessStartInfo
+    $psi.FileName = Join-Path $env:SystemRoot "System32\WindowsPowerShell\v1.0\powershell.exe"
+    $psi.Arguments = '-NoProfile -NonInteractive -ExecutionPolicy Bypass -WindowStyle Hidden -File "' + $skrypt + '" -Zrodlo "' + $script:NadzZrodlo.TrimEnd('\') + '" -Reczna'
+    $psi.WorkingDirectory = $script:NadzZrodlo
+    $psi.UseShellExecute = $false
+    $psi.CreateNoWindow = $true
+    $p = [System.Diagnostics.Process]::Start($psi)
+    $w.Pid = $p.Id
+    $w.Ok = $true
+    $p.Dispose()
+    Notuj "aktualizacja: uruchomiona z okna w tle (pid $($w.Pid))"
+  } catch {
+    $w.Powod = "Windows nie uruchomił skryptu aktualizacji ($($_.Exception.Message))"
+    Zanotuj-Wywrotke "aktualizacja z okna" $_
   }
-  if ($nowe.Count -eq 0) {
-    # Cisza po straznikU nie znaczy "wszystko gra" - znaczy, ze nie wiemy.
-    return ,@("Straznik przeszedl (kod $($r.kod)), ale nie dopisal ani jednej linii do dziennika.",
-             "To NIE jest potwierdzenie, ze cos pobral - to brak odpowiedzi.",
-             "Dziennik: ${plikLogu}")
-  }
-  Notuj "aktualizacja: $($nowe.Count) nowych linii w dzienniku straznika"
-  return ,$nowe
+  return $w
 }
 
 # Znacznik dla stan-nadzorcy.ps1: ten plik wczytal sie do konca.

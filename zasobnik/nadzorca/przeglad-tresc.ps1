@@ -9,6 +9,9 @@
 # nie powstaja - w oknie i w wydruku tak samo. Od P71 narzedzia AI tej maszyny (Claude
 # Code, Codex - klucze narz.N.* z -Dane): Narzedzia-Z-Rachunku, Zdanie-Narzedzi,
 # Problemy-Narzedzi, Teksty-Kosztu-Narzedzi, Opis-Startu-Narzedzia, Linie-Otwarcia-Innych.
+# Od 2026-10-07 aktualizacja MegaRuchacza: sprawa przy nieudanej / urwanej / dawno
+# niesprawdzonej (w Zbierz-Problemy), przycisk wyszarzony w trakcie (Napisy-Przyciskow),
+# w wydruku pasek z krokami albo linia wyniku zamiast wiersza wersji (Linie-Aktualizacji).
 # Skad wolane: tryby -Raz i -Raport w nadzorca.ps1, karty w przeglad.ps1 (Odmaluj-*),
 # przyciski w okno.ps1, sekcje w szczegoly.ps1. Wczytuje go nadzorca.ps1 kropka
 # PRZED trybami bez GUI - tu sa same definicje, nic sie nie liczy.
@@ -83,6 +86,14 @@ function Zbierz-Problemy($d, $wywrotki, [string]$blad, $czasDanych) {
       foreach ($p in (Problemy-Skilli)) { $lista += Problem $p.Waga $p.Tytul $p.Porada $p.Pelne }
     } catch { Zanotuj-Wywrotke "odczyt znacznika skilli" $_ }
   }
+
+  # Aktualizacja MegaRuchacza (od 2026-10-07 chodzi sama): nieudana, urwana w polowie,
+  # nieczytelna albo dawno niesprawdzana - sama ocena pliku stanu (Ocena-Aktualizacji
+  # w stan-wersja.ps1). Nieudana aktualizacja nie ma prawa stac obok "Wszystko gra".
+  try {
+    $oa = Ocena-Aktualizacji-Teraz $(if ($d -and $d.Wersja) { "$($d.Wersja.Lokalna)" } else { "" })
+    if ($oa.Problem) { $lista += Problem $oa.Problem.Waga $oa.Problem.Tytul $oa.Problem.Porada $oa.Problem.Pelne }
+  } catch { Zanotuj-Wywrotke "sprawa aktualizacji MegaRuchacza" $_ }
 
   # Czerwone przed zoltymi, zolte przed informacjami: pierwsza rzecz na ekranie
   # ma byc ta, ktora naprawde czegos wymaga, a nie ta, ktorej akurat nie wiemy.
@@ -335,6 +346,32 @@ function Ile-Wymaga-Uwagi($problemy) {
   return @(@($problemy) | Where-Object { $_ -and ($_.Waga -ne "info") }).Count
 }
 
+# ------------------------------------------- aktualizacja MegaRuchacza (2026-10-07)
+# Karta Stan: w miejscu wiersza "Wersja MegaRuchacza" (Linie-Stanu) staje aktualizacja -
+# w trakcie pasek z czterema krokami, w spoczynku sama linia wyniku. Gdy pliku stanu
+# aktualizacji jeszcze nie ma (ZPliku $false), zostaje stary wiersz wersji.
+function Wiersz-Wersji([string]$linia) { return $linia.StartsWith("Wersja MegaRuchacza:") }
+
+# Ta sama tresc co w oknie, jako tekst do wydruku -Raport (i do testow bez pulpitu).
+function Linie-Aktualizacji($oa) {
+  $l = @()
+  if ($oa.Trwa) {
+    $pel = [int][math]::Round(20 * $oa.Postep)
+    $l += "  $($oa.Etykieta): [$('#' * $pel)$('-' * (20 - $pel))]  $($oa.Naglowek)   (pasek tylko w trakcie)"
+    $nr = 1
+    foreach ($k in $oa.Kroki) {
+      $zn = $(if ($k.Stan -eq "zrobione") { "  " + [string][char]0x2713 } elseif ($k.Stan -eq "trwa") { "  ..." } else { "" })
+      $l += "      $nr. $($k.Napis)$zn"
+      $nr++
+    }
+    return ,$l
+  }
+  $kol = $(switch ($oa.Waga) { "dobrze" { "  (zielony napis)" } "pilne" { "  (czerwony napis)" } "uwaga" { "  (żółty napis)" } default { "" } })
+  $l += "  $($oa.Etykieta): $(@($oa.Znak, $oa.Linia | Where-Object { $_ }) -join ' ')$kol"
+  if ($oa.Dopisek) { $l += "      $($oa.Dopisek)  (żółty napis)" }
+  return ,$l
+}
+
 # ------------------------------------------------------------- napisy przyciskow
 
 # Napisy powstaja TUTAJ, w jednym miejscu, i ten sam tekst widzi uzytkownik
@@ -355,10 +392,14 @@ function Ile-Wymaga-Uwagi($problemy) {
 # "Zmień instalację" - otwiera instalator w trybie zmiany (instalator\okno.ps1), a gdy
 # instalatora jeszcze nie ma w repo, jest nieaktywny i mowi dlaczego. $inst = Stan-Instalacji
 # (pusty = wedlug $d.Instalacja).
-function Napisy-Przyciskow($d, $zuzycie = $null, $inst = $null) {
+#
+# Od 2026-10-07 aktualizacja chodzi sama i trwa w tle - w trakcie przycisk jest wyszarzony
+# z opisem "Aktualizacja trwa" ($akt = Ocena-Aktualizacji; pusty = odczyt na teraz).
+function Napisy-Przyciskow($d, $zuzycie = $null, $inst = $null, $akt = $null) {
   $n = [pscustomobject]@{
     Aktualizuj     = "Sprawdź i pobierz nowszą wersję MegaRuchacza"
     AktualizujOpis = "Nie kosztuje nic. Zagląda na serwer po poprawki i nanosi je."
+    AktualizujWlaczony = $true
     Cykl           = "Przeczytaj teraz nowe rozmowy"
     CyklOpis       = "Nie musisz - MegaRuchacz robi to sam raz dziennie. Zapyta o zgodę."
     CyklWlaczony   = $true
@@ -377,6 +418,14 @@ function Napisy-Przyciskow($d, $zuzycie = $null, $inst = $null) {
 
   if ($d -and $d.Wersja -and ($null -ne $d.Wersja.Nowsza) -and ($d.Wersja.Nowsza -gt 0)) {
     $n.Aktualizuj = "Pobierz nowszą wersję MegaRuchacza ($($d.Wersja.Nowsza) do pobrania)"
+  }
+  if (-not $akt) {
+    try { $akt = Ocena-Aktualizacji-Teraz $(if ($d -and $d.Wersja) { "$($d.Wersja.Lokalna)" } else { "" }) }
+    catch { Zanotuj-Wywrotke "stan aktualizacji pod przyciskiem" $_ }
+  }
+  if ($akt -and -not $akt.Przycisk) {
+    $n.AktualizujWlaczony = $false
+    $n.AktualizujOpis = $akt.PrzyciskOpis
   }
 
   $s = $null
@@ -574,7 +623,16 @@ function Zbuduj-Przod($d, $problemy, $czas, $start, $zuzycie = $null, $koszt = $
     try { $linie = Linie-Stanu $d.Wersja $d.Cykl $d.Przeliczanie $inst }
     catch { Zanotuj-Wywrotke "linie stanu do wydruku" $_; $l += "  NIE UDALO SIE ZLOZYC - szczegoly w dzienniku nadzorcy" }
   }
-  foreach ($x in $linie) { $l += "  $x" }
+  # Aktualizacja w miejscu wiersza "Wersja MegaRuchacza" - tak samo jak w oknie (przeglad.ps1).
+  $oa = $null
+  try { $oa = Ocena-Aktualizacji-Teraz $(if ($d -and $d.Wersja) { "$($d.Wersja.Lokalna)" } else { "" }) }
+  catch { Zanotuj-Wywrotke "aktualizacja do wydruku" $_; $l += "  NIE UDALO SIE ZLOZYC STANU AKTUALIZACJI - szczegoly w dzienniku nadzorcy" }
+  $wstawiona = $false
+  foreach ($x in $linie) {
+    if ($oa -and $oa.ZPliku -and (Wiersz-Wersji $x)) { $l += Linie-Aktualizacji $oa; $wstawiona = $true; continue }
+    $l += "  $x"
+  }
+  if ($oa -and $oa.ZPliku -and -not $wstawiona) { $l += Linie-Aktualizacji $oa }
   if ($d -and (Modul-Jest $inst "kopia")) {
     try { $kop = Ocena-Kopii $d.Kopia $inst; $l += "  $($kop.Linia)$(if ($kop.Waga -eq 'pilne') { '  (czerwony napis)' } elseif ($kop.Waga -eq 'uwaga') { '  (żółty napis)' })" }
     catch { Zanotuj-Wywrotke "linia kopii zapasowej do wydruku" $_; $l += "  NIE UDALO SIE ZLOZYC LINII KOPII ZAPASOWEJ - szczegoly w dzienniku nadzorcy" }
@@ -596,8 +654,8 @@ function Zbuduj-Przod($d, $problemy, $czas, $start, $zuzycie = $null, $koszt = $
   $l += ""
 
   $l += "PRZYCISKI W OKNIE - co się stanie po kliknięciu"
-  $n = Napisy-Przyciskow $d $zuzycie $inst
-  $l += "  [$($n.Aktualizuj)]"
+  $n = Napisy-Przyciskow $d $zuzycie $inst $oa
+  $l += "  [$($n.Aktualizuj)]$(if (-not $n.AktualizujWlaczony) { '  (przycisk nieaktywny)' })"
   $l += "      $($n.AktualizujOpis)"
   if ($n.CyklJest) {
     $wl = ""

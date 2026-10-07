@@ -4,7 +4,8 @@
 # o zgode, zdarzenia) i pokazuje go; Pokaz-Widok przelacza zakladki. Od P59d takze
 # zakladki i pasek wedlug rejestru instalacji (Uloz-Przelacznik, Uloz-Pasek,
 # Ustaw-Instalacje-Okna) i przycisk "Zmień instalację" (Zmien-Instalacje,
-# Po-Instalatorze, Instalator-Otwarty).
+# Po-Instalatorze, Instalator-Otwarty). Od 2026-10-07 postep aktualizacji MegaRuchacza
+# z pliku stanu (Rusz-Zegar-Aktualizacji, Sprawdz-Aktualizacje, Kliknij-Aktualizuj).
 # Skad wolane: menu i klikniecie ikony w nadzorca.ps1 (Pokaz-Okno), przelacznik
 # zakladek (Pokaz-Widok), dozor.ps1 i w-tle.ps1 (Ustaw-Instalacje-Okna po danych),
 # przeglad.ps1 (Uloz-Pasek, Instalator-Otwarty). Wczytuje go nadzorca.ps1 kropka po
@@ -164,6 +165,104 @@ function Po-Instalatorze {
   }
 }
 
+# --- aktualizacja MegaRuchacza (2026-10-07) ------------------------------------
+# Aktualizacja chodzi sama w tle (przy starcie nadzorcy i co 60 min) albo po kliknieciu
+# przycisku - zawsze w osobnym procesie, ktory zapisuje postep w ~\.claude\mr\aktualizacja.json.
+# Okno co 1,5 s zaglada do tego pliku (wzorzec Rusz-Operacje-Skilli: zegar, plik, zero
+# czekania), czyta go tylko po zmianie, a karty odmalowuje tylko wtedy, gdy zmienilo sie to,
+# co widac. Tresc - Ocena-Aktualizacji (stan-wersja.ps1), wyglad - Wiersz-Aktualizacji.
+function Rusz-Zegar-Aktualizacji {
+  if (-not $script:ZegarAktualizacji) {
+    $script:ZegarAktualizacji = New-Object System.Windows.Forms.Timer
+    $script:ZegarAktualizacji.Interval = 1500
+    $script:ZegarAktualizacji.Add_Tick({
+      try { Sprawdz-Aktualizacje }
+      catch { $script:ZegarAktualizacji.Stop(); Zanotuj-Wywrotke "zegar aktualizacji" $_ }
+    })
+  }
+  $script:ZegarAktualizacji.Start()
+}
+
+function Sprawdz-Aktualizacje([bool]$wymus = $false) {
+  $fi = New-Object System.IO.FileInfo((Plik-Aktualizacji))
+  $sygn = "brak"
+  if ($fi.Exists) { $sygn = "$($fi.LastWriteTimeUtc.Ticks)/$($fi.Length)" }
+  if ($wymus -or ($sygn -ne $script:AktualizacjaSygnatura)) {
+    $a = Stan-Aktualizacji
+    if ($a.Blad -and $script:Aktualizacja -and -not $script:Aktualizacja.Blad) {
+      # Plik moze byc wlasnie w trakcie zapisu - stary odczyt zostaje jeszcze 10 s
+      # (sygnatury nie zapamietujemy, wiec nastepny tyk czyta od nowa); dluzej = naprawde zepsuty.
+      if (-not $script:AktualizacjaBladOd) { $script:AktualizacjaBladOd = [datetime]::Now }
+      if (([datetime]::Now - $script:AktualizacjaBladOd).TotalSeconds -ge 10) { $script:Aktualizacja = $a; $script:AktualizacjaSygnatura = $sygn }
+    } else {
+      $script:AktualizacjaBladOd = $null
+      $script:Aktualizacja = $a
+      $script:AktualizacjaSygnatura = $sygn
+    }
+  }
+  $a = $script:Aktualizacja
+  # Klikniecie obsluzone, gdy plik zaczal nowy przebieg (start nie wczesniej niz klikniecie).
+  if ($script:AktualizacjaKlik -and $a -and $a.Start -and ($a.Start -ge $script:AktualizacjaKlik.AddSeconds(-2))) {
+    $script:AktualizacjaKlik = $null; $script:AktualizacjaKlikPowod = ""
+  }
+  $lok = $(if ($script:Dane -and $script:Dane.Wersja) { "$($script:Dane.Wersja.Lokalna)" } else { "" })
+  $oa = Ocena-Aktualizacji-Teraz $lok
+  $widok = "$($oa.Trwa)|$($oa.Naglowek)|$($oa.Znak)|$($oa.Linia)|$($oa.Waga)|$($oa.Dopisek)|$($oa.ZPliku)|" +
+    "$((@($oa.Kroki) | ForEach-Object { $_.Stan }) -join ',')|$(if ($oa.Problem) { $oa.Problem.Tytul })|$($oa.Przycisk)"
+  if ((-not $wymus) -and ($widok -eq $script:AktualizacjaWidok)) { return }
+  $script:AktualizacjaWidok = $widok
+  if ($script:AktualizacjaTrwala -and -not $oa.Trwa) {
+    Notuj "okno: aktualizacja skonczona - $($oa.Linia)"
+    # Po nowej wersji bez restartu (np. restart sie nie udal) liczby licza sie od nowa w tle;
+    # rozbicie i warstwy moga byc juz z innego kodu - przy wejsciu w zakladke od nowa.
+    if ($a -and ($a.Wynik -eq "zaktualizowano")) {
+      if ($script:StanKawalkow["rozbicie"]) { $script:StanKawalkow["rozbicie"].Czas = $null }
+      if ($script:StanKawalkow["warstwy"]) { $script:StanKawalkow["warstwy"].Czas = $null }
+      if ($script:Okno -and -not $script:Okno.IsDisposed) { [void](Przelicz-W-Tle) }
+    }
+  }
+  $script:AktualizacjaTrwala = $oa.Trwa
+  if (-not $script:Okno -or $script:Okno.IsDisposed) { return }
+  # Bez danych Przeglad stoi pod ekranem ladowania - karty i tak zlozy pierwsze odmalowanie
+  # (Odmaluj-Okno), a tu tylko przycisk. Z danymi: sprawy, karta Stan i przyciski, z tym
+  # samym przewinieciem co przed odmalowaniem (jak w Odmaluj-Okno).
+  if (-not $script:Dane) { Odmaluj-Przyciski; return }
+  $przewiniecie = 0
+  try { if ($script:WidokPrzeglad) { $przewiniecie = -$script:WidokPrzeglad.AutoScrollPosition.Y } }
+  catch { Zanotuj-Wywrotke "odczyt przewiniecia przegladu (aktualizacja)" $_ }
+  $script:Okno.SuspendLayout()
+  try {
+    Odmaluj-Problemy
+    Odmaluj-Stan
+    Odmaluj-Przyciski
+  } finally { $script:Okno.ResumeLayout($true) }
+  if ($przewiniecie -gt 0) {
+    try { $script:WidokPrzeglad.AutoScrollPosition = New-Object System.Drawing.Point(0, $przewiniecie) }
+    catch { Zanotuj-Wywrotke "przywrocenie przewiniecia przegladu (aktualizacja)" $_ }
+  }
+}
+
+# Klikniecie: skrypt w tle (Aktualizuj w stan-wersja.ps1), od razu pasek na "Sprawdzam"
+# i widok Przegladu z karta Stan - tam stoi postep. Gdy skrypt nie ruszyl, karta mowi
+# dlaczego (Ocena-Aktualizacji), a nie kreci paskiem w nieskonczonosc.
+function Kliknij-Aktualizuj {
+  $r = Aktualizuj
+  if ($r.Proba) {
+    $script:NapisAktualizacji = "Tryb próbny - aktualizacji nie uruchamiam."
+    Odmaluj-Przyciski
+    return
+  }
+  $script:NapisAktualizacji = ""
+  $script:AktualizacjaKlik = [datetime]::Now
+  $script:AktualizacjaKlikPowod = $(if ($r.Ok) { "" } else { $r.Powod })
+  if ($script:Widok -ne "przeglad") { $script:SzczegolyZajete = $false; Pokaz-Widok "przeglad" }
+  Sprawdz-Aktualizacje $true
+  Rusz-Zegar-Aktualizacji
+  try {
+    if ($script:PanelStan -and -not $script:PanelStan.IsDisposed -and $script:WidokPrzeglad) { $script:WidokPrzeglad.ScrollControlIntoView($script:PanelStan) }
+  } catch { Zanotuj-Wywrotke "przewiniecie do karty Stan po kliknieciu aktualizacji" $_ }
+}
+
 # --- budowa okna -------------------------------------------------------------
 
 function Pokaz-Okno {
@@ -172,6 +271,7 @@ function Pokaz-Okno {
     $script:Okno.Show()
     Wymus-Pokazanie $script:Okno
     Wejdz-Do-Widoku $script:Widok
+    Rusz-Zegar-Aktualizacji
     return
   }
 
@@ -573,6 +673,9 @@ function Pokaz-Okno {
     $script:BWarstwy = $null; $script:WidokWarstwy = $null; $script:LWarstwy = $null
     $script:ListaWarstw = $null; $script:PodgladWarstwy = $null
     if ($script:ZegarSkilli) { $script:ZegarSkilli.Stop() }
+    # aktualizacja chodzi dalej w tle - bez okna nie ma czego odmalowywac; po otwarciu od nowa
+    if ($script:ZegarAktualizacji) { $script:ZegarAktualizacji.Stop() }
+    $script:AktualizacjaWidok = ""; $script:NapisAktualizacji = ""
     $script:BSkille = $null; $script:WidokSkille = $null; $script:LSkille = $null; $script:BSkilleTeraz = $null
     $script:ListaSkilli = $null; $script:SkilleInfo = $null; $script:SkillePrzyciski = $null; $script:SkillePodglad = $null
     $script:BSkillInstaluj = $null; $script:BSkillAktualizuj = $null; $script:BSkillCofnij = $null; $script:BSkillUsun = $null
@@ -695,31 +798,10 @@ function Pokaz-Okno {
   })
 
   # Przycisk bezpieczny - NIE pyta o zgode, bo nie wydaje ani jednego tokena.
-  # Robi DOKLADNIE to, co hook Codeksa: wola straznik-zasad.ps1 -Tlo
-  # (fetch + merge --ff-only, nigdy reset --hard). Warunki odmowy - brudne
-  # drzewo, rozjechana historia, brak zdalnej - naleza do straznika i to on
-  # je wypisuje; my pokazujemy, co powiedzial.
+  # Od 2026-10-07 tylko uruchamia aktualizacje w tle i NIE czeka (Kliknij-Aktualizuj);
+  # do 0.28.0 wolal straznika synchronicznie do 180 s i okno zamarzalo bez wyniku.
   $script:BAktualizuj.Add_Click({
-    $script:BAktualizuj.Enabled = $false
-    $script:LAktualizuj.Text = "Pobieram... to potrwa do dwóch minut."
-    # Odpowiedz straznika ma zostac na ekranie do czasu, az uzytkownik sam
-    # przelaczy widok - dlatego znacznik "zajete", ustawiony PRZED przelaczeniem.
-    $script:SzczegolyZajete = $true
-    Pokaz-Widok "szczegoly"
-    Pokaz-Karty-Szczegolow @(Karta-Komunikatu "Pobieram nowszą wersję" @("Strażnik sprawdza serwer i nanosi poprawki - to potrwa do dwóch minut.") $null)
-    $script:Okno.Refresh()
-    $wynik = @()
-    try { $wynik = Aktualizuj }
-    catch { Zanotuj-Wywrotke "aktualizacja" $_; $wynik = @("NIE UDALO SIE: $($_.Exception.Message)") }
-    Pokaz-Karty-Szczegolow @(Karta-Komunikatu "Co powiedział strażnik" (@($wynik) + @("",
-      "To jest odpowiedź na kliknięcie, nie zwykła zawartość szczegółów. Kliknij [Przegląd], żeby wrócić do liczb.")) $null)
-    $script:Okno.Refresh()
-    $script:BAktualizuj.Enabled = $true
-    # Po pobraniu nowszej wersji liczby licza sie od nowa w tle (P21); rozbicie
-    # i warstwy moga byc juz z innego kodu - przy wejsciu w zakladke licza sie od nowa.
-    $script:StanKawalkow["rozbicie"].Czas = $null
-    $script:StanKawalkow["warstwy"].Czas = $null
-    [void](Przelicz-W-Tle)
+    try { Kliknij-Aktualizuj } catch { Zanotuj-Wywrotke "przycisk aktualizacji" $_ }
   })
 
   # JEDYNY przycisk w tym oknie, ktory wydaje tokeny - i dlatego jedyny, ktory
@@ -801,6 +883,8 @@ function Pokaz-Okno {
   Styl-Przelacznika $script:BSzczegoly $false
   Styl-Przelacznika $script:BWarstwy $false
   Styl-Przelacznika $script:BSkille $false
+  # stan aktualizacji przed pierwszym odmalowaniem - nowe okno po restarcie pokazuje wynik od razu
+  try { Sprawdz-Aktualizacje $true } catch { Zanotuj-Wywrotke "stan aktualizacji przy budowie okna" $_ }
   Odmaluj-Przyciski
   # Watki do liczenia otwieraja sie dopiero PO pokazaniu okna - okno ma stanac
   # na ekranie jak najszybciej, a kroki i tak juz stoja na liscie jako "czeka".
@@ -809,6 +893,7 @@ function Pokaz-Okno {
   $f.Show()
   Wymus-Pokazanie $f
   Obsluz-Kroki
+  Rusz-Zegar-Aktualizacji
 }
 
 # Znacznik dla nadzorca.ps1: ten plik wczytal sie do konca.
