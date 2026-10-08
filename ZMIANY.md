@@ -4,6 +4,13 @@ Każda zmiana wypychana na gita dostaje tu wpis. Numer rośnie wg zasady:
 pierwsza cyfra — przebudowa łamiąca zgodność, druga — nowa funkcja,
 trzecia — poprawka.
 
+## 0.30.1 — 2026-10-08
+
+- **Kopia zapasowa bez fałszywego alarmu o zerach.** Kosz po usuniętych skillach i jednorazowe skrypty przypomnień
+  nie idą już do kopii. Dziennik z małą dziurą po zaniku prądu (zera do 10% pliku, zdrowy koniec) trafia do kopii
+  z wpisem „dziura” w Szczegółach, zamiast być pomijany w całości z czerwonym alarmem. Alarm zostaje tylko dla plików
+  całych z zer: wymienia je po nazwie i mówi, skąd wziąć zdrową wersję albo że jej nie ma.
+
 ## 0.30.0 — 2026-10-08
 
 - **Zadania z przypomnień idą w tle, bez okna.** Gdy w dniu terminu MegaRuchacz sam wykonuje zadanie, Claude pracuje

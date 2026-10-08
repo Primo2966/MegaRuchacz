@@ -450,6 +450,13 @@ inwentarz warstw z 25.09, budowa okna sprzed podzialu, pomiary P23/P30 w calosci
   pliku: ostatnia udana > 48 h = pilne (przez 60 min po starcie komputera tylko zolta linia - zalegla kopia wlasnie
   rusza), `TRWA` > 3 h = przerwana, pominiete uszkodzone pliki = pilne, CHYBA ZE wszystkie sa juz naprawione
   (`Ile-Nadal-Uszkodzonych`) - wtedy zolta linia bez alarmu. Brak pliku stanu i indeksu = "nie ustawiona", bez alarmu.
+- Lista pominietych wyzerowanych plikow: linie `ALARM WYZEROWANY PLIK` w `~\.claude\mr\kopia-stan.txt` (kopia w
+  `<Backup>\dziennik.txt`); sprawa "pominela N plikow z samymi zerami" = `stan-kopia.ps1:186` (`Ocena-Kopii`), szczegoly
+  `szczegoly.ps1:438`. Przycisku "Przywroc z kopii" brak (jest tylko `kopie-dzienne.ps1 -Przywroc`, a to inna kopia).
+  2026-10-08: 21 plikow = 18 w `~\.claude\skills\.trash\*` (smietnik skilli, NIE nasz; `kopia-zapasowa.ps1:458` wyklucza
+  tylko `plugins\.trash`, `skills\.trash` nie), `mr\terminy\zrob-1.ps1` (wygasly launcher przypomnienia #1),
+  `history.jsonl` (1 wpis wyzerowany), `mr\przypomnienia.log` (1 wpis). Zero zdrowych wersji w starszych kopiach dla .trash i zrob-1. [NIEAKTUALNE od 0.30.1, ponizej]
+- Od 0.30.1: kopia wyklucza `skills.trash` i `mr	erminyzrob-*.ps1`; prog `$ProgDziur` 0,10 (zera <=10% pliku i zdrowy koniec) = plik idzie do kopii z wpisem `DZIURA W PLIKU` (plik, offset, dlugosc, poprzednia wersja) i licznikiem `dziury=` w stanie, bez alarmu. Alarm: `ALARM WYZEROWANY PLIK - NIE skopiowany: <plik> - <opis>; ostatnia wersja w kopii: <sciezka> (z RRRR-MM-DD)` albo `; w kopii nie ma zadnej wersji tego pliku`. `stan-kopia.ps1`: `Nadal-Uszkodzone`, `Wpis-Uszkodzony`, `Nazwy-Plikow-Kopii`; teksty Szczegolow sklada stan-kopia.ps1 (szczegoly.ps1 tylko wyswietla). Test `narzedzia	est-kopia-zera.ps1`.
 - `narzedzia/skille.ps1` a zera (regula 8 w naglowku): `Opis-Zer`, `Zera-W-Celach`; `Zrob-Kopie` odmawia kopii zer;
   `Aktualizuj-Skill` bez `-Wymus` nie rusza wyzerowanego skilla, z `-Wymus` wgrywa wersje od autora BEZ kopii (dziennik
   `bez-kopii`); `Cofnij-Skill` pomija wyzerowane kopie (bierze starsza zdrowa albo odmawia z powodem) i nie robi kopii
