@@ -94,6 +94,8 @@ function Zbierz-Problemy($d, $wywrotki, [string]$blad, $czasDanych) {
     $oa = Ocena-Aktualizacji-Teraz $(if ($d -and $d.Wersja) { "$($d.Wersja.Lokalna)" } else { "" })
     if ($oa.Problem) { $lista += Problem $oa.Problem.Waga $oa.Problem.Tytul $oa.Problem.Porada $oa.Problem.Pelne }
   } catch { Zanotuj-Wywrotke "sprawa aktualizacji MegaRuchacza" $_ }
+  # Przypomnienia wykonane w tle (2026-10-08, stan-terminy.ps1): "czlowiek", "blad" i nieczytelny wynik.
+  try { foreach ($p in (Ocena-Wynikow-Przypomnien-Teraz).Problemy) { $lista += $p } } catch { Zanotuj-Wywrotke "sprawy przypomnien w tle" $_ }
 
   # Czerwone przed zoltymi, zolte przed informacjami: pierwsza rzecz na ekranie
   # ma byc ta, ktora naprawde czegos wymaga, a nie ta, ktorej akurat nie wiemy.
@@ -637,6 +639,7 @@ function Zbuduj-Przod($d, $problemy, $czas, $start, $zuzycie = $null, $koszt = $
     try { $kop = Ocena-Kopii $d.Kopia $inst; $l += "  $($kop.Linia)$(if ($kop.Waga -eq 'pilne') { '  (czerwony napis)' } elseif ($kop.Waga -eq 'uwaga') { '  (żółty napis)' })" }
     catch { Zanotuj-Wywrotke "linia kopii zapasowej do wydruku" $_; $l += "  NIE UDALO SIE ZLOZYC LINII KOPII ZAPASOWEJ - szczegoly w dzienniku nadzorcy" }
   }
+  try { $l += Linie-Wynikow-Przypomnien (Ocena-Wynikow-Przypomnien-Teraz) } catch { Zanotuj-Wywrotke "przypomnienia w tle do wydruku" $_; $l += "  NIE UDALO SIE ZLOZYC LINII PRZYPOMNIEN - szczegoly w dzienniku nadzorcy" }
   $pm = $null
   # zmiany w pamieci pisze nauka z rozmow - bez modulu Wiedza linii nie ma (P59d)
   if (Modul-Jest $inst "wiedza") {

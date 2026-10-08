@@ -210,6 +210,50 @@ foreach ($s in $sabotaze) {
 }
 . $plikTerminow
 
+# Wydruk -Raport (Zbierz-Problemy i Zbuduj-Przod w przeglad-tresc.ps1): "czlowiek" i "blad" to sprawy
+# na gorze, bez "Wszystko gra"; "nic" to linia w STAN. Sabotaz: kopia przeglad-tresc.ps1 bez dopisku.
+function Przod { return ((Zbuduj-Przod $D (Zbierz-Problemy $D @() "" (Get-Date)) (Get-Date) $null $null $null) -join "`n") }
+function Proba-RaportSprawy {
+  Wyczysc
+  Atrapa 8 @{ wynik = "czlowiek"; co_zrobic = "Kliknij w Seller Central 'Zatwierdź wysyłkę' dla FBA15K." }
+  Atrapa 9 @{ wynik = "blad"; powod = "Claude Code nie wystartował: brak pliku claude.exe." }
+  $p = Przod
+  $ok = ($p -match '\[!\] Przypomnienie #9 nie wykonało się: Claude Code nie wystartował') -and ($p -match "\[\?\] Przypomnienie #8 czeka na Ciebie: Kliknij w Seller Central") -and
+        ($p -notmatch 'Wszystko gra') -and ((Ile-Wymaga-Uwagi (Zbierz-Problemy $D @() "" (Get-Date))) -eq 2)
+  return [pscustomobject]@{ Ok = $ok; Opis = ([regex]::Match($p, '(?s)CO WYMAGA UWAGI.*?\n\n')).Value.Trim() }
+}
+function Proba-RaportLinia {
+  Wyczysc
+  Atrapa 7 @{}
+  $p = Przod
+  $stan = ([regex]::Match($p, '(?s)STAN .*?\n\n')).Value
+  $ok = ($stan -match "Przypomnienia w tle: $ZNAKOK Przypomnienie #7 zrobione samo") -and ($stan -match 'Wszystko gra') -and ($stan -match [regex]::Escape("[Pokaż wynik: $(Join-Path $katWynikow '7.md')]"))
+  return [pscustomobject]@{ Ok = $ok; Opis = $stan.Trim() }
+}
+$w = Proba-RaportSprawy
+Wynik "negatywna: wydruk -Raport przy czlowiek i blad -> [!] i [?] na gorze, bez 'Wszystko gra'" $w.Ok $w.Opis
+$w = Proba-RaportLinia
+Wynik "wydruk -Raport przy nic -> linia 'Przypomnienia w tle' w STAN, 'Wszystko gra' zostaje" $w.Ok $w.Opis
+$plikTresci = Join-Path $Zasobnik "nadzorca\przeglad-tresc.ps1"
+$oryginalTresci = [System.IO.File]::ReadAllText($plikTresci, [System.Text.Encoding]::UTF8)
+$sabotazeTresci = @(
+  @{ Nazwa = "dopisek w Zbierz-Problemy usuniety"; Proba = "Proba-RaportSprawy"
+     Kotwica = 'try { foreach ($p in (Ocena-Wynikow-Przypomnien-Teraz).Problemy) { $lista += $p } } catch { Zanotuj-Wywrotke "sprawy przypomnien w tle" $_ }' },
+  @{ Nazwa = "dopisek w Zbuduj-Przod usuniety"; Proba = "Proba-RaportLinia"
+     Kotwica = 'try { $l += Linie-Wynikow-Przypomnien (Ocena-Wynikow-Przypomnien-Teraz) } catch { Zanotuj-Wywrotke "przypomnienia w tle do wydruku" $_; $l += "  NIE UDALO SIE ZLOZYC LINII PRZYPOMNIEN - szczegoly w dzienniku nadzorcy" }' })
+$kopiaTresci = Join-Path $tmp "przeglad-tresc-sabotaz.ps1"
+foreach ($s in $sabotazeTresci) {
+  if (-not $oryginalTresci.Contains($s.Kotwica)) { Wynik "sabotaz '$($s.Nazwa)' wylapany" $false "kotwicy nie ma w ${plikTresci}: $($s.Kotwica)"; continue }
+  [System.IO.File]::WriteAllText($kopiaTresci, $oryginalTresci.Replace($s.Kotwica, ""), (New-Object System.Text.UTF8Encoding($true)))
+  . $kopiaTresci
+  $pod = $null
+  try { $pod = & $s.Proba } catch { $pod = [pscustomobject]@{ Ok = $false; Opis = "WYWROTKA: $($_.Exception.Message)" } }
+  . $plikTresci
+  $po = & $s.Proba
+  Wynik "sabotaz '$($s.Nazwa)' wylapany przez $($s.Proba)" ((-not $pod.Ok) -and $po.Ok) "z sabotazem: $($pod.Opis) || po przywroceniu: Ok=$($po.Ok)"
+}
+. $plikTresci
+
 # ---------------------------------------------------------------- B. okno poza ekranem
 if (-not $BezOkna) {
   Add-Type -AssemblyName System.Windows.Forms
