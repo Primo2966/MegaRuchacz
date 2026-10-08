@@ -278,6 +278,11 @@ inwentarz warstw z 25.09, budowa okna sprzed podzialu, pomiary P23/P30 w calosci
   `Odmaluj-Problemy`, `Odmaluj-Stan`, `Odmaluj-Okno`), `wykres` (`Panel-Wykresu`, `Wstaw-Wykres`;
   Chart albo wlasne slupki), `warstwy`, `skille`, `w-tle`, `ladowanie`, `okno` (`Pokaz-Okno`,
   `Pokaz-Widok`).
+- Przelaczanie zakladek (P74, 0.30.2): `Pokaz-Widok` najpierw `Wejdz-Do-Widoku` (przebudowa pod spodem), potem
+  `Ustaw-Panele-Widoku` -> `Pokaz-Panel` (wstrzymuje uklad calego poddrzewa, wznawia od dolu - `Kontenery-Od-Dolu`).
+  Wszystkie 4 zakladki to `MegaRuchacz.ListaBezMigania` (podwojny bufor). PULAPKA: `Visible = $true` na zakladce bez
+  wstrzymania ukladu = 11 s zamrozenia. PULAPKA pomiaru: okno poza ekranem (-5000, 0) ma pusty obszar przyciecia, liczby
+  WM_PAINT sa tam nizsze niz na ekranie. Test: `zasobnik/test-okno-mruganie.ps1` (~4 min, 5 sabotazy; `-BezSabotazy` ~1,5 min).
 - Stan: `stan-podstawy` (`Czytaj-Klucze` / `Zapisz-Klucze`, `Notuj`, `Zanotuj-Wywrotke`, `Wolaj-Gita`,
   `Wolaj-Skrypt`, `Odpal-W-Tle`), `stan-wersja` (`Stan-Wersji` - fetch + `rev-list HEAD...@{u}`,
   `Opis-Wersji`, `Aktualizuj` -> `straznik-zasad.ps1 -Tlo`), `stan-cykl` (`Stan-Cyklu`, `Ruszaj-Cykl`),

@@ -4,6 +4,13 @@ Każda zmiana wypychana na gita dostaje tu wpis. Numer rośnie wg zasady:
 pierwsza cyfra — przebudowa łamiąca zgodność, druga — nowa funkcja,
 trzecia — poprawka.
 
+## 0.30.2 — 2026-10-08
+
+- **Okno MegaRuchacza nie miga już przy przełączaniu zakładek.** Każde pokazanie zakładki przeliczało ułożenie
+  każdego z ~900 elementów osobno (wejście w Szczegóły zamrażało okno na 11 s, w Przegląd na 0,4 s), a zakładka rysowała
+  się kawałkami: tło, karty, tekst. Teraz układ liczy się raz (0,16 s i 0,02 s), a każda zakładka pojawia się w całości
+  jednym ruchem, także po odświeżeniu danych. Wygląd bez zmian.
+
 ## 0.30.1 — 2026-10-08
 
 - **Kopia zapasowa bez fałszywego alarmu o zerach.** Kosz po usuniętych skillach i jednorazowe skrypty przypomnień
