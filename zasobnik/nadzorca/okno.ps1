@@ -316,6 +316,61 @@ function Kliknij-Aktualizuj {
   } catch { Zanotuj-Wywrotke "przewiniecie do karty Stan po kliknieciu aktualizacji" $_ }
 }
 
+# --- czytanie rozmow z przycisku (2026-10-08) -----------------------------------
+# Po kliknieciu "Przeczytaj teraz" co 2 s zagladamy do wyniku czytania recznego
+# (Stan-Recznego, stan-cykl.ps1) - ten sam wzorzec co aktualizacja: zegar, plik, zero
+# czekania. Opis pod przyciskiem sklada Napisy-Przyciskow; tutaj tylko odmalowanie po
+# zmianie, a na koniec okienko z odmowa albo bledem, zeby nie przeszlo bez slowa.
+function Rusz-Zegar-Czytania {
+  if (-not $script:ZegarCzytania) {
+    $script:ZegarCzytania = New-Object System.Windows.Forms.Timer
+    $script:ZegarCzytania.Interval = 2000
+    $script:ZegarCzytania.Add_Tick({
+      try { Pilnuj-Czytania }
+      catch { $script:ZegarCzytania.Stop(); $script:CyklKlik = $null; Zanotuj-Wywrotke "zegar czytania rozmow" $_ }
+    })
+  }
+  $script:ZegarCzytania.Start()
+}
+
+function Pilnuj-Czytania {
+  if (-not $script:CyklKlik) { $script:ZegarCzytania.Stop(); return }
+  $r = Stan-Recznego
+  $ocena = Ocena-Klikniecia $r $script:CyklKlik ([datetime]::Now)
+  $okno = ($script:Okno -and -not $script:Okno.IsDisposed)
+  $widok = "$ocena|$(if ($r) { $r.Krotki })"
+  if ($okno -and ($widok -ne $script:CzytanieWidok)) { $script:CzytanieWidok = $widok; Odmaluj-Przyciski }
+  if (($ocena -eq "czekam") -or ($ocena -eq "trwa")) { return }
+
+  $script:ZegarCzytania.Stop()
+  $klik = $script:CyklKlik
+  $script:CyklKlik = $null
+  $tytul = "Czytanie rozmów"
+  $ikona = [System.Windows.Forms.MessageBoxIcon]::Warning
+  if ($ocena -eq "cisza") {
+    $tekst = "Czytanie rozmów nie dało znaku życia przez $SEKUND_NA_START_RECZNEGO s od kliknięcia - nie wiem, czy w ogóle ruszyło."
+    $script:NapisCyklu = [pscustomobject]@{ Czas = $klik; Tekst = $tekst }
+    $tekst += "`r`n`r`nSpróbuj ręcznie:`r`npowershell -ExecutionPolicy Bypass -File $Zrodlo\narzedzia\cykl-dzienny.ps1 -Recznie" +
+              "`r`n`r`nŚlad w $(Join-Path $KatalogDomowy '.claude\.megaruchacz-zasobnik.log')"
+    Notuj "czytanie zaleglych rozmow z okna: przez $SEKUND_NA_START_RECZNEGO s ani sladu wyniku w .cykl-reczny"
+  } else {
+    Notuj "czytanie zaleglych rozmow z okna skonczone: $($r.Wynik) - $($r.Krotki)"
+    if ($r.Udane) { $tekst = $null }
+    else {
+      $tekst = $r.Pelny
+      if ($r.Wynik -eq "nic") { $ikona = [System.Windows.Forms.MessageBoxIcon]::Information }
+    }
+  }
+  if (-not $okno) { return }   # okno zamkniete - wynik i tak stoi pod przyciskiem przy nastepnym otwarciu
+  Odmaluj-Przyciski
+  # liczby (kolejka, koszt, ostatnia nauka) od nowa - takze po odmowie, bo stan mogl sie zmienic
+  try { [void](Przelicz-W-Tle) } catch { Zanotuj-Wywrotke "przeliczenie po czytaniu rozmow" $_ }
+  if ($tekst) {
+    [System.Windows.Forms.MessageBox]::Show($script:Okno, $tekst, $tytul,
+      [System.Windows.Forms.MessageBoxButtons]::OK, $ikona) | Out-Null
+  }
+}
+
 # --- budowa okna -------------------------------------------------------------
 
 function Pokaz-Okno {
@@ -904,13 +959,24 @@ function Pokaz-Okno {
       return
     }
 
+    # -Recznie: czyta takze po dzisiejszym przebiegu automatu, a kazde zakonczenie (takze
+    # odmowe) zostawia w .cykl-reczny - zegar nizej pokazuje je pod przyciskiem (08.10.2026:
+    # do tej pory po dzisiejszym cyklu klikniecie konczylo sie niczym, bez slowa).
+    $script:NapisCyklu = $null
+    $script:CyklKlik = [datetime]::Now
     $poszlo = $false
-    try { $poszlo = Ruszaj-Cykl } catch { Zanotuj-Wywrotke "reczny start czytania rozmow" $_ }
-    if ($poszlo) {
+    try { $poszlo = Ruszaj-Cykl $true } catch { Zanotuj-Wywrotke "reczny start czytania rozmow" $_ }
+    if ($poszlo -and $script:NadzProba) {
+      $script:CyklKlik = $null
+      $script:LCykl.Text = "Tryb próbny - czytania nie uruchamiam."
+    } elseif ($poszlo) {
       $script:BCykl.Enabled = $false
-      $script:LCykl.Text = "Czytanie ruszyło w tle. Potrwa kilka minut, liczby odświeżą się same."
+      $script:LCykl.Text = "Uruchamiam czytanie w tle..."
       Notuj "czytanie zaleglych rozmow ruszylo z okna po potwierdzeniu kosztu"
+      $script:CzytanieWidok = ""
+      Rusz-Zegar-Czytania
     } else {
+      $script:CyklKlik = $null
       $script:LCykl.Text = "NIE UDAŁO SIĘ uruchomić - szczegóły w oknie obok."
       [System.Windows.Forms.MessageBox]::Show(
         $script:Okno,

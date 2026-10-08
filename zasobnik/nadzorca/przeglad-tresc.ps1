@@ -437,10 +437,26 @@ function Napisy-Przyciskow($d, $zuzycie = $null, $inst = $null, $akt = $null) {
   }
   $n.Szacunek = $s
 
+  # Czytanie reczne z okna (08.10.2026): wynik ostatniego klikniecia z .cykl-reczny
+  # (Stan-Recznego) i klikniecie, na ktore okno jeszcze czeka ($script:CyklKlik, okno.ps1).
+  $r = $null
+  try { $r = Stan-Recznego } catch { Zanotuj-Wywrotke "wynik recznego czytania rozmow" $_ }
+  $ocena = "koniec"
+  if ($script:CyklKlik) {
+    try { $ocena = Ocena-Klikniecia $r $script:CyklKlik ([datetime]::Now) }
+    catch { Zanotuj-Wywrotke "ocena klikniecia czytania rozmow" $_ }
+  }
+
   if ($d -and $d.Cykl -and $d.Cykl.Pracuje) {
     # Drugi przebieg w tej samej chwili nic nie da, a kosztowalby drugi raz.
     $n.CyklWlaczony = $false
     $n.CyklOpis = "Wyłączone: czytanie rozmów właśnie trwa. Liczby odświeżą się same, gdy skończy."
+  } elseif ($ocena -eq "czekam") {
+    $n.CyklWlaczony = $false
+    $n.CyklOpis = "Uruchamiam czytanie w tle..."
+  } elseif ($r -and $r.Trwa) {
+    $n.CyklWlaczony = $false
+    $n.CyklOpis = $r.Krotki
   } elseif (-not $s) {
     $n.Cykl = "Przeczytaj teraz nowe rozmowy (koszt: nie wiem)"
     $n.CyklOpis = "Nie musisz - robi to sam raz dziennie. Nie mam danych, żeby oszacować koszt; przed startem zapyta o zgodę."
@@ -453,6 +469,15 @@ function Napisy-Przyciskow($d, $zuzycie = $null, $inst = $null, $akt = $null) {
   } else {
     $n.Cykl = "Przeczytaj teraz nowe rozmowy (koszt: nie wiem)"
     $n.CyklOpis = "Nie umiem oszacować kosztu: $($s.Powod). Przed startem zapyta o zgodę."
+  }
+  # Po kliknieciu opis pod przyciskiem mowi, jak poszlo - takze odmowe ("nic nowego od 08:04"),
+  # do konca dnia. Klikniecie bez sladu przebiegu ($script:NapisCyklu z okna) wygrywa
+  # ze starszym wynikiem.
+  $trwa = ($d -and $d.Cykl -and $d.Cykl.Pracuje) -or ($ocena -eq "czekam") -or ($r -and $r.Trwa)
+  if (-not $trwa) {
+    $napis = $script:NapisCyklu
+    if ($napis -and -not ($r -and $r.Start -and ($r.Start -ge ([datetime]$napis.Czas).AddSeconds(-5)))) { $n.CyklOpis = $napis.Tekst }
+    elseif ($r -and $r.Dzis -and $r.Krotki) { $n.CyklOpis = $r.Krotki }
   }
   return $n
 }

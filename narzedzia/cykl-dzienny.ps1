@@ -37,12 +37,15 @@
 #   ... -Proba                    pokazuje, co by zrobil; nie wola modelu i niczego nie zapisuje
 #   ... -KatalogDomowy <sciezka>  podmiana katalogu domowego (do testow; ustawia LORE_HOME)
 #   ... -UsunZadanie              zdejmuje z Harmonogramu stare zadania cyklu (sprzatanie)
+#   ... -Recznie                  czytanie reczne z okna nadzorcy, po potwierdzeniu kosztu - czyta
+#                                 od znacznika takze po dzisiejszym przebiegu (patrz "czytanie reczne")
 
 param(
   [string]$Zrodlo = (Split-Path -Parent $PSScriptRoot),
   [switch]$Proba,
   [string]$KatalogDomowy = $HOME,
-  [switch]$UsunZadanie
+  [switch]$UsunZadanie,
+  [switch]$Recznie
 )
 
 # Zadania z Harmonogramu, ktore kiedys odpalaly ten cykl o sztywnej porze. Dzis
@@ -72,6 +75,9 @@ $script:Pominiete = $null   # powod, dla ktorego wylawianie nie poszlo ($null = 
 $script:Porcje    = 0       # ile porcji materialu poszlo do modelu w TYM przebiegu
 $script:KosztStart = @{ tokeny = 0; fakty = 0; wywolania = 0 }  # licznik kosztu sprzed pracy
 $script:ZnacznikPrzed = $null  # dokad siegal odczyt, zanim cykl przesunal znacznik
+$script:PlikRecznego = $null   # .cykl-reczny - wynik czytania recznego z okna (-Recznie)
+$script:RecznyStart  = $null   # kiedy ruszyl ten przebieg reczny - po tym okno poznaje "swoj" wynik
+$script:StatusPrzed  = $null   # status dnia z .cykl-stan sprzed recznego przebiegu
 
 # Zapis odporny na zanik pradu i rozpoznawanie wyzerowanych plikow (awaria 2026-10-02).
 . (Join-Path $PSScriptRoot "zapis-trwaly.ps1")
@@ -111,6 +117,7 @@ function Ustaw-Sciezki {
   $script:Znacznik  = Join-Path $script:Wiedza ".ostatnie-wyciaganie"
   $script:Postep    = Join-Path $script:Wiedza ".cykl-postep"
   $script:Koszt     = Join-Path $script:Wiedza ".koszt-cyklu.txt"
+  $script:PlikRecznego = Join-Path $script:Wiedza ".cykl-reczny"
 
   # wyciagnij-fakty.ps1 nie ma wlasnego przelacznika katalogu - lore czyta LORE_HOME,
   # wiec podmiana idzie przez zmienna srodowiskowa i obejmuje oba wolane skrypty
@@ -279,6 +286,7 @@ function Zapisz-Podsumowanie($status, $powod, $nadrobione, $zaleglosc) {
     # i po nim poznaje, czy ma sie odezwac przy starcie sesji
     zaleglosc  = $zaleglosc
     opis       = $opis
+    uruchomienie = $(if ($Recznie) { "reczne z okna" } else { "automat" })
   }
   if ($Proba) {
     Plan "podsumowanie do $($script:Ostatni): $opis"
@@ -524,21 +532,104 @@ function Zdejmij-Stare-Zadanie {
   try { Unregister-ScheduledTask -TaskName $NazwaPonawiania -Confirm:$false -ErrorAction Stop } catch { }
 }
 
+# ---------------------------------------------------------------- czytanie reczne z okna (-Recznie)
+
+# Do 2026-10-08 przycisk "Przeczytaj teraz nowe rozmowy" w oknie nadzorcy odpalal ten sam
+# przebieg co dozor - a ten po dzisiejszym udanym cyklu konczyl sie od razu ("dzisiejszy cykl
+# juz przeszedl - nie ma czego powtarzac"), choc od porannego odczytu przybyly nowe rozmowy.
+# Okno liczylo koszt z kolejki (jest co czytac), cykl patrzyl na kalendarz (dzis juz bylo):
+# uzytkownik potwierdzal koszt i nie dzialo sie nic, bez slowa. Dlatego -Recznie:
+#   - czyta od znacznika ostatniego odczytu takze po dzisiejszym przebiegu, a wylawianie,
+#     ktore dzis juz przeszlo, nie zamienia sie w sama weryfikacje,
+#   - zabezpieczenia zostaja te same: zamek, kontrola zer, przeszkody dostawcy
+#     i $MaxNadrabiania porcji na jedno podejscie,
+#   - NIE wlicza sie do $MaxProb i nie jest przez nie blokowane. $MaxProb pilnuje automatu,
+#     ktory wraca przy kazdym otwarciu okna i bez sufitu krecilby sie w kolko na zepsutym
+#     dostawcy. Reczny przebieg to jedno klikniecie po zobaczeniu kosztu - petli nie ma,
+#     a wliczony zabieralby automatowi jego dzisiejsze ponowienia (klikniecie w chwili
+#     zerwanej sieci = o jedna szanse mniej dla automatu), zablokowany zas odmawialby
+#     wyraznej decyzji czlowieka z powodu, ktory jej nie dotyczy,
+#   - dzien zamkniety przez automat zostaje zamkniety: odlozenie recznego przebiegu nie
+#     wpisuje do .cykl-stan statusu "odlozony", bo ten kaze dozorowi i straznikowi ruszac
+#     cykl jeszcze dzis - automat ma chodzic dokladnie tak jak dotad, raz na dzien,
+#   - KAZDE zakonczenie (takze odmowa: nic nowego, zamek zajety, przeszkoda, zera, blad)
+#     zostawia wynik w .cykl-reczny, a okno nadzorcy mowi go zwyklymi slowami
+#     (zasobnik\nadzorca\stan-cykl.ps1, Stan-Recznego). Sam dziennik to byla cisza.
+
+# Znacznik do zapisu: ta sama postac, co w opisie znacznika; pusto = jeszcze nigdy nie czytane.
+function Znacznik-Tekst($data) {
+  if ($null -eq $data) { return "" }
+  return $data.ToString("yyyy-MM-dd HH:mm")
+}
+
+# stan: pracuje (z pid procesu - okno po nim poznaje przebieg, ktory zniknal bez wyniku)
+# albo koniec z wynikiem. Zapis nieudany NIE jest cisza: idzie na ekran przebiegu, a okno
+# i tak powie, ze przebieg skonczyl sie bez wyniku.
+function Zapisz-Reczny($stanPracy, $wynik = "", $powod = "", $dodatki = $null) {
+  if (-not $Recznie) { return }
+  if ($Proba) { Plan "wynik czytania recznego do $($script:PlikRecznego): $stanPracy $wynik $powod"; return }
+  $wpis = [ordered]@{
+    start = $script:RecznyStart
+    pid   = $PID
+    stan  = $stanPracy
+    czas  = (Get-Date -Format "yyyy-MM-dd HH:mm:ss")
+  }
+  if ($wynik) { $wpis["wynik"] = $wynik }
+  if ($powod) { $wpis["powod"] = ("$powod" -replace '[\r\n]+', ' ').Trim() }
+  if ($dodatki) { foreach ($k in $dodatki.Keys) { $wpis[$k] = $dodatki[$k] } }
+  try { Zapisz-Klucze $script:PlikRecznego $wpis }
+  catch { Blad "nie udalo sie zapisac wyniku czytania recznego do $($script:PlikRecznego): $($_.Exception.Message)" }
+}
+
+# Liczby do wyniku recznego: od kiedy czytal, dokad siega teraz znacznik, ile porcji i tokenow
+# (roznica wzgledem stanu sprzed pracy, jak w Zamelduj-Koszt) i ile kawalkow ubylo z kolejki.
+function Liczby-Recznego($zostalo, $kawalkiPrzed, $kawalkiPo) {
+  $teraz = Licznik-Kosztu
+  $tokeny = [long]$teraz["tokeny"] - [long]$script:KosztStart["tokeny"]
+  if ($tokeny -lt 0) { $tokeny = 0 }
+  $d = [ordered]@{
+    od       = (Znacznik-Tekst $script:ZnacznikPrzed)
+    znacznik = (Znacznik-Tekst (Czytaj-Znacznik))
+    porcje   = $script:Porcje
+    tokeny   = $tokeny
+  }
+  if ($null -ne $zostalo) { $d["zostalo"] = $zostalo }
+  if (($null -ne $kawalkiPrzed) -and ($null -ne $kawalkiPo)) {
+    $ubylo = [int]$kawalkiPrzed - [int]$kawalkiPo
+    if ($ubylo -lt 0) { $ubylo = 0 }
+    $d["przeczytane"] = $ubylo
+  }
+  return $d
+}
+
 # ---------------------------------------------------------------- kroki cyklu
 
 # Odlozenie, nie porazka: kod 0, znacznik nietkniety, material czeka na nastepna probe.
 # $ponawiaj = $false dla powodow, ktore same z siebie nie przejda (brak narzedzia AI) -
 # wtedy nie ma po co wracac nawet przy nastepnym oknie.
 function Odloz($stan, $powod, $ponawiaj = $true) {
-  $stan["status"] = "odlozony"
-  $stan["powod"]  = $powod
-  $stan["czas"]   = (Get-Date -Format "yyyy-MM-dd HH:mm")
+  if ($Recznie -and $script:StatusPrzed -and ($script:StatusPrzed -ne "odlozony")) {
+    # dzien zamkniety przez automat zostaje zamkniety (patrz "czytanie reczne") - zapisujemy
+    # tylko kolejke; "odlozony" kazalby dozorowi ruszac cykl jeszcze dzis
+    $stan["status"] = $script:StatusPrzed
+  } else {
+    $stan["status"] = "odlozony"
+    $stan["powod"]  = $powod
+    $stan["czas"]   = (Get-Date -Format "yyyy-MM-dd HH:mm")
+  }
   Zapisz-Stan $stan
   # Odlozenie po czesciowej pracy tez ma swoj koszt - i uzytkownik ma go zobaczyc.
   # Dopiero gdy nie poszla ani jedna porcja, nie ma o czym meldowac i plik znika.
   if ($script:Porcje -gt 0) { Zamelduj-Koszt (Ile-Czeka) $null $null }
   else                      { Skasuj-Postep }
   $proby = [int]$stan["proby"]
+  if ($Recznie) {
+    # reczny przebieg nie liczy sie do $MaxProb, wiec "odpuszczony po N probach" byloby nieprawda
+    Zapisz-Podsumowanie "odlozony" $powod 0 (Ile-Czeka)
+    Zapisz-Reczny "koniec" "odlozony" $powod (Liczby-Recznego (Ile-Czeka) $null $null)
+    Ostrzezenie "czytanie reczne nie przeszlo: $powod - material czeka nietkniety"
+    exit 0
+  }
   if (-not $ponawiaj) {
     Zapisz-Podsumowanie "odlozony" $powod 0 (Ile-Czeka)
     Ostrzezenie "$powod - material czeka nietkniety, cykl wroci przy nastepnym otwarciu okna"
@@ -567,7 +658,7 @@ function Linia-Postepu($zrobione, $ile) {
 
 function Wylow-Fakty($stan, $nadrabiaj, $przeszkoda) {
   Naglowek "1/2  Wylawianie faktow od znacznika ostatniego odczytu"
-  if ($stan["wylowione"] -eq "ok") {
+  if (($stan["wylowione"] -eq "ok") -and -not $Recznie) {
     # krok 2 juz sie dzis udal - powtorka jest tylko po to, zeby dokonczyc krok 3.
     # Modelu drugi raz nie wolamy: potkniecie na weryfikacji nie ma kosztowac limitu.
     Krok "dzis juz przeszlo - w tej probie tylko weryfikacja"
@@ -733,6 +824,7 @@ function Pilnuj-Kopii-Dziennych($stan) {
       Zapisz-Stan $stan
     }
     Zapisz-Podsumowanie "wyzerowane" $alarm 0 0
+    Zapisz-Reczny "koniec" "wyzerowane" $alarm
     exit 1
   }
   if ($kod -ne 0) { Ostrzezenie "kopie dzienne sie nie udaly (kod $kod): $tekst - cykl idzie dalej"; return }
@@ -751,7 +843,11 @@ function Uruchom-Cykl {
     if ($zapamietane) { $stan["zostalo"] = $zapamietane }
   }
 
-  if ($stan["status"] -eq "ok") {
+  # status dnia sprzed tej pracy - reczny przebieg nie otwiera dnia zamknietego przez automat
+  $script:StatusPrzed = $stan["status"]
+
+  # Czytanie reczne (-Recznie) omija oba wyjscia ponizej - patrz "czytanie reczne z okna".
+  if (($stan["status"] -eq "ok") -and -not $Recznie) {
     Zdejmij-Stare-Zadanie
     Krok "dzisiejszy cykl juz przeszedl ($($stan['czas'])) - nie ma czego powtarzac"
     exit 0
@@ -759,7 +855,7 @@ function Uruchom-Cykl {
 
   $proby = 0
   if ($stan["proby"] -match '^\d+$') { $proby = [int]$stan["proby"] }
-  if ($proby -ge $MaxProb) {
+  if (($proby -ge $MaxProb) -and -not $Recznie) {
     Zdejmij-Stare-Zadanie
     Krok "na dzis koniec prob ($proby z $MaxProb) - cykl wroci jutro, material czeka nietkniety"
     exit 0
@@ -769,12 +865,17 @@ function Uruchom-Cykl {
   # nie czyta, nie pisze do nich i nie robi z nich kopii (awaria 2026-10-02).
   Pilnuj-Kopii-Dziennych $stan
 
-  # licznik podnosimy PRZED praca: przebieg, ktory sie wywroci, ma sie policzyc
-  $proby++
-  $stan["proby"] = "$proby"
-  Zapisz-Stan $stan
+  if ($Recznie) {
+    # reczny przebieg nie liczy sie do $MaxProb (patrz "czytanie reczne z okna")
+    Naglowek "Czytanie reczne z okna ($dzis) - poza dziennymi probami automatu, status dnia: $(if ($script:StatusPrzed) { $script:StatusPrzed } else { 'jeszcze bez przebiegu' })"
+  } else {
+    # licznik podnosimy PRZED praca: przebieg, ktory sie wywroci, ma sie policzyc
+    $proby++
+    $stan["proby"] = "$proby"
+    Zapisz-Stan $stan
 
-  Naglowek "Cykl dzienny pamieci ($dzis, proba $proby z $MaxProb)"
+    Naglowek "Cykl dzienny pamieci ($dzis, proba $proby z $MaxProb)"
+  }
   $narzedzia = Znajdz-Narzedzia
   if ($narzedzia.Count -gt 0) {
     Krok ("narzedzia AI na tej maszynie: " + (($narzedzia | ForEach-Object { $_.Nazwa }) -join ", "))
@@ -798,6 +899,14 @@ function Uruchom-Cykl {
   } else {
     $script:Czeka = 1
     $skad = "kolejki nie udalo sie odczytac i nie ma czego pamietac - biore jedna porcje"
+  }
+  # Reczne czytanie przy pustej kolejce: modelu nie wolamy, stanu dnia nie ruszamy -
+  # ale uzytkownik kliknal i ma uslyszec, ze nie bylo czego czytac i od kiedy.
+  if ($Recznie -and ($null -ne $kolejka) -and ($kolejka["przebiegi"] -le 0)) {
+    $od = Czytaj-Znacznik
+    Krok "nic nowego od $(Opis-Znacznika $od) - nie bylo czego czytac; model nie wolany, stan dnia nietkniety"
+    Zapisz-Reczny "koniec" "nic" "" ([ordered]@{ od = (Znacznik-Tekst $od); znacznik = (Znacznik-Tekst $od) })
+    exit 0
   }
   # Punkt odniesienia dla meldunku koncowego: znacznik i licznik kosztu SPRZED pracy.
   # Bez tego nie da sie powiedziec, ile kosztowal ten przebieg (facts.py sumuje dobe)
@@ -862,6 +971,7 @@ function Uruchom-Cykl {
     Zapisz-Podsumowanie $status "" $nadrobione $poZostalo
     Sprawdz-Zakres $kawalkiPrzed $script:Kawalki
     Zamelduj-Koszt $poZostalo $kawalkiPrzed $script:Kawalki
+    Zapisz-Reczny "koniec" $status "" (Liczby-Recznego $poZostalo $kawalkiPrzed $script:Kawalki)
 
     Naglowek "Podsumowanie"
     Krok "nadrobione przebiegi: $nadrobione"
@@ -882,6 +992,7 @@ function Uruchom-Cykl {
   Zapisz-Podsumowanie "ok" "" $nadrobione $poZostalo
   Sprawdz-Zakres $kawalkiPrzed $script:Kawalki
   Zamelduj-Koszt 0 $kawalkiPrzed $script:Kawalki
+  Zapisz-Reczny "koniec" "ok" "" (Liczby-Recznego $poZostalo $kawalkiPrzed $script:Kawalki)
 
   Naglowek "Podsumowanie"
   Krok "nadrobione przebiegi: $nadrobione"
@@ -891,6 +1002,10 @@ function Uruchom-Cykl {
 }
 
 # ---------------------------------------------------------------- przebieg
+
+# Pierwsza rzecz: chwila startu recznego przebiegu - okno nadzorcy po niej poznaje, ze wynik
+# w .cykl-reczny jest odpowiedzia na JEGO klikniecie, a nie zostalosc po poprzednim.
+$script:RecznyStart = (Get-Date -Format "yyyy-MM-dd HH:mm:ss")
 
 Ustaw-Sciezki
 
@@ -903,6 +1018,21 @@ $mojZamek = $false
 # porzucony zamek (poprzedni przebieg padl w polowie) liczy sie jako wolny - inaczej
 # jedna wywrotka blokowalaby cykl az do restartu maszyny
 try { $mojZamek = $zamek.WaitOne(0) } catch [System.Threading.AbandonedMutexException] { $mojZamek = $true }
-if (-not $mojZamek) { exit 0 }
+if (-not $mojZamek) {
+  # Automat po cichu (inny przebieg i tak pracuje), klikniecie czlowieka - nigdy po cichu.
+  if ($Recznie) {
+    Ostrzezenie "czytanie rozmow juz trwa w innym procesie - drugi raz nie ruszam"
+    Zapisz-Reczny "koniec" "zajete" "czytanie rozmow juz trwa (automat albo wczesniejsze klikniecie)"
+  }
+  exit 0
+}
 
-Uruchom-Cykl
+# "Pracuje" z pid procesu - od tej chwili okno wie, ze klikniecie ruszylo.
+Zapisz-Reczny "pracuje"
+
+try { Uruchom-Cykl }
+catch {
+  # Wywrotka w srodku: automat konczy sie jak dotad (blad idzie dalej), reczny zostawia slad.
+  Zapisz-Reczny "koniec" "blad" "$($_.Exception.Message)"
+  throw
+}
