@@ -4,6 +4,12 @@ Każda zmiana wypychana na gita dostaje tu wpis. Numer rośnie wg zasady:
 pierwsza cyfra — przebudowa łamiąca zgodność, druga — nowa funkcja,
 trzecia — poprawka.
 
+## 0.30.3 — 2026-10-08
+
+- **Przycisk „Przeczytaj teraz nowe rozmowy” naprawdę czyta**, także po dzisiejszym automatycznym przebiegu. Wcześniej
+  po potwierdzeniu kosztu nic się nie działo i okno nic nie mówiło. Każdy wynik, także odmowa (nic nowego od 08:04, czytanie
+  już trwa, brak sieci, limit, błąd), stoi pod przyciskiem do końca dnia, a odmowa dodatkowo w okienku. Automat dalej czyta raz na dzień.
+
 ## 0.30.2 — 2026-10-08
 
 - **Okno MegaRuchacza nie miga już przy przełączaniu zakładek.** Każde pokazanie zakładki przeliczało ułożenie

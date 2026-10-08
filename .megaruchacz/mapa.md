@@ -283,6 +283,10 @@ inwentarz warstw z 25.09, budowa okna sprzed podzialu, pomiary P23/P30 w calosci
   Wszystkie 4 zakladki to `MegaRuchacz.ListaBezMigania` (podwojny bufor). PULAPKA: `Visible = $true` na zakladce bez
   wstrzymania ukladu = 11 s zamrozenia. PULAPKA pomiaru: okno poza ekranem (-5000, 0) ma pusty obszar przyciecia, liczby
   WM_PAINT sa tam nizsze niz na ekranie. Test: `zasobnik/test-okno-mruganie.ps1` (~4 min, 5 sabotazy; `-BezSabotazy` ~1,5 min).
+- Czytanie reczne (P76, 0.30.3): przycisk w oknie -> `Ruszaj-Cykl $true` -> `narzedzia/cykl-dzienny.ps1 -Recznie` (czyta mimo
+  dzisiejszego "ok", poza $MaxProb). Wynik w `~/.claude/wiedza/.cykl-reczny` (czyta `Stan-Recznego`, `Ocena-Klikniecia` w
+  `stan-cykl.ps1`; napis pod przyciskiem w `Napisy-Przyciskow`). O starcie automatu decyduje tylko `.cykl-stan`;
+  `cykl-ostatni.txt` jest informacyjny. Test: `narzedzia/test-cykl-reczny.ps1` (14 prob + 8 sabotazy).
 - Stan: `stan-podstawy` (`Czytaj-Klucze` / `Zapisz-Klucze`, `Notuj`, `Zanotuj-Wywrotke`, `Wolaj-Gita`,
   `Wolaj-Skrypt`, `Odpal-W-Tle`), `stan-wersja` (`Stan-Wersji` - fetch + `rev-list HEAD...@{u}`,
   `Opis-Wersji`, `Aktualizuj` -> `straznik-zasad.ps1 -Tlo`), `stan-cykl` (`Stan-Cyklu`, `Ruszaj-Cykl`),
