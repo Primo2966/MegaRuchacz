@@ -425,10 +425,14 @@ function Wyrenderuj-Widok([string]$w) {
       if (-not $script:SzczegolyZajete) {
         # Budowa kilkudziesieciu kart trwa ~1,3 s (zmierzone 30.09.2026) i musi isc
         # w watku okna. Za pierwszym razem najpierw jedno zdanie, zeby klikniecie
-        # dalo znak od razu, a nie wygladalo na zawieszenie.
+        # dalo znak od razu, a nie wygladalo na zawieszenie. Od 2026-10-08 Pokaz-Widok
+        # przebudowuje zakladke, zanim ja pokaze (okno.ps1) - tu pokazuje ja od razu, bo to
+        # zdanie ma byc widac, a panel z podwojnym buforem maluje sie razem z karta (Update).
         if ($script:ListaSzczegolow -and ($script:ListaSzczegolow.Controls.Count -eq 0) -and $script:Okno.Visible) {
+          Ustaw-Panele-Widoku "szczegoly"
           Pokaz-Karty-Szczegolow @(Karta-Komunikatu "Układam zakładkę..." @("Kilkadziesiąt kart z liczbami - to trwa około sekundy.") $null)
           $script:Okno.Update()
+          $script:WidokSzczegoly.Update()
         }
         Napelnij-Szczegoly
       }

@@ -5,7 +5,9 @@
 # zakladki i pasek wedlug rejestru instalacji (Uloz-Przelacznik, Uloz-Pasek,
 # Ustaw-Instalacje-Okna) i przycisk "Zmień instalację" (Zmien-Instalacje,
 # Po-Instalatorze, Instalator-Otwarty). Od 2026-10-07 postep aktualizacji MegaRuchacza
-# z pliku stanu (Rusz-Zegar-Aktualizacji, Sprawdz-Aktualizacje, Kliknij-Aktualizuj).
+# z pliku stanu (Rusz-Zegar-Aktualizacji, Sprawdz-Aktualizacje, Kliknij-Aktualizuj). Od 2026-10-08
+# przelaczanie zakladek bez migania (Pokaz-Panel, Ustaw-Panele-Widoku - wolane takze z w-tle.ps1,
+# Panel-Widoku, Kontenery-Od-Dolu) i zakladki jako panele z podwojnym buforem.
 # Skad wolane: menu i klikniecie ikony w nadzorca.ps1 (Pokaz-Okno), przelacznik
 # zakladek (Pokaz-Widok), dozor.ps1 i w-tle.ps1 (Ustaw-Instalacje-Okna po danych),
 # przeglad.ps1 (Uloz-Pasek, Instalator-Otwarty). Wczytuje go nadzorca.ps1 kropka po
@@ -25,15 +27,66 @@ function Pokaz-Widok([string]$nazwa) {
   $warst = ($nazwa -eq "warstwy")
   $skil = ($nazwa -eq "skille")
   $przeg = (-not ($szcz -or $warst -or $skil))
-  $script:WidokSzczegoly.Visible = $szcz
-  $script:WidokWarstwy.Visible = $warst
-  $script:WidokSkille.Visible = $skil
-  $script:WidokPrzeglad.Visible = $przeg
   Styl-Przelacznika $script:BPrzeglad $przeg
   Styl-Przelacznika $script:BSzczegoly $szcz
   Styl-Przelacznika $script:BWarstwy $warst
   Styl-Przelacznika $script:BSkille $skil
+  # 2026-10-08: najpierw tresc - przebudowa (gdy dane sie zmienily) idzie pod spodem, w jeszcze
+  # schowanej zakladce - a dopiero potem jedno przelaczenie widocznosci (Ustaw-Panele-Widoku).
   Wejdz-Do-Widoku $nazwa
+  Ustaw-Panele-Widoku $nazwa
+}
+
+# --- przelaczanie i odmalowanie bez migania (2026-10-08) ----------------------
+# Uzytkownik: okno "dziwnie mruga przy kazdym przelaczaniu zakladek, nawet gdy dane sa juz
+# wczytane". Zmierzone 08.10.2026 na kopii okna z prawdziwymi danymi (test-okno-mruganie.ps1):
+# - Visible = $true na schowanej zakladce liczylo uklad od nowa po KAZDEJ z jej kontrolek
+#   z osobna (kazda zgloszona widocznosc = pelny uklad rodzicow): Przeglad -> Szczegoly
+#   11-12 s zamrozonego okna, Skille -> Przeglad 0,4-0,7 s. Pokaz-Panel wstrzymuje uklad calego
+#   poddrzewa na czas zmiany i liczy go raz, od dolu: ok. 0,2 s i 0,02 s, polozenie wszystkich
+#   kontrolek identyczne jak przed schowaniem.
+# - Zakladka pokazywala sie kawalkami (Szczegoly 35-97 osobnych odmalowan, Warstwy i Skille
+#   wymazanie calego tla, potem bialych kart, potem tresc), a przebudowa widocznego Przegladu
+#   po cichym odswiezeniu wymazywala na oczach 400-2200 razy. Wszystkie cztery zakladki sa
+#   panelami z podwojnym buforem (ListaBezMigania z wyglad.ps1): calosc malowana naraz, jednym
+#   odmalowaniem - takze przy przebudowie widocznej zakladki. Wyglad bez zmian (zrzuty przed
+#   i po identyczne), bezczynne okno nie maluje sie wcale, przewijanie Szczegolow ~40 ms na zabek.
+# - Przebudowa przy wejsciu do zakladki (nowe dane) idzie pod spodem, w jeszcze schowanej
+#   zakladce (Pokaz-Widok: najpierw Wejdz-Do-Widoku, potem Ustaw-Panele-Widoku).
+
+function Panel-Widoku([string]$nazwa) {
+  switch ($nazwa) {
+    "szczegoly" { return $script:WidokSzczegoly }
+    "warstwy"   { return $script:WidokWarstwy }
+    "skille"    { return $script:WidokSkille }
+    default     { return $script:WidokPrzeglad }
+  }
+}
+
+# Kontenery poddrzewa od dolu: dzieci przed rodzicem - wznowione w tej kolejnosci licza
+# swoj uklad raz, z gotowymi juz rozmiarami dzieci.
+function Kontenery-Od-Dolu($c, $lista) {
+  foreach ($d in $c.Controls) { if ($d.Controls.Count -gt 0) { Kontenery-Od-Dolu $d $lista } }
+  [void]$lista.Add($c)
+}
+
+function Pokaz-Panel($panel) {
+  if (-not $panel -or $panel.IsDisposed -or $panel.Visible) { return }
+  $kontenery = New-Object System.Collections.Generic.List[object]
+  Kontenery-Od-Dolu $panel $kontenery
+  foreach ($c in $kontenery) { $c.SuspendLayout() }
+  try { $panel.Visible = $true }
+  finally { foreach ($c in $kontenery) { $c.ResumeLayout($true) } }
+}
+
+# Wybrana zakladka pokazuje sie PRZED schowaniem poprzedniej - miedzy nimi nie przeswituje
+# puste tlo okna.
+function Ustaw-Panele-Widoku([string]$nazwa) {
+  $cel = Panel-Widoku $nazwa
+  Pokaz-Panel $cel
+  foreach ($p in @($script:WidokPrzeglad, $script:WidokSzczegoly, $script:WidokWarstwy, $script:WidokSkille)) {
+    if ($p -and -not $p.IsDisposed -and -not [object]::ReferenceEquals($p, $cel)) { $p.Visible = $false }
+  }
 }
 
 # --- instalacja: zakladki wedlug rejestru i przycisk "Zmień instalację" (P59d) -------
@@ -375,7 +428,9 @@ function Pokaz-Okno {
 
   # Widok przegladu: karty jedna pod druga. Przewija sie wylacznie wtedy, gdy
   # ekran jest nizszy niz tresc - wtedy nic nie znika pod krawedzia.
-  $script:WidokPrzeglad = New-Object System.Windows.Forms.Panel
+  # Panel z podwojnym buforem (ListaBezMigania, wyglad.ps1) - cala zakladka malowana naraz,
+  # nie karta po karcie (2026-10-08, patrz Pokaz-Panel). Tak samo trzy pozostale zakladki.
+  $script:WidokPrzeglad = New-Object MegaRuchacz.ListaBezMigania
   $script:WidokPrzeglad.Dock = [System.Windows.Forms.DockStyle]::Fill
   $script:WidokPrzeglad.AutoScroll = $true
   $script:WidokPrzeglad.BackColor = $script:TloOkna
@@ -414,7 +469,7 @@ function Pokaz-Okno {
 
   # Widok szczegolow: ten sam obszar, karty sekcji jedna pod druga, przewijane
   # w miejscu - okno nie rosnie od tego ani o piksel.
-  $script:WidokSzczegoly = New-Object System.Windows.Forms.Panel
+  $script:WidokSzczegoly = New-Object MegaRuchacz.ListaBezMigania
   $script:WidokSzczegoly.Dock = [System.Windows.Forms.DockStyle]::Fill
   $script:WidokSzczegoly.AutoScroll = $true
   $script:WidokSzczegoly.BackColor = $script:TloOkna
@@ -427,7 +482,7 @@ function Pokaz-Okno {
   # Widok warstw pamieci: zdanie podsumowania u gory, pod nim dwie biale karty -
   # lista warstw pogrupowana wedlug tego, kiedy sie wczytuja, i podglad tylko
   # do odczytu. Ten sam obszar co pozostale widoki, okno nie rosnie.
-  $script:WidokWarstwy = New-Object System.Windows.Forms.Panel
+  $script:WidokWarstwy = New-Object MegaRuchacz.ListaBezMigania
   $script:WidokWarstwy.Dock = [System.Windows.Forms.DockStyle]::Fill
   $script:WidokWarstwy.BackColor = $script:TloOkna
   $script:WidokWarstwy.Padding = New-Object System.Windows.Forms.Padding($script:Margines, 4, $script:Margines, 14)
@@ -519,7 +574,7 @@ function Pokaz-Okno {
   # Widok skilli (P18): u gory zdanie o bezpieczenstwie z podsumowaniem i przycisk
   # "Sprawdz teraz", pod nimi lista (wiersze z zawinietym opisem, pogrupowane wedlug
   # zrodla) i karta szczegolow z przyciskami. Ten sam obszar, okno nie rosnie.
-  $script:WidokSkille = New-Object System.Windows.Forms.Panel
+  $script:WidokSkille = New-Object MegaRuchacz.ListaBezMigania
   $script:WidokSkille.Dock = [System.Windows.Forms.DockStyle]::Fill
   $script:WidokSkille.BackColor = $script:TloOkna
   $script:WidokSkille.Padding = New-Object System.Windows.Forms.Padding($script:Margines, 4, $script:Margines, 14)
