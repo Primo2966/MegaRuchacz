@@ -6,8 +6,10 @@
 //
 // Dwa tryby (decyzja uzytkownika 2026-10-05, "jak w Hermesie"):
 //   sam        (domyslny) - w dniu terminu zasobnik\terminy.ps1 (wolany przez nadzorce przy
-//              starcie i co godzine 8-20) SAM otwiera widoczne okno Claude Code w katalogu
-//              projektu z zadaniem jako pierwszym poleceniem; status "w toku". Najwyzej JEDNO
+//              starcie i co godzine 8-20) SAM puszcza Claude Code w tle, bez okna ("claude -p"
+//              w katalogu projektu); status "w toku". Wynik zawsze w ~\.claude\mr\przypomnienia-
+//              wyniki\<id>.json i .md; "nic do zrobienia" = odhaczone bez okna, "potrzebny
+//              czlowiek" albo blad = okno terminala z ta sama rozmowa. Najwyzej JEDNO
 //              samoczynne uruchomienie na przypomnienie. Nie odhaczone do nastepnego dnia ->
 //              okno z przyciskami i adnotacja, ze automat nie dokonczyl.
 //   przypomnij - tylko okno z przyciskami "Zrob teraz / Jutro / Zrobione" (potrzebny czlowiek).
@@ -424,17 +426,23 @@ function start(poz, opcje) {
   const uwagi = [];
   for (const n of w.nieczytelne.slice(0, 3)) uwagi.push(`MegaRuchacz: linia ${n.nr} w ${plik} ma zly uklad i nie jest czytana jako przypomnienie - popraw ja: ${n.linia.slice(0, 200)}`);
   if (w.nieczytelne.length > 3) uwagi.push(`MegaRuchacz: i jeszcze ${w.nieczytelne.length - 3} takich linii w ${plik}.`);
+  // Przebieg w tle (zasobnik\terminy.ps1 -Wykonaj ustawia MR_PRZYPOMNIENIE_W_TLE): zero wyjscia.
+  // Tam pierwsza linia odpowiedzi ma byc znacznikiem WYNIK, a polecenie "powiedz o zaleglych na
+  // poczatku" by go wypchnelo. Slad zostaje, z adnotacja, ktory przebieg wolal.
+  const wTle = process.env.MR_PRZYPOMNIENIE_W_TLE || "";
   try {
     fs.mkdirSync(path.dirname(stan), { recursive: true });
-    fs.writeFileSync(stan, `hook: ${new Date().toISOString()}\r\nzalegle: ${zal.length}\r\nnieczytelne: ${w.nieczytelne.length}\r\n`, "utf8");
+    fs.writeFileSync(stan, `hook: ${new Date().toISOString()}\r\nzalegle: ${zal.length}\r\nnieczytelne: ${w.nieczytelne.length}\r\n` +
+      (wTle ? `w tle: #${wTle} (bez wyjscia)\r\n` : ""), "utf8");
   } catch (e) {
     uwagi.push(`MegaRuchacz: przypomnienia - nie zapisalem sladu ${stan}: ${e.message}`);
   }
+  if (wTle) return 0;
   const wyjscie = [];
   if (zal.length) {
     const skrypt = __filename.replace(/\\/g, "/");
     const stopka = `Powiedz o nich użytkownikowi na samym początku pierwszej odpowiedzi, jednym-dwoma zdaniami. ` +
-      `Pozycje „uruchomi się samo” zrobi automat w osobnym oknie - nie wykonuj ich tutaj bez prośby użytkownika. ` +
+      `Pozycje „uruchomi się samo” zrobi automat w tle - nie wykonuj ich tutaj bez prośby użytkownika. ` +
       `Gdy sprawa jest załatwiona, odhacz: node "${skrypt}" zrobione <id>; nowy termin: node "${skrypt}" przesun <id> <kiedy>.`;
     const pozycje = zal.map((p) => {
       let stanP = opisTerminu(zTekstu(p.termin), odDnia);

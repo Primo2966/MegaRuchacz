@@ -3,10 +3,19 @@
 # tez recznie. Plik przypomnien i cala jego logike ma narzedzia\terminy.js - tutaj tylko:
 #
 #   1. tryb "sam", termin dzis albo wczesniej, jeszcze nieuruchomione -> NAJPIERW status "w toku"
-#      (terminy.js w-toku), POTEM widoczne okno terminala z Claude Code w katalogu projektu
-#      i zadaniem jako pierwszym poleceniem. W tej kolejnosci, bo wywrotka po otwarciu okna
-#      nie moze skonczyc sie drugim uruchomieniem - najwyzej jedno samoczynne na przypomnienie.
-#      Kilka naraz: po kolei, kazde w osobnym oknie.
+#      (terminy.js w-toku), POTEM osobny proces bez okna (ten skrypt z -Wykonaj <id>), ktory
+#      puszcza "claude -p" w katalogu projektu (2026-10-08: okno z dlugim raportem przy kazdym
+#      zadaniu bylo zbedne, a wynik ginal przy jego zamknieciu). W tej kolejnosci, bo wywrotka
+#      po starcie nie moze skonczyc sie drugim uruchomieniem - najwyzej jedno samoczynne na
+#      przypomnienie. Kilka naraz: kazde w osobnym procesie, rownolegle.
+#      Proces w tle: odpowiedz Claude zaczyna sie znacznikiem "WYNIK: NIC_NIE_MUSISZ" albo
+#      "WYNIK: POTRZEBUJE_CIEBIE: <co>"; wynik ZAWSZE na trwale w ~\.claude\mr\przypomnienia-wyniki\
+#      <id>.json (umowa z karta Przeglad nadzorcy) i <id>.md (raport do Notatnika).
+#        "nic"      -> odhaczone, zadnego okna,
+#        "czlowiek" -> okno terminala z "claude --resume <sesja>" i naglowkiem "MUSISZ: ...",
+#        "blad"     -> to samo z "NIE UDALO SIE: <powod>" (brak znacznika, kod wyjscia, limit
+#                      czasu, nieczytelny JSON - nigdy nie uchodza za "nic"); bez sesji = nowa
+#                      rozmowa z tym samym zadaniem. Oba zostaja "w toku".
 #   2. okno z przyciskami "Zrob teraz / Jutro / Zrobione" dla: trybu "przypomnij", spraw "w toku"
 #      od wczoraj albo dawniej (automat nie dokonczyl) i uruchomien, ktore sie nie udaly. Okno
 #      stoi na wierzchu i na pasku zadan, dopoki ktos nie kliknie. Krzyzyk przy nieobsluzonych
@@ -18,8 +27,11 @@
 # Uzycie:
 #   powershell -NoProfile -ExecutionPolicy Bypass -File zasobnik\terminy.ps1 [-Zrodlo <repo>]
 #     [-KatalogDomowy <kat>] [-Plik <plik przypomnien>] [-Dzis RRRR-MM-DD] [-Proba] [-BezOkna]
+#     [-Wykonaj <id>] [-LimitSekund <s>]
 #   -Proba    nic nie uruchamia, nie zmienia i nie pokazuje - wypisuje, co by zrobil
 #   -BezOkna  tylko samoczynne uruchomienia (punkt 1)
+#   -Wykonaj  proces w tle dla jednego przypomnienia "w toku" (startuje go punkt 1, nie czlowiek)
+#   -LimitSekund  limit claude -p zamiast $SEKUND_LIMITU_W_TLE (testy)
 # Kod wyjscia: 0 ok (takze "nic do zrobienia"), 1 blad (opis w dzienniku i na stderr).
 #
 # Kod i komentarze bez polskich znakow; teksty w oknie i polecenie dla Claude z polskimi -
@@ -31,7 +43,9 @@ param(
   [string]$Plik = "",
   [string]$Dzis = "",
   [switch]$Proba,
-  [switch]$BezOkna
+  [switch]$BezOkna,
+  [int]$Wykonaj = 0,
+  [int]$LimitSekund = 0
 )
 
 $ErrorActionPreference = "Stop"
@@ -49,9 +63,24 @@ $KatUruchomien = Join-Path $KatStanu "terminy"
 
 # Krzyzyk = wroc za tyle minut (decyzja uzytkownika: 2 godziny, "nie gubimy sprawy").
 $MINUT_ODLOZENIA = 120
-# Odstep miedzy kolejnymi samoczynnymi oknami - zeby kilka terminali nie wstawalo w jednej
-# chwili jeden na drugim (Windows Terminal potrafi wtedy zgubic kolejnosc kart).
+# Odstep miedzy kolejnymi samoczynnymi uruchomieniami - zeby kilka procesow Claude nie
+# ruszalo w jednej chwili (rownoczesny start = rownoczesne hooki i logowanie do API).
 $SEKUND_MIEDZY_URUCHOMIENIAMI = 3
+# Limit jednego przebiegu w tle (claude -p). Zadania z przypomnien to "sprawdz, porownaj,
+# przygotuj propozycje" - kilka do kilkunastu minut. 30 min to zapas na wolne API i kilka
+# narzedzi; proces, ktory chodzi dluzej, prawie na pewno utknal (np. na zerwanym MCP). Po
+# limicie proces jest ubijany razem z dziecmi, a wynik to "blad" z okna dla czlowieka.
+$SEKUND_LIMITU_W_TLE = 1800
+if ($LimitSekund -gt 0) { $SEKUND_LIMITU_W_TLE = $LimitSekund }
+# Tryb uprawnien claude -p. Okno interaktywne startuje bez flag = tryb domyslny: wszystko
+# spoza listy dozwolonych pyta czlowieka. W tle nie ma kto odpowiedziec, a "-p" w trybie
+# domyslnym nie moze czekac na pytanie. "dontAsk" = to samo co domyslny, tylko pytanie
+# konczy sie odmowa - nigdy wiecej niz w oknie interaktywnym. Zablokowane narzedzie Claude
+# zglasza jako POTRZEBUJE_CIEBIE, a w oknie --resume czlowiek moze juz zatwierdzic.
+$TRYB_UPRAWNIEN_W_TLE = "dontAsk"
+# Ile znakow wyjscia procesu (stdout/stderr) trafia do raportu, gdy Claude nie dal odpowiedzi.
+$MAX_WYJSCIA_W_RAPORCIE = 4000
+$KatWynikow = Join-Path $KatalogDomowy ".claude\mr\przypomnienia-wyniki"
 # Dziennik rosnie o kilka linii na godzine; powyzej tego rozmiaru zostaje jego koncowka.
 $MAX_DZIENNIKA = 512KB
 # Jak dlugo przycisk mowi "Skopiowano", zanim wroci do "Kopiuj".
@@ -72,7 +101,12 @@ function Dopisz-Dziennik([string]$tekst) {
       $ogon = @([System.IO.File]::ReadAllLines($Dziennik, [System.Text.Encoding]::UTF8) | Select-Object -Last 400)
       [System.IO.File]::WriteAllLines($Dziennik, [string[]]$ogon, (Bez-Bom))
     }
-    [System.IO.File]::AppendAllText($Dziennik, $linia + "`r`n", (Bez-Bom))
+    # Proces w tle (-Wykonaj) i glowny przebieg moga dopisywac w tej samej chwili - kilka
+    # krotkich prob, zanim to bedzie blad.
+    for ($i = 1; ; $i++) {
+      try { [System.IO.File]::AppendAllText($Dziennik, $linia + "`r`n", (Bez-Bom)); break }
+      catch [System.IO.IOException] { if ($i -ge 10) { throw }; Start-Sleep -Milliseconds 50 }
+    }
   } catch {
     # Dziennik jest jedynym sladem - gdy i on padl, zostaje stderr (nadzorca go nie czyta, ale
     # reczne uruchomienie zobaczy) i kod wyjscia.
@@ -151,26 +185,62 @@ function Napis-PS([string]$t) {
   return "'" + ($t -replace "'", "''") + "'"
 }
 
-function Polecenie-Dla-Claude($p, [string]$katalog) {
+# $wTle: przebieg "claude -p" bez czlowieka - polecenie dostaje umowe o znaczniku WYNIK
+# (czyta go Ocen-Przebieg) i zakaz odhaczania (odhacza ten skrypt, tylko przy "nic").
+function Polecenie-Dla-Claude($p, [string]$katalog, [bool]$wTle = $false) {
   $skrypt = $SkryptTerminow.Replace('\', '/')
   $tresc = ($p.tresc -replace '"', "'").TrimEnd('.', ' ')   # kropke dostawia zdanie nizej
   if ($p.sprawdz) { $tresc += " (jak sprawdzić: " + ($p.sprawdz -replace '"', "'") + ")" }
   $gdzie = ""
   if ($katalog -ne $p.projekt) { $gdzie = " Uwaga: katalogu projektu '" + $p.projekt + "' nie ma na tym komputerze - okno otwarte w katalogu domowym; ustal najpierw, gdzie leży projekt." }
-  return ("Zadanie z przypomnienia $($p.id) zaplanowane na $($p.termin): $tresc. Wykonaj je.$gdzie " +
-          "Niczego nie zmieniaj na produkcji ani w sklepach bez wyraźnego polecenia użytkownika — przygotuj propozycję. " +
-          "Na koniec krótki raport po polsku i odhacz przypomnienie: node '$skrypt' zrobione $($p.id)")
+  $wstep = ("Zadanie z przypomnienia $($p.id) zaplanowane na $($p.termin): $tresc. Wykonaj je.$gdzie " +
+            "Niczego nie zmieniaj na produkcji ani w sklepach bez wyraźnego polecenia użytkownika — przygotuj propozycję. ")
+  if (-not $wTle) { return ($wstep + "Na koniec krótki raport po polsku i odhacz przypomnienie: node '$skrypt' zrobione $($p.id)") }
+  return ($wstep +
+          "Robisz to w tle, bez użytkownika przy komputerze: wykonaj zadanie sam, w tej jednej odpowiedzi — nie rozdawaj go workerom w tle, nie zadawaj pytań i nie kończ przed wynikiem. " +
+          "Nie odhaczaj teraz przypomnienia — przy wyniku NIC_NIE_MUSISZ MegaRuchacz zrobi to sam. " +
+          "Twoja ostatnia odpowiedź MUSI zaczynać się dokładnie jedną z dwóch linii, bez niczego przed nią (także gdy inne komunikaty każą zacząć od czegoś innego): " +
+          "'WYNIK: NIC_NIE_MUSISZ' — zadanie załatwione, użytkownik nie musi nic robić; " +
+          "'WYNIK: POTRZEBUJE_CIEBIE: <jednym zdaniem, co użytkownik ma zrobić>' — potrzebna jego decyzja, zgoda na zmianę albo kliknięcie, albo czegoś nie dało się zrobić (np. narzędzie zablokowane z braku uprawnień). " +
+          "Pod tą linią krótki raport po polsku: co sprawdziłeś, co wyszło, czego nie sprawdzono. " +
+          "Gdy później dokończycie sprawę z użytkownikiem w tej rozmowie, odhacz: node '$skrypt' zrobione $($p.id)")
 }
 
-# Otwiera WIDOCZNE okno: Windows Terminal (karta w nowym oknie), a gdy go nie ma - zwykla
-# konsola PowerShella. Polecenie idzie przez maly skrypt startowy w ~\.claude\mr\terminy\
-# (zostaje jako slad, co dokladnie uruchomiono), bo wiersz polecen wt.exe rozcina tekst na ";".
-# Zwraca opis albo rzuca wyjatek z powodem.
-function Uruchom-Claude($p, [string]$jak) {
+# Katalog projektu z przypomnienia; gdy go nie ma na tym komputerze - katalog domowy
+# (polecenie dla Claude mowi wtedy, ze projektu trzeba poszukac).
+function Katalog-Projektu($p) {
   $kat = "$($p.projekt)"
   if (-not $kat -or -not (Test-Path -LiteralPath $kat -PathType Container)) { $kat = $KatalogDomowy }
   $kat = [System.IO.Path]::GetFullPath($kat).TrimEnd('\')
   if ($kat -match '^[A-Za-z]:$') { $kat += '\.' }
+  return $kat
+}
+
+# Otwiera WIDOCZNE okno: Windows Terminal (karta w nowym oknie), a gdy go nie ma - zwykla
+# konsola PowerShella, z gotowym skryptem startowym. Zwraca opis albo rzuca wyjatek.
+function Otworz-Terminal([string]$kat, [string]$id, [string]$start) {
+  $ps = @("-NoExit", "-ExecutionPolicy", "Bypass", "-File", ('"' + $start + '"'))
+  $wt = Get-Command wt.exe -ErrorAction SilentlyContinue | Select-Object -First 1
+  if ($wt) {
+    $arg = @("-w", "new", "new-tab", "-d", ('"' + $kat + '"'), "--title", ('"MegaRuchacz #' + $id + '"'), "powershell.exe") + $ps
+    Start-Process -FilePath $wt.Source -ArgumentList $arg | Out-Null
+    return "Windows Terminal, katalog $kat, skrypt startowy $start"
+  }
+  Start-Process -FilePath "powershell.exe" -WorkingDirectory $kat -ArgumentList $ps | Out-Null
+  return "konsola PowerShell (brak Windows Terminal), katalog $kat, skrypt startowy $start"
+}
+
+# Skrypt startowy w ~\.claude\mr\terminy\ (zostaje jako slad, co dokladnie uruchomiono),
+# bo wiersz polecen wt.exe rozcina tekst na ";". Z BOM - ma polskie litery.
+function Zapisz-Skrypt-Startowy([string]$start, [string[]]$linie) {
+  if (-not (Test-Path -LiteralPath $KatUruchomien)) { New-Item -ItemType Directory -Force -Path $KatUruchomien | Out-Null }
+  [System.IO.File]::WriteAllText($start, ($linie -join "`r`n") + "`r`n", (New-Object System.Text.UTF8Encoding($true)))
+}
+
+# Interaktywny Claude Code w widocznym oknie (przycisk "Zrob teraz"). Zwraca opis albo
+# rzuca wyjatek z powodem.
+function Uruchom-Claude($p, [string]$jak) {
+  $kat = Katalog-Projektu $p
   $claude = Sciezka-Claude
   if (-not $claude) { throw "nie ma polecenia claude w PATH - Claude Code nie jest zainstalowany albo PATH tego procesu go nie widzi" }
   $polecenie = Polecenie-Dla-Claude $p $kat
@@ -181,23 +251,247 @@ function Uruchom-Claude($p, [string]$jak) {
     ('Set-Location -LiteralPath ' + (Napis-PS $kat)),
     ('$polecenie = ' + (Napis-PS $polecenie)),
     ('& ' + (Napis-PS $claude) + ' $polecenie')
-  ) -join "`r`n"
+  )
   if ($Proba) {
     Write-Host "[proba] otworzylbym Claude Code w $kat ($jak):"
     Write-Host "        $polecenie"
     return "proba"
   }
-  if (-not (Test-Path -LiteralPath $KatUruchomien)) { New-Item -ItemType Directory -Force -Path $KatUruchomien | Out-Null }
-  [System.IO.File]::WriteAllText($start, $tresc + "`r`n", (New-Object System.Text.UTF8Encoding($true)))
-  $ps = @("-NoExit", "-ExecutionPolicy", "Bypass", "-File", ('"' + $start + '"'))
-  $wt = Get-Command wt.exe -ErrorAction SilentlyContinue | Select-Object -First 1
-  if ($wt) {
-    $arg = @("-w", "new", "new-tab", "-d", ('"' + $kat + '"'), "--title", ('"MegaRuchacz #' + $p.id + '"'), "powershell.exe") + $ps
-    Start-Process -FilePath $wt.Source -ArgumentList $arg | Out-Null
-    return "Windows Terminal, katalog $kat, skrypt startowy $start"
+  Zapisz-Skrypt-Startowy $start $tresc
+  return (Otworz-Terminal $kat "$($p.id)" $start)
+}
+
+# ------------------------------------------------------ tryb "sam": Claude Code w tle
+
+# Osobny proces bez okna (ten skrypt z -Wykonaj <id>) - glowny przebieg nie czeka na Claude,
+# wiec zamek startu trwa sekundy, a kilka zadan idzie rownolegle. Zwraca opis albo rzuca.
+function Odpal-W-Tle($p) {
+  $arg = @("-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-WindowStyle", "Hidden",
+           "-File", ('"' + $PSCommandPath + '"'), "-Wykonaj", "$($p.id)",
+           "-Zrodlo", ('"' + $Zrodlo + '"'), "-KatalogDomowy", ('"' + $KatalogDomowy.TrimEnd('\') + '"'), "-Plik", ('"' + $Plik + '"'))
+  if ($Dzis) { $arg += @("-Dzis", $Dzis) }
+  if ($LimitSekund -gt 0) { $arg += @("-LimitSekund", "$LimitSekund") }
+  if ($Proba) {
+    Write-Host "[proba] uruchomilbym w tle: powershell $($arg -join ' ')"
+    return "proba"
   }
-  Start-Process -FilePath "powershell.exe" -WorkingDirectory $kat -ArgumentList $ps | Out-Null
-  return "konsola PowerShell (brak Windows Terminal), katalog $kat, skrypt startowy $start"
+  $psi = New-Object System.Diagnostics.ProcessStartInfo
+  $psi.FileName = "powershell.exe"
+  $psi.Arguments = $arg -join " "
+  $psi.UseShellExecute = $false
+  $psi.CreateNoWindow = $true
+  $proc = [System.Diagnostics.Process]::Start($psi)
+  return "w tle, bez okna (proces $($proc.Id), limit $SEKUND_LIMITU_W_TLE s)"
+}
+
+# Ubija proces razem z dziecmi - claude.exe odpala bash, node i serwery MCP, samo Kill()
+# zostawiloby je w tle. taskkill bez okna konsoli. Zwraca opis porazki albo "".
+function Ubij-Drzewo([int]$procId) {
+  $psi = New-Object System.Diagnostics.ProcessStartInfo
+  $psi.FileName = Join-Path $env:SystemRoot "System32\taskkill.exe"
+  $psi.Arguments = "/T /F /PID $procId"
+  $psi.UseShellExecute = $false
+  $psi.CreateNoWindow = $true
+  $psi.RedirectStandardOutput = $true
+  $psi.RedirectStandardError = $true
+  $t = [System.Diagnostics.Process]::Start($psi)
+  $wy = $t.StandardOutput.ReadToEndAsync(); $bl = $t.StandardError.ReadToEndAsync()
+  if (-not $t.WaitForExit(15000)) { return "taskkill nie skonczyl w 15 s" }
+  $t.WaitForExit()
+  if ($t.ExitCode -ne 0) { return "taskkill kod $($t.ExitCode): $($bl.Result.Trim()) $($wy.Result.Trim())" }
+  return ""
+}
+
+# claude -p bez okna, w katalogu projektu, polecenie na stdin (bez cytowania w wierszu
+# polecen; bajty UTF-8 wprost do strumienia, bo .NET Framework nie ma kodowania stdin).
+# MR_PRZYPOMNIENIE_W_TLE wycisza hook "terminy.js start" - inne zalegle przypomnienia nie
+# maja odciagac Claude od znacznika WYNIK w pierwszej linii.
+function Claude-W-Tle([string]$claude, [string]$kat, [string]$polecenie, [int]$id) {
+  $r = [pscustomobject]@{ Kod = $null; Wyjscie = ""; Bledy = ""; Limit = $false; Uwagi = @() }
+  $psi = New-Object System.Diagnostics.ProcessStartInfo
+  $psi.FileName = $claude
+  $psi.Arguments = "-p --output-format json --permission-mode $TRYB_UPRAWNIEN_W_TLE"
+  $psi.WorkingDirectory = $kat
+  $psi.UseShellExecute = $false
+  $psi.CreateNoWindow = $true
+  $psi.RedirectStandardInput = $true
+  $psi.RedirectStandardOutput = $true
+  $psi.RedirectStandardError = $true
+  $psi.StandardOutputEncoding = [System.Text.Encoding]::UTF8
+  $psi.StandardErrorEncoding = [System.Text.Encoding]::UTF8
+  $psi.EnvironmentVariables["MR_PRZYPOMNIENIE_W_TLE"] = "$id"
+  $proc = [System.Diagnostics.Process]::Start($psi)
+  $wy = $proc.StandardOutput.ReadToEndAsync(); $bl = $proc.StandardError.ReadToEndAsync()
+  try {
+    $b = (New-Object System.Text.UTF8Encoding($false)).GetBytes($polecenie)
+    $proc.StandardInput.BaseStream.Write($b, 0, $b.Length)
+    $proc.StandardInput.BaseStream.Flush()
+    $proc.StandardInput.Close()
+  } catch { $r.Uwagi += "polecenie nie weszlo na stdin: $($_.Exception.Message)" }
+  if ($proc.WaitForExit($SEKUND_LIMITU_W_TLE * 1000)) {
+    $proc.WaitForExit()
+    $r.Kod = $proc.ExitCode
+  } else {
+    $r.Limit = $true
+    $u = Ubij-Drzewo $proc.Id
+    if ($u) { $r.Uwagi += "ubijanie po limicie: $u" }
+    if (-not $proc.WaitForExit(10000)) { $r.Uwagi += "proces $($proc.Id) zyje mimo ubijania" }
+  }
+  # Dziecko, ktore odziedziczylo wyjscie i zyje dalej, trzymaloby strumien bez konca.
+  if ($wy.Wait(30000)) { $r.Wyjscie = $wy.Result } else { $r.Uwagi += "stdout nie domkniety w 30 s" }
+  if ($bl.Wait(5000)) { $r.Bledy = $bl.Result } else { $r.Uwagi += "stderr nie domkniety w 5 s" }
+  return $r
+}
+
+function Ogon([string]$t, [int]$ile) {
+  $t = "$t".Trim()
+  if ($t.Length -le $ile) { return $t }
+  return "(...poczatek pominiety...) " + $t.Substring($t.Length - $ile)
+}
+
+# Wynik przebiegu. Domyslnie "blad" - "nic" tylko przy czystym przebiegu ze znacznikiem
+# NIC_NIE_MUSISZ w pierwszej linii odpowiedzi. Kazda inna sytuacja konczy sie oknem.
+function Ocen-Przebieg($r) {
+  $w = [pscustomobject]@{ Wynik = "blad"; CoZrobic = ""; Powod = ""; Raport = ""; Sesja = "" }
+  $j = $null
+  $bladJson = ""
+  $tekst = "$($r.Wyjscie)".Trim()
+  if ($tekst) {
+    try { $j = $tekst | ConvertFrom-Json } catch { $bladJson = $_.Exception.Message }
+    # Ostrzezenie wypisane przed JSON-em nie moze zgubic odpowiedzi - wtedy ostatnia linia "{...".
+    $ost = @($tekst -split "\r?\n" | Where-Object { $_.TrimStart().StartsWith("{") } | Select-Object -Last 1)
+    if (-not $j -and $ost.Count -gt 0 -and $ost[0].Trim() -ne $tekst) {
+      try { $j = $ost[0] | ConvertFrom-Json; $bladJson = "" } catch { $bladJson += "; ostatnia linia: $($_.Exception.Message)" }
+    }
+    if ($j -and -not ($j.PSObject.Properties.Name -contains "result")) { $bladJson = "brak pola result"; $j = $null }
+  } else { $bladJson = "puste wyjscie" }
+  if ($j) { $w.Sesja = "$($j.session_id)"; $w.Raport = "$($j.result)" }
+  if (-not $w.Raport) {
+    $w.Raport = "Brak odpowiedzi Claude.`r`n`r`nWyjście procesu:`r`n" + (Ogon $tekst $MAX_WYJSCIA_W_RAPORCIE) +
+                "`r`n`r`nBłędy procesu:`r`n" + (Ogon $r.Bledy $MAX_WYJSCIA_W_RAPORCIE)
+  }
+  if ($r.Limit) { $w.Powod = "przekroczony limit czasu ($([int]($SEKUND_LIMITU_W_TLE / 60)) min, $SEKUND_LIMITU_W_TLE s) - proces ubity"; return $w }
+  if ($r.Kod -ne 0) { $w.Powod = "Claude Code zakończył się kodem $($r.Kod): " + (Ogon $r.Bledy 300); return $w }
+  if (-not $j) { $w.Powod = "nieczytelna odpowiedź Claude Code (nie JSON: $bladJson)"; return $w }
+  if ($j.is_error) { $w.Powod = "Claude Code zgłosił błąd ($($j.subtype))"; return $w }
+  $pierwsza = @("$($j.result)" -split "\r?\n" | Where-Object { $_.Trim() } | Select-Object -First 1)
+  $linia = ""
+  if ($pierwsza.Count -gt 0) { $linia = $pierwsza[0].Trim().Trim('*', '`', '#', '>', '_', ' ') }
+  if ($linia -match '^WYNIK:\s*NIC_NIE_MUSISZ$') { $w.Wynik = "nic"; return $w }
+  if ($linia -match '^WYNIK:\s*POTRZEBUJE_CIEBIE:\s*(\S.*)$') { $w.Wynik = "czlowiek"; $w.CoZrobic = $matches[1].Trim(); return $w }
+  if ($linia -match '^WYNIK:') { $w.Powod = "nieznany znacznik w pierwszej linii odpowiedzi: $linia"; return $w }
+  $w.Powod = "brak znacznika WYNIK w pierwszej linii odpowiedzi"
+  return $w
+}
+
+# Wynik na trwale: <id>.json (umowa z karta Przeglad nadzorcy - nazwy pol sa jej czescia)
+# i <id>.md do Notatnika. Kolejny przebieg tego samego id nadpisuje oba. Zwraca sciezke json.
+function Zapisz-Wynik($p, [string]$kat, [datetime]$start, [datetime]$koniec, $w) {
+  $raport = "$($w.Raport)".Replace([string][char]0, "")
+  $dane = [ordered]@{
+    id = [int]$p.id; tresc = "$($p.tresc)"; projekt = "$($p.projekt)"
+    start = $start.ToString("yyyy-MM-ddTHH:mm:sszzz"); koniec = $koniec.ToString("yyyy-MM-ddTHH:mm:sszzz")
+    wynik = $w.Wynik; co_zrobic = $w.CoZrobic; powod = $w.Powod; raport = $raport
+    session_id = $w.Sesja; projekt_katalog = $kat
+  }
+  $json = Join-Path $KatWynikow "$($p.id).json"
+  $md = Join-Path $KatWynikow "$($p.id).md"
+  $naglowek = switch ($w.Wynik) {
+    "nic"      { "Nic nie musisz robić." }
+    "czlowiek" { "MUSISZ: $($w.CoZrobic)" }
+    default    { "NIE UDAŁO SIĘ: $($w.Powod)" }
+  }
+  $tekstMd = (@("# Przypomnienie #$($p.id): $($p.tresc)", "", $naglowek, "",
+                "Projekt: $($p.projekt)", "Start: $($dane.start)", "Koniec: $($dane.koniec)", "Sesja Claude: $($w.Sesja)", "",
+                "## Raport", "", $raport) -join "`n") -replace "\r?\n", "`r`n"
+  Zapisz-Trwale $json (($dane | ConvertTo-Json -Depth 3) + "`r`n")
+  Zapisz-Trwale $md ($tekstMd + "`r`n") (New-Object System.Text.UTF8Encoding($true))
+  return $json
+}
+
+# Okno dla czlowieka po przebiegu w tle: naglowek "MUSISZ: ..." albo "NIE UDALO SIE: ...",
+# pod nim ta sama rozmowa (claude --resume), a bez sesji - nowa z tym samym zadaniem.
+function Okno-Po-Przebiegu($p, [string]$kat, [string]$claude, $w, [string]$sciezkaMd) {
+  if ($w.Wynik -eq "czlowiek") { $glowa = "MUSISZ: $($w.CoZrobic)"; $kolor = "Yellow" }
+  else { $glowa = "NIE UDAŁO SIĘ: $($w.Powod)"; $kolor = "Red" }
+  $start = Join-Path $KatUruchomien "zrob-$($p.id).ps1"
+  $linie = @(
+    "# MegaRuchacz: przypomnienie #$($p.id) - po przebiegu w tle $(Get-Date -Format 'yyyy-MM-dd HH:mm'), wynik $($w.Wynik) (zasobnik\terminy.ps1)",
+    ('$Host.UI.RawUI.WindowTitle = ' + (Napis-PS "MegaRuchacz - przypomnienie #$($p.id): $glowa")),
+    ('$ramka = "=" * [Math]::Max(40, [Math]::Min(100, $Host.UI.RawUI.WindowSize.Width - 1))'),
+    'Write-Host ""',
+    ('Write-Host $ramka -ForegroundColor ' + $kolor),
+    ('Write-Host ' + (Napis-PS "  $glowa  ") + ' -ForegroundColor Black -BackgroundColor ' + $kolor),
+    ('Write-Host $ramka -ForegroundColor ' + $kolor),
+    ('Write-Host ' + (Napis-PS "Przypomnienie #$($p.id): $($p.tresc)")),
+    ('Write-Host ' + (Napis-PS "Pełny raport: $sciezkaMd")),
+    'Write-Host ""',
+    ('Set-Location -LiteralPath ' + (Napis-PS $kat)))
+  if ($w.Sesja) {
+    $linie += ('Write-Host ' + (Napis-PS "Niżej rozmowa, w której Claude robił to zadanie - możesz pisać w niej dalej.") + ' -ForegroundColor Gray')
+    $linie += ('& ' + (Napis-PS $claude) + ' --resume ' + (Napis-PS $w.Sesja))
+  } else {
+    $linie += ('Write-Host ' + (Napis-PS "Rozmowy z przebiegu w tle nie da się wznowić - zaczynam nową z tym samym zadaniem.") + ' -ForegroundColor Gray')
+    $linie += ('$polecenie = ' + (Napis-PS (Polecenie-Dla-Claude $p $kat)))
+    $linie += ('& ' + (Napis-PS $claude) + ' $polecenie')
+  }
+  Zapisz-Skrypt-Startowy $start $linie
+  return (Otworz-Terminal $kat "$($p.id)" $start)
+}
+
+# Proces w tle (-Wykonaj): jedno przypomnienie "w toku" od poczatku do konca. Wynik zapisany
+# zawsze, status i okno zgodne z wynikiem, jedna linia podsumowania w dzienniku.
+function Wykonaj-W-Tle([int]$id) {
+  $plikZapisu = Join-Path $Zrodlo "narzedzia\zapis-trwaly.ps1"
+  if (-not (Test-Path -LiteralPath $plikZapisu)) { throw "nie ma $plikZapisu - wyniku nie da sie zapisac trwale" }
+  . $plikZapisu
+  $r = Wolaj-Terminy @("zalegle", "--json")
+  if ($r.Kod -ne 0) { throw "terminy.js zalegle --json: kod $($r.Kod) $($r.Blad)" }
+  $p = @(($r.Tekst | ConvertFrom-Json).zalegle | Where-Object { $_ -and ([int]$_.id -eq $id) }) | Select-Object -First 1
+  if (-not $p) { throw "nie ma zaleglego przypomnienia #$id" }
+  if ($p.status -ne "w toku") { throw "przypomnienie #$id ma status '$($p.status)', a nie 'w toku' - nie uruchamiam" }
+  $kat = Katalog-Projektu $p
+  $claude = Sciezka-Claude
+  $start = Get-Date
+  $uwagi = @()
+  if (-not $claude) {
+    $w = [pscustomobject]@{ Wynik = "blad"; CoZrobic = ""; Raport = ""; Sesja = ""
+                            Powod = "nie ma polecenia claude w PATH - Claude Code nie jest zainstalowany albo PATH tego procesu go nie widzi" }
+    $claude = "claude"
+  } else {
+    try {
+      $przebieg = Claude-W-Tle $claude $kat (Polecenie-Dla-Claude $p $kat $true) $id
+      $uwagi = @($przebieg.Uwagi)
+      $w = Ocen-Przebieg $przebieg
+    } catch {
+      $w = [pscustomobject]@{ Wynik = "blad"; CoZrobic = ""; Raport = ""; Sesja = ""; Powod = "Claude Code nie wystartował: $($_.Exception.Message)" }
+    }
+  }
+  $koniec = Get-Date
+  $sciezka = ""
+  try {
+    $sciezka = Zapisz-Wynik $p $kat $start $koniec $w
+  } catch {
+    $uwagi += "NIE ZAPISALEM wyniku: $($_.Exception.Message)"
+    if ($w.Wynik -eq "nic") { $w.Wynik = "blad"; $w.Powod = "zadanie zrobione, ale nie zapisałem wyniku ($($_.Exception.Message))" }
+    $script:BladZapisuWyniku = $true
+  }
+  $status = "zostaje w toku"
+  if ($w.Wynik -eq "nic") {
+    if (Zmien-Status "zrobione" @("$id") "w tle #${id}: odhaczenie") { $status = "odhaczone" }
+    else { $status = "NIE ODHACZONE ($($script:OstatniBladStatusu)) - wroci jutro w oknie jako niedokonczone" }
+  }
+  $okno = "bez okna"
+  if ($w.Wynik -ne "nic") {
+    try { $okno = "okno: " + (Okno-Po-Przebiegu $p $kat $claude $w (Join-Path $KatWynikow "$id.md")) }
+    catch { $okno = "NIE OTWORZYLEM okna: $($_.Exception.Message)"; $script:BladOkna = $true }
+  }
+  $opis = $w.Wynik
+  if ($w.Wynik -eq "czlowiek") { $opis += " (co: $($w.CoZrobic))" }
+  if ($w.Wynik -eq "blad") { $opis += " (powod: $($w.Powod))" }
+  $czas = [int]($koniec - $start).TotalSeconds
+  $dopisek = ""; if ($uwagi.Count -gt 0) { $dopisek = "; UWAGI: " + ($uwagi -join "; ") }
+  Dopisz-Dziennik ("w tle #${id}: wynik $opis; ${czas} s, sesja '$($w.Sesja)'; $status; wynik w '$sciezka'; $okno$dopisek" -replace "\r?\n", " ")
 }
 
 # -------------------------------------------------------------------- okno z przyciskami
@@ -402,6 +696,14 @@ try {
   $script:Node = $nodeCmd.Source
   if (-not (Test-Path -LiteralPath $SkryptTerminow)) { throw "nie ma $SkryptTerminow" }
 
+  if ($Wykonaj -gt 0) {
+    if ($Proba) { throw "-Wykonaj nie dziala z -Proba (uruchamia Claude naprawde)" }
+    Wykonaj-W-Tle $Wykonaj
+    if ($script:BladZapisuWyniku -or $script:BladOkna) { $kod = 1 }
+    if ($script:BladDziennika) { $kod = 1 }
+    exit $kod
+  }
+
   # Jedna kopia czesci uruchamiajacej naraz - dwie odpalone jednoczesnie otworzylyby to samo
   # zadanie dwa razy, zanim pierwsza zdazy zapisac "w toku".
   $zamekStartu = New-Object System.Threading.Mutex($false, "Local\MegaRuchacz-Terminy-Start")
@@ -430,13 +732,13 @@ try {
         continue
       }
       try {
-        $jak = Uruchom-Claude $p "uruchomione samoczynnie"
+        $jak = Odpal-W-Tle $p
         Dopisz-Dziennik "samoczynne #$($p.id) ($($p.termin), $($p.projekt)): $jak"
         $uruchomione++
       } catch {
-        Dopisz-Dziennik "samoczynne #$($p.id) - NIE OTWORZYLEM Claude Code: $($_.Exception.Message)"
+        Dopisz-Dziennik "samoczynne #$($p.id) - NIE URUCHOMILEM zadania w tle: $($_.Exception.Message)"
         $p.status = "w toku"
-        $p.uwaga = "Automat nie zdołał otworzyć Claude Code: $($_.Exception.Message)"
+        $p.uwaga = "Automat nie zdołał uruchomić zadania w tle: $($_.Exception.Message)"
         $doOkna += $p
       }
       continue
@@ -445,7 +747,11 @@ try {
     # "w toku": od dzis = jeszcze chodzi, nie przeszkadzamy; od wczoraj albo dawniej = nie dokonczone
     $od = "$($p.wTokuOd)"
     if ($od.Length -ge 10 -and $od.Substring(0, 10) -lt $dzis) {
-      if ($p.tryb -eq "sam") { $p.uwaga = "Automat uruchomił to zadanie $od, ale nie zostało dokończone (nie odhaczone)." }
+      if ($p.tryb -eq "sam") {
+        $p.uwaga = "Automat uruchomił to zadanie $od, ale nie zostało dokończone (nie odhaczone)."
+        $md = Join-Path $KatWynikow "$($p.id).md"
+        if (Test-Path -LiteralPath $md) { $p.uwaga += " Raport z przebiegu: $md" }
+      }
       else { $p.uwaga = "Uruchomione $od, ale nie zostało dokończone (nie odhaczone)." }
       $doOkna += $p
     }
