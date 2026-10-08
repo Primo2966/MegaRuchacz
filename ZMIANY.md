@@ -4,6 +4,12 @@ Każda zmiana wypychana na gita dostaje tu wpis. Numer rośnie wg zasady:
 pierwsza cyfra — przebudowa łamiąca zgodność, druga — nowa funkcja,
 trzecia — poprawka.
 
+## 0.30.4 — 2026-10-08
+
+- **Przycisk „Kopiuj” w przypomnieniach nie pokazuje już fałszywie „Nie skopiowano”.** W ok. 4% kliknięć tekst był
+  w schowku, a okienko i tak zgłaszało błąd: programy czytające każdą zmianę schowka (historia schowka, Remotly) prosiły
+  okienko o dane, a ono w tym czasie czekało. Teraz kopiowanie ponawia się do 2,5 s i nie blokuje okna (0 na 120 prób).
+
 ## 0.30.3 — 2026-10-08
 
 - **Przycisk „Przeczytaj teraz nowe rozmowy” naprawdę czyta**, także po dzisiejszym automatycznym przebiegu. Wcześniej
