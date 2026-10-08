@@ -4,6 +4,12 @@ Każda zmiana wypychana na gita dostaje tu wpis. Numer rośnie wg zasady:
 pierwsza cyfra — przebudowa łamiąca zgodność, druga — nowa funkcja,
 trzecia — poprawka.
 
+## 0.29.1 — 2026-10-08
+
+- **Przypomnienia da się skopiować.** W okienku przypomnień tekst można zaznaczyć myszą i skopiować,
+  a przy każdym przypomnieniu jest przycisk „Kopiuj” (nagłówek i treść do schowka, na chwilę napis „Skopiowano”;
+  gdy schowek jest zajęty — „Nie skopiowano” i wpis w dzienniku przypomnień).
+
 ## 0.29.0 — 2026-10-07
 
 - **Aktualizacja MegaRuchacza zawsze sama.** Nadzorca minutę po starcie i potem co godzinę sprawdza, czy jest
