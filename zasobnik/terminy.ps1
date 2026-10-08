@@ -10,7 +10,8 @@
 #   2. okno z przyciskami "Zrob teraz / Jutro / Zrobione" dla: trybu "przypomnij", spraw "w toku"
 #      od wczoraj albo dawniej (automat nie dokonczyl) i uruchomien, ktore sie nie udaly. Okno
 #      stoi na wierzchu i na pasku zadan, dopoki ktos nie kliknie. Krzyzyk przy nieobsluzonych
-#      = wroci za 2 godziny (odlozone_do w przypomnienia-okno.txt).
+#      = wroci za 2 godziny (odlozone_do w przypomnienia-okno.txt). Tekst w oknie da sie
+#      zaznaczyc mysza, a przycisk "Kopiuj" daje do schowka naglowek i tresc przypomnienia.
 #
 # Slad "bylem tu", kazde uruchomienie i kazda wywrotka: ~\.claude\mr\przypomnienia.log.
 #
@@ -53,6 +54,12 @@ $MINUT_ODLOZENIA = 120
 $SEKUND_MIEDZY_URUCHOMIENIAMI = 3
 # Dziennik rosnie o kilka linii na godzine; powyzej tego rozmiaru zostaje jego koncowka.
 $MAX_DZIENNIKA = 512KB
+# Jak dlugo przycisk mowi "Skopiowano", zanim wroci do "Kopiuj".
+$MS_NAPISU_SKOPIOWANO = 2000
+# Pole tekstowe ma wewnetrzne marginesy (zmierzone 3+3 px zwykla, 4+4 pogrubiona Segoe UI 10);
+# wysokosc mierzymy przy szerokosci mniejszej o ten zapas - wezsze zawijanie daje najwyzej
+# o linie za duzo, nigdy za malo (za malo = tekst uciety).
+$ZAPAS_SZEROKOSCI_POLA = 10
 
 function Bez-Bom { return (New-Object System.Text.UTF8Encoding($false)) }
 
@@ -195,6 +202,52 @@ function Uruchom-Claude($p, [string]$jak) {
 
 # -------------------------------------------------------------------- okno z przyciskami
 
+# Napisy w oknie to pola tylko do odczytu, nie Label - Label nie daje sie zaznaczyc ani
+# skopiowac (zgloszenie uzytkownika 2026-10-08). Bez ramki i w kolorze tla wyglada jak napis.
+# TextBox nie ma AutoSize, wiec wysokosc z TextRenderer.MeasureText (zapas wyzej).
+function Pole-Tekstowe([string]$tekst, [int]$szerokosc, $czcionka, $kolor, $tlo) {
+  $t = New-Object System.Windows.Forms.TextBox
+  $t.ReadOnly = $true
+  $t.Multiline = $true
+  $t.WordWrap = $true
+  $t.ScrollBars = "None"
+  $t.BorderStyle = "None"
+  $t.TabStop = $false
+  $t.BackColor = $tlo
+  $t.ForeColor = $kolor
+  $t.Font = $czcionka
+  $t.Margin = New-Object System.Windows.Forms.Padding(3, 0, 3, 0)   # jak domyslny Label
+  $t.Width = $szerokosc
+  $t.Text = $tekst
+  $flagi = [System.Windows.Forms.TextFormatFlags]"WordBreak, TextBoxControl, NoPrefix"
+  $ile = New-Object System.Drawing.Size(($szerokosc - $ZAPAS_SZEROKOSCI_POLA), [int]::MaxValue)
+  $t.Height = [System.Windows.Forms.TextRenderer]::MeasureText($tekst, $czcionka, $ile, $flagi).Height
+  return $t
+}
+
+function Do-Schowka([string]$tekst) { [System.Windows.Forms.Clipboard]::SetText($tekst) }
+
+# Przycisk "Kopiuj": naglowek i tresc przypomnienia do schowka. Porazka zostaje na przycisku
+# ("Nie skopiowano") i w dzienniku - nie znika po chwili jak "Skopiowano".
+function Kopiuj-Przypomnienie($btn) {
+  $tag = $btn.Tag
+  if ($tag.Zegar) { $tag.Zegar.Stop(); $tag.Zegar.Dispose(); $tag.Zegar = $null }
+  try {
+    Do-Schowka $tag.Tekst
+  } catch {
+    $btn.Text = "Nie skopiowano"
+    Dopisz-Dziennik "przycisk Kopiuj #$($tag.Poz.id) - NIE SKOPIOWALEM do schowka: $($_.Exception.Message)"
+    return
+  }
+  $btn.Text = "Skopiowano"
+  $z = New-Object System.Windows.Forms.Timer
+  $z.Interval = $MS_NAPISU_SKOPIOWANO
+  $z.Tag = $btn
+  $z.Add_Tick({ $this.Stop(); if (-not $this.Tag.IsDisposed) { $this.Tag.Text = "Kopiuj" } })
+  $tag.Zegar = $z
+  $z.Start()
+}
+
 function Okno-Przypomnien($pozycje) {
   Add-Type -AssemblyName System.Windows.Forms
   Add-Type -AssemblyName System.Drawing
@@ -230,11 +283,9 @@ function Okno-Przypomnien($pozycje) {
   $lista.Padding = New-Object System.Windows.Forms.Padding(14, 10, 14, 10)
   $f.Controls.Add($lista)
 
-  $wstep = New-Object System.Windows.Forms.Label
-  $wstep.AutoSize = $true
-  $wstep.MaximumSize = New-Object System.Drawing.Size(720, 0)
-  $wstep.Text = "Te sprawy mają termin dziś albo już minął. Wybierz, co z każdą zrobić. " +
-                "Zamknięcie okna krzyżykiem = przypomnę ponownie za 2 godziny."
+  $czerwony = [System.Drawing.Color]::FromArgb(170, 40, 20)
+  $wstep = Pole-Tekstowe ("Te sprawy mają termin dziś albo już minął. Wybierz, co z każdą zrobić. " +
+                          "Zamknięcie okna krzyżykiem = przypomnę ponownie za 2 godziny.") 720 $f.Font $f.ForeColor $f.BackColor
   $wstep.Margin = New-Object System.Windows.Forms.Padding(0, 0, 0, 10)
   $lista.Controls.Add($wstep)
 
@@ -248,25 +299,17 @@ function Okno-Przypomnien($pozycje) {
     $karta.Margin = New-Object System.Windows.Forms.Padding(0, 0, 0, 10)
     $karta.MinimumSize = New-Object System.Drawing.Size(720, 0)
 
-    $glowa = New-Object System.Windows.Forms.Label
-    $glowa.AutoSize = $true
-    $glowa.Font = New-Object System.Drawing.Font("Segoe UI", 10, [System.Drawing.FontStyle]::Bold)
-    $glowa.Text = "#$($p.id)   $($p.termin) ($($p.opis))   $($p.projekt)"
+    $gruba = New-Object System.Drawing.Font("Segoe UI", 10, [System.Drawing.FontStyle]::Bold)
+    $glowa = Pole-Tekstowe "#$($p.id)   $($p.termin) ($($p.opis))   $($p.projekt)" 690 $gruba $f.ForeColor $f.BackColor
     $karta.Controls.Add($glowa)
 
-    $tekst = New-Object System.Windows.Forms.Label
-    $tekst.AutoSize = $true
-    $tekst.MaximumSize = New-Object System.Drawing.Size(690, 0)
-    $tekst.Text = $p.tresc
-    if ($p.sprawdz) { $tekst.Text += "`r`nJak sprawdzić: $($p.sprawdz)" }
+    $tresc = $p.tresc
+    if ($p.sprawdz) { $tresc += "`r`nJak sprawdzić: $($p.sprawdz)" }
+    $tekst = Pole-Tekstowe $tresc 690 $f.Font $f.ForeColor $f.BackColor
     $karta.Controls.Add($tekst)
 
     if ($p.uwaga) {
-      $uw = New-Object System.Windows.Forms.Label
-      $uw.AutoSize = $true
-      $uw.MaximumSize = New-Object System.Drawing.Size(690, 0)
-      $uw.ForeColor = [System.Drawing.Color]::FromArgb(170, 40, 20)
-      $uw.Text = $p.uwaga
+      $uw = Pole-Tekstowe $p.uwaga 690 $f.Font $czerwony $f.BackColor
       $karta.Controls.Add($uw)
     }
 
@@ -283,6 +326,16 @@ function Okno-Przypomnien($pozycje) {
       $btn.Add_Click({ Klik $this.Tag })
       $przyciski.Controls.Add($btn)
     }
+    $kop = New-Object System.Windows.Forms.Button
+    $kop.AutoSize = $true
+    $kop.Padding = New-Object System.Windows.Forms.Padding(8, 2, 8, 2)
+    $kop.Text = "Nie skopiowano"   # najdluzszy napis - przycisk nie skacze przy zmianie
+    $kop.MinimumSize = New-Object System.Drawing.Size($kop.PreferredSize.Width, 0)
+    $kop.Text = "Kopiuj"
+    $kop.AccessibleName = "Kopiuj #$($p.id)"
+    $kop.Tag = @{ Poz = $p; Tekst = $glowa.Text + "`r`n" + $tekst.Text; Zegar = $null }
+    $kop.Add_Click({ Kopiuj-Przypomnienie $this })
+    $przyciski.Controls.Add($kop)
     $karta.Controls.Add($przyciski)
     $lista.Controls.Add($karta)
   }
