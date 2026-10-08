@@ -50,7 +50,7 @@ function Stan-Kopii {
   $k = [pscustomobject]@{
     Jest = $false; Plik = $plik; Indeks = $indeks; Powod = ""; Stan = ""; Ostatnia = $null; Start = $null
     Rodzaj = ""; Cel = ""; Plikow = $null; Mb = ""; Alarmy = 0; Bledy = 0; WUzyciu = 0; Blad = ""
-    Uszkodzone = @(); UszkodzoneTeraz = 0; InneAlarmy = @(); ListaBledow = @(); OstatniaUdana = $null; Dziennik = ""
+    Uszkodzone = @(); UszkodzoneTeraz = 0; NadalUszkodzone = @(); Dziury = @(); InneAlarmy = @(); ListaBledow = @(); OstatniaUdana = $null; Dziennik = ""
   }
   if (Test-Path -LiteralPath $indeks -PathType Leaf) { $k.OstatniaUdana = (Get-Item -LiteralPath $indeks).LastWriteTime }
   if (-not (Test-Path -LiteralPath $plik -PathType Leaf)) { return $k }
@@ -60,9 +60,11 @@ function Stan-Kopii {
   catch { $k.Powod = "nie da się odczytać pliku stanu kopii: $($_.Exception.Message)"; return $k }
   if ($tekst.IndexOf([char]0) -ge 0) { $k.Powod = "plik stanu kopii ma w środku zera (uszkodzony zapis, zwykle po zaniku prądu)"; return $k }
   $kl = @{}
-  $usz = @(); $inne = @(); $bl = @()
+  $usz = @(); $inne = @(); $bl = @(); $dz = @()
   foreach ($l in ($tekst -split "\r?\n")) {
     if ($l -match '^ALARM WYZEROWANY PLIK[^:]*:\s*(.+)$') { $usz += $Matches[1].Trim(); continue }
+    # skopiowany mimo malej dziury z zer (kopia-zapasowa.ps1, $ProgDziur) - informacja, nie alarm
+    if ($l -match '^DZIURA W PLIKU[^:]*:\s*(.+)$') { $dz += $Matches[1].Trim(); continue }
     if ($l -match '^ALARM\s') { $inne += $l.Trim(); continue }
     if ($l -match '^BLAD\s+(.+)$') { $bl += $Matches[1].Trim(); continue }
     $m = [regex]::Match($l, '^([a-z_]+)=(.*)$')
@@ -83,8 +85,9 @@ function Stan-Kopii {
   if ([int]::TryParse("$($kl['alarmy'])", [ref]$n)) { $k.Alarmy = $n }
   if ([int]::TryParse("$($kl['bledy'])", [ref]$n)) { $k.Bledy = $n }
   if ([int]::TryParse("$($kl['w_uzyciu'])", [ref]$n)) { $k.WUzyciu = $n }
-  $k.Uszkodzone = $usz; $k.InneAlarmy = $inne; $k.ListaBledow = $bl
-  $k.UszkodzoneTeraz = Ile-Nadal-Uszkodzonych $usz
+  $k.Uszkodzone = $usz; $k.InneAlarmy = $inne; $k.ListaBledow = $bl; $k.Dziury = $dz
+  $k.NadalUszkodzone = @(Nadal-Uszkodzone $usz)
+  $k.UszkodzoneTeraz = @($k.NadalUszkodzone).Count
   # Ostatni zakonczony przebieg jest swiezszy niz indeks tylko o sekundy - ale gdyby indeksu
   # nie bylo (usuniety recznie), data z pliku stanu tez dowodzi udanej kopii.
   if ($k.Ostatnia -and (@("OK", "ALARM") -contains $k.Stan -or ($k.Stan -eq "BLAD" -and $null -ne $k.Plikow))) {
@@ -98,35 +101,74 @@ function Stan-Kopii {
   return $k
 }
 
-# Ile z plikow pominietych przez ostatnia kopie jako uszkodzone jest uszkodzonych NADAL.
+# Ktore z plikow pominietych przez ostatnia kopie jako uszkodzone sa uszkodzone NADAL
+# (Nadal-Uszkodzone - lista wpisow; Ile-Nadal-Uszkodzonych - ich liczba).
 # Pliki naprawione po kopii (np. skill wgrany od nowa) wejda do nastepnej kopii same -
 # czerwony alarm o nich bylby do tego czasu falszywy. Rozpoznanie jak w kopia-zapasowa.ps1:
 # ciag co najmniej 64 bajtow 0x00 albo caly plik z zer (tekst nie ma nigdy wiecej niz 3 zera
-# pod rzad). Plik, ktorego juz nie ma, nie jest uszkodzony. Najwyzej 200 plikow - dalej
-# liczymy wszystkie reszty jako uszkodzone (lepiej alarm niz cisza).
+# pod rzad) - ALE plik z mala dziura (bloki zer razem <= $PROG_DZIUR_KOPII dlugosci, koniec
+# bez zer) kopia od 08.10.2026 bierze, wiec i tu nie jest juz "pominiety". Plik, ktorego juz
+# nie ma, nie jest uszkodzony. Najwyzej 200 plikow - dalej liczymy wszystkie reszty jako
+# uszkodzone (lepiej alarm niz cisza).
+# Prog ten sam co $ProgDziur w kopia-zapasowa.ps1 (uzasadnienie tam): 10%.
+$PROG_DZIUR_KOPII = 0.10
 # (pliki binarne maja dlugie ciagi zer z natury - u nich tylko "caly plik z zer"; lista
 # z kopia-zapasowa.ps1, $RozszBinarne)
 $ROZSZERZENIA_BINARNE_KOPII = @(".png", ".jpg", ".jpeg", ".gif", ".webp", ".ico", ".bmp", ".pdf", ".zip", ".gz", ".7z", ".rar",
   ".exe", ".dll", ".bin", ".onnx", ".safetensors", ".pyc", ".woff", ".woff2", ".ttf", ".db", ".sqlite", ".sqlite3", ".mp4",
   ".webm", ".pma", ".node", ".xlsx", ".xls", ".docx", ".doc", ".pptx", ".ppt", ".odt", ".ods", ".jar", ".class", ".mp3", ".wav",
   ".mov", ".avi", ".tar", ".tgz", ".bz2", ".xz", ".wasm")
-function Ile-Nadal-Uszkodzonych($wpisy) {
-  $ile = 0; $nr = 0
-  $zera64 = New-Object string ([char]0), 64
+function Nadal-Uszkodzone($wpisy) {
+  $lista = @(); $nr = 0
   foreach ($w in @($wpisy)) {
     $nr++
-    if ($nr -gt 200) { $ile++; continue }
+    if ($nr -gt 200) { $lista += $w; continue }
     $m = [regex]::Match("$w", '^(.+?) - (blok|caly plik)')
-    if (-not $m.Success) { $ile++; continue }
+    if (-not $m.Success) { $lista += $w; continue }
     $p = $m.Groups[1].Value
     if (-not (Test-Path -LiteralPath $p -PathType Leaf)) { continue }
     try {
       $t = [System.Text.Encoding]::GetEncoding(28591).GetString([System.IO.File]::ReadAllBytes($p))
-      $binarny = $ROZSZERZENIA_BINARNE_KOPII -contains [System.IO.Path]::GetExtension($p).ToLowerInvariant()
-      if (($t.Length -gt 0) -and ((-not $binarny -and $t.IndexOf($zera64, [System.StringComparison]::Ordinal) -ge 0) -or ($t.Trim([char]0).Length -eq 0))) { $ile++ }
-    } catch { $ile++ }
+      if ($t.Length -eq 0) { continue }
+      if ($t.Trim([char]0).Length -eq 0) { $lista += $w; continue }
+      if ($ROZSZERZENIA_BINARNE_KOPII -contains [System.IO.Path]::GetExtension($p).ToLowerInvariant()) { continue }
+      $bloki = [regex]::Matches($t, '\x00{64,}')
+      if ($bloki.Count -eq 0) { continue }
+      $suma = 0; foreach ($b in $bloki) { $suma += $b.Length }
+      $ostatni = $bloki[$bloki.Count - 1]
+      $dziura = (($ostatni.Index + $ostatni.Length) -lt $t.Length) -and ($suma -le [math]::Floor($t.Length * $PROG_DZIUR_KOPII))
+      if (-not $dziura) { $lista += $w }
+    } catch { $lista += $w }
   }
-  return $ile
+  return $lista   # bez przecinka - wolajacy owija w @()
+}
+function Ile-Nadal-Uszkodzonych($wpisy) { return @(Nadal-Uszkodzone $wpisy).Count }
+
+# Wpis "ALARM WYZEROWANY PLIK" rozbity na czesci: Sciezka, Nazwa (~ zamiast katalogu
+# domowego), Wersja (sciezka ostatniej wersji w kopii albo ""), Data, Brak (kopia napisala,
+# ze zadnej wersji nie ma). Wpis sprzed 08.10.2026 nie mowi ani jednego, ani drugiego.
+function Wpis-Uszkodzony([string]$w) {
+  $o = [pscustomobject]@{ Sciezka = ""; Nazwa = ""; Wersja = ""; Data = ""; Brak = $false; Wpis = $w }
+  $m = [regex]::Match($w, '^(.+?) - (blok|caly plik)')
+  $o.Sciezka = $(if ($m.Success) { $m.Groups[1].Value } else { $w })
+  $o.Nazwa = $o.Sciezka
+  if ($script:NadzDom -and $o.Sciezka.StartsWith($script:NadzDom + '\', [System.StringComparison]::OrdinalIgnoreCase)) {
+    $o.Nazwa = "~" + $o.Sciezka.Substring($script:NadzDom.Length)
+  }
+  $v = [regex]::Match($w, ';\s*ostatnia wersja w kopii:\s*(.+)\s+\(z ([0-9-]+)\)\s*$')
+  if ($v.Success) { $o.Wersja = $v.Groups[1].Value.Trim(); $o.Data = $v.Groups[2].Value }
+  elseif ($w -match ';\s*w kopii nie ma zadnej wersji') { $o.Brak = $true }
+  return $o
+}
+
+# "a, b, c i 2 inne" - najwyzej $ile nazw, reszta liczba.
+function Nazwy-Plikow-Kopii($wpisy, [int]$ile = 3) {
+  $all = @($wpisy)
+  $nazwy = @($all | Select-Object -First $ile | ForEach-Object { $_.Nazwa })
+  $tekst = $nazwy -join ", "
+  $r = $all.Count - $nazwy.Count
+  if ($r -gt 0) { $tekst += " i $r $(Odmiana $r 'inny' 'inne' 'innych')" }
+  return $tekst
 }
 
 function Ile-Plikow([int]$n) { return "$(Liczba-Ludzka $n) $(Odmiana $n 'plik' 'pliki' 'plików')" }
@@ -176,16 +218,31 @@ function Ocena-Kopii($k, $inst = $null) {
   if ((@($k.Uszkodzone).Count -gt 0) -and ($k.UszkodzoneTeraz -eq 0)) {
     # wszystkie juz naprawione (albo usuniete) - wejda do nastepnej kopii; bez alarmu
     $n = @($k.Uszkodzone).Count
-    $sprawy += ,@("uwaga", "Kopia zapasowa: $(Kiedy-Ludzko $k.Ostatnia), $(Ile-Plikow ([int]$k.Plikow)); $n $(Odmiana $n 'pominięty jako uszkodzony jest' 'pominięte jako uszkodzone są' 'pominiętych jako uszkodzone jest') już $(Odmiana $n 'naprawiony' 'naprawione' 'naprawionych') - $(Odmiana $n 'wejdzie' 'wejdą' 'wejdzie') do następnej kopii.", "", "", "")
+    $sprawy += ,@("uwaga", "Kopia zapasowa: $(Kiedy-Ludzko $k.Ostatnia), $(Ile-Plikow ([int]$k.Plikow)); $n $(Odmiana $n 'plik pominięty jako uszkodzony jest' 'pliki pominięte jako uszkodzone są' 'plików pominiętych jako uszkodzone jest') już w porządku (naprawione, usunięte albo z małą dziurą, którą kopia bierze) - nic nie trzeba robić.", "", "", "")
   } elseif (@($k.Uszkodzone).Count -gt 0) {
     $n = [int]$k.UszkodzoneTeraz; $wszystkich = @($k.Uszkodzone).Count
+    $nadal = @(@($k.NadalUszkodzone) | ForEach-Object { Wpis-Uszkodzony "$_" })
+    $nazwy = Nazwy-Plikow-Kopii $nadal 3
     $kiedy = $(if ($k.Ostatnia) { " (kopia $(Kiedy-Ludzko $k.Ostatnia))" } else { "" })
-    $linia = $(if ($n -eq $wszystkich) { "Kopia zapasowa: ALARM - $(Ile-Plikow $n) $(Odmiana $n 'pominięty' 'pominięte' 'pominiętych'), bo $(Odmiana $n 'uszkodzony' 'uszkodzone' 'uszkodzone')$kiedy." }
-               else { "Kopia zapasowa: ALARM - $n z $wszystkich plików pominiętych jako uszkodzone $(Odmiana $n 'jest nadal uszkodzony' 'są nadal uszkodzone' 'jest nadal uszkodzonych')$kiedy." })
+    $linia = "Kopia zapasowa: ALARM - $(Odmiana $n 'nie wzięła uszkodzonego pliku' 'nie wzięła uszkodzonych plików' 'nie wzięła uszkodzonych plików')${kiedy}: $nazwy."
+    # Co zrobic - po jednym zdaniu na plik (najwyzej trzy), z miejscem zdrowej wersji albo
+    # wprost: kopii nie ma. Wpis sprzed 08.10 nie mowi, czy wersja jest - wtedy gdzie szukac.
+    $korzen = $(if ($k.Dziennik) { Split-Path -Parent $k.Dziennik } else { "" })
+    $pierwsze = @($nadal | Select-Object -First 3)
+    $kroki = @($pierwsze | Where-Object { $_.Wersja -or $_.Brak } | ForEach-Object {
+      if ($_.Wersja) { "$($_.Nazwa) - zdrowa wersja jest w kopii z $($_.Data): skopiuj $($_.Wersja) na miejsce uszkodzonego pliku" }
+      else { "$($_.Nazwa) - w kopii nie ma żadnej jego wersji: jeśli jest potrzebny, odtwórz go, a jeśli nie, usuń go" }
+    })
+    $stare = @($pierwsze | Where-Object { -not ($_.Wersja -or $_.Brak) } | ForEach-Object { $_.Nazwa })
+    if ($stare.Count -gt 0) {
+      $kroki += "$($stare -join ', ') - starszej wersji szukaj w kopii$(if ($korzen) { ' ' + $korzen }) (katalogi zmiany\<data> i pelna-<data>), od najnowszej daty"
+    }
+    $reszta = $(if ($nadal.Count -gt 3) { "; pozostałe - w zakładce Szczegóły" } else { "" })
     $sprawy += ,@("pilne", $linia,
       "MegaRuchacz: kopia zapasowa pominęła $(Ile-Plikow $n) z samymi zerami",
-      "Te pliki mają w środku same zera (uszkodzony zapis, zwykle po zaniku prądu), więc kopia ich nie wzięła - ich zdrowe wersje zostają w starszej kopii. Napraw albo przywróć te pliki; lista jest w zakładce Szczegóły. Następna kopia sprawdzi je od nowa.",
-      ("Pominiete uszkodzone pliki ($wszystkich, nadal uszkodzonych $n): " + (@($k.Uszkodzone | Select-Object -First 10) -join "; ") + $(if ($wszystkich -gt 10) { "; i $($wszystkich - 10) wiecej" } else { "" }) + ". $gdzie"))
+      ("Kopia pominęła $(Ile-Plikow $n), bo $(Odmiana $n 'jest' 'są' 'są') w całości albo w dużej części z samych zer (uszkodzony zapis, zwykle po zaniku prądu): $nazwy. Co zrobić: " +
+       ($kroki -join "; ") + "$reszta. Alarm zniknie sam, gdy $(Odmiana $n 'plik będzie naprawiony albo usunięty' 'pliki będą naprawione albo usunięte' 'pliki będą naprawione albo usunięte')."),
+      ("Pominiete uszkodzone pliki ($wszystkich, nadal uszkodzonych $n): " + (@($k.NadalUszkodzone | Select-Object -First 10) -join "; ") + $(if ($n -gt 10) { "; i $($n - 10) wiecej" } else { "" }) + ". $gdzie"))
   }
   if ($stara -and -not $k.Powod) {
     $ile = $(if ($k.OstatniaUdana) { [int][math]::Floor(($teraz - $k.OstatniaUdana).TotalDays) } else { $null })
@@ -266,9 +323,16 @@ function Opis-Kopii($k, $inst = $null) {
     if ($null -ne $k.Plikow) { $w += Wiersz "Skopiowane" "$(Ile-Plikow $k.Plikow)$(if ($k.Mb) { ', ' + $k.Mb + ' MB' })" }
     if ($k.Blad) { $w += Wiersz "Powód przerwania" $k.Blad "uwaga" }
     $n = @($k.Uszkodzone).Count
-    $w += Wiersz "Pominięte uszkodzone" $(if ($n -gt 0) { "$(Ile-Plikow $n) z samymi zerami - zdrowe wersje zostają w starszej kopii; nadal uszkodzonych teraz: $($k.UszkodzoneTeraz)" } else { "żadnych" }) $(if ($k.UszkodzoneTeraz -gt 0) { "pilne" } elseif ($n -gt 0) { "uwaga" } else { "" })
+    $w += Wiersz "Pominięte uszkodzone" $(if ($n -gt 0) { "$(Ile-Plikow $n) z samymi zerami - kopia ich nie wzięła (przy każdym: gdzie leży jego ostatnia wersja w kopii albo że jej nie ma); nadal uszkodzonych teraz: $($k.UszkodzoneTeraz)" } else { "żadnych" }) $(if ($k.UszkodzoneTeraz -gt 0) { "pilne" } elseif ($n -gt 0) { "uwaga" } else { "" })
     foreach ($u in @($k.Uszkodzone | Select-Object -First 15)) { $w += Wiersz "" $u "szary" }
     if ($n -gt 15) { $w += Wiersz "" "i $($n - 15) więcej - pełna lista w pliku stanu (niżej)" "szary" }
+    # Skopiowane mimo malej dziury z zer - informacja bez alarmu (prog: $ProgDziur w kopia-zapasowa.ps1)
+    $nd = @($k.Dziury).Count
+    if ($nd -gt 0) {
+      $w += Wiersz "Skopiowane mimo dziury" "$(Ile-Plikow $nd) z małym blokiem zer w środku (zwykle ślad zaniku prądu w dzienniku dopisywanym) - $(Odmiana $nd 'wzięty' 'wzięte' 'wzięte') do kopii, bo reszta jest zdrowa, a poprzednia wersja zostaje w starszej kopii. Nic nie trzeba robić." ""
+      foreach ($u in @($k.Dziury | Select-Object -First 10)) { $w += Wiersz "" $u "szary" }
+      if ($nd -gt 10) { $w += Wiersz "" "i $($nd - 10) więcej - pełna lista w pliku stanu (niżej)" "szary" }
+    }
     foreach ($a in @($k.InneAlarmy)) { $w += Wiersz "Alarm" $a "pilne" }
     $w += Wiersz "Błędy" $(if ($k.Bledy -gt 0) { "$($k.Bledy)" } else { "żadnych" }) $(if ($k.Bledy -gt 0) { "uwaga" } else { "" })
     foreach ($b in @($k.ListaBledow | Select-Object -First 5)) { $w += Wiersz "" $b "szary" }
@@ -277,7 +341,7 @@ function Opis-Kopii($k, $inst = $null) {
   if ($k.Cel) { $w += Wiersz "Gdzie leży kopia" $k.Cel "szary" }
   if ($k.Dziennik) { $w += Wiersz "Dziennik kopii" $k.Dziennik "szary" }
   $w += Wiersz "Plik stanu" $k.Plik "szary"
-  $w += Wiersz "Kiedy alarm" "ostatnia udana kopia starsza niż $GODZIN_KOPIA_STARA h (kopia idzie raz dziennie, przegapiona rusza po włączeniu komputera - dwie doby to dwa nieudane przebiegi z rzędu) albo pominięte uszkodzone pliki" "szary"
+  $w += Wiersz "Kiedy alarm" "ostatnia udana kopia starsza niż $GODZIN_KOPIA_STARA h (kopia idzie raz dziennie, przegapiona rusza po włączeniu komputera - dwie doby to dwa nieudane przebiegi z rzędu) albo pominięte uszkodzone pliki (w całości z zer, ponad $([int]($PROG_DZIUR_KOPII * 100))% zer albo zera na końcu); plik z małą dziurą idzie do kopii bez alarmu" "szary"
   return ,$w
 }
 

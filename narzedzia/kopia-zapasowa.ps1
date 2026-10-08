@@ -29,7 +29,10 @@
 # Dlaczego tak: 2026-10-02 rano pliki pamieci (~\.claude\CLAUDE.md, wiedza\) zostaly
 # wyzerowane. Kopia nadpisujaca skasowalaby zdrowa wersje. Dlatego (1) kazdy dzien
 # trafia do osobnego katalogu, (2) przed skopiowaniem plik tekstowy jest sprawdzany
-# na zera - wyzerowany NIE trafia do kopii, a w dzienniku i pliku stanu staje ALARM.
+# na zera - wyzerowany NIE trafia do kopii, a w dzienniku i pliku stanu staje ALARM
+# z miejscem ostatniej wersji w kopii (albo zdaniem, ze jej nie ma). Wyjatek od 08.10:
+# plik z mala dziura (bloki zer <= 10%, zdrowy koniec - $ProgDziur) idzie do kopii
+# z wpisem DZIURA zamiast alarmu.
 #
 # Uzycie:
 #   kopia-zapasowa.ps1                 przyrostowa (zadanie Harmonogramu; bez indeksu = pelna)
@@ -83,6 +86,20 @@ $KorzenieClaude = @("$H\.claude", "$H\.claude.json", "$H\.codex", "$H\.config\op
 # 64 daje duzy zapas w obie strony: zadnego falszywego alarmu na tekscie, a
 # kazde widziane uszkodzenie jest 50x wieksze od progu.
 $MinCiagZer = 64
+
+# Prog dziury (od 2026-10-08). Plik, w ktorym bloki zer to RAZEM najwyzej 10% dlugosci,
+# a koniec NIE jest blokiem zer, idzie do kopii mimo zer - z wpisem DZIURA w dzienniku
+# i pliku stanu, bez ALARMU. To slad zaniku pradu w dzienniku dopisywanym: kawalek
+# przepadl, a po nim program pisal dalej (zdrowy koniec dowodzi, ze plik zyje). Pominiecie
+# takiego pliku w calosci gubilo wszystkie NOWSZE wpisy, a dziury i tak nie da sie
+# zalatac. Liczby z 08.10.2026: ~\.claude\history.jsonl - 847 B zer na 582 066 B (0,15%),
+# ~\.claude\mr\przypomnienia.log - 311 B na 5 411 B (5,75%); obydwa rosna, wiec udzial
+# zer z czasem tylko spada. Plik z ponad 10% zer albo z zerami na koncu (swieze
+# uszkodzenie, nic po nim nie dopisano) - jak dawniej: NIE do kopii, ALARM. Poprzednia
+# wersja z kopii nie ginie: kazdy dzien to osobny katalog, nic nie jest nadpisywane, a wpis
+# DZIURA podaje, gdzie lezy. Nasze pliki pamieci (CLAUDE.md, wiedza) ma dodatkowo
+# straznik w zasobniku (jedno zero = alarm) - dziura w nich nie przejdzie po cichu.
+$ProgDziur = 0.10
 
 # --- zadanie w harmonogramie (wzor: narzedzia\koszt\pomiar-dzienny.ps1) -------
 
@@ -329,8 +346,11 @@ public static class KopiaIO {
 
   // Czyta zrodlo raz: sprawdza zera (jesli zera=true) i - gdy dst != null - pisze
   // do dst.kopia-tmp, a na koncu przemianowuje BEZ nadpisywania. dst == null:
-  // samo sprawdzenie (tryb -Proba). Wynik: OK, ZERA:opis, W_UZYCIU, ISTNIEJE, BLAD:opis.
-  public static string Kopiuj(string src, string dst, bool zera, int minCiag, long czas) {
+  // samo sprawdzenie (tryb -Proba). Wynik: OK, ZERA:opis (NIE skopiowany),
+  // DZIURY:opis (skopiowany mimo blokow zer - patrz $ProgDziur), W_UZYCIU, ISTNIEJE, BLAD:opis.
+  // Blok = ciag co najmniej minCiag bajtow 0x00. Plik idzie do kopii z dziurami tylko,
+  // gdy bloki razem to najwyzej progDziur jego dlugosci I plik nie konczy sie blokiem.
+  public static string Kopiuj(string src, string dst, bool zera, int minCiag, double progDziur, long czas) {
     if (dst == "") dst = null;   // PowerShell podaje $null jako pusty napis
     SafeFileHandle hs = CreateFileW(L(src), 0x80000000, 7, IntPtr.Zero, 3, 0x08000000, IntPtr.Zero);
     if (hs.IsInvalid) {
@@ -347,20 +367,32 @@ public static class KopiaIO {
         // wyzerowany plik tekstowy nie zostawia wtedy w kopii nawet pustego katalogu.
         byte[] buf = new byte[1 << 20];
         byte[] wstrzym = null; int wstrzymN = 0;
-        long ciag = 0, maxCiag = 0, gdzie = -1, poz = 0;
-        bool same = true;
+        long ciag = 0, poczCiagu = 0, maxCiag = 0, gdzie = -1, poz = 0, przeczytane = 0;
+        // dziury: suma blokow, ich liczba i opis pierwszych pieciu (od bajtu, dlugosc)
+        long dlugosc = rs.Length, sumaBlokow = 0, limit = (long)Math.Floor(rs.Length * progDziur);
+        int ileBlokow = 0;
+        var opisBlokow = new System.Text.StringBuilder();
+        bool same = true, zaDuzo = false, zerowyKoniec = false;
         int n;
         string blad;
         while ((n = rs.Read(buf, 0, buf.Length)) > 0) {
+          przeczytane += n;
           if (zera) {
             for (int j = 0; j < n; j++) {
               if (buf[j] == 0) {
+                if (ciag == 0) poczCiagu = poz + j;
                 ciag++;
-                if (ciag > maxCiag) maxCiag = ciag;
-                if (ciag == minCiag) gdzie = poz + j - minCiag + 1;
-              } else { ciag = 0; same = false; }
+                if (ciag > maxCiag) { maxCiag = ciag; if (ciag >= minCiag) gdzie = poczCiagu; }
+              } else {
+                if (ciag >= minCiag) {
+                  sumaBlokow += ciag; ileBlokow++;
+                  if (ileBlokow <= 5) opisBlokow.Append((ileBlokow > 1 ? "; " : "") + "od bajtu " + poczCiagu + " dl. " + ciag + " B");
+                }
+                ciag = 0; same = false;
+              }
             }
-            if (maxCiag >= minCiag) break;
+            // za duzo zer jak na dziure - dalej nie czytamy, plik i tak nie idzie do kopii
+            if (sumaBlokow + (ciag >= minCiag ? ciag : 0) > limit) { zaDuzo = true; break; }
           }
           if (dst != null) {
             if (ws == null && wstrzym == null) { wstrzym = (byte[])buf.Clone(); wstrzymN = n; }
@@ -375,10 +407,16 @@ public static class KopiaIO {
           }
           poz += n;
         }
-        if (zera && (maxCiag >= minCiag || (poz > 0 && same))) {
-          string opis = (maxCiag >= minCiag)
-            ? ("blok co najmniej " + maxCiag + " bajtow 0x00 od bajtu " + gdzie)
-            : ("caly plik (" + poz + " B) to same bajty 0x00");
+        if (zera && !zaDuzo && ciag >= minCiag) {
+          // blok zer na samym koncu: swieze uszkodzenie (po nim nikt nic nie dopisal)
+          zerowyKoniec = true; sumaBlokow += ciag; ileBlokow++;
+        }
+        bool caly = same && przeczytane > 0 && przeczytane >= dlugosc;
+        if (zera && (zaDuzo || zerowyKoniec || caly)) {
+          string opis = caly
+            ? ("caly plik (" + przeczytane + " B) to same bajty 0x00")
+            : ("blok co najmniej " + maxCiag + " bajtow 0x00 od bajtu " + gdzie +
+               (zerowyKoniec && !zaDuzo ? " (na koncu pliku)" : ""));
           if (ws != null) {
             // plik > 1 MB zdazyl juz zalozyc katalogi - zdejmujemy te, ktore zostaly puste
             ws.Dispose(); ws = null; DeleteFileW(L(tmp)); tmp = null;
@@ -402,6 +440,13 @@ public static class KopiaIO {
             return (e == 183 || e == 80) ? "ISTNIEJE" : ("BLAD:przemianowanie kopii (blad Win32 " + e + ")");
           }
           tmp = null;
+        }
+        if (zera && ileBlokow > 0) {
+          double proc = przeczytane > 0 ? (100.0 * sumaBlokow / przeczytane) : 0;
+          string bl = ileBlokow == 1 ? " blok" : ((ileBlokow % 10 >= 2 && ileBlokow % 10 <= 4 && (ileBlokow % 100 < 12 || ileBlokow % 100 > 14)) ? " bloki" : " blokow");
+          return "DZIURY:" + ileBlokow + bl + " zer, razem " + sumaBlokow + " B z " + przeczytane + " B (" +
+                 proc.ToString("0.00", System.Globalization.CultureInfo.InvariantCulture) + "% pliku): " + opisBlokow.ToString() +
+                 (ileBlokow > 5 ? "; i " + (ileBlokow - 5) + " wiecej" : "");
         }
         return "OK";
       }
@@ -456,6 +501,15 @@ Regula '\\minio\.exe$' "program przenosny (minio.exe) - odtwarzalny" $false
 # agents, commands, mr, projects (transkrypty), file-history, settings, lore.db.
 Regula "^$eH\\\.claude\\(shell-snapshots|statsig|todos|session-env|sessions|paste-cache|cache|ide|telemetry|debug|lore_models|backups)$" "katalog techniczny Claude Code (migawki powloki, sesje, pamiec podreczna, model Lore do pobrania, autokopie .claude.json)" $true
 Regula "^$eH\\\.claude\\plugins\\(marketplaces|cache|\.trash)$" "wtyczki pobrane z marketplace - odtwarzalne" $true
+# Kosz po usunietych skillach - zaklada go sama aplikacja Claude, nikt z niego nie czyta.
+# 08.10.2026 dal 18 z 21 alarmow "wyzerowany plik" (pliki w calosci zerowe, bez zdrowej
+# wersji w zadnej kopii) - falszywy alarm o czyms, czego nikt nie potrzebuje.
+Regula "^$eH\\\.claude\\skills\\\.trash$" "kosz po usunietych skillach (zaklada go aplikacja Claude) - nieuzywany" $true
+# Jednorazowe skrypty startowe przypomnien (zasobnik\terminy.ps1 Zapisz-Skrypt-Startowy):
+# zapisywane od nowa przy kazdym otwarciu przypomnienia, po nim zbedne. Tresc przypomnienia
+# jest w ~\.claude\mr\przypomnienia.md - ten idzie do kopii. 08.10.2026: zrob-1.ps1
+# wyzerowany po zaniku pradu = 1 z 21 alarmow.
+Regula "^$eH\\\.claude\\mr\\terminy\\zrob-[^\\]*\.ps1$" "skrypt startowy przypomnienia (zasobnik\terminy.ps1) - jednorazowy, zapisywany od nowa" $false
 Regula "^$eH\\\.claude\\lore\.db\.przed-[^\\]*$" "stara migawka lore.db sprzed migracji (184 MB) - aktualna lore.db jest w kopii" $false
 Regula "^$eH\\\.claude\\mr\\kopia-indeks\.tsv(\.nowy)?$" "indeks samej kopii (zmienia sie co dzien)" $false
 Regula "^$eH\\\.codex\\(\.sandbox|\.sandbox-bin|\.tmp|tmp|cache|packages|thread-writer-locks)$" "katalog techniczny Codeksa (programy, piaskownica, pamiec podreczna)" $true
@@ -506,6 +560,29 @@ function Do-Kopii([string]$zrodlo, [string]$katalogPrzebiegu) {
   return $katalogPrzebiegu + '\' + $zrodlo.Substring(0, 1) + $zrodlo.Substring(2)
 }
 
+# Gdzie w kopii lezy ostatnia wersja pliku sprzed tego przebiegu - do wpisow ALARM
+# WYZEROWANY PLIK i DZIURA (zeby czlowiek wiedzial, skad ja wziac, albo ze jej nie ma).
+# Przeszukuje katalogi zmiany\* (od najmlodszego) i pelna-*, bez biezacego przebiegu.
+# Lista katalogow czytana raz na przebieg; pytamy tylko o pliki z zerami (kilka sztuk).
+$script:KatalogiWersji = $null
+function Ostatnia-Wersja([string]$zrodlo) {
+  if ($null -eq $script:KatalogiWersji) {
+    $kat = @()
+    if (Test-Path -LiteralPath "$Cel\zmiany") {
+      $kat += @(Get-ChildItem -LiteralPath "$Cel\zmiany" -Directory -ErrorAction SilentlyContinue | Sort-Object Name -Descending |
+               ForEach-Object { [pscustomobject]@{ Kat = $_.FullName; Data = $_.Name.Substring(0, [Math]::Min(10, $_.Name.Length)) } })
+    }
+    $kat += @(Get-ChildItem -LiteralPath $Cel -Directory -Filter "pelna-*" -ErrorAction SilentlyContinue | Sort-Object Name -Descending |
+             ForEach-Object { [pscustomobject]@{ Kat = $_.FullName; Data = $_.Name.Substring(6, [Math]::Min(10, $_.Name.Length - 6)) } })
+    $script:KatalogiWersji = @($kat | Where-Object { $_.Kat.TrimEnd('\') -ne $Przebieg })
+  }
+  foreach ($k in $script:KatalogiWersji) {
+    $p = Do-Kopii $zrodlo $k.Kat
+    if ([KopiaIO]::Istnieje($p)) { return "ostatnia wersja w kopii: $p (z $($k.Data))" }
+  }
+  return "w kopii nie ma zadnej wersji tego pliku"
+}
+
 function Zapisz-Stan([string]$tresc) {
   try {
     $kat = Split-Path -Parent $PlikStanu
@@ -554,7 +631,7 @@ function Kopiuj-Sqlite([string]$zrodlo, [string]$dst, [long]$czas) {
     $exe = $script:Python[0]; $resz = @($script:Python | Select-Object -Skip 1)
     $wynik = & $exe @resz $py $zrodlo $tmp 2>&1
     if ($LASTEXITCODE -ne 0) { return "BLAD:sqlite3.backup nie przeszedl (kod $LASTEXITCODE): $(($wynik | Out-String).Trim())" }
-    return [KopiaIO]::Kopiuj($tmp, $dst, $false, $MinCiagZer, $czas)
+    return [KopiaIO]::Kopiuj($tmp, $dst, $false, $MinCiagZer, $ProgDziur, $czas)
   } catch {
     # blad jednej bazy nie przerywa calej kopii - idzie do listy bledow
     return "BLAD:kopia bazy SQLite: $($_.Exception.Message)"
@@ -663,6 +740,7 @@ $Alarmy = New-Object 'System.Collections.Generic.List[string]'
 $Bledy = New-Object 'System.Collections.Generic.List[string]'
 $Uwagi = New-Object 'System.Collections.Generic.List[string]'
 $WUzyciu = New-Object 'System.Collections.Generic.List[string]'
+$Dziury = New-Object 'System.Collections.Generic.List[string]'
 if ($Ustawienia.Alarm) { $Alarmy.Add($Ustawienia.Alarm) }
 if ($Ustawienia.Uwaga -and ($Zrodla.Count -gt 0) -and -not ($Ustawienia.Skad -like "-Zrodla z wywolania*")) { $Uwagi.Add($Ustawienia.Uwaga) }
 
@@ -768,7 +846,12 @@ try {
     if ($Proba -and $k.Baza) { continue }
     if ($Proba -and -not $k.Zera) { continue }
     if ($k.Baza) { $wynik = Kopiuj-Sqlite $k.Sciezka $dst $k.Czas }
-    else { $wynik = [KopiaIO]::Kopiuj($k.Sciezka, $dst, [bool]$k.Zera, $MinCiagZer, $k.Czas) }
+    else { $wynik = [KopiaIO]::Kopiuj($k.Sciezka, $dst, [bool]$k.Zera, $MinCiagZer, $ProgDziur, $k.Czas) }
+    if ($wynik.StartsWith("DZIURY:")) {
+      # skopiowany mimo dziury (patrz $ProgDziur) - slad zamiast alarmu
+      $Dziury.Add("DZIURA W PLIKU - skopiowany mimo zer: $($k.Sciezka) - $($wynik.Substring(7)); " + (Ostatnia-Wersja $k.Sciezka))
+      $wynik = "OK"
+    }
     if ($wynik -eq "OK") {
       if (-not $Proba) {
         $skopiowane++; $bajty += $k.Rozmiar; $Indeks[$k.Sciezka] = $k.Klucz
@@ -778,7 +861,7 @@ try {
       }
     } elseif ($wynik.StartsWith("ZERA:")) {
       $wyzerowane++
-      $Alarmy.Add("ALARM WYZEROWANY PLIK - NIE skopiowany (zdrowa wersja zostaje w starszej kopii): $($k.Sciezka) - $($wynik.Substring(5))")
+      $Alarmy.Add("ALARM WYZEROWANY PLIK - NIE skopiowany: $($k.Sciezka) - $($wynik.Substring(5)); " + (Ostatnia-Wersja $k.Sciezka))
     } elseif ($wynik -eq "W_UZYCIU") {
       $WUzyciu.Add($k.Sciezka)
     } elseif ($wynik -eq "ZNIKNAL") {
@@ -807,6 +890,7 @@ try {
     Write-Output ("wykluczenia z ustawien: " + $(if (@($Ustawienia.Wykluczenia).Count) { (@($Ustawienia.Wykluczenia | ForEach-Object { $_.Sciezka }) -join "; ") } else { "zadnych" }))
     foreach ($a in $Alarmy) { Write-Output $a }
     foreach ($b in $Bledy) { Write-Output "BLAD  $b" }
+    foreach ($z in $Dziury) { Write-Output $z }
     Write-Output ("rodzaj: $rodzaj  ->  $Cel\$nazwa")
     Write-Output ("do skopiowania: {0} plikow, {1}  (nowe {2}, zmienione {3}, bez zmian {4}, pliki -wal/-shm w kopii bazy {5})" -f $DoKopii.Count, (MB $sumaDoKopii), $nowe, $zmienione, $bezZmian, $towarzyszace)
     Write-Output ""
@@ -866,8 +950,9 @@ try {
   [void]$d.AppendLine("=== " + $t0.ToString("yyyy-MM-dd HH:mm") + "  $rodzaj  stan=$stan  ->  $nazwa")
   foreach ($a in $Alarmy) { [void]$d.AppendLine($a) }
   [void]$d.AppendLine(("skopiowane: {0} plikow, {1}  (nowe {2}, zmienione {3}; bez zmian {4}); czas {5:hh\:mm\:ss}" -f $skopiowane, (MB $bajty), $nowe, $zmienione, $bezZmian, $czasTrwania))
-  [void]$d.AppendLine(("pominiete: wyzerowane {0}, w uzyciu {1}, bledy {2}, sekrety {3}{4}, wykluczone katalogi/pliki {5}" -f $wyzerowane, $WUzyciu.Count, $Bledy.Count, $sekrety.Count, $(if ($ZSekretami) { " (z -ZSekretami)" } else { " (bez -ZSekretami)" }), ($Pominiete.Count - $sekrety.Count)))
+  [void]$d.AppendLine(("pominiete: wyzerowane {0}, w uzyciu {1}, bledy {2}, sekrety {3}{4}, wykluczone katalogi/pliki {5}; skopiowane mimo dziury {6}" -f $wyzerowane, $WUzyciu.Count, $Bledy.Count, $sekrety.Count, $(if ($ZSekretami) { " (z -ZSekretami)" } else { " (bez -ZSekretami)" }), ($Pominiete.Count - $sekrety.Count), $Dziury.Count))
   foreach ($b in $Bledy) { [void]$d.AppendLine("BLAD  $b") }
+  foreach ($z in $Dziury) { [void]$d.AppendLine($z) }
   foreach ($u in $WUzyciu) { [void]$d.AppendLine("W UZYCIU (pominiety, sprobuje jutro): $u") }
   foreach ($u in $Uwagi) { [void]$d.AppendLine("UWAGA $u") }
   [void]$d.AppendLine("")
@@ -875,9 +960,10 @@ try {
 
   $s = "stan=$stan`r`nostatnia=" + (Get-Date).ToString("yyyy-MM-dd HH:mm:ss") + "`r`nrodzaj=$rodzaj`r`ncel=$Przebieg`r`n" +
        "plikow=$skopiowane`r`nmb=" + [Math]::Round($bajty / 1MB, 1) + "`r`nalarmy=$($Alarmy.Count)`r`nbledy=$($Bledy.Count)`r`nw_uzyciu=$($WUzyciu.Count)`r`n" +
-       "ustawienia=$($Ustawienia.Skad)`r`n"
-  # alarmy ida zawsze w calosci; lista bledow skrocona do 20 - ostrzezenie PRZED nia
+       "dziury=$($Dziury.Count)`r`nustawienia=$($Ustawienia.Skad)`r`n"
+  # alarmy i dziury ida zawsze w calosci; lista bledow skrocona do 20 - ostrzezenie PRZED nia
   foreach ($a in $Alarmy) { $s += "$a`r`n" }
+  foreach ($z in $Dziury) { $s += "$z`r`n" }
   if ($Bledy.Count -gt 20) { $s += "UWAGA lista bledow skrocona: ponizej 20 z $($Bledy.Count), pelna w $Cel\dziennik.txt`r`n" }
   foreach ($b in ($Bledy | Select-Object -First 20)) { $s += "BLAD  $b`r`n" }
   Zapisz-Stan $s
