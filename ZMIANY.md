@@ -4,6 +4,16 @@ Każda zmiana wypychana na gita dostaje tu wpis. Numer rośnie wg zasady:
 pierwsza cyfra — przebudowa łamiąca zgodność, druga — nowa funkcja,
 trzecia — poprawka.
 
+## 0.30.0 — 2026-10-08
+
+- **Zadania z przypomnień idą w tle, bez okna.** Gdy w dniu terminu MegaRuchacz sam wykonuje zadanie, Claude pracuje
+  w ukrytym procesie (limit 30 min). Jeśli nic nie musisz robić, okno się nie otwiera, a zadanie jest odhaczone.
+  Okno otwiera się tylko, gdy jesteś potrzebny albo coś się nie udało — z napisem „MUSISZ: …” albo
+  „NIE UDAŁO SIĘ: …” i z dalszym ciągiem tej samej rozmowy.
+- **Wynik nigdy nie przepada.** Każdy przebieg zapisuje się w `~.claudemrprzypomnienia-wyniki<id>.json` i `.md`.
+- **Widać to na Przeglądzie.** Zielona linia „zrobione samo — nic nie musisz robić”, żółta sprawa „czeka na Ciebie”,
+  czerwona przy błędzie; przy każdej „Pokaż wynik” otwiera pełny raport w Notatniku. To samo w wydruku `-Raport`.
+
 ## 0.29.1 — 2026-10-08
 
 - **Przypomnienia da się skopiować.** W okienku przypomnień tekst można zaznaczyć myszą i skopiować,
