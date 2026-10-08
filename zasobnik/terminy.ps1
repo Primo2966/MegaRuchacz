@@ -85,6 +85,10 @@ $KatWynikow = Join-Path $KatalogDomowy ".claude\mr\przypomnienia-wyniki"
 $MAX_DZIENNIKA = 512KB
 # Jak dlugo przycisk mowi "Skopiowano", zanim wroci do "Kopiuj".
 $MS_NAPISU_SKOPIOWANO = 2000
+# Przycisk Kopiuj przy zajetym schowku: ile prob i co ile (lacznie ok. 2,5 s). Inne programy
+# trzymaja schowek po kazdej zmianie najwyzej 70 ms (zmierzone 2026-10-08), wiec 2,5 s to duzy zapas.
+$PROB_SCHOWKA = 25
+$MS_MIEDZY_PROBAMI_SCHOWKA = 100
 # Pole tekstowe ma wewnetrzne marginesy (zmierzone 3+3 px zwykla, 4+4 pogrubiona Segoe UI 10);
 # wysokosc mierzymy przy szerokosci mniejszej o ten zapas - wezsze zawijanie daje najwyzej
 # o linie za duzo, nigdy za malo (za malo = tekst uciety).
@@ -519,7 +523,28 @@ function Pole-Tekstowe([string]$tekst, [int]$szerokosc, $czcionka, $kolor, $tlo)
   return $t
 }
 
-function Do-Schowka([string]$tekst) { [System.Windows.Forms.Clipboard]::SetText($tekst) }
+# Schowek z ponawianiem i obsluga komunikatow miedzy probami. Clipboard.SetText ponawia sam
+# (10 x 100 ms), ale nie obsluguje w tym czasie komunikatow, a programy czytajace kazda zmiane
+# schowka (zmierzone 2026-10-08: Remotly, historia schowka, Eksplorator) prosza nas o dane
+# i trzymaja schowek, az je dostana - czekamy na siebie nawzajem. Zmierzone: 5 na 120 klikniec
+# "Nie skopiowano" po 1,1 s, choc tekst trafil do schowka; z kodem ponizej - 0 na 120.
+# Porazka po wszystkich probach to wyjatek - Kopiuj-Przypomnienie pokazuje ja i zapisuje.
+function Do-Schowka([string]$tekst) {
+  $blad = ""
+  for ($i = 1; $i -le $PROB_SCHOWKA; $i++) {
+    if ($i -gt 1) {
+      $do = [datetime]::Now.AddMilliseconds($MS_MIEDZY_PROBAMI_SCHOWKA)
+      while ([datetime]::Now -lt $do) { [System.Windows.Forms.Application]::DoEvents(); Start-Sleep -Milliseconds 10 }
+    }
+    try {
+      $dane = New-Object System.Windows.Forms.DataObject
+      $dane.SetData([System.Windows.Forms.DataFormats]::UnicodeText, $false, $tekst)
+      [System.Windows.Forms.Clipboard]::SetDataObject($dane, $true, 0, 0)   # bez wlasnego czekania .NET
+      return
+    } catch { $blad = $_.Exception.Message }
+  }
+  throw "schowek zajety przez inny program - $PROB_SCHOWKA prob co $MS_MIEDZY_PROBAMI_SCHOWKA ms, ostatni blad: $blad"
+}
 
 # Przycisk "Kopiuj": naglowek i tresc przypomnienia do schowka. Porazka zostaje na przycisku
 # ("Nie skopiowano") i w dzienniku - nie znika po chwili jak "Skopiowano".
