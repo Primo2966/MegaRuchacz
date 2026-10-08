@@ -6,7 +6,8 @@
 # albo wynikiem aktualizacji MegaRuchacza - Wiersz-Aktualizacji), przyciski na dole
 # (Odmaluj-Przyciski) i calosc (Odmaluj-Okno). Od P59d karty i linie modulow, ktorych
 # nie ma w rejestrze instalacji ($script:Instalacja), sa niewidoczne albo nie
-# powstaja - bez dziur w ukladzie. Tresc (co pokazac) jest
+# powstaja - bez dziur w ukladzie. Od 2026-10-08 przypomnienia wykonane w tle: sprawy
+# i linia w karcie Stan z "Pokaż wynik" (Wiersz-Przypomnien, Link-Wyniku). Tresc (co pokazac) jest
 # w przeglad-tresc.ps1. Wykres kosztu nauki z 30 dni stal tu do P35 - teraz jest
 # karta w Szczegolach (Panel-Wykresu w wykres.ps1).
 # Skad wolane: w-tle.ps1 (Wyrenderuj-Widok, Odswiez-Zuzycie), ladowanie.ps1
@@ -387,7 +388,92 @@ function Karta-Problemu($p) {
   if ($p.Porada) {
     $k.Controls.Add((Etykieta-Zawijana $p.Porada $script:CzZwykla $script:KolTekst $szer))
   }
+  # Sprawa z przypomnienia wykonanego w tle (2026-10-08) niesie plik z pelnym raportem.
+  if ($p.PSObject.Properties["Plik"] -and $p.Plik) {
+    $l = Link-Wyniku $p.Plik
+    $l.Margin = New-Object System.Windows.Forms.Padding(0, 4, 0, 0)
+    $k.Controls.Add($l)
+  }
   return $k
+}
+
+# --- przypomnienia wykonane w tle (2026-10-08) ---------------------------------
+# Tresc sklada Ocena-Wynikow-Przypomnien (stan-terminy.ps1): wynik "nic" to spokojna
+# zielona linia w karcie Stan (Wiersz-Przypomnien), "czlowiek" i "blad" - sprawy na gorze
+# Przegladu (Odmaluj-Problemy), kazda z "Pokaż wynik", ktore otwiera <id>.md w Notatniku.
+
+# Osobna funkcja, zeby test mogl ja podmienic i sprawdzic sciezke bez otwierania Notatnika.
+function Otworz-W-Notatniku([string]$plik) {
+  Start-Process -FilePath (Join-Path $env:SystemRoot "notepad.exe") -ArgumentList ('"' + $plik + '"')
+}
+
+# Klikniecie "Pokaż wynik". Pliku moglo juz nie byc (kolejny przebieg go podmienia) - wtedy
+# link mowi to wprost i zostaje wpis w dzienniku, zamiast nie zrobic nic.
+function Otworz-Wynik-Przypomnienia([string]$plik, $link) {
+  if ((-not $plik) -or -not (Test-Path -LiteralPath $plik -PathType Leaf)) {
+    Zanotuj-Wywrotke "pokazanie wyniku przypomnienia" "nie ma pliku '$plik'"
+    if ($link -and -not $link.IsDisposed) { $link.Text = "Nie ma pliku z wynikiem" }
+    return
+  }
+  try { Otworz-W-Notatniku $plik }
+  catch {
+    Zanotuj-Wywrotke "otwarcie wyniku przypomnienia w Notatniku" $_
+    if ($link -and -not $link.IsDisposed) { $link.Text = "Nie udało się otworzyć Notatnika" }
+  }
+}
+
+function Link-Wyniku([string]$plik) {
+  $l = New-Object System.Windows.Forms.LinkLabel
+  $l.AutoSize = $true
+  $l.Font = $script:CzZwykla
+  $l.BackColor = [System.Drawing.Color]::Transparent
+  $l.UseMnemonic = $false
+  $l.Text = "Pokaż wynik"
+  $l.Tag = $plik
+  $l.Margin = New-Object System.Windows.Forms.Padding(8, 0, 0, 0)
+  $l.Add_LinkClicked({ param($nadawca, $e) try { Otworz-Wynik-Przypomnienia "$($nadawca.Tag)" $nadawca } catch { Zanotuj-Wywrotke "link do wyniku przypomnienia" $_ } })
+  return $l
+}
+
+# Jedna podpowiedz na cale okno - pelna tresc przypomnienia po najechaniu na skrocona linie.
+function Podpowiedz-Przypomnien {
+  if (-not $script:PodpowiedzPrzypomnien) {
+    $script:PodpowiedzPrzypomnien = New-Object System.Windows.Forms.ToolTip
+    $script:PodpowiedzPrzypomnien.AutoPopDelay = 30000
+    $script:PodpowiedzPrzypomnien.InitialDelay = 400
+  }
+  return $script:PodpowiedzPrzypomnien
+}
+
+# Te same dwie kolumny co reszta karty Stan: po lewej "Przypomnienia w tle", po prawej po
+# jednej linii na wynik "nic" z ostatniej doby, z "Pokaż wynik" obok.
+function Wiersz-Przypomnien($op) {
+  $szer = $script:SzerKarty - 44
+  $szerW = $szer - $script:SzerEtykiety
+  $w = Poziomy
+  $w.Margin = New-Object System.Windows.Forms.Padding(0, 0, 0, 5)
+  $e = Etykieta-Zawijana $op.Etykieta $script:CzZwykla $script:KolSzary $script:SzerEtykiety
+  $e.MinimumSize = New-Object System.Drawing.Size($script:SzerEtykiety, 0)
+  $w.Controls.Add($e)
+  $p = Pionowy $szerW
+  $pp = Podpowiedz-Przypomnien
+  foreach ($x in @($op.Linie)) {
+    $r = Poziomy
+    $r.Margin = New-Object System.Windows.Forms.Padding(0, 0, 0, 2)
+    $t = Etykieta-Zawijana "$([string][char]0x2713) $($x.Tekst)" $script:CzZwykla $script:KolDobrze ($szerW - 110)
+    $t.UseMnemonic = $false
+    $pp.SetToolTip($t, $x.Podpowiedz)
+    $r.Controls.Add($t)
+    if ($x.Plik) { $r.Controls.Add((Link-Wyniku $x.Plik)) }
+    else {
+      $b = Etykieta "bez raportu" $script:CzZwykla $script:KolSzary
+      $b.Margin = New-Object System.Windows.Forms.Padding(8, 0, 0, 0)
+      $r.Controls.Add($b)
+    }
+    $p.Controls.Add($r)
+  }
+  $w.Controls.Add($p)
+  return $w
 }
 
 function Odmaluj-Problemy {
@@ -395,6 +481,21 @@ function Odmaluj-Problemy {
   Wyczysc-Panel $script:PanelProblemy
   # Bez @() - patrz uwaga o "return ,$lista" w naglowku stan-nadzorcy.ps1.
   $script:Problemy = Zbierz-Problemy $script:Dane $script:Wywrotki $script:DaneBlad $script:DaneCzas
+  # Przypomnienia wykonane w tle (2026-10-08): "czlowiek" i "blad" to sprawy - zabieraja
+  # "Wszystko gra". Dolaczane tutaj, dopoki nie zbiera ich Zbierz-Problemy (przeglad-tresc.ps1);
+  # gdy zacznie, warunek nizej nie doda ich drugi raz.
+  $script:OcenaPrzypomnien = $null
+  try {
+    $script:OcenaPrzypomnien = Ocena-Wynikow-Przypomnien-Teraz
+    if (-not @(@($script:Problemy) | Where-Object { $_ -and $_.PSObject.Properties["Zrodlo"] -and ($_.Zrodlo -eq "przypomnienia") }).Count) {
+      # Czerwone przed zoltymi jak w Zbierz-Problemy, a przy tej samej wadze kolejnosc bez zmian.
+      $wsz = @(@($script:Problemy) + @($script:OcenaPrzypomnien.Problemy) | Where-Object { $_ })
+      if ($wsz.Count -gt 0) {
+        $script:Problemy = @(0..($wsz.Count - 1) | Sort-Object -Property @{ Expression = { Kolejnosc-Wagi $wsz[$_].Waga } }, @{ Expression = { $_ } } |
+          ForEach-Object { $wsz[$_] })
+      }
+    }
+  } catch { Zanotuj-Wywrotke "wyniki przypomnien na Przegladzie" $_ }
   if (@($script:Problemy).Count -eq 0) {
     # Niewidoczna kontrolka nie bierze udzialu w ukladaniu, wiec sekcja bez
     # problemow NIE ZOSTAWIA po sobie ani pustej ramki, ani odstepu.
@@ -624,6 +725,13 @@ function Odmaluj-Stan {
       $script:PanelStan.Controls.Add((Wiersz-Stanu $kop.Linia (Kolor-Wagi $kop.Waga)))
     } catch { Zanotuj-Wywrotke "linia kopii zapasowej" $_ }
   }
+  # Przypomnienia wykonane w tle z wynikiem "nic" (2026-10-08) - spokojna linia, bez sprawy.
+  # Ocena z Odmaluj-Problemy (wolana tuz przed), zeby sprawy i linie byly z jednego odczytu.
+  try {
+    $op = $script:OcenaPrzypomnien
+    if (-not $op) { $op = Ocena-Wynikow-Przypomnien-Teraz }
+    if (@($op.Linie).Count -gt 0) { $script:PanelStan.Controls.Add((Wiersz-Przypomnien $op)) }
+  } catch { Zanotuj-Wywrotke "linia przypomnien w tle" $_ }
   # Zmiany w pamieci pisze nauka z rozmow - bez modulu Wiedza linii nie ma (P59d).
   if (Modul-Jest $script:Instalacja "wiedza") { Dodaj-Zmiany-Pamieci }
   else { $script:PanelZmian = $null; $script:LinkZmian = $null }
