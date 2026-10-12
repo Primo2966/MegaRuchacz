@@ -7,31 +7,40 @@
 #      puszcza "claude -p" w katalogu projektu (2026-10-08: okno z dlugim raportem przy kazdym
 #      zadaniu bylo zbedne, a wynik ginal przy jego zamknieciu). W tej kolejnosci, bo wywrotka
 #      po starcie nie moze skonczyc sie drugim uruchomieniem - najwyzej jedno samoczynne na
-#      przypomnienie. Kilka naraz: kazde w osobnym procesie, rownolegle.
+#      przypomnienie. Kilka naraz: kazde w osobnym procesie, ale Claude PO KOLEI - proces czeka
+#      w kolejce (zamek $NAZWA_KOLEJKI_CLAUDE), az poprzedni skonczy razem z ponowieniami
+#      (2026-10-12: trzy rownolegle starty zderzyly sie przy odswiezaniu logowania i padly).
 #      Proces w tle: odpowiedz Claude zaczyna sie znacznikiem "WYNIK: NIC_NIE_MUSISZ" albo
 #      "WYNIK: POTRZEBUJE_CIEBIE: <co>"; wynik ZAWSZE na trwale w ~\.claude\mr\przypomnienia-wyniki\
 #      <id>.json (umowa z karta Przeglad nadzorcy) i <id>.md (raport do Notatnika).
 #        "nic"      -> odhaczone, zadnego okna,
 #        "czlowiek" -> okno terminala z "claude --resume <sesja>" i naglowkiem "MUSISZ: ...",
-#        "blad"     -> to samo z "NIE UDALO SIE: <powod>" (brak znacznika, kod wyjscia, limit
-#                      czasu, nieczytelny JSON - nigdy nie uchodza za "nic"); bez sesji = nowa
-#                      rozmowa z tym samym zadaniem. Oba zostaja "w toku".
+#                      zostaje "w toku",
+#        "blad"     -> brak znacznika, kod wyjscia, limit czasu, nieczytelny JSON - nigdy nie
+#                      uchodza za "nic". Blad przejsciowy (logowanie, limit zapytan, przeciazenie,
+#                      siec) ponawiany do $PROB_W_TLE razy co $SEKUND_MIEDZY_PROBAMI. Potem zadanie
+#                      SAMO przechodzi na jutro (terminy.js przesun <id> jutro) i jutro rusza znowu,
+#                      bez limitu dni, a czlowiek dostaje male okno "Nie udalo sie ... Przeniesione
+#                      na jutro" z przyciskami "Sprobuj teraz" / "Odloz na jutro" - nigdy terminal
+#                      z surowa rozmowa Claude (decyzja uzytkownika 2026-10-12).
 #   2. okno z przyciskami "Zrob teraz / Jutro / Zrobione" dla: trybu "przypomnij", spraw "w toku"
 #      od wczoraj albo dawniej (automat nie dokonczyl) i uruchomien, ktore sie nie udaly. Okno
 #      stoi na wierzchu i na pasku zadan, dopoki ktos nie kliknie. Krzyzyk przy nieobsluzonych
 #      = wroci za 2 godziny (odlozone_do w przypomnienia-okno.txt). Tekst w oknie da sie
 #      zaznaczyc mysza, a przycisk "Kopiuj" daje do schowka naglowek i tresc przypomnienia.
+#      "Zrob teraz" startuje Claude dopiero, gdy kolejka jest wolna (okno pisze, ze czeka).
 #
 # Slad "bylem tu", kazde uruchomienie i kazda wywrotka: ~\.claude\mr\przypomnienia.log.
 #
 # Uzycie:
 #   powershell -NoProfile -ExecutionPolicy Bypass -File zasobnik\terminy.ps1 [-Zrodlo <repo>]
 #     [-KatalogDomowy <kat>] [-Plik <plik przypomnien>] [-Dzis RRRR-MM-DD] [-Proba] [-BezOkna]
-#     [-Wykonaj <id>] [-LimitSekund <s>]
+#     [-Wykonaj <id>] [-LimitSekund <s>] [-PauzaSekund <s>]
 #   -Proba    nic nie uruchamia, nie zmienia i nie pokazuje - wypisuje, co by zrobil
 #   -BezOkna  tylko samoczynne uruchomienia (punkt 1)
 #   -Wykonaj  proces w tle dla jednego przypomnienia "w toku" (startuje go punkt 1, nie czlowiek)
 #   -LimitSekund  limit claude -p zamiast $SEKUND_LIMITU_W_TLE (testy)
+#   -PauzaSekund  przerwa miedzy probami zamiast $SEKUND_MIEDZY_PROBAMI (testy)
 # Kod wyjscia: 0 ok (takze "nic do zrobienia"), 1 blad (opis w dzienniku i na stderr).
 #
 # Kod i komentarze bez polskich znakow; teksty w oknie i polecenie dla Claude z polskimi -
@@ -45,7 +54,8 @@ param(
   [switch]$Proba,
   [switch]$BezOkna,
   [int]$Wykonaj = 0,
-  [int]$LimitSekund = 0
+  [int]$LimitSekund = 0,
+  [int]$PauzaSekund = 0
 )
 
 $ErrorActionPreference = "Stop"
@@ -63,15 +73,41 @@ $KatUruchomien = Join-Path $KatStanu "terminy"
 
 # Krzyzyk = wroc za tyle minut (decyzja uzytkownika: 2 godziny, "nie gubimy sprawy").
 $MINUT_ODLOZENIA = 120
-# Odstep miedzy kolejnymi samoczynnymi uruchomieniami - zeby kilka procesow Claude nie
-# ruszalo w jednej chwili (rownoczesny start = rownoczesne hooki i logowanie do API).
-$SEKUND_MIEDZY_URUCHOMIENIAMI = 3
+# Kolejka Claude (decyzja uzytkownika 2026-10-12, po awarii z 08:03): w danej chwili najwyzej
+# jeden Claude uruchomiony przez przypomnienia. Starty co 3 s nie wystarczyly - trzy procesy
+# zderzyly sie przy odswiezaniu logowania ("another Claude Code process is refreshing it")
+# i padly wszystkie. Zamek trzyma proces w tle przez wszystkie proby; "Zrob teraz" na niego czeka.
+$NAZWA_KOLEJKI_CLAUDE = "Local\MegaRuchacz-Terminy-Claude"
 # Limit jednego przebiegu w tle (claude -p). Zadania z przypomnien to "sprawdz, porownaj,
 # przygotuj propozycje" - kilka do kilkunastu minut. 30 min to zapas na wolne API i kilka
 # narzedzi; proces, ktory chodzi dluzej, prawie na pewno utknal (np. na zerwanym MCP). Po
-# limicie proces jest ubijany razem z dziecmi, a wynik to "blad" z okna dla czlowieka.
+# limicie proces jest ubijany razem z dziecmi, a wynik to "blad" (na jutro, okno dla czlowieka).
 $SEKUND_LIMITU_W_TLE = 1800
 if ($LimitSekund -gt 0) { $SEKUND_LIMITU_W_TLE = $LimitSekund }
+# Ponowienie bledu przejsciowego (decyzja uzytkownika 2026-10-12): 3 proby co 60 s. Claude Code
+# przy bledzie logowania sam pisze "retry in a minute"; limit zapytan i przeciazenie API tez
+# mijaja zwykle w ciagu minut. Wiecej prob tylko dluzej trzyma kolejke - nastepna szansa jutro.
+$PROB_W_TLE = 3
+$SEKUND_MIEDZY_PROBAMI = 60
+if ($PauzaSekund -gt 0) { $SEKUND_MIEDZY_PROBAMI = $PauzaSekund }
+# Najdluzsze czekanie w kolejce. Jedno zadanie trzyma ja najwyzej $PROB_W_TLE x $SEKUND_LIMITU_W_TLE
+# + pauzy = ok. 92 min; 12 h to zapas na ok. 8 takich zadan przed nami. Dluzej = cos utknelo -
+# zadanie konczy sie bledem (na jutro, z oknem), a nie czeka w ciszy.
+$MINUT_CZEKANIA_W_KOLEJCE = 720
+# Bledy, ktore mijaja same - wzor szukany w stderr i odpowiedzi Claude (pole result) przebiegu,
+# ktory sie nie udal (kod != 0, is_error, nie JSON; zwykly raport moze cytowac te slowa i nie
+# jest bledem). Opis to powod dla czlowieka; surowa tresc bledu idzie za nim w nawiasie.
+$BLEDY_PRZEJSCIOWE = @(
+  @{ Wzor = 'OAuth|refresh(ing)? (the )?(access )?token|another Claude Code process'
+     Opis = "Claude nie mógł się zalogować, bo kilka okien naraz odnawiało logowanie" },
+  @{ Wzor = 'usage limit'; Opis = "wyczerpał się limit użycia konta Claude" },
+  @{ Wzor = 'rate.?limit|too many requests|\b429\b'; Opis = "Claude chwilowo odmówił, bo przekroczono limit zapytań" },
+  @{ Wzor = 'overloaded|(API Error|status|HTTP)\W{0,3}5\d\d\b|internal server error|bad gateway|service unavailable|gateway time-?out'
+     Opis = "serwery Claude były przeciążone albo miały awarię" },
+  @{ Wzor = 'ECONNRESET|ETIMEDOUT|ECONNREFUSED|ENOTFOUND|EAI_AGAIN|socket hang up|fetch failed|network|connection (error|refused|reset)'
+     Opis = "nie było połączenia z serwerami Claude (sieć)" })
+# Okno niepowodzenia: tyle znakow tresci przypomnienia w zdaniu "Nie udalo sie wykonac #N (...)".
+$ZNAKOW_SKROTU_TRESCI = 80
 # Tryb uprawnien claude -p. Okno interaktywne startuje bez flag = tryb domyslny: wszystko
 # spoza listy dozwolonych pyta czlowieka. W tle nie ma kto odpowiedziec, a "-p" w trybie
 # domyslnym nie moze czekac na pytanie. "dontAsk" = to samo co domyslny, tylko pytanie
@@ -189,6 +225,15 @@ function Napis-PS([string]$t) {
   return "'" + ($t -replace "'", "''") + "'"
 }
 
+# Sciezka do porownania: "/" -> "\", bez koncowego ukosnika i "\." po literze dysku, bez wielkosci
+# liter. 2026-10-12 "C:/dev/ecommerce-helper" z przypomnienia nie zgadzalo sie z "C:\dev\ecommerce-
+# helper" po GetFullPath i Claude dostal falszywa uwage, ze katalogu nie ma na tym komputerze.
+function Sciezka-Do-Porownania([string]$s) {
+  $s = "$s".Trim() -replace '/', '\'
+  if ($s -match '^[A-Za-z]:\\\.$') { $s = $s.Substring(0, 2) }
+  return $s.TrimEnd('\').ToLowerInvariant()
+}
+
 # $wTle: przebieg "claude -p" bez czlowieka - polecenie dostaje umowe o znaczniku WYNIK
 # (czyta go Ocen-Przebieg) i zakaz odhaczania (odhacza ten skrypt, tylko przy "nic").
 function Polecenie-Dla-Claude($p, [string]$katalog, [bool]$wTle = $false) {
@@ -196,7 +241,7 @@ function Polecenie-Dla-Claude($p, [string]$katalog, [bool]$wTle = $false) {
   $tresc = ($p.tresc -replace '"', "'").TrimEnd('.', ' ')   # kropke dostawia zdanie nizej
   if ($p.sprawdz) { $tresc += " (jak sprawdzić: " + ($p.sprawdz -replace '"', "'") + ")" }
   $gdzie = ""
-  if ($katalog -ne $p.projekt) { $gdzie = " Uwaga: katalogu projektu '" + $p.projekt + "' nie ma na tym komputerze - okno otwarte w katalogu domowym; ustal najpierw, gdzie leży projekt." }
+  if ((Sciezka-Do-Porownania $katalog) -ne (Sciezka-Do-Porownania $p.projekt)) { $gdzie = " Uwaga: katalogu projektu '" + $p.projekt + "' nie ma na tym komputerze - okno otwarte w katalogu domowym; ustal najpierw, gdzie leży projekt." }
   $wstep = ("Zadanie z przypomnienia $($p.id) zaplanowane na $($p.termin): $tresc. Wykonaj je.$gdzie " +
             "Niczego nie zmieniaj na produkcji ani w sklepach bez wyraźnego polecenia użytkownika — przygotuj propozycję. ")
   if (-not $wTle) { return ($wstep + "Na koniec krótki raport po polsku i odhacz przypomnienie: node '$skrypt' zrobione $($p.id)") }
@@ -241,6 +286,18 @@ function Zapisz-Skrypt-Startowy([string]$start, [string[]]$linie) {
   [System.IO.File]::WriteAllText($start, ($linie -join "`r`n") + "`r`n", (New-Object System.Text.UTF8Encoding($true)))
 }
 
+# Linie skryptu startowego okna: zanim ruszy Claude, poczekaj, az zadanie z przypomnienia
+# w tle zwolni kolejke (decyzja uzytkownika 2026-10-12: zaden drugi Claude rownolegle).
+# Zamek tylko na chwile - rozmowa z czlowiekiem trwa godzinami i nie moze wstrzymac automatu.
+# Zamek po procesie, ktory padl (AbandonedMutexException), jest juz nasz - zwalniamy go tak samo.
+function Linie-Czekania-Na-Kolejke {
+  return @(
+    ('$kolejka = New-Object System.Threading.Mutex($false, ' + (Napis-PS $NAZWA_KOLEJKI_CLAUDE) + ')'),
+    ('try { if (-not $kolejka.WaitOne(0)) { Write-Host ' + (Napis-PS "Czekam, aż skończy się zadanie z przypomnienia, które Claude robi w tle (dwa naraz psują logowanie)...") +
+     ' -ForegroundColor Yellow; [void]$kolejka.WaitOne() } } catch [System.Threading.AbandonedMutexException] { }'),
+    '$kolejka.ReleaseMutex(); $kolejka.Dispose()')
+}
+
 # Interaktywny Claude Code w widocznym oknie (przycisk "Zrob teraz"). Zwraca opis albo
 # rzuca wyjatek z powodem.
 function Uruchom-Claude($p, [string]$jak) {
@@ -253,7 +310,8 @@ function Uruchom-Claude($p, [string]$jak) {
     "# MegaRuchacz: przypomnienie #$($p.id) - $jak $(Get-Date -Format 'yyyy-MM-dd HH:mm') (zasobnik\terminy.ps1)",
     ('$Host.UI.RawUI.WindowTitle = ' + (Napis-PS "MegaRuchacz - przypomnienie #$($p.id)")),
     ('Set-Location -LiteralPath ' + (Napis-PS $kat)),
-    ('$polecenie = ' + (Napis-PS $polecenie)),
+    ('$polecenie = ' + (Napis-PS $polecenie))
+  ) + (Linie-Czekania-Na-Kolejke) + @(
     ('& ' + (Napis-PS $claude) + ' $polecenie')
   )
   if ($Proba) {
@@ -268,13 +326,14 @@ function Uruchom-Claude($p, [string]$jak) {
 # ------------------------------------------------------ tryb "sam": Claude Code w tle
 
 # Osobny proces bez okna (ten skrypt z -Wykonaj <id>) - glowny przebieg nie czeka na Claude,
-# wiec zamek startu trwa sekundy, a kilka zadan idzie rownolegle. Zwraca opis albo rzuca.
+# wiec zamek startu trwa sekundy; Claude po kolei pilnuje kolejka w procesie. Zwraca opis albo rzuca.
 function Odpal-W-Tle($p) {
   $arg = @("-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-WindowStyle", "Hidden",
            "-File", ('"' + $PSCommandPath + '"'), "-Wykonaj", "$($p.id)",
            "-Zrodlo", ('"' + $Zrodlo + '"'), "-KatalogDomowy", ('"' + $KatalogDomowy.TrimEnd('\') + '"'), "-Plik", ('"' + $Plik + '"'))
   if ($Dzis) { $arg += @("-Dzis", $Dzis) }
   if ($LimitSekund -gt 0) { $arg += @("-LimitSekund", "$LimitSekund") }
+  if ($PauzaSekund -gt 0) { $arg += @("-PauzaSekund", "$PauzaSekund") }
   if ($Proba) {
     Write-Host "[proba] uruchomilbym w tle: powershell $($arg -join ' ')"
     return "proba"
@@ -353,10 +412,23 @@ function Ogon([string]$t, [int]$ile) {
   return "(...poczatek pominiety...) " + $t.Substring($t.Length - $ile)
 }
 
+# Powod bledu: co sie stalo + surowa tresc bledu; gdy tresc (stderr albo odpowiedz Claude)
+# pasuje do bledu przejsciowego - na poczatku zdanie dla czlowieka i Przejsciowy = ponowic.
+function Powod-Bledu($w, [string]$co, [string]$tresc, [string]$doOceny) {
+  $szczegoly = $co
+  if ("$tresc".Trim()) { $szczegoly += ": " + (Ogon ($tresc -replace '\s+', ' ') 300) }
+  foreach ($b in $BLEDY_PRZEJSCIOWE) {
+    if ($doOceny -match $b.Wzor) { $w.Przejsciowy = $true; $w.Powod = "$($b.Opis) ($szczegoly)"; return }
+  }
+  $w.Powod = $szczegoly
+}
+
 # Wynik przebiegu. Domyslnie "blad" - "nic" tylko przy czystym przebiegu ze znacznikiem
 # NIC_NIE_MUSISZ w pierwszej linii odpowiedzi. Kazda inna sytuacja konczy sie oknem.
+# Przejsciowy = blad, ktory mija sam (Wykonaj-W-Tle ponawia); brak znacznika, nieznany
+# znacznik i limit czasu nigdy nie sa przejsciowe.
 function Ocen-Przebieg($r) {
-  $w = [pscustomobject]@{ Wynik = "blad"; CoZrobic = ""; Powod = ""; Raport = ""; Sesja = "" }
+  $w = [pscustomobject]@{ Wynik = "blad"; CoZrobic = ""; Powod = ""; Raport = ""; Sesja = ""; Przejsciowy = $false }
   $j = $null
   $bladJson = ""
   $tekst = "$($r.Wyjscie)".Trim()
@@ -374,10 +446,15 @@ function Ocen-Przebieg($r) {
     $w.Raport = "Brak odpowiedzi Claude.`r`n`r`nWyjście procesu:`r`n" + (Ogon $tekst $MAX_WYJSCIA_W_RAPORCIE) +
                 "`r`n`r`nBłędy procesu:`r`n" + (Ogon $r.Bledy $MAX_WYJSCIA_W_RAPORCIE)
   }
+  # Tresc bledu: stderr, a gdy pusty - odpowiedz Claude (pole result) albo samo wyjscie.
+  # 2026-10-12 blad logowania byl tylko w result, a powod brzmial "...kodem 1: " bez tresci.
+  $trescBledu = "$($r.Bledy)".Trim()
+  if (-not $trescBledu) { if ($j -and "$($j.result)".Trim()) { $trescBledu = "$($j.result)".Trim() } else { $trescBledu = $tekst } }
+  $doOceny = "$($r.Bledy)`n$($w.Raport)"
   if ($r.Limit) { $w.Powod = "przekroczony limit czasu ($([int]($SEKUND_LIMITU_W_TLE / 60)) min, $SEKUND_LIMITU_W_TLE s) - proces ubity"; return $w }
-  if ($r.Kod -ne 0) { $w.Powod = "Claude Code zakończył się kodem $($r.Kod): " + (Ogon $r.Bledy 300); return $w }
-  if (-not $j) { $w.Powod = "nieczytelna odpowiedź Claude Code (nie JSON: $bladJson)"; return $w }
-  if ($j.is_error) { $w.Powod = "Claude Code zgłosił błąd ($($j.subtype))"; return $w }
+  if ($r.Kod -ne 0) { Powod-Bledu $w "Claude Code zakończył się kodem $($r.Kod)" $trescBledu $doOceny; return $w }
+  if (-not $j) { Powod-Bledu $w "nieczytelna odpowiedź Claude Code (nie JSON: $bladJson)" $trescBledu $doOceny; return $w }
+  if ($j.is_error) { Powod-Bledu $w "Claude Code zgłosił błąd ($($j.subtype))" $trescBledu $doOceny; return $w }
   $pierwsza = @("$($j.result)" -split "\r?\n" | Where-Object { $_.Trim() } | Select-Object -First 1)
   $linia = ""
   if ($pierwsza.Count -gt 0) { $linia = $pierwsza[0].Trim().Trim('*', '`', '#', '>', '_', ' ') }
@@ -415,6 +492,7 @@ function Zapisz-Wynik($p, [string]$kat, [datetime]$start, [datetime]$koniec, $w)
 
 # Okno dla czlowieka po przebiegu w tle: naglowek "MUSISZ: ..." albo "NIE UDALO SIE: ...",
 # pod nim ta sama rozmowa (claude --resume), a bez sesji - nowa z tym samym zadaniem.
+# Od 2026-10-12 wolane tylko przy "czlowiek" - "blad" dostaje Okno-Niepowodzenia (bez terminala).
 function Okno-Po-Przebiegu($p, [string]$kat, [string]$claude, $w, [string]$sciezkaMd) {
   if ($w.Wynik -eq "czlowiek") { $glowa = "MUSISZ: $($w.CoZrobic)"; $kolor = "Yellow" }
   else { $glowa = "NIE UDAŁO SIĘ: $($w.Powod)"; $kolor = "Red" }
@@ -443,33 +521,110 @@ function Okno-Po-Przebiegu($p, [string]$kat, [string]$claude, $w, [string]$sciez
   return (Otworz-Terminal $kat "$($p.id)" $start)
 }
 
-# Proces w tle (-Wykonaj): jedno przypomnienie "w toku" od poczatku do konca. Wynik zapisany
-# zawsze, status i okno zgodne z wynikiem, jedna linia podsumowania w dzienniku.
+# Kolejka Claude: czeka, az zaden inny proces przypomnien nie trzyma zamka, i go bierze. Zwraca
+# zamek (oddaje go Zwolnij-Kolejke) albo rzuca po $MINUT_CZEKANIA_W_KOLEJCE. Zamek po procesie,
+# ktory padl, nie blokuje: AbandonedMutexException = zamek juz nasz.
+function Zajmij-Kolejke([string]$kto) {
+  $z = New-Object System.Threading.Mutex($false, $NAZWA_KOLEJKI_CLAUDE)
+  try {
+    if ($z.WaitOne(0)) { return $z }
+    Dopisz-Dziennik "${kto}: czeka w kolejce - Claude z innego przypomnienia jeszcze pracuje"
+    $t0 = Get-Date
+    if (-not $z.WaitOne($MINUT_CZEKANIA_W_KOLEJCE * 60000)) {
+      $z.Dispose()
+      throw "kolejka Claude zajęta dłużej niż $MINUT_CZEKANIA_W_KOLEJCE min - inne przypomnienie w tle utknęło"
+    }
+    Dopisz-Dziennik "${kto}: kolejka wolna po $([int]((Get-Date) - $t0).TotalSeconds) s"
+    return $z
+  } catch [System.Threading.AbandonedMutexException] {
+    Dopisz-Dziennik "${kto}: przejal kolejke po procesie, ktory padl"
+    return $z
+  }
+}
+
+function Zwolnij-Kolejke($z) {
+  if (-not $z) { return }
+  try { $z.ReleaseMutex() } catch { Dopisz-Dziennik "kolejka Claude - nie zwolnilem zamka: $($_.Exception.Message)" }
+  $z.Dispose()
+}
+
+# "Sprobuj teraz" z okna niepowodzenia: z powrotem na dzis, "w toku" i przebieg w tle - w kolejce,
+# jak samoczynny (przesuniete na jutro nie jest zalegle, a -Wykonaj bierze tylko zalegle).
+function Sprobuj-Teraz($p) {
+  if (-not (Zmien-Status "przesun" @("$($p.id)", "dzis") "przycisk Sprobuj teraz #$($p.id): z powrotem na dzis")) { return $false }
+  if (-not (Zmien-Status "w-toku" @("$($p.id)") "przycisk Sprobuj teraz #$($p.id): status w toku")) { return $false }
+  $jak = Odpal-W-Tle $p
+  Dopisz-Dziennik "przycisk Sprobuj teraz #$($p.id): $jak (Claude ruszy, gdy kolejka bedzie wolna)"
+  return $true
+}
+
+# Okno po bledzie przebiegu w tle (decyzja uzytkownika 2026-10-12): zamiast terminala z surowa
+# rozmowa Claude - okno przypomnien z jedna karta, zdaniem "Nie udalo sie ... bo: ... Przeniesione
+# na jutro" i przyciskami "Sprobuj teraz" / "Odloz na jutro". Czeka na czlowieka (okno modalne).
+function Okno-Niepowodzenia($p, $w, [bool]$przeniesione, [string]$bladPrzesuniecia, [string]$sciezkaMd, [string]$jutro) {
+  $skrot = "$($p.tresc)".Trim().TrimEnd('.', ' ')
+  if ($skrot.Length -gt $ZNAKOW_SKROTU_TRESCI) { $skrot = $skrot.Substring(0, $ZNAKOW_SKROTU_TRESCI).TrimEnd() + "…" }
+  $uwaga = "Nie udało się wykonać przypomnienia #$($p.id) ($skrot), bo: $("$($w.Powod)".Trim().TrimEnd('.')). "
+  if ($przeniesione) { $uwaga += "Przeniesione na jutro." }
+  else { $uwaga += "Nie udało się też przenieść go na jutro ($bladPrzesuniecia) - zostaje w toku i jutro wróci w oknie przypomnień." }
+  if ($sciezkaMd) { $uwaga += "`r`nPełny raport: $sciezkaMd" }
+  $poz = $p | Select-Object *
+  $poz | Add-Member -NotePropertyName uwaga -NotePropertyValue $uwaga -Force
+  $poz | Add-Member -NotePropertyName przeniesione -NotePropertyValue $przeniesione -Force
+  if ($przeniesione -and $jutro) { $poz.termin = $jutro; $poz.opis = "jutro" }
+  Okno-Przypomnien @($poz) "niepowodzenie"
+}
+
+# Proces w tle (-Wykonaj): jedno przypomnienie "w toku" od poczatku do konca. Claude tylko po
+# zajeciu kolejki, blad przejsciowy ponawiany. Wynik zapisany zawsze, status i okno zgodne
+# z wynikiem, jedna linia podsumowania w dzienniku (przed oknem niepowodzenia, ktore czeka).
 function Wykonaj-W-Tle([int]$id) {
   $plikZapisu = Join-Path $Zrodlo "narzedzia\zapis-trwaly.ps1"
   if (-not (Test-Path -LiteralPath $plikZapisu)) { throw "nie ma $plikZapisu - wyniku nie da sie zapisac trwale" }
   . $plikZapisu
   $r = Wolaj-Terminy @("zalegle", "--json")
   if ($r.Kod -ne 0) { throw "terminy.js zalegle --json: kod $($r.Kod) $($r.Blad)" }
-  $p = @(($r.Tekst | ConvertFrom-Json).zalegle | Where-Object { $_ -and ([int]$_.id -eq $id) }) | Select-Object -First 1
+  $dane = $r.Tekst | ConvertFrom-Json
+  $p = @($dane.zalegle | Where-Object { $_ -and ([int]$_.id -eq $id) }) | Select-Object -First 1
   if (-not $p) { throw "nie ma zaleglego przypomnienia #$id" }
   if ($p.status -ne "w toku") { throw "przypomnienie #$id ma status '$($p.status)', a nie 'w toku' - nie uruchamiam" }
+  $jutro = ""
+  try { $jutro = [datetime]::ParseExact("$($dane.dzis)", "yyyy-MM-dd", $null).AddDays(1).ToString("yyyy-MM-dd") }
+  catch { Dopisz-Dziennik "w tle #${id}: nieczytelne 'dzis' z terminy.js: '$($dane.dzis)'" }
   $kat = Katalog-Projektu $p
   $claude = Sciezka-Claude
   $start = Get-Date
   $uwagi = @()
-  if (-not $claude) {
-    $w = [pscustomobject]@{ Wynik = "blad"; CoZrobic = ""; Raport = ""; Sesja = ""
-                            Powod = "nie ma polecenia claude w PATH - Claude Code nie jest zainstalowany albo PATH tego procesu go nie widzi" }
-    $claude = "claude"
-  } else {
-    try {
-      $przebieg = Claude-W-Tle $claude $kat (Polecenie-Dla-Claude $p $kat $true) $id
-      $uwagi = @($przebieg.Uwagi)
-      $w = Ocen-Przebieg $przebieg
-    } catch {
-      $w = [pscustomobject]@{ Wynik = "blad"; CoZrobic = ""; Raport = ""; Sesja = ""; Powod = "Claude Code nie wystartował: $($_.Exception.Message)" }
+  $nrProby = 0
+  $w = $null
+  $kolejka = $null
+  try { $kolejka = Zajmij-Kolejke "w tle #$id" }
+  catch { $w = [pscustomobject]@{ Wynik = "blad"; CoZrobic = ""; Raport = ""; Sesja = ""; Przejsciowy = $false; Powod = "$($_.Exception.Message)" } }
+  try {
+    if ($w) { }
+    elseif (-not $claude) {
+      $w = [pscustomobject]@{ Wynik = "blad"; CoZrobic = ""; Raport = ""; Sesja = ""; Przejsciowy = $false
+                              Powod = "nie ma polecenia claude w PATH - Claude Code nie jest zainstalowany albo PATH tego procesu go nie widzi" }
+      $claude = "claude"
+    } else {
+      while ($true) {
+        $nrProby++
+        try {
+          $przebieg = Claude-W-Tle $claude $kat (Polecenie-Dla-Claude $p $kat $true) $id
+          $uwagi += @($przebieg.Uwagi | ForEach-Object { "proba ${nrProby}: $_" })
+          $w = Ocen-Przebieg $przebieg
+        } catch {
+          $w = [pscustomobject]@{ Wynik = "blad"; CoZrobic = ""; Raport = ""; Sesja = ""; Przejsciowy = $false; Powod = "Claude Code nie wystartował: $($_.Exception.Message)" }
+        }
+        if (-not (($w.Wynik -eq "blad") -and $w.Przejsciowy -and ($nrProby -lt $PROB_W_TLE))) { break }
+        Dopisz-Dziennik ("w tle #${id}: proba $nrProby z $PROB_W_TLE nieudana, blad przejsciowy ($($w.Powod)) - ponawiam za $SEKUND_MIEDZY_PROBAMI s" -replace "\r?\n", " ")
+        Start-Sleep -Seconds $SEKUND_MIEDZY_PROBAMI
+      }
     }
+  } finally { Zwolnij-Kolejke $kolejka }
+  if (($w.Wynik -eq "blad") -and ($nrProby -gt 0)) {
+    if ($w.Przejsciowy) { $w.Powod += "; prób: $nrProby z $PROB_W_TLE" }
+    else { $w.Powod += "; prób: $nrProby (ten błąd nie mija sam - bez ponawiania)" }
   }
   $koniec = Get-Date
   $sciezka = ""
@@ -481,14 +636,24 @@ function Wykonaj-W-Tle([int]$id) {
     $script:BladZapisuWyniku = $true
   }
   $status = "zostaje w toku"
+  $przeniesione = $false
+  $bladPrzesuniecia = ""
   if ($w.Wynik -eq "nic") {
     if (Zmien-Status "zrobione" @("$id") "w tle #${id}: odhaczenie") { $status = "odhaczone" }
     else { $status = "NIE ODHACZONE ($($script:OstatniBladStatusu)) - wroci jutro w oknie jako niedokonczone" }
+  } elseif ($w.Wynik -eq "blad") {
+    # Blad = samo na jutro (decyzja uzytkownika 2026-10-12); jutro automat probuje znowu.
+    $script:OstatniBladStatusu = ""
+    if (Zmien-Status "przesun" @("$id", "jutro") "w tle #${id}: blad - przesuniecie na jutro") { $status = "przeniesione na jutro"; $przeniesione = $true }
+    else { $bladPrzesuniecia = $script:OstatniBladStatusu; $status = "NIE PRZENIESIONE NA JUTRO ($bladPrzesuniecia) - zostaje w toku, jutro wroci w oknie jako niedokonczone" }
   }
   $okno = "bez okna"
+  $pokazNiepowodzenie = $false
   if ($w.Wynik -ne "nic") {
-    try { $okno = "okno: " + (Okno-Po-Przebiegu $p $kat $claude $w (Join-Path $KatWynikow "$id.md")) }
-    catch { $okno = "NIE OTWORZYLEM okna: $($_.Exception.Message)"; $script:BladOkna = $true }
+    if ($w.Wynik -eq "czlowiek") {
+      try { $okno = "okno: " + (Okno-Po-Przebiegu $p $kat $claude $w (Join-Path $KatWynikow "$id.md")) }
+      catch { $okno = "NIE OTWORZYLEM okna: $($_.Exception.Message)"; $script:BladOkna = $true }
+    } else { $okno = "okno niepowodzenia (Sprobuj teraz / Odloz na jutro)"; $pokazNiepowodzenie = $true }
   }
   $opis = $w.Wynik
   if ($w.Wynik -eq "czlowiek") { $opis += " (co: $($w.CoZrobic))" }
@@ -496,6 +661,11 @@ function Wykonaj-W-Tle([int]$id) {
   $czas = [int]($koniec - $start).TotalSeconds
   $dopisek = ""; if ($uwagi.Count -gt 0) { $dopisek = "; UWAGI: " + ($uwagi -join "; ") }
   Dopisz-Dziennik ("w tle #${id}: wynik $opis; ${czas} s, sesja '$($w.Sesja)'; $status; wynik w '$sciezka'; $okno$dopisek" -replace "\r?\n", " ")
+  if ($pokazNiepowodzenie) {
+    $md = ""; if ($sciezka) { $md = Join-Path $KatWynikow "$id.md" }
+    try { Okno-Niepowodzenia $p $w $przeniesione $bladPrzesuniecia $md $jutro }
+    catch { Dopisz-Dziennik "w tle #${id}: NIE POKAZALEM okna niepowodzenia: $($_.Exception.Message)"; $script:BladOkna = $true }
+  }
 }
 
 # -------------------------------------------------------------------- okno z przyciskami
@@ -567,15 +737,20 @@ function Kopiuj-Przypomnienie($btn) {
   $z.Start()
 }
 
-function Okno-Przypomnien($pozycje) {
+# $rodzaj "niepowodzenie" (Okno-Niepowodzenia): ten sam wyglad, inny wstep, przyciski "Sprobuj
+# teraz" / "Odloz na jutro", a krzyzyk nic nie odklada - sprawa juz jest na jutro.
+function Okno-Przypomnien($pozycje, [string]$rodzaj = "") {
   Add-Type -AssemblyName System.Windows.Forms
   Add-Type -AssemblyName System.Drawing
   [System.Windows.Forms.Application]::EnableVisualStyles()
   $script:Obsluzone = @{}
   $script:Pozostalo = @($pozycje).Count
+  $script:Niepowodzenie = ($rodzaj -eq "niepowodzenie")
+  $niepowodzenie = $script:Niepowodzenie
 
   $f = New-Object System.Windows.Forms.Form
   $f.Text = "MegaRuchacz - przypomnienia ($(@($pozycje).Count))"
+  if ($niepowodzenie) { $f.Text = "MegaRuchacz - nie udało się wykonać przypomnienia" }
   $f.TopMost = $true
   $f.ShowInTaskbar = $true
   $f.StartPosition = "CenterScreen"
@@ -603,8 +778,13 @@ function Okno-Przypomnien($pozycje) {
   $f.Controls.Add($lista)
 
   $czerwony = [System.Drawing.Color]::FromArgb(170, 40, 20)
-  $wstep = Pole-Tekstowe ("Te sprawy mają termin dziś albo już minął. Wybierz, co z każdą zrobić. " +
-                          "Zamknięcie okna krzyżykiem = przypomnę ponownie za 2 godziny.") 720 $f.Font $f.ForeColor $f.BackColor
+  $tekstWstepu = ("Te sprawy mają termin dziś albo już minął. Wybierz, co z każdą zrobić. " +
+                  "Zamknięcie okna krzyżykiem = przypomnę ponownie za 2 godziny.")
+  if ($niepowodzenie) {
+    $tekstWstepu = ("Automat nie zdołał wykonać tego przypomnienia w tle. Jutro spróbuje znowu sam - nic nie musisz robić. " +
+                    "Zamknięcie okna krzyżykiem = zostaje na jutro.")
+  }
+  $wstep = Pole-Tekstowe $tekstWstepu 720 $f.Font $f.ForeColor $f.BackColor
   $wstep.Margin = New-Object System.Windows.Forms.Padding(0, 0, 0, 10)
   $lista.Controls.Add($wstep)
 
@@ -635,7 +815,9 @@ function Okno-Przypomnien($pozycje) {
     $przyciski = New-Object System.Windows.Forms.FlowLayoutPanel
     $przyciski.AutoSize = $true
     $przyciski.Margin = New-Object System.Windows.Forms.Padding(0, 6, 0, 0)
-    foreach ($b in @(@("Zrób teraz", "teraz"), @("Jutro", "jutro"), @("Zrobione", "zrobione"))) {
+    $akcje = @(@("Zrób teraz", "teraz"), @("Jutro", "jutro"), @("Zrobione", "zrobione"))
+    if ($niepowodzenie) { $akcje = @(@("Spróbuj teraz", "sprobuj"), @("Odłóż na jutro", "odloz")) }
+    foreach ($b in $akcje) {
       $btn = New-Object System.Windows.Forms.Button
       $btn.Text = $b[0]
       $btn.AccessibleName = "$($b[0]) #$($p.id)"
@@ -661,7 +843,10 @@ function Okno-Przypomnien($pozycje) {
 
   $f.Add_FormClosing({
     param($s, $e)
-    if ($script:Pozostalo -gt 0) {
+    if ($script:Niepowodzenie) {
+      if ($script:Pozostalo -gt 0) { Dopisz-Dziennik "okno niepowodzenia zamkniete krzyzykiem - zostaje na jutro" }
+      else { Dopisz-Dziennik "okno niepowodzenia zamkniete - obsluzone" }
+    } elseif ($script:Pozostalo -gt 0) {
       $do = (Get-Date).AddMinutes($MINUT_ODLOZENIA)
       try { Zapisz-Klucz-Okna "odlozone_do" $do.ToString("yyyy-MM-dd HH:mm:ss") }
       catch { Dopisz-Dziennik "zapis odlozenia sie nie udal: $($_.Exception.Message)" }
@@ -672,8 +857,12 @@ function Okno-Przypomnien($pozycje) {
   })
   $script:Okno = $f
   $f.Add_Shown({ $f.Activate() })
-  Dopisz-Dziennik ("okno pokazane: " + ((@($pozycje) | ForEach-Object { "#$($_.id)" }) -join ", "))
-  Zapisz-Klucz-Okna "pokazane" (Get-Date -Format "yyyy-MM-dd HH:mm:ss")
+  if ($niepowodzenie) {
+    Dopisz-Dziennik ("okno niepowodzenia pokazane: " + ((@($pozycje) | ForEach-Object { "#$($_.id)" }) -join ", "))
+  } else {
+    Dopisz-Dziennik ("okno pokazane: " + ((@($pozycje) | ForEach-Object { "#$($_.id)" }) -join ", "))
+    Zapisz-Klucz-Okna "pokazane" (Get-Date -Format "yyyy-MM-dd HH:mm:ss")
+  }
   [void]$f.ShowDialog()
   $f.Dispose()
 }
@@ -695,6 +884,11 @@ function Klik($tag) {
       }
       "jutro"    { $ok = Zmien-Status "przesun" @("$($p.id)", "jutro") "przycisk Jutro #$($p.id)" }
       "zrobione" { $ok = Zmien-Status "zrobione" @("$($p.id)") "przycisk Zrobione #$($p.id)" }
+      "sprobuj"  { $ok = Sprobuj-Teraz $p }
+      "odloz" {
+        if ($p.przeniesione) { Dopisz-Dziennik "przycisk Odloz na jutro #$($p.id): zostaje na jutro"; $ok = $true }
+        else { $ok = Zmien-Status "przesun" @("$($p.id)", "jutro") "przycisk Odloz na jutro #$($p.id)" }
+      }
     }
   } catch {
     $script:OstatniBladStatusu = $_.Exception.Message
@@ -750,7 +944,7 @@ try {
   foreach ($p in $zalegle) {
     $p | Add-Member -NotePropertyName uwaga -NotePropertyValue "" -Force
     if ($p.status -eq "otwarte" -and $p.tryb -eq "sam") {
-      if ($uruchomione -gt 0 -and -not $Proba) { Start-Sleep -Seconds $SEKUND_MIEDZY_URUCHOMIENIAMI }
+      # Procesy w tle ruszaja od razu wszystkie, ale Claude po kolei - czekaja w kolejce (Zajmij-Kolejke).
       if (-not (Zmien-Status "w-toku" @("$($p.id)") "samoczynne #$($p.id): status w toku")) {
         $p.uwaga = "Automat nie zdołał oznaczyć sprawy jako »w toku« i jej nie uruchomił: $($script:OstatniBladStatusu)"
         $doOkna += $p

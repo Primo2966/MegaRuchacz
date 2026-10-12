@@ -9,6 +9,10 @@
 # Sabotaze: kopie z Label zamiast pola, zepsutym "Kopiuj", stala wysokoscia pola, cichym bledem
 # schowka i trzema zepsutymi Do-Schowka - kazdy MUSI zostac zlapany. Zawartosc schowka uzytkownika
 # zachowana i przywrocona.
+# Okno niepowodzenia (2026-10-12, Okno-Niepowodzenia: blad przebiegu w tle, sprawa juz na jutro):
+# kopia, ktora zamiast zwyklego okna pokazuje je dla #1 - zdanie "Nie udalo sie ... Przeniesione
+# na jutro" na czerwono, przyciski "Sprobuj teraz" / "Odloz na jutro" (+ Kopiuj), krzyzyk niczego
+# nie odklada. Sabotaze: zwykle przyciski w oknie niepowodzenia, krzyzyk odkladajacy o 2 godziny.
 # Schowek czytaja po kazdej zmianie inne programy (zmierzone 2026-10-08: Remotly, historia schowka,
 # Eksplorator - kazdy trzyma go do 70 ms), dlatego test przed kopiowaniem czeka, az ucichna, a odczyt
 # ponawia do $MS_ODCZYTU_SCHOWKA (GetText przy zajetym schowku po cichu zwraca ""). Zajety schowek
@@ -172,6 +176,7 @@ $f.KeyPreview = $true
     foreach ($c in @(T-Wszystkie $script:Okno)) {
       $k = [ordered]@{ Typ = $c.GetType().Name; Tekst = "$($c.Text)"; Widoczny = $c.Visible; Wys = $c.Height; Szer = $c.Width; Prawa = $c.Right
                        SzerRodzica = $c.Parent.ClientSize.Width; Kolor = $c.ForeColor.ToArgb(); Tlo = $c.BackColor.ToArgb(); TloRodzica = $c.Parent.BackColor.ToArgb() }
+      $k.Akcja = ""; if (($c -is [System.Windows.Forms.Button]) -and ($c.Tag -is [hashtable])) { $k.Akcja = "$($c.Tag.Akcja)" }
       if ($c -is [System.Windows.Forms.TextBox]) {
         $k.ReadOnly = $c.ReadOnly; $k.Multiline = $c.Multiline; $k.Ramka = "$($c.BorderStyle)"; $k.Paski = "$($c.ScrollBars)"
         $k.TabStop = $c.TabStop; $k.Wlaczony = $c.Enabled; $k.WysWnetrza = $c.ClientSize.Height; $k.WysCzcionki = $c.Font.Height
@@ -392,6 +397,50 @@ $OPISY = [ordered]@{
   "uciecie" = "dluga tresc (kilka linii) miesci sie bez uciecia"
 }
 
+# ---------------------------------------------------------------- okno niepowodzenia
+$jutro = (Get-Date).AddDays(1).ToString("yyyy-MM-dd")
+$POWOD_NIEP = "Claude nie mógł się zalogować, bo kilka okien naraz odnawiało logowanie (Claude Code zakończył się kodem 1: Failed to refresh OAuth token); prób: 3 z 3"
+$MD_NIEP = Join-Path $katMr "przypomnienia-wyniki\1.md"
+# Kopia pokazuje okno niepowodzenia dla #1 zamiast zwyklego okna (te same atrapy okna i zegar).
+$NIEPOWODZENIE = @{ K = 'try { Okno-Przypomnien $doOkna } finally {'
+                    Z = "try { Okno-Niepowodzenia @(`$doOkna | Where-Object { `$_.id -eq 1 })[0] ([pscustomobject]@{ Powod = '$POWOD_NIEP' }) `$true '' '$MD_NIEP' '$jutro' } finally {" }
+
+function Ocen-Niepowodzenia($u) {
+  $o = [ordered]@{}
+  $r = $u.Raport
+  $ok = (-not $u.Zabity) -and ($u.Kod -eq 0) -and $r -and (-not $r.Wywrotka) -and ($u.Dziennik -notmatch 'WYWROTKA') -and
+        ($u.Dziennik -match 'okno niepowodzenia pokazane: #1\r?\n') -and ($r.Watek -eq "STA") -and (@($r.Uwagi).Count -eq 0)
+  $o["przebieg"] = @($ok, "kod $($u.Kod), zabity=$($u.Zabity), wywrotka '$($r.Wywrotka)', uwagi '$(@($r.Uwagi) -join '; ')', wyjscie '$($u.Wyjscie)'")
+  if (-not $r) { foreach ($n in @("teksty", "przyciski", "krzyzyk", "uciecie")) { $o[$n] = @($false, "brak raportu z okna") }; return $o }
+  $k = @($r.Kontrolki | Where-Object { $_.Widoczny })
+  $pola = @($k | Where-Object { $_.Typ -eq "TextBox" })
+  $uwaga = "Nie udało się wykonać przypomnienia #1 ($($tresc1.TrimEnd('.'))), bo: $POWOD_NIEP. Przeniesione na jutro.`r`nPełny raport: $MD_NIEP"
+  $szukane = @(
+    @{ Co = "wstep"; Kolor = $CZARNY; Pole = @($pola | Where-Object { $_.Tekst -like "Automat nie zdołał wykonać tego przypomnienia*krzyżykiem = zostaje na jutro." }) },
+    @{ Co = "naglowek z terminem jutro"; Kolor = $CZARNY; Pole = @($pola | Where-Object { $_.Tekst -ceq "#1   $jutro (jutro)   $projekt" }) },
+    @{ Co = "tresc"; Kolor = $CZARNY; Pole = @($pola | Where-Object { $_.Tekst -ceq $trescPola[1] }) },
+    @{ Co = "zdanie o niepowodzeniu"; Kolor = $CZERWONY; Pole = @($pola | Where-Object { $_.Tekst -ceq $uwaga }) })
+  $zle = @($szukane | Where-Object { ($_.Pole.Count -ne 1) -or ($_.Pole[0].Kolor -ne $_.Kolor) } | ForEach-Object { "$($_.Co): pol $($_.Pole.Count)" })
+  $etykiety = @($k | Where-Object { $_.Typ -eq "Label" })
+  $o["teksty"] = @((($zle.Count -eq 0) -and ($etykiety.Count -eq 0) -and ($pola.Count -eq 4)), "pol $($pola.Count), Label $($etykiety.Count); zle: $($zle -join '; '); pola: $(@($pola | ForEach-Object { "'$($_.Tekst.Substring(0, [Math]::Min(40, $_.Tekst.Length)))'" }) -join ', ')")
+  $przyc = @($k | Where-Object { $_.Typ -eq "Button" } | ForEach-Object { "$($_.Tekst)=$($_.Akcja)" })
+  $o["przyciski"] = @((($przyc -join ", ") -ceq "Spróbuj teraz=sprobuj, Odłóż na jutro=odloz, Kopiuj="), "przyciski: $($przyc -join ', ')")
+  $odl = (Test-Path -LiteralPath $plikOkna) -and ((Czytaj-Okno) -match 'odlozone_do')
+  $o["krzyzyk"] = @((($u.Dziennik -match 'okno niepowodzenia zamkniete krzyzykiem - zostaje na jutro') -and (-not $odl) -and ($u.Dziennik -notmatch 'wroce o')),
+                    "wpis 'zostaje na jutro': $($u.Dziennik -match 'zostaje na jutro'); odlozone_do w przypomnienia-okno.txt: $odl")
+  $zleU = @($pola | Where-Object { ($_.PierwszaY -ne 0) -or (($_.OstatniaY + $_.WysCzcionki) -gt $_.WysWnetrza) -or ($_.Prawa -gt $_.SzerRodzica) } | ForEach-Object { "'$($_.Tekst.Substring(0, [Math]::Min(25, $_.Tekst.Length)))'" })
+  $o["uciecie"] = @((($pola.Count -gt 0) -and ($zleU.Count -eq 0)), "uciete: $(if ($zleU) { $zleU -join '; ' } else { 'zadne' })")
+  return $o
+}
+function Czytaj-Okno { return [System.IO.File]::ReadAllText($plikOkna, [System.Text.Encoding]::UTF8) }
+$OPISY_NIEP = [ordered]@{
+  "przebieg" = "okno niepowodzenia: kopia przeszla bez wywrotki, wpis 'okno niepowodzenia pokazane'"
+  "teksty" = "okno niepowodzenia: wstep, naglowek z terminem jutro, tresc i czerwone zdanie 'Nie udalo sie ... Przeniesione na jutro' w polach"
+  "przyciski" = "okno niepowodzenia: przyciski Sprobuj teraz / Odloz na jutro / Kopiuj, bez Zrob teraz / Jutro / Zrobione"
+  "krzyzyk" = "okno niepowodzenia: krzyzyk = zostaje na jutro, nic nie odklada o 2 godziny"
+  "uciecie" = "okno niepowodzenia: dlugi powod miesci sie bez uciecia"
+}
+
 function Pompuj-Schowek([int]$ms) { $do = [datetime]::Now.AddMilliseconds($ms); while ([datetime]::Now -lt $do) { [System.Windows.Forms.Application]::DoEvents(); Start-Sleep -Milliseconds 20 } }
 function Schowek-Stan {
   $s = [pscustomobject]@{ Tekst = $null; Formaty = [ordered]@{}; Nieodczytane = @() }
@@ -453,6 +502,25 @@ if ($stan) {
         $kop = Kopia "sabotaz$nr" @(@{ K = $s.K; Z = $s.Z }) -Zajety ($s.Sprawdzenie -like "kopiuj-*")
       } catch { Wynik "sabotaz '$($s.Nazwa)' wylapany" $false "przygotowanie: $($_.Exception.Message)"; continue }
       $os = Ocen (Uruchom $kop)
+      Wynik "negatywna: sabotaz '$($s.Nazwa)' wylapany przez '$($s.Sprawdzenie)'" ((-not $os[$s.Sprawdzenie][0]) -and $os["przebieg"][0]) "z sabotazem: $($os[$s.Sprawdzenie][1])"
+    }
+
+    # Okno niepowodzenia (bez prob z trzymanym schowkiem - te sprawdza zwykle okno, kod ten sam).
+    $kn = Kopia "niepowodzenie" @($NIEPOWODZENIE) -Zajety $false
+    $un = Uruchom $kn
+    $on = Ocen-Niepowodzenia $un
+    foreach ($n in $OPISY_NIEP.Keys) { Wynik $OPISY_NIEP[$n] $on[$n][0] $on[$n][1] }
+    Write-Host "Zrzut okna niepowodzenia: $($kn.Zrzut)"
+    $sabotazeN = @(
+      @{ Nazwa = "zwykle przyciski w oknie niepowodzenia"; Sprawdzenie = "przyciski"
+         K = 'if ($niepowodzenie) { $akcje = @(@("Spróbuj teraz", "sprobuj"), @("Odłóż na jutro", "odloz")) }'; Z = '# sabotaz: zwykle przyciski' },
+      @{ Nazwa = "krzyzyk w oknie niepowodzenia odklada o 2 godziny"; Sprawdzenie = "krzyzyk"
+         K = 'if ($script:Niepowodzenie) {'; Z = 'if ($false) {' })
+    foreach ($s in $sabotazeN) {
+      $nr++
+      try { $kop = Kopia "sabotaz$nr" @($NIEPOWODZENIE, @{ K = $s.K; Z = $s.Z }) -Zajety $false }
+      catch { Wynik "sabotaz '$($s.Nazwa)' wylapany" $false "przygotowanie: $($_.Exception.Message)"; continue }
+      $os = Ocen-Niepowodzenia (Uruchom $kop)
       Wynik "negatywna: sabotaz '$($s.Nazwa)' wylapany przez '$($s.Sprawdzenie)'" ((-not $os[$s.Sprawdzenie][0]) -and $os["przebieg"][0]) "z sabotazem: $($os[$s.Sprawdzenie][1])"
     }
   } catch {
