@@ -4,6 +4,18 @@ Każda zmiana wypychana na gita dostaje tu wpis. Numer rośnie wg zasady:
 pierwsza cyfra — przebudowa łamiąca zgodność, druga — nowa funkcja,
 trzecia — poprawka.
 
+## 0.32.0 — 2026-10-12
+
+- **Gdy przypomnienie potrzebuje Twojej decyzji — małe okienko z pytaniem i przyciskami zamiast terminala z długim
+  raportem.** Klikasz odpowiedź (albo „Zrobione”, gdy trzeba było coś zrobić samemu), a Claude kończy zadanie sam
+  w tle, w tej samej rozmowie. „Odłóż na jutro” i krzyżyk przenoszą na jutro; „Otwórz rozmowę” tylko na życzenie;
+  pełny raport schowany pod „Szczegóły”.
+- **Przypomnienia w tle naprawdę mogą pracować** — wcześniej działały w trybie, który blokował im terminal i połączenie
+  z Amazonem/MCP, więc kończyły się prośbą „uruchom to sam”. Teraz ten sam tryb co Twoje okna; odmowa uprawnień to
+  błąd ustawień (zadanie idzie na jutro), a nie prośba do Ciebie.
+- Test okna przypomnień nie dotyka już Twojego schowka (wcześniej wklejało się „TEST-SCHOWEK-…”); próby schowka tylko
+  na żądanie (`-Schowek`).
+
 ## 0.31.0 — 2026-10-12
 
 - **Przypomnienia albo się wykonują, albo same przechodzą na jutro — bez okien z błędem.** Rano trzy zadania ruszyły
