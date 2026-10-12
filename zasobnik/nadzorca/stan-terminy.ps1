@@ -6,7 +6,7 @@
 # Od 2026-10-08 takze wyniki przypomnien wykonanych w tle: odczyt i ocena po ludzku
 # (Wyniki-Przypomnien, Ocena-Wynikow-Przypomnien) - rysuje je karta Przeglad.
 # Nalezy do bazy (bez modulu w rejestrze instalacji): nadzorca jest zawsze, wiec i to.
-# Skad wolane: dozor.ps1 (Dozor-Po-Danych), przeglad.ps1 (Odmaluj-Problemy, Odmaluj-Stan).
+# Skad wolane: dozor.ps1 (Dozor-Terminy), przeglad.ps1 (Odmaluj-Problemy, Odmaluj-Stan).
 # Wczytuje go stan-nadzorcy.ps1 kropka -
 # poza stalymi same definicje.
 
@@ -22,28 +22,91 @@ $GODZINA_TERMINOW_DO = 20
 # startu nadzorcy, czyli pierwszy przebieg po zalogowaniu - ten idzie zawsze.
 $script:NadzTerminyOstatnio = $null
 
+# (2026-10-12, decyzja uzytkownika) Najwczesniej 5 min po starcie Windows. Rano po wlaczeniu
+# komputera nadzorca wstaje razem z logowaniem, a terminy.ps1 od razu otwieral Claude Code
+# - wszystko szlo naraz, zanim siec i logowanie Claude byly gotowe, i konczylo sie bledem
+# logowania. Liczone od startu SYSTEMU (Start-Systemu), nie nadzorcy: nadzorca uruchomiony
+# ponownie po 2 h pracy komputera rusza terminy od razu, jak dotad. Wybudzenie ze snu
+# i hibernacji liczy sie jak start (siec po wybudzeniu wstaje tak samo od zera). Dozor
+# sprawdza ponownie zaraz po uplywie tych 5 min (Dozor-Terminy w dozor.ps1), nie po godzinie.
+$MINUT_PO_STARCIE_WINDOWS = 5
+
+# Ostatni start albo wybudzenie Windows. Zawsze obiekt: Kiedy ([datetime] albo $null), Co
+# ("starcie" / "wybudzeniu" - do zdania w dzienniku), Skad (zrodlo odczytu), Blad (gdy nic sie
+# nie dalo odczytac). Najpierw dziennik zdarzen System, najnowsze z: Kernel-Boot 27 (kazdy
+# rozruch, takze "szybkie uruchamianie", ktore NIE zmienia LastBootUpTime - typ 0x2 to powrot
+# z hibernacji), Power-Troubleshooter 1 (wybudzenie ze snu/hibernacji), Kernel-Power 507
+# (wyjscie z nowoczesnego czuwania). Zmierzone 2026-10-12: ok. 70 ms. Gdy w dzienniku nic nie
+# ma (wyczyszczony, zawiniety) - LastBootUpTime z Win32_OperatingSystem (ok. 0,5 s).
+function Start-Systemu {
+  $w = [pscustomobject]@{ Kiedy = $null; Co = "starcie"; Skad = ""; Blad = "" }
+  $bledy = @()
+  $x = "*[System[(Provider[@Name='Microsoft-Windows-Kernel-Boot'] and EventID=27) or " +
+    "(Provider[@Name='Microsoft-Windows-Power-Troubleshooter'] and EventID=1) or " +
+    "(Provider[@Name='Microsoft-Windows-Kernel-Power'] and EventID=507)]]"
+  try {
+    $e = @(Get-WinEvent -LogName System -FilterXPath $x -MaxEvents 1 -ErrorAction Stop)[0]
+    $w.Kiedy = $e.TimeCreated
+    $w.Skad = "dziennik zdarzen: $($e.ProviderName) $($e.Id)"
+    if (($e.Id -ne 27) -or ([int]$e.Properties[0].Value -eq 2)) { $w.Co = "wybudzeniu" }
+    return $w
+  } catch {
+    # Brak pasujacych zdarzen to nie usterka - wtedy rozstrzyga LastBootUpTime.
+    if ("$($_.FullyQualifiedErrorId)" -notlike "NoMatchingEventsFound*") { $bledy += "dziennik zdarzen: $($_.Exception.Message)" }
+  }
+  try {
+    $w.Kiedy = (Get-CimInstance -ClassName Win32_OperatingSystem -ErrorAction Stop).LastBootUpTime
+    $w.Skad = "Win32_OperatingSystem.LastBootUpTime"
+    if (-not $w.Kiedy) { throw "pusty LastBootUpTime" }
+  } catch {
+    $w.Kiedy = $null
+    $bledy += "LastBootUpTime: $($_.Exception.Message)"
+  }
+  # Blad zostaje takze przy udanym LastBootUpTime - zepsuty dziennik zdarzen nie ma byc cisza.
+  $w.Blad = ($bledy -join "; ")
+  return $w
+}
+
 function Skrypt-Terminow { return (Join-Path $script:NadzZrodlo "zasobnik\terminy.ps1") }
 
-function Czy-Sprawdzac-Terminy([datetime]$teraz = [datetime]::Now) {
-  $w = [pscustomobject]@{ Ruszac = $false; Powod = "" }
+# $startSystemu - wynik Start-Systemu; $null = odczyt prawdziwy (testy wstrzykuja wlasny).
+# Odlozone - [datetime], od ktorego wolno ruszyc, gdy przebieg odlozono z powodu swiezego
+# startu Windows (dozor planuje na te chwile ponowne sprawdzenie); poza tym $null.
+function Czy-Sprawdzac-Terminy([datetime]$teraz = [datetime]::Now, $startSystemu = $null) {
+  $w = [pscustomobject]@{ Ruszac = $false; Powod = ""; Odlozone = $null }
   $skrypt = Skrypt-Terminow
   if (-not (Test-Path -LiteralPath $skrypt)) { $w.Powod = "nie ma $skrypt"; return $w }
   if ($null -eq $script:NadzTerminyOstatnio) {
     $w.Ruszac = $true
     $w.Powod = "pierwszy przebieg od startu nadzorcy"
-    return $w
-  }
-  if ($teraz.Hour -lt $GODZINA_TERMINOW_OD -or $teraz.Hour -ge $GODZINA_TERMINOW_DO) {
+  } elseif ($teraz.Hour -lt $GODZINA_TERMINOW_OD -or $teraz.Hour -ge $GODZINA_TERMINOW_DO) {
     $w.Powod = "poza godzinami $GODZINA_TERMINOW_OD-$GODZINA_TERMINOW_DO"
     return $w
+  } else {
+    $minut = ($teraz - $script:NadzTerminyOstatnio).TotalMinutes
+    if ($minut -lt $MINUT_MIEDZY_TERMINAMI) {
+      $w.Powod = "sprawdzone o $($script:NadzTerminyOstatnio.ToString('HH:mm')), nastepne po $MINUT_MIEDZY_TERMINAMI min"
+      return $w
+    }
+    $w.Ruszac = $true
+    $w.Powod = "ostatnio o $($script:NadzTerminyOstatnio.ToString('HH:mm'))"
   }
-  $minut = ($teraz - $script:NadzTerminyOstatnio).TotalMinutes
-  if ($minut -lt $MINUT_MIEDZY_TERMINAMI) {
-    $w.Powod = "sprawdzone o $($script:NadzTerminyOstatnio.ToString('HH:mm')), nastepne po $MINUT_MIEDZY_TERMINAMI min"
+  # Pora wypada - ale nie wczesniej niz $MINUT_PO_STARCIE_WINDOWS po starcie/wybudzeniu Windows.
+  $s = $startSystemu
+  if ($null -eq $s) { $s = Start-Systemu }
+  if (-not $s.Kiedy) {
+    $w.Powod += " (startu Windows nie umiem odczytac - nie odkladam: $($s.Blad))"
     return $w
   }
-  $w.Ruszac = $true
-  $w.Powod = "ostatnio o $($script:NadzTerminyOstatnio.ToString('HH:mm'))"
+  if ($s.Blad) { $w.Powod += " (uwaga przy odczycie startu Windows: $($s.Blad))" }
+  $od = ([datetime]$s.Kiedy).AddMinutes($MINUT_PO_STARCIE_WINDOWS)
+  if ($teraz -lt $od) {
+    $w.Ruszac = $false
+    $w.Odlozone = $od
+    $minelo = [math]::Max(0, [int][math]::Floor(($teraz - [datetime]$s.Kiedy).TotalMinutes))
+    $w.Powod = "terminy odlozone do $($od.ToString('HH:mm')) - $MINUT_PO_STARCIE_WINDOWS min po $($s.Co) Windows " +
+      "(o $(([datetime]$s.Kiedy).ToString('HH:mm:ss')), minelo $minelo min; $($s.Skad))"
+  }
   return $w
 }
 

@@ -1,7 +1,8 @@
 ﻿# zasobnik\nadzorca\dozor.ps1 - czesc zasobnik\nadzorca.ps1 (patrz BUDOWA
 # w jego naglowku). Dozor: jeden przebieg (Dozor - dane i decyzje naraz, tryb
 # -Raz), decyzje na gotowych danych (Dozor-Po-Danych: cykl wiedzy i skille - tylko
-# z ich modulem w rejestrze instalacji, przypomnienia z terminem, alarmy, slad obecnosci), dozor co kwadrans
+# z ich modulem w rejestrze instalacji, przypomnienia z terminem - Dozor-Terminy, swiezo po
+# starcie Windows z zegarem ponownego sprawdzenia, alarmy, slad obecnosci), dozor co kwadrans
 # w tle (Rusz-Dozor -> Po-Dozorze; kroki
 # i watki sa w w-tle.ps1), podpowiedz przy ikonie (Podpowiedz) i aktualizacja
 # automatyczna MegaRuchacza (Zaplanuj-Aktualizacje -> Ruszaj-Aktualizacje: ~1 min po
@@ -31,7 +32,11 @@ function Dozor($pokazDymek, [bool]$zKolejka, [bool]$zSieci) {
 # Druga polowa dozoru - decyzje na gotowych danych. Osobno od P21: w ikonie dane
 # licza sie w watku w tle (Rusz-Dozor), a decyzje zapadaja tu, w watku okna,
 # gdy dane przyjda - w tej samej kolejnosci co dotad.
-function Dozor-Po-Danych($d, $pokazDymek) {
+#
+# $wIkonie: $true tylko z dozoru w ikonie (Po-Dozorze) - tam dziala petla okien, wiec zegar
+# ponownego sprawdzenia przypomnien (Zaplanuj-Terminy-Po-Starcie) naprawde odpali. Tryb -Raz
+# konczy sie po jednym przebiegu - tam zegar bylby obietnica bez pokrycia.
+function Dozor-Po-Danych($d, $pokazDymek, [bool]$wIkonie = $false) {
   # P59d: nauka tylko z modulem Wiedza, skille tylko z modulem Skille - decyduja
   # Czy-Ruszac-Cykl i Czy-Sprawdzac-Skille na odczycie rejestru z tego samego przebiegu.
   $inst = $null
@@ -66,15 +71,7 @@ function Dozor-Po-Danych($d, $pokazDymek) {
 
   # Przypomnienia z terminem (2026-10-05) - przy starcie i co godzine 8-20; baza, bez
   # modulu w rejestrze. Co uruchomic i co pokazac, rozstrzyga zasobnik\terminy.ps1.
-  try {
-    $ct = Czy-Sprawdzac-Terminy
-    if ($ct.Ruszac) {
-      Notuj "dozor: sprawdzam przypomnienia z terminem ($($ct.Powod))"
-      if (-not (Ruszaj-Terminy)) { Zanotuj-Wywrotke "start sprawdzenia przypomnien" "Odpal-W-Tle nie wystartowal zasobnik\terminy.ps1" }
-    } else {
-      Notuj "dozor: przypomnien nie sprawdzam - $($ct.Powod)"
-    }
-  } catch { Zanotuj-Wywrotke "decyzja o sprawdzeniu przypomnien" $_ }
+  Dozor-Terminy $wIkonie
 
   # Alarmy - jeden na sprawe na dobe, zeby nie uczyly ignorowania.
   foreach ($a in @($d.Alarmy)) {
@@ -111,7 +108,7 @@ function Po-Dozorze($k) {
     return
   }
   $d = $k.Wynik
-  try { Dozor-Po-Danych $d $script:Dymek } catch { Zanotuj-Wywrotke "przebieg dozoru (decyzje)" $_ }
+  try { Dozor-Po-Danych $d $script:Dymek $true } catch { Zanotuj-Wywrotke "przebieg dozoru (decyzje)" $_ }
   $script:Dane = $d
   $script:DaneCzas = [datetime]::Now
   $script:DaneBlad = $null
@@ -123,6 +120,53 @@ function Po-Dozorze($k) {
   try {
     if ($script:Okno -and (-not $script:Okno.IsDisposed) -and $script:Okno.Visible -and (Nieswiezy-Kawalek "koszt")) { [void](Rusz-Krok "koszt") }
   } catch { Zanotuj-Wywrotke "odswiezenie prawdziwego kosztu po dozorze" $_ }
+}
+
+# ------------------------------------------ przypomnienia z terminem (dozor.ps1)
+# Decyzja i start (stan-terminy.ps1: Czy-Sprawdzac-Terminy, Ruszaj-Terminy). Swiezo po starcie
+# albo wybudzeniu Windows przebieg jest odkladany ($MINUT_PO_STARCIE_WINDOWS) - wtedy w ikonie
+# jednorazowy zegar sprawdza ponownie zaraz po uplywie tych minut, a nie przy nastepnym dozorze
+# (do kwadransa) czy pelnej godzinie. Wola go Dozor-Po-Danych i ten zegar.
+# 2 s zapasu: zegar okien nie odpala co do milisekundy, a przebieg o wlos za wczesnie zostalby
+# odlozony drugi raz (sam by sie naprawil, ale po kolejnym kolku i z dodatkowym wpisem).
+$SEKUND_ZAPASU_PO_STARCIE_WINDOWS = 2
+$script:ZegarTerminowPoStarcie = $null
+
+function Dozor-Terminy([bool]$wIkonie) {
+  try {
+    $ct = Czy-Sprawdzac-Terminy
+    if ($ct.Ruszac) {
+      Notuj "dozor: sprawdzam przypomnienia z terminem ($($ct.Powod))"
+      if (-not (Ruszaj-Terminy)) { Zanotuj-Wywrotke "start sprawdzenia przypomnien" "Odpal-W-Tle nie wystartowal zasobnik\terminy.ps1" }
+    } elseif ($ct.Odlozone) {
+      if ($wIkonie) {
+        Zaplanuj-Terminy-Po-Starcie ([datetime]$ct.Odlozone)
+        Notuj "dozor: $($ct.Powod); sprawdze ponownie o $(([datetime]$ct.Odlozone).AddSeconds($SEKUND_ZAPASU_PO_STARCIE_WINDOWS).ToString('HH:mm:ss'))"
+      } else {
+        Notuj "dozor: $($ct.Powod); przebieg jednorazowy (-Raz) - ponownego sprawdzenia nie planuje"
+      }
+    } else {
+      Notuj "dozor: przypomnien nie sprawdzam - $($ct.Powod)"
+    }
+  } catch { Zanotuj-Wywrotke "decyzja o sprawdzeniu przypomnien" $_ }
+}
+
+# Jeden zegar naraz: kolejne odlozenie (np. dozor wypadl w trakcie czekania) przestawia ten sam.
+function Zaplanuj-Terminy-Po-Starcie([datetime]$kiedy) {
+  $ms = [int][math]::Max(1000, [math]::Ceiling(($kiedy - [datetime]::Now).TotalMilliseconds) + $SEKUND_ZAPASU_PO_STARCIE_WINDOWS * 1000)
+  if (-not $script:ZegarTerminowPoStarcie) {
+    $script:ZegarTerminowPoStarcie = New-Object System.Windows.Forms.Timer
+    $script:ZegarTerminowPoStarcie.Add_Tick({
+      $z = $script:ZegarTerminowPoStarcie
+      $script:ZegarTerminowPoStarcie = $null
+      try { $z.Stop(); $z.Dispose() } catch { Zanotuj-Wywrotke "zatrzymanie zegara przypomnien po starcie Windows" $_ }
+      Notuj "dozor: minelo $MINUT_PO_STARCIE_WINDOWS min po starcie Windows - sprawdzam przypomnienia ponownie"
+      Dozor-Terminy $true
+    })
+  }
+  $script:ZegarTerminowPoStarcie.Stop()
+  $script:ZegarTerminowPoStarcie.Interval = $ms
+  $script:ZegarTerminowPoStarcie.Start()
 }
 
 # ------------------------------------------- aktualizacja automatyczna (2026-10-07)
