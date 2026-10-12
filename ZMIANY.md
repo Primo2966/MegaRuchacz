@@ -4,6 +4,18 @@ Każda zmiana wypychana na gita dostaje tu wpis. Numer rośnie wg zasady:
 pierwsza cyfra — przebudowa łamiąca zgodność, druga — nowa funkcja,
 trzecia — poprawka.
 
+## 0.31.0 — 2026-10-12
+
+- **Przypomnienia albo się wykonują, albo same przechodzą na jutro — bez okien z błędem.** Rano trzy zadania ruszyły
+  naraz zaraz po włączeniu komputera, pokłóciły się o logowanie Claude i każde zostawiło okno z błędem. Teraz:
+  - zadania idą po kolei, nie naraz (także „Zrób teraz” czeka, aż poprzednie się skończy);
+  - błąd logowania, limitu, przeciążenia albo sieci jest ponawiany 3 razy co minutę;
+  - gdy dalej się nie da, zadanie samo przechodzi na jutro i jutro próbuje znowu; zamiast rozmowy z błędem pojawia
+    się krótkie okienko z powodem i przyciskami „Spróbuj teraz” / „Odłóż na jutro” (zamknięcie = zostaje na jutro).
+- **Przypomnienia ruszają najwcześniej 5 minut po włączeniu albo wybudzeniu komputera**, potem od razu, bez czekania
+  do pełnej godziny.
+- Zniknęła fałszywa uwaga „katalogu projektu nie ma na tym komputerze”, gdy ścieżka była zapisana z ukośnikami `/`.
+
 ## 0.30.4 — 2026-10-08
 
 - **Przycisk „Kopiuj” w przypomnieniach nie pokazuje już fałszywie „Nie skopiowano”.** W ok. 4% kliknięć tekst był
