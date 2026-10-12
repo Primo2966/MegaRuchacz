@@ -16,7 +16,8 @@
 #        "nic"      -> odhaczone, zadnego okna,
 #        "czlowiek" -> okno terminala z "claude --resume <sesja>" i naglowkiem "MUSISZ: ...",
 #                      zostaje "w toku",
-#        "blad"     -> brak znacznika, kod wyjscia, limit czasu, nieczytelny JSON - nigdy nie
+#        "blad"     -> brak znacznika, kod wyjscia, limit czasu, nieczytelny JSON, odmowa uprawnien
+#                      (permission_denials - blad naszych ustawien, nie sprawa dla czlowieka) - nigdy nie
 #                      uchodza za "nic". Blad przejsciowy (logowanie, limit zapytan, przeciazenie,
 #                      siec) ponawiany do $PROB_W_TLE razy co $SEKUND_MIEDZY_PROBAMI. Potem zadanie
 #                      SAMO przechodzi na jutro (terminy.js przesun <id> jutro) i jutro rusza znowu,
@@ -108,12 +109,29 @@ $BLEDY_PRZEJSCIOWE = @(
      Opis = "nie było połączenia z serwerami Claude (sieć)" })
 # Okno niepowodzenia: tyle znakow tresci przypomnienia w zdaniu "Nie udalo sie wykonac #N (...)".
 $ZNAKOW_SKROTU_TRESCI = 80
-# Tryb uprawnien claude -p. Okno interaktywne startuje bez flag = tryb domyslny: wszystko
-# spoza listy dozwolonych pyta czlowieka. W tle nie ma kto odpowiedziec, a "-p" w trybie
-# domyslnym nie moze czekac na pytanie. "dontAsk" = to samo co domyslny, tylko pytanie
-# konczy sie odmowa - nigdy wiecej niz w oknie interaktywnym. Zablokowane narzedzie Claude
-# zglasza jako POTRZEBUJE_CIEBIE, a w oknie --resume czlowiek moze juz zatwierdzic.
-$TRYB_UPRAWNIEN_W_TLE = "dontAsk"
+# Tryb uprawnien claude -p: "auto", jak u uzytkownika na co dzien (pasek "auto mode on").
+# Do 2026-10-12 byl "dontAsk" = odmowa wszystkiego spoza listy dozwolonych, a uzytkownik
+# listy nie ma - tego dnia wszystkie trzy przypomnienia skonczyly sie POTRZEBUJE_CIEBIE, bo
+# Read poza katalogiem, Bash i MCP (lore, ecommerce-helper) byly odrzucane. Sprawdzone na
+# zywo 2026-10-12 (claude 2.1.296, -p, polecenie na stdin, Claude-W-Tle): w "auto" przeszly
+# Bash, PowerShell, Read poza katalogiem, mcp__lore__lore_stats i mcp__ecommerce-helper__
+# credentials_status (serwery MCP z ~\.claude.json wstaja w -p same, bez --mcp-config); w
+# "dontAsk" te same Read i oba MCP poszly do permission_denials. (Bash jest tylko, gdy Git
+# jest w PATH procesu - nadzorca go ma, z PATH uzytkownika.) "auto" przepuszcza
+# odczyt, a ryzykowne kroki ocenia klasyfikator; zakaz zmian na produkcji stoi w poleceniu.
+# Nigdy bypassPermissions (test-terminy-tlo.ps1 tego pilnuje).
+$TRYB_UPRAWNIEN_W_TLE = "auto"
+# Znaczniki sesji nadrzednej, ktore Claude Code ustawia swoim dzieciom (lista z claude.exe
+# 2.1.296 + zmienne widziane 2026-10-12 w srodowisku sesji). Odziedziczone przez Claude
+# uruchomionego przez ten skrypt robia z niego "dziecko" cudzej sesji: okno interaktywne
+# wylacza zapis rozmowy ("Transcript saving is off - inherited CLAUDE_CODE_CHILD_SESSION
+# marker", 2026-10-12, gdy terminy.ps1 odpalil kierownik z wnetrza Claude Code), a z niego
+# korzysta Lore i --resume. Usuwane przy kazdym starcie claude: w tle (Claude-W-Tle) i w oknie
+# (skrypt startowy, Linie-Bez-Znacznikow-Sesji). Tylko te nazwy - reszta srodowiska zostaje.
+$ZNACZNIKI_SESJI_NADRZEDNEJ = @("CLAUDECODE", "CLAUDE_CODE_CHILD_SESSION", "CLAUDE_CODE_SESSION_ID",
+  "CLAUDE_CODE_SESSION_ATTENDED", "CLAUDE_CODE_ENTRYPOINT", "CLAUDE_CODE_EXECPATH", "CLAUDE_PID",
+  "CLAUDE_CODE_MESSAGING_SOCKET", "CLAUDE_CODE_MESSAGING_TOKEN", "CLAUDE_CODE_INVOKED_SKILLS",
+  "CLAUDE_EFFORT", "AI_AGENT")
 # Ile znakow wyjscia procesu (stdout/stderr) trafia do raportu, gdy Claude nie dal odpowiedzi.
 $MAX_WYJSCIA_W_RAPORCIE = 4000
 $KatWynikow = Join-Path $KatalogDomowy ".claude\mr\przypomnienia-wyniki"
@@ -250,7 +268,8 @@ function Polecenie-Dla-Claude($p, [string]$katalog, [bool]$wTle = $false) {
           "Nie odhaczaj teraz przypomnienia — przy wyniku NIC_NIE_MUSISZ MegaRuchacz zrobi to sam. " +
           "Twoja ostatnia odpowiedź MUSI zaczynać się dokładnie jedną z dwóch linii, bez niczego przed nią (także gdy inne komunikaty każą zacząć od czegoś innego): " +
           "'WYNIK: NIC_NIE_MUSISZ' — zadanie załatwione, użytkownik nie musi nic robić; " +
-          "'WYNIK: POTRZEBUJE_CIEBIE: <jednym zdaniem, co użytkownik ma zrobić>' — potrzebna jego decyzja, zgoda na zmianę albo kliknięcie, albo czegoś nie dało się zrobić (np. narzędzie zablokowane z braku uprawnień). " +
+          "'WYNIK: POTRZEBUJE_CIEBIE: <jednym zdaniem, co użytkownik ma zrobić>' — potrzebna jego decyzja, zgoda na zmianę albo kliknięcie, albo czegoś nie dało się zrobić. " +
+          "Gdy Claude Code odmówi ci narzędzia z braku uprawnień, nie każ użytkownikowi uruchamiać zadania gdzie indziej — to błąd ustawień MegaRuchacza, który sam go zgłosi; napisz w raporcie wprost 'ODMOWA UPRAWNIEŃ: <narzędzie> — <po co było potrzebne>'. " +
           "Pod tą linią krótki raport po polsku: co sprawdziłeś, co wyszło, czego nie sprawdzono. " +
           "Gdy później dokończycie sprawę z użytkownikiem w tej rozmowie, odhacz: node '$skrypt' zrobione $($p.id)")
 }
@@ -298,6 +317,16 @@ function Linie-Czekania-Na-Kolejke {
     '$kolejka.ReleaseMutex(); $kolejka.Dispose()')
 }
 
+# Linie skryptu startowego okna: bez znacznikow sesji nadrzednej ($ZNACZNIKI_SESJI_NADRZEDNEJ).
+# W skrypcie, nie w tym procesie - okno moze otworzyc juz dzialajacy Windows Terminal ze swoim
+# srodowiskiem, a skrypt startowy zawsze biegnie tuz przed claude.
+function Linie-Bez-Znacznikow-Sesji {
+  $nazwy = ($ZNACZNIKI_SESJI_NADRZEDNEJ | ForEach-Object { Napis-PS $_ }) -join ", "
+  return @(
+    '# Bez znacznikow sesji nadrzednej Claude Code - inaczej okno wylacza zapis rozmowy (Lore, --resume)',
+    ('foreach ($n in @(' + $nazwy + ')) { if (Test-Path -LiteralPath "Env:\$n") { Remove-Item -LiteralPath "Env:\$n" } }'))
+}
+
 # Interaktywny Claude Code w widocznym oknie (przycisk "Zrob teraz"). Zwraca opis albo
 # rzuca wyjatek z powodem.
 function Uruchom-Claude($p, [string]$jak) {
@@ -311,7 +340,7 @@ function Uruchom-Claude($p, [string]$jak) {
     ('$Host.UI.RawUI.WindowTitle = ' + (Napis-PS "MegaRuchacz - przypomnienie #$($p.id)")),
     ('Set-Location -LiteralPath ' + (Napis-PS $kat)),
     ('$polecenie = ' + (Napis-PS $polecenie))
-  ) + (Linie-Czekania-Na-Kolejke) + @(
+  ) + (Linie-Bez-Znacznikow-Sesji) + (Linie-Czekania-Na-Kolejke) + @(
     ('& ' + (Napis-PS $claude) + ' $polecenie')
   )
   if ($Proba) {
@@ -383,6 +412,7 @@ function Claude-W-Tle([string]$claude, [string]$kat, [string]$polecenie, [int]$i
   $psi.StandardOutputEncoding = [System.Text.Encoding]::UTF8
   $psi.StandardErrorEncoding = [System.Text.Encoding]::UTF8
   $psi.EnvironmentVariables["MR_PRZYPOMNIENIE_W_TLE"] = "$id"
+  foreach ($n in $ZNACZNIKI_SESJI_NADRZEDNEJ) { $psi.EnvironmentVariables.Remove($n) }   # brak klucza = nic
   $proc = [System.Diagnostics.Process]::Start($psi)
   $wy = $proc.StandardOutput.ReadToEndAsync(); $bl = $proc.StandardError.ReadToEndAsync()
   try {
@@ -458,7 +488,14 @@ function Ocen-Przebieg($r) {
   $pierwsza = @("$($j.result)" -split "\r?\n" | Where-Object { $_.Trim() } | Select-Object -First 1)
   $linia = ""
   if ($pierwsza.Count -gt 0) { $linia = $pierwsza[0].Trim().Trim('*', '`', '#', '>', '_', ' ') }
+  # Odmowa uprawnien = blad naszej konfiguracji (tryb $TRYB_UPRAWNIEN_W_TLE), nie zadanie dla
+  # czlowieka: zamiast terminala z prosba "uruchom gdzie indziej" - na jutro i okno niepowodzenia.
+  # Rozpoznanie tylko z pola permission_denials (lista {tool_name, tool_use_id, tool_input}), nie
+  # ze slow w odpowiedzi. Przy NIC_NIE_MUSISZ zadanie zrobione mimo odmowy - Odmowy idzie do dziennika.
+  $odmowy = @(@($j.permission_denials) | Where-Object { $_ } | ForEach-Object { "$($_.tool_name)".Trim() } | Where-Object { $_ } | Select-Object -Unique)
+  $w | Add-Member -NotePropertyName Odmowy -NotePropertyValue $odmowy -Force
   if ($linia -match '^WYNIK:\s*NIC_NIE_MUSISZ$') { $w.Wynik = "nic"; return $w }
+  if ($odmowy.Count -gt 0) { $w.Powod = "brak uprawnień w tle: Claude Code odrzucił narzędzia $($odmowy -join ', ') (tryb uprawnień $TRYB_UPRAWNIEN_W_TLE) - błąd ustawień MegaRuchacza, nie zadanie dla ciebie"; return $w }
   if ($linia -match '^WYNIK:\s*POTRZEBUJE_CIEBIE:\s*(\S.*)$') { $w.Wynik = "czlowiek"; $w.CoZrobic = $matches[1].Trim(); return $w }
   if ($linia -match '^WYNIK:') { $w.Powod = "nieznany znacznik w pierwszej linii odpowiedzi: $linia"; return $w }
   $w.Powod = "brak znacznika WYNIK w pierwszej linii odpowiedzi"
@@ -509,6 +546,7 @@ function Okno-Po-Przebiegu($p, [string]$kat, [string]$claude, $w, [string]$sciez
     ('Write-Host ' + (Napis-PS "Pełny raport: $sciezkaMd")),
     'Write-Host ""',
     ('Set-Location -LiteralPath ' + (Napis-PS $kat)))
+  $linie += @(Linie-Bez-Znacznikow-Sesji)
   if ($w.Sesja) {
     $linie += ('Write-Host ' + (Napis-PS "Niżej rozmowa, w której Claude robił to zadanie - możesz pisać w niej dalej.") + ' -ForegroundColor Gray')
     $linie += ('& ' + (Napis-PS $claude) + ' --resume ' + (Napis-PS $w.Sesja))
@@ -622,6 +660,7 @@ function Wykonaj-W-Tle([int]$id) {
       }
     }
   } finally { Zwolnij-Kolejke $kolejka }
+  if (($w.Wynik -eq "nic") -and @($w.Odmowy).Count -gt 0) { $uwagi += "zrobione, ale Claude Code odrzucil narzedzia $(@($w.Odmowy) -join ', ') (tryb $TRYB_UPRAWNIEN_W_TLE) - sprawdz ustawienia uprawnien w tle" }
   if (($w.Wynik -eq "blad") -and ($nrProby -gt 0)) {
     if ($w.Przejsciowy) { $w.Powod += "; prób: $nrProby z $PROB_W_TLE" }
     else { $w.Powod += "; prób: $nrProby (ten błąd nie mija sam - bez ponawiania)" }

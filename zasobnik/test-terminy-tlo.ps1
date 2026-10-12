@@ -14,9 +14,15 @@
 # Kopia ma wlasne zamki (start, okno, kolejka Claude) i pauze miedzy probami 1 s zamiast 60 s.
 # Procesy bez okna konsoli; po kazdym przebiegu test czeka, az zniknie kazdy proces z katalogiem
 # testu w wierszu polecen (takze proces w tle -Wykonaj i atrapa ubita po limicie czasu).
+# Od 2026-10-12 (po 08:45 - w "dontAsk" przypomnienia nie mialy Bash, Read poza katalogiem ani MCP):
+# tryb uprawnien "auto", claude bez znacznikow sesji nadrzednej (CLAUDE_CODE_CHILD_SESSION i spolka -
+# test je ustawia, atrapa zapisuje, ktore dostala) w tle i w skryptach okien, odmowa uprawnien
+# (permission_denials) = blad na jutro, a nie "czlowiek"; przy "nic" odmowa idzie do dziennika.
 # Sabotaze na kopii (kazdy MUSI zostac zlapany): brak znacznika uznany za "nic", brak zapisu
 # wyniku, okno przy "nic", usuniete ponawianie, rownolegly start, po porazce "w toku" zamiast
-# jutra, powod tylko ze stderr, porownanie katalogu bez normalizacji, "Zrob teraz" bez kolejki.
+# jutra, powod tylko ze stderr, porownanie katalogu bez normalizacji, "Zrob teraz" bez kolejki,
+# tryb "dontAsk", znaczniki sesji w tle / w "Zrob teraz" / w oknie po przebiegu, odmowa uprawnien
+# jako "czlowiek", odmowa przy "nic" w ciszy.
 param(
   [string]$Zrodlo = (Split-Path -Parent $PSScriptRoot)
 )
@@ -50,6 +56,10 @@ $CZEKAJ_NA_PROCESY_S = 60
 $KOLEJKA_TESTU = "Local\MegaRuchacz-Terminy-Claude-TEST-TLA"
 # "Zrob teraz" przy zajetej kolejce: tyle trzyma ja osobny proces; Claude ma ruszyc dopiero potem.
 $MS_TRZYMANIA_KOLEJKI = 4000
+# Znaczniki sesji nadrzednej Claude Code: test je ustawia (jak sesja Claude, z ktorej ktos odpalil
+# terminy.ps1 - 2026-10-12 kierownik), atrapa zapisuje, ktore z nich dostala. Lista niezalezna od
+# kopii w terminy.ps1 - claude startowany przez terminy.ps1 nie moze dostac zadnego z nich.
+$ZNACZNIKI_TESTU = @("CLAUDECODE", "CLAUDE_CODE_CHILD_SESSION", "CLAUDE_CODE_SESSION_ID", "CLAUDE_CODE_SESSION_ATTENDED", "CLAUDE_CODE_MESSAGING_SOCKET")
 
 $script:wyniki = @()
 function Wynik($nazwa, $ok, $opis) {
@@ -68,10 +78,13 @@ const t = Date.now();
 let stdin = "";
 try { stdin = fs.readFileSync(0, "utf8"); } catch (e) { stdin = "BLAD STDIN " + e.message; }
 const nr = (fs.existsSync(log) ? fs.readFileSync(log, "utf8").split("\n").filter(Boolean).length : 0) + 1;
+const znaczniki = (process.env.MR_TEST_ZNACZNIKI || "").split(",").filter((n) => n && process.env[n] !== undefined);
 fs.appendFileSync(log, JSON.stringify({ scen, nr, t, argv: process.argv.slice(2), cwd: process.cwd(),
-  stdin, wTle: process.env.MR_PRZYPOMNIENIE_W_TLE || "" }) + "\n");
-const wynik = (result) => process.stdout.write(JSON.stringify({ type: "result", subtype: "success", is_error: false,
-  result, session_id: "sesja-test-" + scen, permission_denials: [] }));
+  stdin, wTle: process.env.MR_PRZYPOMNIENIE_W_TLE || "", znaczniki }) + "\n");
+const wynik = (result, odmowy = []) => process.stdout.write(JSON.stringify({ type: "result", subtype: "success", is_error: false,
+  result, session_id: "sesja-test-" + scen, permission_denials: odmowy }));
+// Ksztalt pola permission_denials z prawdziwego claude -p 2.1.296 w trybie dontAsk (2026-10-12).
+const odmowa = (tool_name, tool_input = {}) => ({ tool_name, tool_use_id: "toolu_test_" + tool_name, tool_input });
 const nic = () => wynik("WYNIK: NIC_NIE_MUSISZ\n\nSprawdziłem logi, wszystko gra. Zażółć gęślą jaźń.");
 // Dokladnie to, co 2026-10-12 zwrocil prawdziwy claude -p (stdout JSON, stderr pusty, kod 1).
 const oauth = () => { process.stdout.write(JSON.stringify({ type: "result", subtype: "success", is_error: true,
@@ -81,6 +94,10 @@ switch (scen) {
   case "nic": case "ukosniki": nic(); break;
   case "czlowiek": wynik("**WYNIK: POTRZEBUJE_CIEBIE: zatwierdź zmianę ceny P1 na Amazon UK**\n\nCena różni się o 2 £, propozycja w pliku."); break;
   case "brak": wynik("Zrobiłem wszystko, oto raport bez znacznika."); break;
+  // Jak #6 z 2026-10-12: Claude prosi czlowieka o uruchomienie gdzie indziej, bo odmowiono mu narzedzi.
+  case "odmowa": wynik("WYNIK: POTRZEBUJE_CIEBIE: uruchom to przypomnienie jeszcze raz w oknie, w którym Claude może używać terminala\n\nOkno blokowało każde polecenie.",
+    [odmowa("Bash", { command: "echo ok" }), odmowa("mcp__ecommerce-helper__credentials_status"), odmowa("Bash", { command: "echo 2" })]); break;
+  case "odmowa-nic": wynik("WYNIK: NIC_NIE_MUSISZ\n\nRead odrzucony, ale przeczytałem przez PowerShell - wszystko gra.", [odmowa("Read", { file_path: "C:\\x.txt" })]); break;
   case "kod": process.stderr.write("error: unknown option '--zla-flaga'"); process.exitCode = 1; break;
   case "przeciazenie": process.stderr.write("API Error: 529 {\"type\":\"error\",\"error\":{\"type\":\"overloaded_error\",\"message\":\"Overloaded\"}}"); process.exitCode = 1; break;
   case "czas": setTimeout(() => wynik("WYNIK: NIC_NIE_MUSISZ\nza pozno"), 120000); break;
@@ -230,8 +247,9 @@ function Usterki-Wspolne($u, [string]$scen, [int]$wywolan = 1) {
   if ($u.Claude.Count -gt 0) {
     $c = $u.Claude[0]
     $a = " " + ($c.argv -join " ") + " "
-    foreach ($f in @(" -p ", " --output-format json ", " --permission-mode dontAsk ")) { if (-not $a.Contains($f)) { $z += "brak '$($f.Trim())' w argumentach: $a" } }
-    if ($a -match 'dangerously|bypassPermissions') { $z += "uprawnienia poszerzone: $a" }
+    foreach ($f in @(" -p ", " --output-format json ", " --permission-mode auto ")) { if (-not $a.Contains($f)) { $z += "brak '$($f.Trim())' w argumentach: $a" } }
+    if ($a -match 'dangerously|bypassPermissions|dontAsk') { $z += "zly tryb uprawnien: $a" }
+    if (@($c.znaczniki).Count -gt 0) { $z += "claude w tle dostal znaczniki sesji nadrzednej: $(@($c.znaczniki) -join ',')" }
     if ($c.cwd.TrimEnd('\') -ne $projekt) { $z += "katalog '$($c.cwd)' zamiast projektu" }
     foreach ($f in @("WYNIK: NIC_NIE_MUSISZ", "WYNIK: POTRZEBUJE_CIEBIE:", $TRESC, "Niczego nie zmieniaj na produkcji")) { if (-not $c.stdin.Contains($f)) { $z += "polecenie bez '$f'" } }
     if ($c.stdin.Contains($UWAGA_KATALOGU)) { $z += "falszywa uwaga, ze katalogu projektu nie ma" }
@@ -282,6 +300,9 @@ function Usterki-Okna($u, [string]$naglowek, [string]$sesja) {
   [void][System.Management.Automation.Language.Parser]::ParseInput($o.skrypt, [ref]$null, [ref]$bledy)
   if (@($bledy).Count -gt 0) { $z += "skrypt okna sie nie parsuje: $(@($bledy | ForEach-Object { $_.Message }) -join '; ')" }
   if (-not $o.skrypt.Contains("--resume '$sesja'")) { $z += "brak --resume '$sesja'" }
+  # Okno po przebiegu: znaczniki sesji usuniete w skrypcie, zanim ruszy claude (wykonanie sprawdza "zrob-teraz").
+  $iUsun = $o.skrypt.IndexOf('Remove-Item -LiteralPath "Env:\$n"')
+  if ($iUsun -lt 0 -or -not $o.skrypt.Contains("'CLAUDE_CODE_CHILD_SESSION'") -or $iUsun -gt $iClaude) { $z += "skrypt okna nie usuwa znacznikow sesji przed startem claude" }
   if ((Stan-Linii $u.Przypomnienia 1) -ne "~") { $z += "status '$(Stan-Linii $u.Przypomnienia 1)' zamiast w toku" }
   return $z
 }
@@ -373,6 +394,7 @@ function Usterki-Zrob-Teraz($u) {
   $c = @(Linie-Json $logAtrapy)
   if ($c.Count -ne 1) { $z += "skrypt startowy wolal claude $($c.Count) razy (wyjscie: $("$($wy.Result)$($bl.Result)".Trim()))" }
   elseif ([double]$c[0].t -lt $puszczam) { $z += "claude ruszyl $($puszczam - [double]$c[0].t) ms PRZED zwolnieniem kolejki" }
+  if ($c.Count -ge 1 -and @($c[0].znaczniki).Count -gt 0) { $z += "claude z okna dostal znaczniki sesji nadrzednej: $(@($c[0].znaczniki) -join ',')" }
   if ("$($wy.Result)" -notmatch 'Czekam,.*zadanie z przypomnienia') { $z += "skrypt nie powiedzial, ze czeka na kolejke" }
   return $z
 }
@@ -398,6 +420,18 @@ $PRZYPADKI = [ordered]@{
   "brak" = @{ Opis = "brak znacznika = blad bez ponawiania (1 wywolanie), na jutro, okno niepowodzenia"; Ocena = { param($u)
     $z = @(Usterki-Wspolne $u "brak" 1)
     $z += @(Usterki-Niepowodzenia $u @("brak znacznika WYNIK"))
+    $z } }
+  "odmowa" = @{ Opis = "odmowa uprawnien (permission_denials) przy POTRZEBUJE_CIEBIE = blad ustawien: bez ponawiania, na jutro, okno niepowodzenia, bez terminala"; Ocena = { param($u)
+    $z = @(Usterki-Wspolne $u "odmowa" 1)
+    $z += @(Usterki-Niepowodzenia $u @("brak uprawnień w tle", "Bash, mcp__ecommerce-helper__credentials_status (", "tryb uprawnień auto", "bez ponawiania"))
+    if ($u.Json -and "$($u.Json.co_zrobic)") { $z += "co_zrobic '$($u.Json.co_zrobic)' - prosba Claude trafila do czlowieka" }
+    $z } }
+  "odmowa-nic" = @{ Opis = "odmowa uprawnien przy NIC_NIE_MUSISZ: odhaczone bez okna, ale odmowa zapisana w dzienniku (nie w ciszy)"; Ocena = { param($u)
+    $z = @(Usterki-Wspolne $u "odmowa-nic" 1)
+    if ($u.Json -and $u.Json.wynik -ne "nic") { $z += "wynik '$($u.Json.wynik)', powod '$($u.Json.powod)'" }
+    if ((Stan-Linii $u.Przypomnienia 1) -ne "x") { $z += "nie odhaczone: '$(Stan-Linii $u.Przypomnienia 1)'" }
+    if ($u.Okna.Count -ne 0 -or $u.Niep.Count -ne 0) { $z += "otwarte okna: terminal $($u.Okna.Count), niepowodzenia $($u.Niep.Count)" }
+    if ($u.Dziennik -notmatch 'w tle #1: wynik nic.*UWAGI: .*odrzucil narzedzia Read') { $z += "odmowa nie trafila do dziennika" }
     $z } }
   "kod" = @{ Opis = "blad nieprzejsciowy (kod 1, nieznana opcja) = 1 wywolanie, powod ze stderr, na jutro"; Ocena = { param($u)
     $z = @(Usterki-Wspolne $u "kod" 1)
@@ -479,7 +513,11 @@ function Przypadek([string]$kopia, [string]$nazwa) {
 }
 
 # ---------------------------------------------------------------- przebiegi
+$znacznikiPrzed = @{}
+foreach ($n in $ZNACZNIKI_TESTU) { $znacznikiPrzed[$n] = [Environment]::GetEnvironmentVariable($n) }
 try {
+  foreach ($n in $ZNACZNIKI_TESTU) { Set-Item -Path "Env:\$n" -Value "znacznik-testu-$n" }
+  $env:MR_TEST_ZNACZNIKI = $ZNACZNIKI_TESTU -join ","
   $prawdziwa = Kopia "prawdziwa" @()
   foreach ($nazwa in $PRZYPADKI.Keys) {
     $w = Przypadek $prawdziwa $nazwa
@@ -534,7 +572,19 @@ try {
     @{ Nazwa = "katalog porownywany bez normalizacji"; Przypadek = "ukosniki"
        K = 'if ((Sciezka-Do-Porownania $katalog) -ne (Sciezka-Do-Porownania $p.projekt)) {'; Z = 'if ($katalog -ne $p.projekt) {' },
     @{ Nazwa = "'Zrob teraz' bez czekania na kolejke"; Przypadek = "zrob-teraz"
-       K = ') + (Linie-Czekania-Na-Kolejke) + @('; Z = ') + @(' })
+       K = ') + (Linie-Czekania-Na-Kolejke) + @('; Z = ') + @(' },
+    @{ Nazwa = "tryb uprawnien 'dontAsk' zamiast 'auto'"; Przypadek = "nic"
+       K = '$TRYB_UPRAWNIEN_W_TLE = "auto"'; Z = '$TRYB_UPRAWNIEN_W_TLE = "dontAsk"' },
+    @{ Nazwa = "claude w tle ze znacznikami sesji nadrzednej"; Przypadek = "nic"
+       K = 'foreach ($n in $ZNACZNIKI_SESJI_NADRZEDNEJ) { $psi.EnvironmentVariables.Remove($n) }'; Z = '# sabotaz: znaczniki zostaja' },
+    @{ Nazwa = "'Zrob teraz' ze znacznikami sesji nadrzednej"; Przypadek = "zrob-teraz"
+       K = ') + (Linie-Bez-Znacznikow-Sesji) + (Linie-Czekania-Na-Kolejke) + @('; Z = ') + (Linie-Czekania-Na-Kolejke) + @(' },
+    @{ Nazwa = "okno po przebiegu ze znacznikami sesji nadrzednej"; Przypadek = "czlowiek"
+       K = '$linie += @(Linie-Bez-Znacznikow-Sesji)'; Z = '# sabotaz: znaczniki zostaja' },
+    @{ Nazwa = "odmowa uprawnien jako 'czlowiek'"; Przypadek = "odmowa"
+       K = 'if ($odmowy.Count -gt 0) {'; Z = 'if ($false) {' },
+    @{ Nazwa = "odmowa przy 'nic' w ciszy"; Przypadek = "odmowa-nic"
+       K = 'if (($w.Wynik -eq "nic") -and @($w.Odmowy).Count -gt 0) {'; Z = 'if ($false) {' })
   $nr = 0
   foreach ($s in $sabotaze) {
     $nr++
@@ -546,7 +596,8 @@ try {
 } catch {
   Wynik "WYWROTKA TESTU" $false "$($_.Exception.Message) @ $($_.InvocationInfo.PositionMessage)"
 } finally {
-  foreach ($k in @("MR_TEST_SCENARIUSZ", "MR_TEST_ATRAPA_LOG", "MR_TEST_SPROBUJ", "MR_TEST_ZROB_TERAZ")) { Remove-Item "Env:\$k" -ErrorAction SilentlyContinue }
+  foreach ($k in @("MR_TEST_SCENARIUSZ", "MR_TEST_ATRAPA_LOG", "MR_TEST_SPROBUJ", "MR_TEST_ZROB_TERAZ", "MR_TEST_ZNACZNIKI")) { Remove-Item "Env:\$k" -ErrorAction SilentlyContinue }
+  foreach ($n in $ZNACZNIKI_TESTU) { [Environment]::SetEnvironmentVariable($n, $znacznikiPrzed[$n]) }
 }
 
 # Po tescie zaden proces (kopia, proces w tle, atrapa, trzymacz) nie moze zostac.
