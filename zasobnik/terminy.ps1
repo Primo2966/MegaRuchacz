@@ -14,8 +14,13 @@
 #      "WYNIK: POTRZEBUJE_CIEBIE: <co>"; wynik ZAWSZE na trwale w ~\.claude\mr\przypomnienia-wyniki\
 #      <id>.json (umowa z karta Przeglad nadzorcy) i <id>.md (raport do Notatnika).
 #        "nic"      -> odhaczone, zadnego okna,
-#        "czlowiek" -> okno terminala z "claude --resume <sesja>" i naglowkiem "MUSISZ: ...",
-#                      zostaje "w toku",
+#        "czlowiek" -> male okno decyzji (2026-10-12, uzytkownik nad terminalem z raportem: "nie wiem,
+#                      co mam zrobic"): jedno zdanie duza czcionka i gotowe przyciski - odpowiedzi
+#                      z "PYTANIE: <pytanie> | <odp> | <odp>" albo "Zrobione" przy "ZROB: <co>" (stary
+#                      format bez PYTANIE/ZROB = czynnosc). Klik odpowiedzi / "Zrobione" wznawia te
+#                      sama rozmowe w tle (ten skrypt z -Wykonaj <id> -Wznow <plik>: claude -p --resume,
+#                      kolejka i ponowienia jak wyzej), "Odloz na jutro" i krzyzyk = na jutro, terminal
+#                      z "claude --resume" tylko pod przyciskiem "Otworz rozmowe"; do tego czasu "w toku",
 #        "blad"     -> brak znacznika, kod wyjscia, limit czasu, nieczytelny JSON, odmowa uprawnien
 #                      (permission_denials - blad naszych ustawien, nie sprawa dla czlowieka) - nigdy nie
 #                      uchodza za "nic". Blad przejsciowy (logowanie, limit zapytan, przeciazenie,
@@ -36,10 +41,11 @@
 # Uzycie:
 #   powershell -NoProfile -ExecutionPolicy Bypass -File zasobnik\terminy.ps1 [-Zrodlo <repo>]
 #     [-KatalogDomowy <kat>] [-Plik <plik przypomnien>] [-Dzis RRRR-MM-DD] [-Proba] [-BezOkna]
-#     [-Wykonaj <id>] [-LimitSekund <s>] [-PauzaSekund <s>]
+#     [-Wykonaj <id> [-Wznow <plik>]] [-LimitSekund <s>] [-PauzaSekund <s>]
 #   -Proba    nic nie uruchamia, nie zmienia i nie pokazuje - wypisuje, co by zrobil
 #   -BezOkna  tylko samoczynne uruchomienia (punkt 1)
 #   -Wykonaj  proces w tle dla jednego przypomnienia "w toku" (startuje go punkt 1, nie czlowiek)
+#   -Wznow    z -Wykonaj: wznowienie rozmowy po kliknieciu w oknie decyzji (plik JSON od Wznow-W-Tle)
 #   -LimitSekund  limit claude -p zamiast $SEKUND_LIMITU_W_TLE (testy)
 #   -PauzaSekund  przerwa miedzy probami zamiast $SEKUND_MIEDZY_PROBAMI (testy)
 # Kod wyjscia: 0 ok (takze "nic do zrobienia"), 1 blad (opis w dzienniku i na stderr).
@@ -55,6 +61,7 @@ param(
   [switch]$Proba,
   [switch]$BezOkna,
   [int]$Wykonaj = 0,
+  [string]$Wznow = "",
   [int]$LimitSekund = 0,
   [int]$PauzaSekund = 0
 )
@@ -147,6 +154,13 @@ $MS_MIEDZY_PROBAMI_SCHOWKA = 100
 # wysokosc mierzymy przy szerokosci mniejszej o ten zapas - wezsze zawijanie daje najwyzej
 # o linie za duzo, nigdy za malo (za malo = tekst uciety).
 $ZAPAS_SZEROKOSCI_POLA = 10
+# Okno decyzji: szerokosc tresci (jak makieta zatwierdzona 2026-10-12 - wezsze niz okno
+# przypomnien, bo to jedno zdanie), wielkosc zdania i przyciskow odpowiedzi w punktach.
+$SZEROKOSC_DECYZJI = 600
+$PUNKTOW_ZDANIA_DECYZJI = 14
+$PUNKTOW_ODPOWIEDZI = 11
+# Szczegoly w oknie decyzji: wyzszy raport dostaje pasek przewijania zamiast rozpychac okno.
+$MAX_WYS_SZCZEGOLOW = 280
 
 function Bez-Bom { return (New-Object System.Text.UTF8Encoding($false)) }
 
@@ -264,11 +278,21 @@ function Polecenie-Dla-Claude($p, [string]$katalog, [bool]$wTle = $false) {
             "Niczego nie zmieniaj na produkcji ani w sklepach bez wyraźnego polecenia użytkownika — przygotuj propozycję. ")
   if (-not $wTle) { return ($wstep + "Na koniec krótki raport po polsku i odhacz przypomnienie: node '$skrypt' zrobione $($p.id)") }
   return ($wstep +
-          "Robisz to w tle, bez użytkownika przy komputerze: wykonaj zadanie sam, w tej jednej odpowiedzi — nie rozdawaj go workerom w tle, nie zadawaj pytań i nie kończ przed wynikiem. " +
-          "Nie odhaczaj teraz przypomnienia — przy wyniku NIC_NIE_MUSISZ MegaRuchacz zrobi to sam. " +
-          "Twoja ostatnia odpowiedź MUSI zaczynać się dokładnie jedną z dwóch linii, bez niczego przed nią (także gdy inne komunikaty każą zacząć od czegoś innego): " +
+          "Robisz to w tle, bez użytkownika przy komputerze: wykonaj zadanie sam, w tej jednej odpowiedzi — nie rozdawaj go workerom w tle, nie zadawaj pytań po drodze (jedyne pytanie do użytkownika może stać w linii WYNIK) i nie kończ przed wynikiem. " +
+          (Umowa-Wyniku $p))
+}
+
+# Umowa o linii WYNIK dla przebiegu w tle - w pierwszym poleceniu i w kazdym wznowieniu po
+# decyzji z okna (rozmowa wznowiona w tle tez musi skonczyc sie linia, ktora czyta Ocen-Przebieg).
+# PYTANIE / ZROB czyta Rozbierz-Prosbe; z nich powstaje okno decyzji (decyzja uzytkownika 2026-10-12).
+function Umowa-Wyniku($p) {
+  $skrypt = $SkryptTerminow.Replace('\', '/')
+  return ("Nie odhaczaj teraz przypomnienia — przy wyniku NIC_NIE_MUSISZ MegaRuchacz zrobi to sam. " +
+          "Twoja ostatnia odpowiedź MUSI zaczynać się dokładnie jedną z trzech linii, bez niczego przed nią (także gdy inne komunikaty każą zacząć od czegoś innego): " +
           "'WYNIK: NIC_NIE_MUSISZ' — zadanie załatwione, użytkownik nie musi nic robić; " +
-          "'WYNIK: POTRZEBUJE_CIEBIE: <jednym zdaniem, co użytkownik ma zrobić>' — potrzebna jego decyzja, zgoda na zmianę albo kliknięcie, albo czegoś nie dało się zrobić. " +
+          "'WYNIK: POTRZEBUJE_CIEBIE: PYTANIE: <pytanie> | <odpowiedź 1> | <odpowiedź 2>' — potrzebna decyzja albo zgoda użytkownika: jedno pytanie, które zrozumie ktoś, kto nie jest programistą (bez żargonu, nazw plików i poleceń), a po nim od 2 do 4 krótkich odpowiedzi rozdzielonych znakiem |; każda odpowiedź to gotowa decyzja do kliknięcia (np. 'Tak, zmień cenę' | 'Nie, zostaw'), nigdy 'inne' ani 'coś innego'; " +
+          "'WYNIK: POTRZEBUJE_CIEBIE: ZROB: <co i gdzie, jednym zdaniem>' — użytkownik musi coś zrobić sam (np. kliknąć w Seller Central) albo czegoś nie dało się zrobić; zdanie proste, bez żargonu. " +
+          "Linię WYNIK użytkownik zobaczy w małym okienku z przyciskami, a jego wybór wróci do tej rozmowy. " +
           "Gdy Claude Code odmówi ci narzędzia z braku uprawnień, nie każ użytkownikowi uruchamiać zadania gdzie indziej — to błąd ustawień MegaRuchacza, który sam go zgłosi; napisz w raporcie wprost 'ODMOWA UPRAWNIEŃ: <narzędzie> — <po co było potrzebne>'. " +
           "Pod tą linią krótki raport po polsku: co sprawdziłeś, co wyszło, czego nie sprawdzono. " +
           "Gdy później dokończycie sprawę z użytkownikiem w tej rozmowie, odhacz: node '$skrypt' zrobione $($p.id)")
@@ -356,10 +380,11 @@ function Uruchom-Claude($p, [string]$jak) {
 
 # Osobny proces bez okna (ten skrypt z -Wykonaj <id>) - glowny przebieg nie czeka na Claude,
 # wiec zamek startu trwa sekundy; Claude po kolei pilnuje kolejka w procesie. Zwraca opis albo rzuca.
-function Odpal-W-Tle($p) {
+function Odpal-W-Tle($p, [string]$wznow = "") {
   $arg = @("-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-WindowStyle", "Hidden",
            "-File", ('"' + $PSCommandPath + '"'), "-Wykonaj", "$($p.id)",
            "-Zrodlo", ('"' + $Zrodlo + '"'), "-KatalogDomowy", ('"' + $KatalogDomowy.TrimEnd('\') + '"'), "-Plik", ('"' + $Plik + '"'))
+  if ($wznow) { $arg += @("-Wznow", ('"' + $wznow + '"')) }
   if ($Dzis) { $arg += @("-Dzis", $Dzis) }
   if ($LimitSekund -gt 0) { $arg += @("-LimitSekund", "$LimitSekund") }
   if ($PauzaSekund -gt 0) { $arg += @("-PauzaSekund", "$PauzaSekund") }
@@ -398,11 +423,13 @@ function Ubij-Drzewo([int]$procId) {
 # polecen; bajty UTF-8 wprost do strumienia, bo .NET Framework nie ma kodowania stdin).
 # MR_PRZYPOMNIENIE_W_TLE wycisza hook "terminy.js start" - inne zalegle przypomnienia nie
 # maja odciagac Claude od znacznika WYNIK w pierwszej linii.
-function Claude-W-Tle([string]$claude, [string]$kat, [string]$polecenie, [int]$id) {
+# $sesja: wznowienie tej rozmowy (--resume) po decyzji z okna; identyfikator sprawdza Wykonaj-W-Tle.
+function Claude-W-Tle([string]$claude, [string]$kat, [string]$polecenie, [int]$id, [string]$sesja = "") {
   $r = [pscustomobject]@{ Kod = $null; Wyjscie = ""; Bledy = ""; Limit = $false; Uwagi = @() }
   $psi = New-Object System.Diagnostics.ProcessStartInfo
   $psi.FileName = $claude
   $psi.Arguments = "-p --output-format json --permission-mode $TRYB_UPRAWNIEN_W_TLE"
+  if ($sesja) { $psi.Arguments = "-p --resume $sesja --output-format json --permission-mode $TRYB_UPRAWNIEN_W_TLE" }
   $psi.WorkingDirectory = $kat
   $psi.UseShellExecute = $false
   $psi.CreateNoWindow = $true
@@ -453,6 +480,23 @@ function Powod-Bledu($w, [string]$co, [string]$tresc, [string]$doOceny) {
   $w.Powod = $szczegoly
 }
 
+# Prosba do czlowieka z linii "WYNIK: POTRZEBUJE_CIEBIE: <reszta>" (umowa w Umowa-Wyniku):
+#   "PYTANIE: <pytanie> | <odpowiedz> | ..." -> pytanie z odpowiedziami do klikniecia (puste pomijane,
+#                                              zadna nie jest ucinana ani obcinana do 4),
+#   "ZROB: <co>" (tez "ZRÓB")                -> czynnosc,
+#   cokolwiek innego (stary format) albo PYTANIE bez ani jednej odpowiedzi -> czynnosc z tym tekstem.
+function Rozbierz-Prosbe([string]$reszta) {
+  $r = [pscustomobject]@{ Rodzaj = "czynnosc"; Tekst = "$reszta".Trim(); Opcje = @() }
+  if ($r.Tekst -match '^PYTANIE\s*:\s*(.*)$') {
+    $czesci = @($matches[1] -split '\|' | ForEach-Object { $_.Trim() })
+    $pytanie = $czesci[0]
+    $opcje = @($czesci | Select-Object -Skip 1 | Where-Object { $_ })
+    if ($pytanie -and $opcje.Count -gt 0) { $r.Rodzaj = "pytanie"; $r.Tekst = $pytanie; $r.Opcje = $opcje }
+    elseif ($pytanie) { $r.Tekst = $pytanie }
+  } elseif ($r.Tekst -match '^ZR[OÓ]B\s*:\s*(\S.*)$') { $r.Tekst = $matches[1].Trim() }
+  return $r
+}
+
 # Wynik przebiegu. Domyslnie "blad" - "nic" tylko przy czystym przebiegu ze znacznikiem
 # NIC_NIE_MUSISZ w pierwszej linii odpowiedzi. Kazda inna sytuacja konczy sie oknem.
 # Przejsciowy = blad, ktory mija sam (Wykonaj-W-Tle ponawia); brak znacznika, nieznany
@@ -496,7 +540,13 @@ function Ocen-Przebieg($r) {
   $w | Add-Member -NotePropertyName Odmowy -NotePropertyValue $odmowy -Force
   if ($linia -match '^WYNIK:\s*NIC_NIE_MUSISZ$') { $w.Wynik = "nic"; return $w }
   if ($odmowy.Count -gt 0) { $w.Powod = "brak uprawnień w tle: Claude Code odrzucił narzędzia $($odmowy -join ', ') (tryb uprawnień $TRYB_UPRAWNIEN_W_TLE) - błąd ustawień MegaRuchacza, nie zadanie dla ciebie"; return $w }
-  if ($linia -match '^WYNIK:\s*POTRZEBUJE_CIEBIE:\s*(\S.*)$') { $w.Wynik = "czlowiek"; $w.CoZrobic = $matches[1].Trim(); return $w }
+  if ($linia -match '^WYNIK:\s*POTRZEBUJE_CIEBIE:\s*(\S.*)$') {
+    $prosba = Rozbierz-Prosbe $matches[1]
+    $w.Wynik = "czlowiek"; $w.CoZrobic = $prosba.Tekst
+    $w | Add-Member -NotePropertyName Rodzaj -NotePropertyValue $prosba.Rodzaj -Force
+    $w | Add-Member -NotePropertyName Opcje -NotePropertyValue @($prosba.Opcje) -Force
+    return $w
+  }
   if ($linia -match '^WYNIK:') { $w.Powod = "nieznany znacznik w pierwszej linii odpowiedzi: $linia"; return $w }
   $w.Powod = "brak znacznika WYNIK w pierwszej linii odpowiedzi"
   return $w
@@ -516,7 +566,7 @@ function Zapisz-Wynik($p, [string]$kat, [datetime]$start, [datetime]$koniec, $w)
   $md = Join-Path $KatWynikow "$($p.id).md"
   $naglowek = switch ($w.Wynik) {
     "nic"      { "Nic nie musisz robić." }
-    "czlowiek" { "MUSISZ: $($w.CoZrobic)" }
+    "czlowiek" { if ($w.Rodzaj -eq "pytanie") { "PYTANIE: $($w.CoZrobic) (do wyboru: $(@($w.Opcje) -join ' / '))" } else { "MUSISZ: $($w.CoZrobic)" } }
     default    { "NIE UDAŁO SIĘ: $($w.Powod)" }
   }
   $tekstMd = (@("# Przypomnienie #$($p.id): $($p.tresc)", "", $naglowek, "",
@@ -529,9 +579,11 @@ function Zapisz-Wynik($p, [string]$kat, [datetime]$start, [datetime]$koniec, $w)
 
 # Okno dla czlowieka po przebiegu w tle: naglowek "MUSISZ: ..." albo "NIE UDALO SIE: ...",
 # pod nim ta sama rozmowa (claude --resume), a bez sesji - nowa z tym samym zadaniem.
-# Od 2026-10-12 wolane tylko przy "czlowiek" - "blad" dostaje Okno-Niepowodzenia (bez terminala).
+# Od 2026-10-12 wolane tylko przy "czlowiek" - "blad" dostaje Okno-Niepowodzenia (bez terminala),
+# a od okna decyzji (tez 2026-10-12) tylko przyciskiem "Otworz rozmowe" w nim (Wybor-Decyzji).
 function Okno-Po-Przebiegu($p, [string]$kat, [string]$claude, $w, [string]$sciezkaMd) {
   if ($w.Wynik -eq "czlowiek") { $glowa = "MUSISZ: $($w.CoZrobic)"; $kolor = "Yellow" }
+  if ($w.Rodzaj -eq "pytanie") { $glowa = "DECYZJA: $($w.CoZrobic)" }
   else { $glowa = "NIE UDAŁO SIĘ: $($w.Powod)"; $kolor = "Red" }
   $start = Join-Path $KatUruchomien "zrob-$($p.id).ps1"
   $linie = @(
@@ -613,6 +665,52 @@ function Okno-Niepowodzenia($p, $w, [bool]$przeniesione, [string]$bladPrzesuniec
   Okno-Przypomnien @($poz) "niepowodzenie"
 }
 
+# Okno po wyniku "czlowiek" (decyzja uzytkownika 2026-10-12, zamiast terminala z claude --resume):
+# jedno zdanie duza czcionka, odpowiedzi do klikniecia (PYTANIE) albo "Zrobione" (ZROB), "Odloz na
+# jutro", "Otworz rozmowe" i zwiniete "Szczegoly" z raportem Claude. Czeka na czlowieka (modalne);
+# co kazdy przycisk robi - Wybor-Decyzji. Wszystko, czego potrzebuja przyciski, jedzie w kopii pozycji.
+function Okno-Decyzji($p, $w, [string]$kat, [string]$claude, [string]$sciezkaMd) {
+  $poz = $p | Select-Object *
+  $dane = [ordered]@{ rodzaj = "$($w.Rodzaj)"; zdanie = "$($w.CoZrobic)"; opcje = @($w.Opcje | Where-Object { $_ }); sesja = "$($w.Sesja)"
+                      raport = "$($w.Raport)"; katalog = $kat; claude = $claude; md = $sciezkaMd; wynikPrzebiegu = $w; przeniesione = $false }
+  if ($dane.rodzaj -ne "pytanie" -or $dane.opcje.Count -eq 0) { $dane.rodzaj = "czynnosc" }
+  foreach ($k in $dane.Keys) { $poz | Add-Member -NotePropertyName $k -NotePropertyValue $dane[$k] -Force }
+  Okno-Przypomnien @($poz) "decyzja"
+}
+
+# Odpowiedz z okna decyzji wraca do tej samej rozmowy: plik ~\.claude\mr\terminy\wznow-<id>.json
+# (zostaje jako slad, co wyslano) i proces w tle -Wykonaj <id> -Wznow <plik> - ta sama droga co
+# samoczynny przebieg (kolejka, ponowienia, ocena, zapis wyniku, okna). Okno nie czeka na Claude.
+function Wznow-W-Tle($p, [string]$wiadomosc, [string]$kto) {
+  $plikWz = Join-Path $KatUruchomien "wznow-$($p.id).json"
+  if (-not (Test-Path -LiteralPath $KatUruchomien)) { New-Item -ItemType Directory -Force -Path $KatUruchomien | Out-Null }
+  $dane = [ordered]@{ id = [int]$p.id; sesja = "$($p.sesja)"; wiadomosc = $wiadomosc; prosba = "$($p.zdanie)"; czas = (Get-Date -Format "yyyy-MM-ddTHH:mm:sszzz") }
+  [System.IO.File]::WriteAllText($plikWz, ($dane | ConvertTo-Json) + "`r`n", (Bez-Bom))
+  $jak = Odpal-W-Tle $p $plikWz
+  Dopisz-Dziennik "$kto #$($p.id): wznawiam rozmowe '$($p.sesja)' w tle z wiadomoscia '$wiadomosc' - $jak"
+  return $true
+}
+
+# Przyciski okna decyzji (bez "Odloz na jutro" - to zwykle "odloz" w Klik). Zwraca $true, gdy
+# sie udalo; porazka statusu zostaje w $script:OstatniBladStatusu, inna - wyjatek.
+#   opcja    -> "Uzytkownik wybral: <opcja>. Kontynuuj zadanie." do rozmowy w tle,
+#   zrobilem -> "Uzytkownik zrobil: <czynnosc>. Sprawdz i dokoncz zadanie." - nie odhacza, Claude sprawdza,
+#   rozmowa  -> terminal z claude --resume (Okno-Po-Przebiegu), sprawa zostaje "w toku",
+#   krzyzyk  -> na jutro.
+function Wybor-Decyzji($p, [string]$akcja, [string]$opcja) {
+  switch ($akcja) {
+    "opcja"    { return (Wznow-W-Tle $p ("Użytkownik wybrał: " + "$opcja".Trim().TrimEnd('.') + ". Kontynuuj zadanie.") "przycisk '$opcja'") }
+    "zrobilem" { return (Wznow-W-Tle $p ("Użytkownik zrobił: " + "$($p.zdanie)".Trim().TrimEnd('.') + ". Sprawdź i dokończ zadanie.") "przycisk Zrobione") }
+    "rozmowa" {
+      $jak = Okno-Po-Przebiegu $p $p.katalog $p.claude $p.wynikPrzebiegu $p.md
+      Dopisz-Dziennik "przycisk Otworz rozmowe #$($p.id): $jak (zostaje w toku)"
+      return $true
+    }
+    "krzyzyk"  { return (Zmien-Status "przesun" @("$($p.id)", "jutro") "okno decyzji #$($p.id) zamkniete krzyzykiem - na jutro") }
+  }
+  throw "nieznany przycisk okna decyzji: '$akcja'"
+}
+
 # Proces w tle (-Wykonaj): jedno przypomnienie "w toku" od poczatku do konca. Claude tylko po
 # zajeciu kolejki, blad przejsciowy ponawiany. Wynik zapisany zawsze, status i okno zgodne
 # z wynikiem, jedna linia podsumowania w dzienniku (przed oknem niepowodzenia, ktore czeka).
@@ -635,6 +733,25 @@ function Wykonaj-W-Tle([int]$id) {
   $uwagi = @()
   $nrProby = 0
   $w = $null
+  # Wznowienie po decyzji z okna (-Wznow): wiadomosc z pliku do tej samej rozmowy; bez sesji (Claude
+  # jej nie podal) - nowa rozmowa z calym zadaniem i tym, o co pytal i co uslyszal.
+  $sesjaWznowienia = ""
+  $polecenie = ""
+  if ($Wznow) {
+    try {
+      $wz = [System.IO.File]::ReadAllText($Wznow, [System.Text.Encoding]::UTF8) | ConvertFrom-Json
+      if ("$($wz.id)" -ne "$id") { throw "plik dotyczy przypomnienia #$($wz.id), nie #$id" }
+      if (-not "$($wz.wiadomosc)".Trim()) { throw "brak wiadomosci dla Claude" }
+      $sesjaWznowienia = "$($wz.sesja)".Trim()
+      if ($sesjaWznowienia -and $sesjaWznowienia -notmatch '^[A-Za-z0-9_-]+$') { throw "dziwny identyfikator rozmowy '$sesjaWznowienia'" }
+      if ($sesjaWznowienia) { $polecenie = "$($wz.wiadomosc) " + (Umowa-Wyniku $p) }
+      else { $polecenie = (Polecenie-Dla-Claude $p $kat $true) + " Wcześniej, w rozmowie, której nie da się wznowić, poprosiłeś użytkownika: '$($wz.prosba)'. $($wz.wiadomosc)" }
+      Dopisz-Dziennik "w tle #${id}: wznowienie po decyzji z okna, rozmowa '$sesjaWznowienia': $($wz.wiadomosc)"
+    } catch {
+      $w = [pscustomobject]@{ Wynik = "blad"; CoZrobic = ""; Raport = ""; Sesja = ""; Przejsciowy = $false
+                              Powod = "nie odczytałem wyboru z okna decyzji ($Wznow): $($_.Exception.Message)" }
+    }
+  } else { $polecenie = Polecenie-Dla-Claude $p $kat $true }
   $kolejka = $null
   try { $kolejka = Zajmij-Kolejke "w tle #$id" }
   catch { $w = [pscustomobject]@{ Wynik = "blad"; CoZrobic = ""; Raport = ""; Sesja = ""; Przejsciowy = $false; Powod = "$($_.Exception.Message)" } }
@@ -648,7 +765,7 @@ function Wykonaj-W-Tle([int]$id) {
       while ($true) {
         $nrProby++
         try {
-          $przebieg = Claude-W-Tle $claude $kat (Polecenie-Dla-Claude $p $kat $true) $id
+          $przebieg = Claude-W-Tle $claude $kat $polecenie $id $sesjaWznowienia
           $uwagi += @($przebieg.Uwagi | ForEach-Object { "proba ${nrProby}: $_" })
           $w = Ocen-Przebieg $przebieg
         } catch {
@@ -688,22 +805,33 @@ function Wykonaj-W-Tle([int]$id) {
   }
   $okno = "bez okna"
   $pokazNiepowodzenie = $false
+  $pokazDecyzje = $false
   if ($w.Wynik -ne "nic") {
-    if ($w.Wynik -eq "czlowiek") {
-      try { $okno = "okno: " + (Okno-Po-Przebiegu $p $kat $claude $w (Join-Path $KatWynikow "$id.md")) }
-      catch { $okno = "NIE OTWORZYLEM okna: $($_.Exception.Message)"; $script:BladOkna = $true }
-    } else { $okno = "okno niepowodzenia (Sprobuj teraz / Odloz na jutro)"; $pokazNiepowodzenie = $true }
+    if ($w.Wynik -eq "czlowiek") { $okno = "okno decyzji ($($w.Rodzaj))"; $pokazDecyzje = $true }
+    else { $okno = "okno niepowodzenia (Sprobuj teraz / Odloz na jutro)"; $pokazNiepowodzenie = $true }
   }
   $opis = $w.Wynik
-  if ($w.Wynik -eq "czlowiek") { $opis += " (co: $($w.CoZrobic))" }
+  if ($w.Wynik -eq "czlowiek") {
+    if ($w.Rodzaj -eq "pytanie") { $opis += " (pytanie: $($w.CoZrobic) | $(@($w.Opcje) -join ' | '))" } else { $opis += " (co: $($w.CoZrobic))" }
+  }
   if ($w.Wynik -eq "blad") { $opis += " (powod: $($w.Powod))" }
   $czas = [int]($koniec - $start).TotalSeconds
   $dopisek = ""; if ($uwagi.Count -gt 0) { $dopisek = "; UWAGI: " + ($uwagi -join "; ") }
   Dopisz-Dziennik ("w tle #${id}: wynik $opis; ${czas} s, sesja '$($w.Sesja)'; $status; wynik w '$sciezka'; $okno$dopisek" -replace "\r?\n", " ")
+  $md = ""; if ($sciezka) { $md = Join-Path $KatWynikow "$id.md" }
   if ($pokazNiepowodzenie) {
-    $md = ""; if ($sciezka) { $md = Join-Path $KatWynikow "$id.md" }
     try { Okno-Niepowodzenia $p $w $przeniesione $bladPrzesuniecia $md $jutro }
     catch { Dopisz-Dziennik "w tle #${id}: NIE POKAZALEM okna niepowodzenia: $($_.Exception.Message)"; $script:BladOkna = $true }
+  }
+  if ($pokazDecyzje) {
+    try { Okno-Decyzji $p $w $kat $claude $md }
+    catch {
+      # Bez okna decyzji czlowiek nie moze zostac bez niczego - zostaje dawny terminal z rozmowa.
+      Dopisz-Dziennik "w tle #${id}: NIE POKAZALEM okna decyzji: $($_.Exception.Message) - otwieram rozmowe w terminalu"
+      $script:BladOkna = $true
+      try { Dopisz-Dziennik ("w tle #${id}: " + (Okno-Po-Przebiegu $p $kat $claude $w $md)) }
+      catch { Dopisz-Dziennik "w tle #${id}: NIE OTWORZYLEM tez terminala: $($_.Exception.Message)" }
+    }
   }
 }
 
@@ -776,8 +904,152 @@ function Kopiuj-Przypomnienie($btn) {
   $z.Start()
 }
 
+# Przycisk okna decyzji. Tekst odpowiedzi pisze Claude - za dlugi na jeden wiersz zawija sie
+# w przycisku o pelnej szerokosci, ktory rosnie w dol (nic nie jest ucinane). Ramka przycisku =
+# roznica miedzy jego naturalnym rozmiarem a samym tekstem. "&" w tekscie to zwykly znak.
+function Przycisk-Decyzji([string]$tekst, $tag, $czcionka, [int]$maxSzer) {
+  $b = New-Object System.Windows.Forms.Button
+  $b.Font = $czcionka
+  $b.UseMnemonic = $false
+  $b.Text = $tekst
+  $b.AccessibleName = "$tekst #$($tag.Poz.id)"
+  $b.AutoSize = $true
+  $b.Padding = New-Object System.Windows.Forms.Padding(8, 2, 8, 2)
+  $b.Tag = $tag
+  $b.Add_Click({ Klik $this.Tag })
+  $szer = $maxSzer - $b.Margin.Horizontal
+  $nat = $b.PreferredSize
+  if ($nat.Width -gt $szer) {
+    $jeden = [System.Windows.Forms.TextRenderer]::MeasureText($tekst, $czcionka, [System.Drawing.Size]::Empty, [System.Windows.Forms.TextFormatFlags]"NoPrefix")
+    $flagi = [System.Windows.Forms.TextFormatFlags]"WordBreak, NoPrefix"
+    $ile = New-Object System.Drawing.Size(($szer - ($nat.Width - $jeden.Width)), [int]::MaxValue)
+    $b.AutoSize = $false
+    $b.Size = New-Object System.Drawing.Size($szer, ([System.Windows.Forms.TextRenderer]::MeasureText($tekst, $czcionka, $ile, $flagi).Height + $nat.Height - $jeden.Height))
+  }
+  return $b
+}
+
+function Rzad-Przyciskow([int]$szer) {
+  $r = New-Object System.Windows.Forms.FlowLayoutPanel
+  $r.FlowDirection = "LeftToRight"
+  $r.WrapContents = $true
+  $r.AutoSize = $true
+  $r.MaximumSize = New-Object System.Drawing.Size($szer, 0)
+  $r.Margin = New-Object System.Windows.Forms.Padding(0)
+  return $r
+}
+
+# Wysokosc okna decyzji = tresc (zdanie, przyciski, ewentualnie szczegoly), najwyzej ekran - wtedy
+# przewijanie zamiast uciecia. Rozwiniete szczegoly nie moga wypchnac okna pod dolna krawedz ekranu.
+function Dopasuj-Okno-Decyzji($f, $lista) {
+  $lista.PerformLayout()
+  $pref = $lista.GetPreferredSize((New-Object System.Drawing.Size($lista.ClientSize.Width, 0)))
+  $ekran = [System.Windows.Forms.Screen]::FromControl($f).WorkingArea
+  $max = $ekran.Height - ($f.Height - $f.ClientSize.Height) - 20
+  $szer = $pref.Width
+  if ($pref.Height -gt $max) { $szer += [System.Windows.Forms.SystemInformation]::VerticalScrollBarWidth }
+  $f.ClientSize = New-Object System.Drawing.Size($szer, [Math]::Min($pref.Height, $max))
+  if ($f.Visible -and $f.Bottom -gt $ekran.Bottom) { $f.Top = [Math]::Max($ekran.Top, $ekran.Bottom - $f.Height) }
+}
+
+# "Szczegoly" w oknie decyzji: pokazuje / chowa raport Claude.
+function Przelacz-Szczegoly($btn) {
+  $t = $btn.Tag
+  $t.Otwarte = -not $t.Otwarte
+  $t.Panel.Visible = $t.Otwarte
+  if ($t.Otwarte) { $btn.Text = "Szczegóły ▾" } else { $btn.Text = "Szczegóły ▸" }
+  Dopisz-Dziennik "przycisk Szczegoly #$($t.Poz.id): $(if ($t.Otwarte) { 'rozwiniete' } else { 'zwiniete' })"
+  Dopasuj-Okno-Decyzji $t.Okno $t.Lista
+}
+
+# Zawartosc okna decyzji (Okno-Przypomnien "decyzja", makieta zatwierdzona 2026-10-12): zdanie duza
+# czcionka, rzad odpowiedzi (PYTANIE), rzad "Zrobione" (tylko ZROB) / "Odloz na jutro" / "Otworz
+# rozmowe" / "Szczegoly", pod nim schowany raport Claude z "Kopiuj". Napisy w polach tylko do odczytu.
+function Uloz-Decyzje($f, $lista, $p) {
+  $szer = $SZEROKOSC_DECYZJI
+  $karta = New-Object System.Windows.Forms.FlowLayoutPanel
+  $karta.FlowDirection = "TopDown"
+  $karta.WrapContents = $false
+  $karta.AutoSize = $true
+  $karta.Margin = New-Object System.Windows.Forms.Padding(0)
+
+  $duza = New-Object System.Drawing.Font("Segoe UI", $PUNKTOW_ZDANIA_DECYZJI)
+  $zdanie = Pole-Tekstowe $p.zdanie $szer $duza $f.ForeColor $f.BackColor
+  $zdanie.Margin = New-Object System.Windows.Forms.Padding(3, 0, 3, 14)
+  $karta.Controls.Add($zdanie)
+
+  $akcje = @()
+  if ($p.rodzaj -eq "pytanie") {
+    $odp = Rzad-Przyciskow $szer
+    $odp.Margin = New-Object System.Windows.Forms.Padding(0, 0, 0, 10)
+    $wieksza = New-Object System.Drawing.Font("Segoe UI", $PUNKTOW_ODPOWIEDZI)
+    foreach ($o in @($p.opcje)) { $odp.Controls.Add((Przycisk-Decyzji $o @{ Akcja = "opcja"; Opcja = $o; Poz = $p; Karta = $karta } $wieksza $szer)) }
+    $karta.Controls.Add($odp)
+  } else { $akcje += , @("Zrobione", "zrobilem") }
+  $akcje += , @("Odłóż na jutro", "odloz")
+  $akcje += , @("Otwórz rozmowę", "rozmowa")
+  $dol = Rzad-Przyciskow $szer
+  foreach ($a in $akcje) { $dol.Controls.Add((Przycisk-Decyzji $a[0] @{ Akcja = $a[1]; Poz = $p; Karta = $karta } $f.Font $szer)) }
+
+  $szcz = New-Object System.Windows.Forms.Button
+  $szcz.FlatStyle = "Flat"
+  $szcz.FlatAppearance.BorderSize = 0
+  $szcz.ForeColor = [System.Drawing.Color]::FromArgb(0, 84, 166)
+  $szcz.AutoSize = $true
+  $szcz.Padding = New-Object System.Windows.Forms.Padding(8, 2, 8, 2)
+  $szcz.Text = "Szczegóły ▸"
+  $szcz.AccessibleName = "Szczegóły #$($p.id)"
+  $dol.Controls.Add($szcz)
+  $karta.Controls.Add($dol)
+
+  $panel = New-Object System.Windows.Forms.FlowLayoutPanel
+  $panel.FlowDirection = "TopDown"
+  $panel.WrapContents = $false
+  $panel.AutoSize = $true
+  $panel.Margin = New-Object System.Windows.Forms.Padding(0, 10, 0, 0)
+  $panel.Visible = $false
+  $tekstSzcz = ("Przypomnienie #$($p.id): $($p.tresc)`r`n" + $(if ($p.md) { "Pełny raport: $($p.md)`r`n" } else { "" }) +
+                "`r`n" + ("$($p.raport)".Trim() -replace "\r?\n", "`r`n"))
+  $raport = Pole-Tekstowe $tekstSzcz $szer $f.Font $f.ForeColor ([System.Drawing.Color]::FromArgb(246, 246, 246))
+  if ($raport.Height -gt $MAX_WYS_SZCZEGOLOW) { $raport.Height = $MAX_WYS_SZCZEGOLOW; $raport.ScrollBars = "Vertical" }
+  $panel.Controls.Add($raport)
+  $kop = New-Object System.Windows.Forms.Button
+  $kop.AutoSize = $true
+  $kop.Padding = New-Object System.Windows.Forms.Padding(8, 2, 8, 2)
+  $kop.Text = "Nie skopiowano"   # najdluzszy napis - przycisk nie skacze przy zmianie
+  $kop.MinimumSize = New-Object System.Drawing.Size($kop.PreferredSize.Width, 0)
+  $kop.Text = "Kopiuj"
+  $kop.AccessibleName = "Kopiuj #$($p.id)"
+  $kop.Margin = New-Object System.Windows.Forms.Padding(3, 6, 3, 0)
+  $kop.Tag = @{ Poz = $p; Tekst = $tekstSzcz; Zegar = $null }
+  $kop.Add_Click({ Kopiuj-Przypomnienie $this })
+  $panel.Controls.Add($kop)
+  $karta.Controls.Add($panel)
+
+  $szcz.Tag = @{ Akcja = "szczegoly"; Panel = $panel; Otwarte = $false; Okno = $f; Lista = $lista; Poz = $p }
+  $szcz.Add_Click({ Przelacz-Szczegoly $this })
+  $lista.Controls.Add($karta)
+  Dopasuj-Okno-Decyzji $f $lista
+}
+
+# Ostrzezenie dla czlowieka, gdy przycisk nie zadzialal (jedno miejsce - testy podmieniaja je na zapis).
+function Pokaz-Blad([string]$tekst) {
+  [void][System.Windows.Forms.MessageBox]::Show($script:Okno, $tekst, "MegaRuchacz", "OK", "Warning")
+}
+
+# Krzyzyk w oknie decyzji = na jutro. Porazka nie moze przejsc w ciszy: dziennik (Zmien-Status) i ostrzezenie.
+function Zamknij-Decyzje-Krzyzykiem {
+  $p = $script:PozycjaDecyzji
+  $script:OstatniBladStatusu = ""
+  $ok = $false
+  try { $ok = Wybor-Decyzji $p "krzyzyk" "" }
+  catch { $script:OstatniBladStatusu = $_.Exception.Message; Dopisz-Dziennik "okno decyzji #$($p.id) zamkniete krzyzykiem - WYWROTKA: $($_.Exception.Message)" }
+  if (-not $ok) { Pokaz-Blad "Nie udało się przenieść przypomnienia #$($p.id) na jutro: $($script:OstatniBladStatusu)`r`nZostaje w toku - jutro wróci w oknie przypomnień.`r`n`r`nSzczegóły: $Dziennik" }
+}
+
 # $rodzaj "niepowodzenie" (Okno-Niepowodzenia): ten sam wyglad, inny wstep, przyciski "Sprobuj
 # teraz" / "Odloz na jutro", a krzyzyk nic nie odklada - sprawa juz jest na jutro.
+# $rodzaj "decyzja" (Okno-Decyzji): jedna pozycja, zawartosc z Uloz-Decyzje, krzyzyk = na jutro.
 function Okno-Przypomnien($pozycje, [string]$rodzaj = "") {
   Add-Type -AssemblyName System.Windows.Forms
   Add-Type -AssemblyName System.Drawing
@@ -786,10 +1058,14 @@ function Okno-Przypomnien($pozycje, [string]$rodzaj = "") {
   $script:Pozostalo = @($pozycje).Count
   $script:Niepowodzenie = ($rodzaj -eq "niepowodzenie")
   $niepowodzenie = $script:Niepowodzenie
+  $script:Decyzja = ($rodzaj -eq "decyzja")
+  $decyzja = $script:Decyzja
+  $script:PozycjaDecyzji = @($pozycje)[0]
 
   $f = New-Object System.Windows.Forms.Form
   $f.Text = "MegaRuchacz - przypomnienia ($(@($pozycje).Count))"
   if ($niepowodzenie) { $f.Text = "MegaRuchacz - nie udało się wykonać przypomnienia" }
+  if ($decyzja) { $f.Text = "Przypomnienie #$(@($pozycje)[0].id) – potrzebna Twoja decyzja" }
   $f.TopMost = $true
   $f.ShowInTaskbar = $true
   $f.StartPosition = "CenterScreen"
@@ -825,9 +1101,10 @@ function Okno-Przypomnien($pozycje, [string]$rodzaj = "") {
   }
   $wstep = Pole-Tekstowe $tekstWstepu 720 $f.Font $f.ForeColor $f.BackColor
   $wstep.Margin = New-Object System.Windows.Forms.Padding(0, 0, 0, 10)
-  $lista.Controls.Add($wstep)
+  $karty = @($pozycje)
+  if ($decyzja) { $karty = @() } else { $lista.Controls.Add($wstep) }
 
-  foreach ($p in @($pozycje)) {
+  foreach ($p in $karty) {
     $karta = New-Object System.Windows.Forms.FlowLayoutPanel
     $karta.FlowDirection = "TopDown"
     $karta.WrapContents = $false
@@ -879,10 +1156,14 @@ function Okno-Przypomnien($pozycje, [string]$rodzaj = "") {
     $karta.Controls.Add($przyciski)
     $lista.Controls.Add($karta)
   }
+  if ($decyzja) { Uloz-Decyzje $f $lista @($pozycje)[0] }
 
   $f.Add_FormClosing({
     param($s, $e)
-    if ($script:Niepowodzenie) {
+    if ($script:Decyzja) {
+      if ($script:Pozostalo -gt 0) { Zamknij-Decyzje-Krzyzykiem }
+      else { Dopisz-Dziennik "okno decyzji zamkniete - obsluzone" }
+    } elseif ($script:Niepowodzenie) {
       if ($script:Pozostalo -gt 0) { Dopisz-Dziennik "okno niepowodzenia zamkniete krzyzykiem - zostaje na jutro" }
       else { Dopisz-Dziennik "okno niepowodzenia zamkniete - obsluzone" }
     } elseif ($script:Pozostalo -gt 0) {
@@ -896,7 +1177,9 @@ function Okno-Przypomnien($pozycje, [string]$rodzaj = "") {
   })
   $script:Okno = $f
   $f.Add_Shown({ $f.Activate() })
-  if ($niepowodzenie) {
+  if ($decyzja) {
+    Dopisz-Dziennik "okno decyzji pokazane: #$($script:PozycjaDecyzji.id) ($($script:PozycjaDecyzji.rodzaj))"
+  } elseif ($niepowodzenie) {
     Dopisz-Dziennik ("okno niepowodzenia pokazane: " + ((@($pozycje) | ForEach-Object { "#$($_.id)" }) -join ", "))
   } else {
     Dopisz-Dziennik ("okno pokazane: " + ((@($pozycje) | ForEach-Object { "#$($_.id)" }) -join ", "))
@@ -924,6 +1207,9 @@ function Klik($tag) {
       "jutro"    { $ok = Zmien-Status "przesun" @("$($p.id)", "jutro") "przycisk Jutro #$($p.id)" }
       "zrobione" { $ok = Zmien-Status "zrobione" @("$($p.id)") "przycisk Zrobione #$($p.id)" }
       "sprobuj"  { $ok = Sprobuj-Teraz $p }
+      "opcja"    { $ok = Wybor-Decyzji $p "opcja" $tag.Opcja }
+      "zrobilem" { $ok = Wybor-Decyzji $p "zrobilem" "" }
+      "rozmowa"  { $ok = Wybor-Decyzji $p "rozmowa" "" }
       "odloz" {
         if ($p.przeniesione) { Dopisz-Dziennik "przycisk Odloz na jutro #$($p.id): zostaje na jutro"; $ok = $true }
         else { $ok = Zmien-Status "przesun" @("$($p.id)", "jutro") "przycisk Odloz na jutro #$($p.id)" }
@@ -934,9 +1220,7 @@ function Klik($tag) {
     Dopisz-Dziennik "przycisk $($tag.Akcja) #$($p.id) - WYWROTKA: $($_.Exception.Message)"
   }
   if (-not $ok) {
-    [void][System.Windows.Forms.MessageBox]::Show($script:Okno,
-      "Nie udało się ($($tag.Akcja), przypomnienie #$($p.id)): $($script:OstatniBladStatusu)`r`n`r`nSzczegóły: $Dziennik",
-      "MegaRuchacz", "OK", "Warning")
+    Pokaz-Blad "Nie udało się ($($tag.Akcja), przypomnienie #$($p.id)): $($script:OstatniBladStatusu)`r`n`r`nSzczegóły: $Dziennik"
     return
   }
   $tag.Karta.Visible = $false
@@ -954,6 +1238,7 @@ try {
   $script:Node = $nodeCmd.Source
   if (-not (Test-Path -LiteralPath $SkryptTerminow)) { throw "nie ma $SkryptTerminow" }
 
+  if ($Wznow -and $Wykonaj -le 0) { throw "-Wznow tylko razem z -Wykonaj <id>" }
   if ($Wykonaj -gt 0) {
     if ($Proba) { throw "-Wykonaj nie dziala z -Proba (uruchamia Claude naprawde)" }
     Wykonaj-W-Tle $Wykonaj

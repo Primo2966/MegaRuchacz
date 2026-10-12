@@ -23,6 +23,12 @@
 # jutra, powod tylko ze stderr, porownanie katalogu bez normalizacji, "Zrob teraz" bez kolejki,
 # tryb "dontAsk", znaczniki sesji w tle / w "Zrob teraz" / w oknie po przebiegu, odmowa uprawnien
 # jako "czlowiek", odmowa przy "nic" w ciszy.
+# Od 2026-10-12 wieczorem (okno decyzji zamiast terminala przy POTRZEBUJE_CIEBIE): Rozbierz-Prosbe
+# wyjeta z terminy.ps1 i sprawdzona na PYTANIE / ZROB / starym formacie; atrapa okna decyzji zapisuje,
+# z czym ja wolano, a przy MR_TEST_DECYZJA raz "klika" (Wybor-Decyzji): odpowiedz i "Zrobione"
+# wznawiaja te sama rozmowe w tle (claude -p --resume), "Otworz rozmowe" otwiera terminal, krzyzyk
+# przenosi na jutro. Sabotaze: terminal jak dawniej, wznowienie bez --resume, wznowienie bez umowy
+# WYNIK, "Zrobione" odhacza od razu, krzyzyk zostawia w toku, parser bez PYTANIE / ZROB.
 param(
   [string]$Zrodlo = (Split-Path -Parent $PSScriptRoot)
 )
@@ -43,6 +49,8 @@ $logOkien = Join-Path $tmp "atrapa-okna.jsonl"
 $logOknaPrzyp = Join-Path $tmp "atrapa-okno-przypomnien.txt"
 $logNiep = Join-Path $tmp "atrapa-okno-niepowodzenia.jsonl"
 $znakSprobuj = Join-Path $tmp "atrapa-sprobuj.txt"
+$logDecyzji = Join-Path $tmp "atrapa-okno-decyzji.jsonl"
+$znakDecyzji = Join-Path $tmp "atrapa-decyzja.txt"
 $oryginal = Join-Path $Zrodlo "zasobnik\terminy.ps1"
 $BezBom = New-Object System.Text.UTF8Encoding($false)
 $ZBom = New-Object System.Text.UTF8Encoding($true)
@@ -86,6 +94,8 @@ const wynik = (result, odmowy = []) => process.stdout.write(JSON.stringify({ typ
 // Ksztalt pola permission_denials z prawdziwego claude -p 2.1.296 w trybie dontAsk (2026-10-12).
 const odmowa = (tool_name, tool_input = {}) => ({ tool_name, tool_use_id: "toolu_test_" + tool_name, tool_input });
 const nic = () => wynik("WYNIK: NIC_NIE_MUSISZ\n\nSprawdziłem logi, wszystko gra. Zażółć gęślą jaźń.");
+const resume = process.argv.includes("--resume");
+const pytanie = () => wynik("WYNIK: POTRZEBUJE_CIEBIE: PYTANIE: Grafiki PT02: od czego zacząć poprawę niemieckich tekstów? | Jeden zapach na próbę | Od razu wszystkie\n\nZnalazłem 14 błędów w 12 zapachach.");
 // Dokladnie to, co 2026-10-12 zwrocil prawdziwy claude -p (stdout JSON, stderr pusty, kod 1).
 const oauth = () => { process.stdout.write(JSON.stringify({ type: "result", subtype: "success", is_error: true,
   result: "Failed to refresh OAuth token: another Claude Code process is refreshing it or exited mid-refresh. This is usually transient; retry in a minute, and if it persists close other Claude Code processes or sign in again",
@@ -105,6 +115,11 @@ switch (scen) {
   case "oauth": if (nr <= 2) oauth(); else nic(); break;
   case "oauth-na-stale": oauth(); break;
   case "oauth-sprobuj": if (nr <= 3) oauth(); else nic(); break;
+  // Okno decyzji: pierwsze wywolanie prosi czlowieka, wznowienie (--resume) konczy sprawe.
+  case "pytanie": if (resume) nic(); else pytanie(); break;
+  case "pytanie-znowu": pytanie(); break;
+  case "pytanie-blad": if (resume) { process.stderr.write("error: unknown option '--zla-flaga'"); process.exitCode = 1; } else pytanie(); break;
+  case "czynnosc": if (resume) nic(); else wynik("**WYNIK: POTRZEBUJE_CIEBIE: ZROB: Kliknij w Seller Central „Zatwierdź wysyłkę” dla FBA15K.**\n\nWysyłka czeka na zatwierdzenie."); break;
   case "wolno": setTimeout(() => { fs.appendFileSync(log + ".czasy", JSON.stringify({ id: process.env.MR_PRZYPOMNIENIE_W_TLE, start: t, koniec: Date.now() }) + "\n"); nic(); }, 2000); break;
   default: process.stderr.write("atrapa: nieznany scenariusz " + scen); process.exitCode = 3;
 }
@@ -126,6 +141,19 @@ function Otworz-Terminal([string]`$kat, [string]`$id, [string]`$start) {
   return "ATRAPA okna terminala"
 }
 function Okno-Przypomnien(`$pozycje, [string]`$rodzaj = "") {
+  if (`$rodzaj -eq "decyzja") {
+    `$q = @(`$pozycje)[0]
+    `$z = [ordered]@{ id = `$q.id; rodzaj = `$q.rodzaj; zdanie = `$q.zdanie; opcje = @(`$q.opcje); sesja = `$q.sesja; katalog = `$q.katalog; md = `$q.md; raport = `$q.raport }
+    [System.IO.File]::AppendAllText('$logDecyzji', ((`$z | ConvertTo-Json -Compress) + "``r``n"), (New-Object System.Text.UTF8Encoding(`$false)))
+    if (`$env:MR_TEST_DECYZJA -and -not (Test-Path -LiteralPath '$znakDecyzji')) {
+      [System.IO.File]::WriteAllText('$znakDecyzji', "klik `$env:MR_TEST_DECYZJA")
+      `$akcja = `$env:MR_TEST_DECYZJA; `$opcja = ""
+      if (`$akcja -match '^opcja:(\d+)$') { `$opcja = @(`$q.opcje)[[int]`$matches[1] - 1]; `$akcja = "opcja" }
+      `$ok = Wybor-Decyzji `$q `$akcja `$opcja
+      [System.IO.File]::AppendAllText('$znakDecyzji', " wynik: `$ok")
+    }
+    return
+  }
   if (`$rodzaj -eq "niepowodzenie") {
     `$q = @(`$pozycje)[0]
     `$z = [ordered]@{ id = `$q.id; termin = `$q.termin; opis = `$q.opis; uwaga = `$q.uwaga; przeniesione = `$q.przeniesione }
@@ -192,7 +220,7 @@ $TRESC = "Sprawdzić logi synchronizacji eBay i porównać stany (zażółć)"
 # proces bez okna, potem czekanie na procesy w tle. Zwraca wszystko, co da sie sprawdzic.
 function Uruchom([string]$kopia, [string]$scen, [string[]]$linie, [switch]$Dalej) {
   if (-not $Dalej) {
-    foreach ($x in @($dziennik, $logAtrapy, $logCzasow, $logOkien, $logOknaPrzyp, $logNiep, $znakSprobuj)) { if (Test-Path -LiteralPath $x) { Remove-Item -LiteralPath $x -Force } }
+    foreach ($x in @($dziennik, $logAtrapy, $logCzasow, $logOkien, $logOknaPrzyp, $logNiep, $znakSprobuj, $logDecyzji, $znakDecyzji)) { if (Test-Path -LiteralPath $x) { Remove-Item -LiteralPath $x -Force } }
     foreach ($x in @($katWynikow, (Join-Path $katMr "terminy"))) { if (Test-Path -LiteralPath $x) { Remove-Item -LiteralPath $x -Recurse -Force } }
     [System.IO.File]::WriteAllLines($plikP, [string[]](@("# Przypomnienia - plik testowy test-terminy-tlo.ps1", "") + $linie), $BezBom)
   }
@@ -219,7 +247,7 @@ function Uruchom([string]$kopia, [string]$scen, [string[]]$linie, [switch]$Dalej
     Zostale = @($zostale)
     Dziennik = (Czytaj $dziennik); Przypomnienia = (Czytaj $plikP); OknoPrzyp = (Czytaj $logOknaPrzyp)
     Claude = @(Linie-Json $logAtrapy); Okna = @(Linie-Json $logOkien); Niep = @(Linie-Json $logNiep); Czasy = @(Linie-Json $logCzasow)
-    Sprobuj = (Czytaj $znakSprobuj)
+    Sprobuj = (Czytaj $znakSprobuj); Decyzje = @(Linie-Json $logDecyzji); Klik = (Czytaj $znakDecyzji)
     Json = $null; JsonTekst = ""; Md = ""; MdBom = $false
   }
   $fj = Join-Path $katWynikow "1.json"
@@ -304,6 +332,43 @@ function Usterki-Okna($u, [string]$naglowek, [string]$sesja) {
   $iUsun = $o.skrypt.IndexOf('Remove-Item -LiteralPath "Env:\$n"')
   if ($iUsun -lt 0 -or -not $o.skrypt.Contains("'CLAUDE_CODE_CHILD_SESSION'") -or $iUsun -gt $iClaude) { $z += "skrypt okna nie usuwa znacznikow sesji przed startem claude" }
   if ((Stan-Linii $u.Przypomnienia 1) -ne "~") { $z += "status '$(Stan-Linii $u.Przypomnienia 1)' zamiast w toku" }
+  return $z
+}
+
+# POTRZEBUJE_CIEBIE: okno decyzji (atrapa) z rozebrana prosba, sesja i katalogiem - zadnego terminala
+# ani okna niepowodzenia. $ile - ile okien decyzji (kolejne POTRZEBUJE_CIEBIE po wznowieniu = kolejne).
+$PYT = "Grafiki PT02: od czego zacząć poprawę niemieckich tekstów?"
+$OPCJE = @("Jeden zapach na próbę", "Od razu wszystkie")
+$ZROB = 'Kliknij w Seller Central „Zatwierdź wysyłkę” dla FBA15K.'   # „” to dla PS cudzyslow - tylko w '...'
+function Usterki-Decyzji($u, [string]$rodzaj, [string]$zdanie, [string[]]$opcje, [string]$sesja, [int]$ile = 1) {
+  $z = @()
+  if ($u.Okna.Count -ne 0) { $z += "otwarty terminal ($($u.Okna.Count)) bez klikniecia 'Otworz rozmowe'" }
+  if ($u.Niep.Count -ne 0) { $z += "okno niepowodzenia ($($u.Niep.Count))" }
+  if ($u.Decyzje.Count -ne $ile) { return @($z) + @("okien decyzji $($u.Decyzje.Count) zamiast $ile") }
+  foreach ($d in $u.Decyzje) {
+    if ("$($d.id)" -ne "1" -or $d.rodzaj -ne $rodzaj -or $d.zdanie -cne $zdanie -or ((@($d.opcje) -join "|") -cne ($opcje -join "|")) -or $d.sesja -ne $sesja) {
+      $z += "okno decyzji: id '$($d.id)', rodzaj '$($d.rodzaj)', zdanie '$($d.zdanie)', opcje '$(@($d.opcje) -join "|")', sesja '$($d.sesja)'"
+    }
+    if ($d.katalog.TrimEnd('\') -ne $projekt -or $d.md -ne (Join-Path $katWynikow "1.md") -or -not "$($d.raport)".Contains("WYNIK: POTRZEBUJE_CIEBIE")) { $z += "okno decyzji: katalog '$($d.katalog)', md '$($d.md)', raport '$($d.raport)'" }
+  }
+  if ($u.Dziennik -notmatch "okno decyzji \($rodzaj\)") { $z += "w dzienniku brak 'okno decyzji ($rodzaj)'" }
+  return $z
+}
+
+# Drugie wywolanie claude = wznowienie tej samej rozmowy w tle z wiadomoscia z okna i umowa WYNIK.
+function Usterki-Wznowienia($u, [string]$sesja, [string]$wiadomosc) {
+  $z = @()
+  if ($u.Claude.Count -lt 2) { return @("brak wznowienia (wywolan claude $($u.Claude.Count))") }
+  $c = $u.Claude[1]
+  $a = " " + ($c.argv -join " ") + " "
+  foreach ($f in @(" -p ", " --resume $sesja ", " --output-format json ", " --permission-mode auto ")) { if (-not $a.Contains($f)) { $z += "wznowienie bez '$($f.Trim())': $a" } }
+  if (-not $c.stdin.StartsWith($wiadomosc)) { $z += "wznowienie zaczyna sie od '$($c.stdin.Substring(0, [Math]::Min(80, $c.stdin.Length)))' zamiast '$wiadomosc'" }
+  foreach ($f in @("WYNIK: NIC_NIE_MUSISZ", "WYNIK: POTRZEBUJE_CIEBIE: PYTANIE:", "WYNIK: POTRZEBUJE_CIEBIE: ZROB:")) { if (-not $c.stdin.Contains($f)) { $z += "wznowienie bez umowy '$f'" } }
+  if ($c.cwd.TrimEnd('\') -ne $projekt) { $z += "wznowienie w '$($c.cwd)'" }
+  if (@($c.znaczniki).Count -gt 0) { $z += "wznowienie ze znacznikami sesji nadrzednej: $(@($c.znaczniki) -join ',')" }
+  if ($c.wTle -ne "1") { $z += "wznowienie: MR_PRZYPOMNIENIE_W_TLE='$($c.wTle)'" }
+  if ($u.Dziennik -notmatch "wznawiam rozmowe '$sesja' w tle") { $z += "w dzienniku brak sladu klikniecia ('wznawiam rozmowe')" }
+  if ($u.Dziennik -notmatch "w tle #1: wznowienie po decyzji z okna, rozmowa '$sesja'") { $z += "w dzienniku brak 'wznowienie po decyzji z okna'" }
   return $z
 }
 
@@ -411,11 +476,57 @@ $PRZYPADKI = [ordered]@{
     if ($u.Okna.Count -ne 0 -or $u.Niep.Count -ne 0) { $z += "otwarte okna: terminal $($u.Okna.Count), niepowodzenia $($u.Niep.Count)" }
     if ((Stan-Linii $u.Przypomnienia 1) -ne "x") { $z += "nie odhaczone: '$(Stan-Linii $u.Przypomnienia 1)'" }
     $z } }
-  "czlowiek" = @{ Opis = "POTRZEBUJE_CIEBIE: okno z --resume i naglowkiem MUSISZ, zostaje w toku (bez zmian)"; Ocena = { param($u)
+  "czlowiek" = @{ Opis = "POTRZEBUJE_CIEBIE w starym formacie (bez PYTANIE/ZROB, pogrubione): okno decyzji z czynnoscia, bez terminala, zostaje w toku"; Ocena = { param($u)
     $z = @(Usterki-Wspolne $u "czlowiek")
     $co = "zatwierdź zmianę ceny P1 na Amazon UK"
     if ($u.Json -and ($u.Json.wynik -ne "czlowiek" -or $u.Json.co_zrobic -ne $co)) { $z += "wynik '$($u.Json.wynik)', co '$($u.Json.co_zrobic)'" }
-    $z += @(Usterki-Okna $u "MUSISZ: $co" "sesja-test-czlowiek")
+    $z += @(Usterki-Decyzji $u "czynnosc" $co @() "sesja-test-czlowiek")
+    if ((Stan-Linii $u.Przypomnienia 1) -ne "~") { $z += "status '$(Stan-Linii $u.Przypomnienia 1)' zamiast w toku" }
+    $z } }
+  "pytanie" = @{ Opis = "PYTANIE + klik odpowiedzi: okno decyzji z odpowiedziami, wznowienie tej rozmowy w tle (--resume, 'Użytkownik wybrał: ...'), bez terminala, odhaczone"
+    Env = @{ MR_TEST_DECYZJA = "opcja:2" }; Ocena = { param($u)
+    $z = @(Usterki-Wspolne $u "pytanie" 2)
+    foreach ($f in @("WYNIK: POTRZEBUJE_CIEBIE: PYTANIE:", "WYNIK: POTRZEBUJE_CIEBIE: ZROB:", "zrozumie ktoś, kto nie jest programistą", "nigdy 'inne'")) { if ($u.Claude.Count -gt 0 -and -not $u.Claude[0].stdin.Contains($f)) { $z += "polecenie bez '$f'" } }
+    $z += @(Usterki-Decyzji $u "pytanie" $PYT $OPCJE "sesja-test-pytanie")
+    if ($u.Klik -ne "klik opcja:2 wynik: True") { $z += "klik w oknie decyzji: '$($u.Klik)'" }
+    $z += @(Usterki-Wznowienia $u "sesja-test-pytanie" "Użytkownik wybrał: Od razu wszystkie. Kontynuuj zadanie.")
+    if ($u.Json -and $u.Json.wynik -ne "nic") { $z += "wynik po wznowieniu '$($u.Json.wynik)'" }
+    if ((Stan-Linii $u.Przypomnienia 1) -ne "x") { $z += "nie odhaczone po wznowieniu: '$(Stan-Linii $u.Przypomnienia 1)'" }
+    $z } }
+  "czynnosc" = @{ Opis = "ZROB + 'Zrobione': okno decyzji z czynnoscia, wznowienie w tle ('Użytkownik zrobił: ... Sprawdź'), odhacza dopiero Claude"
+    Env = @{ MR_TEST_DECYZJA = "zrobilem" }; Ocena = { param($u)
+    $z = @(Usterki-Wspolne $u "czynnosc" 2)
+    $z += @(Usterki-Decyzji $u "czynnosc" $ZROB @() "sesja-test-czynnosc")
+    $z += @(Usterki-Wznowienia $u "sesja-test-czynnosc" ("Użytkownik zrobił: " + $ZROB.TrimEnd('.') + ". Sprawdź i dokończ zadanie."))
+    if ((Stan-Linii $u.Przypomnienia 1) -ne "x") { $z += "nie odhaczone po wznowieniu: '$(Stan-Linii $u.Przypomnienia 1)'" }
+    $z } }
+  "pytanie-znowu" = @{ Opis = "po wznowieniu znowu POTRZEBUJE_CIEBIE: drugie okno decyzji, bez terminala, zostaje w toku"; Scen = "pytanie-znowu"
+    Env = @{ MR_TEST_DECYZJA = "opcja:1" }; Ocena = { param($u)
+    $z = @(Usterki-Wspolne $u "pytanie-znowu" 2)
+    $z += @(Usterki-Decyzji $u "pytanie" $PYT $OPCJE "sesja-test-pytanie-znowu" 2)
+    $z += @(Usterki-Wznowienia $u "sesja-test-pytanie-znowu" "Użytkownik wybrał: Jeden zapach na próbę. Kontynuuj zadanie.")
+    if ((Stan-Linii $u.Przypomnienia 1) -ne "~") { $z += "status '$(Stan-Linii $u.Przypomnienia 1)' zamiast w toku" }
+    $z } }
+  "pytanie-blad" = @{ Opis = "wznowienie konczy sie bledem: na jutro i okno niepowodzenia, bez terminala"
+    Env = @{ MR_TEST_DECYZJA = "opcja:2" }; Ocena = { param($u)
+    $z = @(Usterki-Wspolne $u "pytanie-blad" 2)
+    $z += @(Usterki-Wznowienia $u "sesja-test-pytanie-blad" "Użytkownik wybrał: Od razu wszystkie. Kontynuuj zadanie.")
+    if ($u.Decyzje.Count -ne 1) { $z += "okien decyzji $($u.Decyzje.Count) zamiast 1" }
+    $z += @(Usterki-Niepowodzenia $u @("kodem 1", "unknown option"))
+    $z } }
+  "rozmowa" = @{ Opis = "'Otworz rozmowe': dopiero po kliknieciu terminal z claude --resume tej rozmowy i naglowkiem DECYZJA, zostaje w toku"; Scen = "pytanie"
+    Env = @{ MR_TEST_DECYZJA = "rozmowa" }; Ocena = { param($u)
+    $z = @(Usterki-Wspolne $u "pytanie" 1)
+    if ($u.Decyzje.Count -ne 1) { $z += "okien decyzji $($u.Decyzje.Count) zamiast 1" }
+    $z += @(Usterki-Okna $u "DECYZJA: $PYT" "sesja-test-pytanie")
+    if ($u.Dziennik -notmatch 'przycisk Otworz rozmowe #1: ATRAPA okna terminala \(zostaje w toku\)') { $z += "w dzienniku brak sladu 'przycisk Otworz rozmowe'" }
+    $z } }
+  "krzyzyk" = @{ Opis = "okno decyzji zamkniete krzyzykiem: na jutro, bez terminala i bez wznowienia"; Scen = "pytanie"
+    Env = @{ MR_TEST_DECYZJA = "krzyzyk" }; Ocena = { param($u)
+    $z = @(Usterki-Wspolne $u "pytanie" 1)
+    if ($u.Okna.Count -ne 0 -or $u.Niep.Count -ne 0) { $z += "okna: terminal $($u.Okna.Count), niepowodzenia $($u.Niep.Count)" }
+    if ((Stan-Linii $u.Przypomnienia 1) -ne " " -or (Data-Linii $u.Przypomnienia 1) -ne $jutro) { $z += "po krzyzyku '$(Stan-Linii $u.Przypomnienia 1)' $(Data-Linii $u.Przypomnienia 1) zamiast otwarte na jutro" }
+    if ($u.Dziennik -notmatch 'okno decyzji #1 zamkniete krzyzykiem - na jutro - ok') { $z += "w dzienniku brak 'zamkniete krzyzykiem - na jutro'" }
     $z } }
   "brak" = @{ Opis = "brak znacznika = blad bez ponawiania (1 wywolanie), na jutro, okno niepowodzenia"; Ocena = { param($u)
     $z = @(Usterki-Wspolne $u "brak" 1)
@@ -525,8 +636,8 @@ try {
     if ($nazwa -eq "czlowiek") {
       # Najwyzej jedno samoczynne uruchomienie: kolejne sprawdzenie tego samego dnia nic nie odpala.
       $u2 = Uruchom $prawdziwa "czlowiek" @() -Dalej
-      $ok = ($u2.Kod -eq 0) -and ($u2.Claude.Count -eq 1) -and ($u2.Okna.Count -eq 1) -and ((Stan-Linii $u2.Przypomnienia 1) -eq "~") -and (-not $u2.OknoPrzyp)
-      Wynik "drugie sprawdzenie tego dnia nie uruchamia zadania w toku ponownie" $ok "wywolan claude $($u2.Claude.Count), okien $($u2.Okna.Count), okno przypomnien '$($u2.OknoPrzyp.Trim())'"
+      $ok = ($u2.Kod -eq 0) -and ($u2.Claude.Count -eq 1) -and ($u2.Decyzje.Count -eq 1) -and ($u2.Okna.Count -eq 0) -and ((Stan-Linii $u2.Przypomnienia 1) -eq "~") -and (-not $u2.OknoPrzyp)
+      Wynik "drugie sprawdzenie tego dnia nie uruchamia zadania w toku ponownie" $ok "wywolan claude $($u2.Claude.Count), okien decyzji $($u2.Decyzje.Count), terminali $($u2.Okna.Count), okno przypomnien '$($u2.OknoPrzyp.Trim())'"
     }
   }
 
@@ -543,6 +654,46 @@ try {
   if ($u.Okna.Count -ne 0) { $z += "okna terminala: $($u.Okna.Count)" }
   if ($u.Zostale.Count -gt 0) { $z += "zostaly procesy: $($u.Zostale -join ', ')" }
   Wynik "tryb 'przypomnij' bez zmian: okno z przyciskami, bez claude i bez wyniku" ($z.Count -eq 0) "$(if ($z) { $z -join ' | ' } else { 'ok' })"
+
+  # Rozbior prosby z linii WYNIK: POTRZEBUJE_CIEBIE (Rozbierz-Prosbe wyjeta z terminy.ps1 i zdefiniowana
+  # tutaj; sabotaz = ta sama funkcja z jedna podmiana). Odpowiedzi nie sa ucinane ani obcinane do 4.
+  $PROSBY = @(
+    @{ We = "PYTANIE: Grafiki PT02: od czego zacząć? | Jeden zapach na próbę | Od razu wszystkie"; Rodzaj = "pytanie"; Tekst = "Grafiki PT02: od czego zacząć?"; Opcje = @("Jeden zapach na próbę", "Od razu wszystkie") },
+    @{ We = "pytanie:Czy zmienić cenę P1?|Tak, zmień na 50,76 £|  Nie, zostaw |"; Rodzaj = "pytanie"; Tekst = "Czy zmienić cenę P1?"; Opcje = @("Tak, zmień na 50,76 £", "Nie, zostaw") },
+    @{ We = "PYTANIE: Który zestaw? | A | B | C | D | E"; Rodzaj = "pytanie"; Tekst = "Który zestaw?"; Opcje = @("A", "B", "C", "D", "E") },
+    @{ We = 'ZROB: Kliknij w Seller Central „Zatwierdź wysyłkę”.'; Rodzaj = "czynnosc"; Tekst = 'Kliknij w Seller Central „Zatwierdź wysyłkę”.'; Opcje = @() },
+    @{ We = "ZRÓB:  Wgraj SDS w Manage Dangerous Goods"; Rodzaj = "czynnosc"; Tekst = "Wgraj SDS w Manage Dangerous Goods"; Opcje = @() },
+    @{ We = "zatwierdź zmianę ceny P1 na Amazon UK"; Rodzaj = "czynnosc"; Tekst = "zatwierdź zmianę ceny P1 na Amazon UK"; Opcje = @() },
+    @{ We = "PYTANIE: Samo pytanie bez odpowiedzi?"; Rodzaj = "czynnosc"; Tekst = "Samo pytanie bez odpowiedzi?"; Opcje = @() },
+    @{ We = "PYTANIE: | A | B"; Rodzaj = "czynnosc"; Tekst = "PYTANIE: | A | B"; Opcje = @() })
+  $bledyAst = $null
+  $ast = [System.Management.Automation.Language.Parser]::ParseInput($zrodloSkryptu, [ref]$null, [ref]$bledyAst)
+  $fnRozbioru = @($ast.FindAll({ param($n) ($n -is [System.Management.Automation.Language.FunctionDefinitionAst]) -and ($n.Name -eq "Rozbierz-Prosbe") }, $true))
+  function Sprawdz-Rozbior {
+    $zle = @()
+    foreach ($c in $PROSBY) {
+      $r = Rozbierz-Prosbe $c.We
+      if ($r.Rodzaj -ne $c.Rodzaj -or $r.Tekst -cne $c.Tekst -or ((@($r.Opcje) -join "|") -cne (@($c.Opcje) -join "|"))) {
+        $zle += "'$($c.We)' -> $($r.Rodzaj) '$($r.Tekst)' [$(@($r.Opcje) -join '|')] zamiast $($c.Rodzaj) '$($c.Tekst)' [$(@($c.Opcje) -join '|')]"
+      }
+    }
+    return $zle
+  }
+  if ($fnRozbioru.Count -ne 1) { Wynik "rozbior prosby PYTANIE / ZROB / stary format" $false "Rozbierz-Prosbe w terminy.ps1: $($fnRozbioru.Count) definicji" }
+  else {
+    $tekstFn = $fnRozbioru[0].Extent.Text
+    . ([scriptblock]::Create($tekstFn))
+    $zle = @(Sprawdz-Rozbior)
+    Wynik "rozbior prosby: PYTANIE z odpowiedziami, ZROB / ZRÓB, stary format i PYTANIE bez odpowiedzi jako czynnosc ($($PROSBY.Count) przypadkow)" ($zle.Count -eq 0) "$(if ($zle) { $zle -join ' | ' } else { 'wszystkie zgodne' })"
+    foreach ($s in @(@{ Nazwa = "PYTANIE bez podzialu na odpowiedzi"; K = "-split '\|'"; Z = "-split '#BRAK#'" },
+                     @{ Nazwa = "ZROB zostaje w tresci"; K = "} elseif (`$r.Tekst -match '^ZR"; Z = "} elseif (`$false -and `$r.Tekst -match '^ZR" })) {
+      if ((Ile $tekstFn $s.K) -ne 1) { Wynik "negatywna: sabotaz rozbioru '$($s.Nazwa)' wylapany" $false "kotwica wystepuje $(Ile $tekstFn $s.K) razy"; continue }
+      . ([scriptblock]::Create($tekstFn.Replace($s.K, $s.Z)))
+      $zleS = @(Sprawdz-Rozbior)
+      Wynik "negatywna: sabotaz rozbioru '$($s.Nazwa)' wylapany" ($zleS.Count -gt 0) "z sabotazem: $(if ($zleS) { $zleS[0] } else { 'NIE ZLAPANY' })"
+    }
+    . ([scriptblock]::Create($tekstFn))
+  }
 
   # Proba (-Proba) niczego nie uruchamia.
   $env:MR_TEST_SCENARIUSZ = "nic"
@@ -579,7 +730,17 @@ try {
        K = 'foreach ($n in $ZNACZNIKI_SESJI_NADRZEDNEJ) { $psi.EnvironmentVariables.Remove($n) }'; Z = '# sabotaz: znaczniki zostaja' },
     @{ Nazwa = "'Zrob teraz' ze znacznikami sesji nadrzednej"; Przypadek = "zrob-teraz"
        K = ') + (Linie-Bez-Znacznikow-Sesji) + (Linie-Czekania-Na-Kolejke) + @('; Z = ') + (Linie-Czekania-Na-Kolejke) + @(' },
-    @{ Nazwa = "okno po przebiegu ze znacznikami sesji nadrzednej"; Przypadek = "czlowiek"
+    @{ Nazwa = "POTRZEBUJE_CIEBIE otwiera terminal jak dawniej"; Przypadek = "czlowiek"
+       K = 'try { Okno-Decyzji $p $w $kat $claude $md }'; Z = 'try { [void](Okno-Po-Przebiegu $p $kat $claude $w $md) }' },
+    @{ Nazwa = "wznowienie bez --resume (nowa rozmowa)"; Przypadek = "pytanie"
+       K = 'if ($sesja) { $psi.Arguments = "-p --resume $sesja'; Z = 'if ($false) { $psi.Arguments = "-p --resume $sesja' },
+    @{ Nazwa = "wznowienie bez umowy WYNIK"; Przypadek = "pytanie"
+       K = 'if ($sesjaWznowienia) { $polecenie = "$($wz.wiadomosc) " + (Umowa-Wyniku $p) }'; Z = 'if ($sesjaWznowienia) { $polecenie = "$($wz.wiadomosc)" }' },
+    @{ Nazwa = "'Zrobione' odhacza od razu, bez sprawdzenia przez Claude"; Przypadek = "czynnosc"
+       K = '"zrobilem" { return (Wznow-W-Tle'; Z = '"zrobilem" { return (Zmien-Status "zrobione" @("$($p.id)") "sabotaz Zrobione") }; "zrobilem-sabotaz" { return (Wznow-W-Tle' },
+    @{ Nazwa = "krzyzyk w oknie decyzji zostawia w toku"; Przypadek = "krzyzyk"
+       K = '"krzyzyk"  { return (Zmien-Status'; Z = '"krzyzyk"  { return $true; (Zmien-Status' },
+    @{ Nazwa = "okno po przebiegu ze znacznikami sesji nadrzednej"; Przypadek = "rozmowa"
        K = '$linie += @(Linie-Bez-Znacznikow-Sesji)'; Z = '# sabotaz: znaczniki zostaja' },
     @{ Nazwa = "odmowa uprawnien jako 'czlowiek'"; Przypadek = "odmowa"
        K = 'if ($odmowy.Count -gt 0) {'; Z = 'if ($false) {' },
@@ -596,7 +757,7 @@ try {
 } catch {
   Wynik "WYWROTKA TESTU" $false "$($_.Exception.Message) @ $($_.InvocationInfo.PositionMessage)"
 } finally {
-  foreach ($k in @("MR_TEST_SCENARIUSZ", "MR_TEST_ATRAPA_LOG", "MR_TEST_SPROBUJ", "MR_TEST_ZROB_TERAZ", "MR_TEST_ZNACZNIKI")) { Remove-Item "Env:\$k" -ErrorAction SilentlyContinue }
+  foreach ($k in @("MR_TEST_SCENARIUSZ", "MR_TEST_ATRAPA_LOG", "MR_TEST_SPROBUJ", "MR_TEST_ZROB_TERAZ", "MR_TEST_ZNACZNIKI", "MR_TEST_DECYZJA")) { Remove-Item "Env:\$k" -ErrorAction SilentlyContinue }
   foreach ($n in $ZNACZNIKI_TESTU) { [Environment]::SetEnvironmentVariable($n, $znacznikiPrzed[$n]) }
 }
 

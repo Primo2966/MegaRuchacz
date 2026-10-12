@@ -13,14 +13,26 @@
 # kopia, ktora zamiast zwyklego okna pokazuje je dla #1 - zdanie "Nie udalo sie ... Przeniesione
 # na jutro" na czerwono, przyciski "Sprobuj teraz" / "Odloz na jutro" (+ Kopiuj), krzyzyk niczego
 # nie odklada. Sabotaze: zwykle przyciski w oknie niepowodzenia, krzyzyk odkladajacy o 2 godziny.
+# Okno decyzji (2026-10-12, Okno-Decyzji: wynik POTRZEBUJE_CIEBIE zamiast terminala): kopia pokazuje
+# je dla #1 - tytul "Przypomnienie #1 – potrzebna Twoja decyzja", zdanie duza czcionka, odpowiedzi
+# (PYTANIE) albo "Zrobione" (ZROB), "Odloz na jutro", "Otworz rozmowe", zwiniete "Szczegoly". Hak
+# klika przycisk przed pomiarem (-Przed) albo po nim (-Klik). Otworz-Terminal, Odpal-W-Tle i
+# Pokaz-Blad w KAZDEJ kopii to atrapy, ktore tylko zapisuja - zaden terminal, proces w tle ani
+# MessageBox nie powstaje. Sabotaze: szczegoly rozwiniete od razu, stala wysokosc przycisku
+# odpowiedzi, krzyzyk bez przeniesienia na jutro, odpowiedz otwierajaca terminal.
 # Schowek czytaja po kazdej zmianie inne programy (zmierzone 2026-10-08: Remotly, historia schowka,
 # Eksplorator - kazdy trzyma go do 70 ms), dlatego test przed kopiowaniem czeka, az ucichna, a odczyt
 # ponawia do $MS_ODCZYTU_SCHOWKA (GetText przy zajetym schowku po cichu zwraca ""). Zajety schowek
 # robi tez celowo osobny proces (trzymacz): krotko - Kopiuj ma poczekac i skopiowac, dlugo - porazka
 # widoczna na przycisku i w dzienniku.
+# SCHOWEK TYLKO Z -Schowek (2026-10-12: przebieg nadpisal schowek uzytkownika w trakcie jego pracy -
+# wklejal "TEST-SCHOWEK-PUSTY-4"). Bez przelacznika test ani razu nie dotyka schowka: bez zaznaczania
+# i kopiowania pol, przyciskow Kopiuj, trzymacza, zapamietania i przywracania - i mowi o tym jedna linia.
+# Proby schowka uruchamiac tylko, gdy nikt nie pracuje przy komputerze.
 param(
   [string]$Zrodlo = (Split-Path -Parent $PSScriptRoot),
-  [string]$Zrzuty = ""
+  [string]$Zrzuty = "",
+  [switch]$Schowek
 )
 $ErrorActionPreference = "Stop"
 try { [Console]::OutputEncoding = [System.Text.Encoding]::UTF8 } catch { Write-Warning "konsola bez UTF-8: $($_.Exception.Message)" }
@@ -36,6 +48,9 @@ New-Item -ItemType Directory -Force -Path $katMr | Out-Null
 $plikP = Join-Path $katMr "przypomnienia.md"
 $dziennik = Join-Path $katMr "przypomnienia.log"
 $plikOkna = Join-Path $katMr "przypomnienia-okno.txt"
+$logTerminala = Join-Path $tmp "atrapa-terminal.jsonl"
+$logOdpal = Join-Path $tmp "atrapa-odpal.jsonl"
+$logBledow = Join-Path $tmp "atrapa-pokaz-blad.txt"
 $oryginal = Join-Path $Zrodlo "zasobnik\terminy.ps1"
 $BezBom = New-Object System.Text.UTF8Encoding($false)
 $ZBom = New-Object System.Text.UTF8Encoding($true)
@@ -177,6 +192,22 @@ $f.KeyPreview = $true
       $k = [ordered]@{ Typ = $c.GetType().Name; Tekst = "$($c.Text)"; Widoczny = $c.Visible; Wys = $c.Height; Szer = $c.Width; Prawa = $c.Right
                        SzerRodzica = $c.Parent.ClientSize.Width; Kolor = $c.ForeColor.ToArgb(); Tlo = $c.BackColor.ToArgb(); TloRodzica = $c.Parent.BackColor.ToArgb() }
       $k.Akcja = ""; if (($c -is [System.Windows.Forms.Button]) -and ($c.Tag -is [hashtable])) { $k.Akcja = "$($c.Tag.Akcja)" }
+      # Polozenie w obszarze okna (ucina je okno, nie tylko rodzic) i wielkosc czcionki.
+      $k.Pkt = [Math]::Round($c.Font.SizeInPoints, 1)
+      if ($c.Visible) { $pt = $script:Okno.PointToClient($c.PointToScreen([System.Drawing.Point]::Empty)); $k.WOknieDol = $pt.Y + $c.Height; $k.WOkniePrawa = $pt.X + $c.Width }
+      # Przycisk: wysokosc potrzebna na tekst zawiniety przy jego szerokosci. Ramka = naturalny rozmiar
+      # blizniaka z AutoSize (jeden wiersz; PreferredSize przycisku bez AutoSize oddaje jego obecna
+      # wysokosc) minus sam tekst; plaski "Szczegoly" ma ja mniejsza niz zwykly.
+      if ($c -is [System.Windows.Forms.Button]) {
+        $flagi = [System.Windows.Forms.TextFormatFlags]"WordBreak, NoPrefix"
+        $jeden = [System.Windows.Forms.TextRenderer]::MeasureText($c.Text, $c.Font, [System.Drawing.Size]::Empty, [System.Windows.Forms.TextFormatFlags]"NoPrefix")
+        $bl = New-Object System.Windows.Forms.Button
+        $bl.Font = $c.Font; $bl.UseMnemonic = $c.UseMnemonic; $bl.Padding = $c.Padding; $bl.FlatStyle = $c.FlatStyle; $bl.FlatAppearance.BorderSize = $c.FlatAppearance.BorderSize
+        $bl.Text = $c.Text; $bl.AutoSize = $true
+        $nat = $bl.PreferredSize; $bl.Dispose()
+        $ile = New-Object System.Drawing.Size([Math]::Max(1, $c.Width - ($nat.Width - $jeden.Width)), [int]::MaxValue)
+        $k.Potrzebna = [System.Windows.Forms.TextRenderer]::MeasureText($c.Text, $c.Font, $ile, $flagi).Height + ($nat.Height - $jeden.Height)
+      }
       if ($c -is [System.Windows.Forms.TextBox]) {
         $k.ReadOnly = $c.ReadOnly; $k.Multiline = $c.Multiline; $k.Ramka = "$($c.BorderStyle)"; $k.Paski = "$($c.ScrollBars)"
         $k.TabStop = $c.TabStop; $k.Wlaczony = $c.Enabled; $k.WysWnetrza = $c.ClientSize.Height; $k.WysCzcionki = $c.Font.Height
@@ -185,6 +216,8 @@ $f.KeyPreview = $true
       }
       $r.Kontrolki += [pscustomobject]$k
     }
+    # Wszystko do zamykajacej klamry "koniec prob schowka" dotyka schowka - tylko z -Schowek.
+    if (__SCHOWEK__) {
     # zaznaczenie calego pola i Kopiuj (to samo, co zaznaczenie mysza + Ctrl+C / menu Kopiuj)
     $pola = @(T-Wszystkie $script:Okno | Where-Object { $_ -is [System.Windows.Forms.TextBox] })
     foreach ($c in $pola) {
@@ -228,23 +261,35 @@ $f.KeyPreview = $true
                                            CzasKlikniecia = $czas; NapisPo = $po; NapisPozniej = $b.Text; Schowek = $sch }
       }
     }
+    }   # koniec prob schowka (__SCHOWEK__)
     $bmp = New-Object System.Drawing.Bitmap($script:Okno.Width, $script:Okno.Height)
     $script:Okno.DrawToBitmap($bmp, (New-Object System.Drawing.Rectangle(0, 0, $script:Okno.Width, $script:Okno.Height)))
     $bmp.Save('__ZRZUT__'); $bmp.Dispose()
   }
   $script:TestRaport = [pscustomobject]@{ Kontrolki = @(); Zaznaczenia = @(); Fragment = $null; Kopiuj = @(); KopiujZajety = $null; KopiujBlad = $null
                                           Wywrotka = ""; Uwagi = @(); Watek = [System.Threading.Thread]::CurrentThread.ApartmentState.ToString()
-                                          Okno = ""; Ekran = "" }
+                                          Okno = ""; Ekran = ""; Tytul = ""; KlientSzer = 0; KlientWys = 0; Klik = $null }
+  # Przycisk po napisie (okno decyzji: -Przed klika przed pomiarem, -Klik po nim).
+  function T-Kliknij([string]$napis) {
+    $b = @(T-Wszystkie $script:Okno | Where-Object { ($_ -is [System.Windows.Forms.Button]) -and $_.Visible -and ($_.Text -ceq $napis) })
+    if ($b.Count -ne 1) { $script:TestRaport.Uwagi += "przyciskow '$napis': $($b.Count)"; return $null }
+    $sw = [System.Diagnostics.Stopwatch]::StartNew()
+    $b[0].PerformClick()
+    return [pscustomobject]@{ Napis = $napis; Ms = $sw.ElapsedMilliseconds; Zamkniete = ($script:Okno.IsDisposed -or -not $script:Okno.Visible) }
+  }
   $script:TestZegar = New-Object System.Windows.Forms.Timer
   $script:TestZegar.Interval = 300
   $script:TestZegar.Add_Tick({
     $script:TestZegar.Stop()
     try {
+      if ('__PRZED__') { [void](T-Kliknij '__PRZED__'); T-Pompuj 300 }
       $script:TestRaport.Okno = "$($script:Okno.Bounds)"; $script:TestRaport.Ekran = "$([System.Windows.Forms.Screen]::PrimaryScreen.WorkingArea)"
+      $script:TestRaport.Tytul = $script:Okno.Text; $script:TestRaport.KlientSzer = $script:Okno.ClientSize.Width; $script:TestRaport.KlientWys = $script:Okno.ClientSize.Height
       T-Sprawdz
+      if ('__KLIK__') { $script:TestRaport.Klik = T-Kliknij '__KLIK__' }
     } catch { $script:TestRaport.Wywrotka = "$($_.Exception.Message) @ $($_.InvocationInfo.PositionMessage)" }
     [System.IO.File]::WriteAllText('__RAPORT__', ($script:TestRaport | ConvertTo-Json -Depth 5), (New-Object System.Text.UTF8Encoding($false)))
-    $script:Okno.Close()
+    if ((-not $script:Okno.IsDisposed) -and $script:Okno.Visible) { $script:Okno.Close() }
   })
   $f.Add_Shown({ $script:TestZegar.Start() })
 '@
@@ -259,10 +304,34 @@ $f.Show()
 
 $zrodloSkryptu = [System.IO.File]::ReadAllText($oryginal, [System.Text.Encoding]::UTF8)
 function Ile([string]$w, [string]$co) { return ([regex]::Matches($w, [regex]::Escape($co))).Count }
+# Atrapy w kazdej kopii: nowa definicja zamiast naglowka prawdziwej, ktora dostaje inna nazwe
+# (nikt jej nie wola). Zapisuja, z czym je wolano - zaden terminal, proces w tle ani MessageBox.
+$atrapaTerminala = @'
+function Otworz-Terminal([string]$kat, [string]$id, [string]$start) {
+  $z = [ordered]@{ kat = $kat; id = $id; start = $start; skrypt = [System.IO.File]::ReadAllText($start, [System.Text.Encoding]::UTF8) }
+  [System.IO.File]::AppendAllText('__LOG__', (($z | ConvertTo-Json -Compress) + "`r`n"), (New-Object System.Text.UTF8Encoding($false)))
+  return "ATRAPA terminala"
+}
+function Otworz-Terminal-Nieuzywana([string]$kat, [string]$id, [string]$start) {
+'@
+$atrapaOdpal = @'
+function Odpal-W-Tle($p, [string]$wznow = "") {
+  $plikWz = ""; if ($wznow -and (Test-Path -LiteralPath $wznow)) { $plikWz = [System.IO.File]::ReadAllText($wznow, [System.Text.Encoding]::UTF8) }
+  $z = [ordered]@{ id = "$($p.id)"; wznow = $wznow; plik = $plikWz }
+  [System.IO.File]::AppendAllText('__LOG__', (($z | ConvertTo-Json -Compress) + "`r`n"), (New-Object System.Text.UTF8Encoding($false)))
+  return "ATRAPA procesu w tle"
+}
+function Odpal-W-Tle-Nieuzywana($p, [string]$wznow = "") {
+'@
+$atrapaBledu = @'
+function Pokaz-Blad([string]$tekst) { [System.IO.File]::AppendAllText('__LOG__', $tekst + "`r`n", (New-Object System.Text.UTF8Encoding($false))) }
+function Pokaz-Blad-Nieuzywana([string]$tekst) {
+'@
 # Kopia z podmianami; kazda kotwica musi wystapic dokladnie raz - inaczej porazka przygotowania,
 # a nie test, ktory po cichu sprawdza nie to okno.
 # -Zajety:$false pomija scenariusze z trzymanym schowkiem (ok. 12 s) w sabotazach, ktore ich nie oceniaja.
-function Kopia([string]$wariant, [hashtable[]]$podmiany, [bool]$Zajety = $true) {
+# -Przed / -Klik: napis przycisku, ktory hak kliknie przed pomiarem / po nim.
+function Kopia([string]$wariant, [hashtable[]]$podmiany, [bool]$Zajety = $true, [string]$Przed = "", [string]$Klik = "") {
   $raport = Join-Path $tmp "raport-$wariant.json"
   $zrzut = Join-Path $Zrzuty "terminy-okno-$wariant.png"
   $wsp = @(
@@ -270,7 +339,10 @@ function Kopia([string]$wariant, [hashtable[]]$podmiany, [bool]$Zajety = $true) 
     @{ K = '$f.TopMost = $true'; Z = '$f.TopMost = $false' },
     @{ K = '$f.ShowInTaskbar = $true'; Z = '$f.ShowInTaskbar = $false' },
     @{ K = '$f.StartPosition = "CenterScreen"'; Z = '$f.StartPosition = "Manual"; $f.Location = New-Object System.Drawing.Point(-5000, 0)' },
-    @{ K = '$f.Add_Shown({ $f.Activate() })'; Z = $hak.Replace('__RAPORT__', $raport).Replace('__ZRZUT__', $zrzut).Replace('__TMP__', $tmp).Replace('__TRZYMACZ__', $trzymacz).Replace('__MS_KROTKO__', "$MS_TRZYMANIA_KROTKO").Replace('__MS_DLUGO__', "$MS_TRZYMANIA_DLUGO").Replace('__ZAJETY__', ('$' + "$Zajety")) },
+    @{ K = '$f.Add_Shown({ $f.Activate() })'; Z = $hak.Replace('__RAPORT__', $raport).Replace('__ZRZUT__', $zrzut).Replace('__TMP__', $tmp).Replace('__TRZYMACZ__', $trzymacz).Replace('__MS_KROTKO__', "$MS_TRZYMANIA_KROTKO").Replace('__MS_DLUGO__', "$MS_TRZYMANIA_DLUGO").Replace('__ZAJETY__', ('$' + "$($Zajety -and $Schowek)")).Replace('__SCHOWEK__', ('$' + "$([bool]$Schowek)")).Replace('__PRZED__', $Przed.Replace("'", "''")).Replace('__KLIK__', $Klik.Replace("'", "''")) },
+    @{ K = 'function Otworz-Terminal([string]$kat, [string]$id, [string]$start) {'; Z = $atrapaTerminala.Replace('__LOG__', $logTerminala).TrimEnd() },
+    @{ K = 'function Odpal-W-Tle($p, [string]$wznow = "") {'; Z = $atrapaOdpal.Replace('__LOG__', $logOdpal).TrimEnd() },
+    @{ K = 'function Pokaz-Blad([string]$tekst) {'; Z = $atrapaBledu.Replace('__LOG__', $logBledow).TrimEnd() },
     @{ K = '[void]$f.ShowDialog()'; Z = $petla.Replace('__RAPORT__', $raport) },
     @{ K = '"Local\MegaRuchacz-Terminy-Start"'; Z = '"Local\MegaRuchacz-Terminy-Start-TEST-OKNA"' },
     @{ K = '"Local\MegaRuchacz-Terminy-Okno"'; Z = '"Local\MegaRuchacz-Terminy-Okno-TEST-OKNA"' })
@@ -280,6 +352,9 @@ function Kopia([string]$wariant, [hashtable[]]$podmiany, [bool]$Zajety = $true) 
     if ($n -ne 1) { throw "kopia '$wariant': kotwica wystepuje $n razy (ma byc 1): $($p.K)" }
     $kod = $kod.Replace($p.K, $p.Z)
   }
+  # Bez -Schowek proby schowka w haku musza byc wylaczone - inaczej porazka przygotowania, nie
+  # cichy zapis do schowka uzytkownika.
+  if ((-not $Schowek) -and (-not $kod.Contains("if (`$False) {`r`n    # zaznaczenie calego pola"))) { throw "kopia '$wariant': proby schowka w haku nie sa wylaczone, a test idzie bez -Schowek" }
   foreach ($zakaz in @('.Activate()', 'SetForegroundWindow', 'ShowDialog', '$f.TopMost = $true', '$f.ShowInTaskbar = $true')) {
     if ($kod.Contains($zakaz)) { throw "kopia '$wariant' nadal zawiera '$zakaz' - okno mogloby wyskoczyc na ekran" }
   }
@@ -288,10 +363,15 @@ function Kopia([string]$wariant, [hashtable[]]$podmiany, [bool]$Zajety = $true) 
   return [pscustomobject]@{ Plik = $plik; Raport = $raport; Zrzut = $zrzut }
 }
 
+function Linie-Json([string]$f) {
+  if (-not (Test-Path -LiteralPath $f)) { return @() }
+  return @([System.IO.File]::ReadAllText($f, [System.Text.Encoding]::UTF8) -split "\r?\n" | Where-Object { $_ } | ForEach-Object { $_ | ConvertFrom-Json })
+}
+
 # Kopia jako osobny proces: bez okna konsoli, wyjscie przechwycone, ubijana po 120 s.
 function Uruchom($kopia) {
   [System.IO.File]::WriteAllLines($plikP, [string[]]$linie, $BezBom)
-  foreach ($x in @($dziennik, $plikOkna, $kopia.Raport, "$($kopia.Raport).zwis")) { if (Test-Path -LiteralPath $x) { Remove-Item -LiteralPath $x -Force } }
+  foreach ($x in @($dziennik, $plikOkna, $kopia.Raport, "$($kopia.Raport).zwis", $logTerminala, $logOdpal, $logBledow)) { if (Test-Path -LiteralPath $x) { Remove-Item -LiteralPath $x -Force } }
   $psi = New-Object System.Diagnostics.ProcessStartInfo
   $psi.FileName = "powershell.exe"
   $psi.Arguments = "-NoProfile -NonInteractive -ExecutionPolicy Bypass -File `"$($kopia.Plik)`" -Zrodlo `"$Zrodlo`" -KatalogDomowy `"$dom`" -Plik `"$plikP`" -Dzis $dzis"
@@ -305,7 +385,10 @@ function Uruchom($kopia) {
   $wy = $p.StandardOutput.ReadToEndAsync(); $bl = $p.StandardError.ReadToEndAsync()
   $zabity = $false
   if (-not $p.WaitForExit(120000)) { $p.Kill(); $p.WaitForExit(5000) | Out-Null; $zabity = $true }
-  $r = [pscustomobject]@{ Kod = $p.ExitCode; Zabity = $zabity; Wyjscie = "$($wy.Result)$($bl.Result)".Trim(); Raport = $null; Dziennik = "" }
+  $r = [pscustomobject]@{ Kod = $p.ExitCode; Zabity = $zabity; Wyjscie = "$($wy.Result)$($bl.Result)".Trim(); Raport = $null; Dziennik = ""
+                          Przypomnienia = [System.IO.File]::ReadAllText($plikP, [System.Text.Encoding]::UTF8)
+                          Terminal = @(Linie-Json $logTerminala); Odpal = @(Linie-Json $logOdpal); Bledy = "" }
+  if (Test-Path -LiteralPath $logBledow) { $r.Bledy = [System.IO.File]::ReadAllText($logBledow, [System.Text.Encoding]::UTF8).Trim() }
   if (Test-Path -LiteralPath $kopia.Raport) { $r.Raport = [System.IO.File]::ReadAllText($kopia.Raport, [System.Text.Encoding]::UTF8) | ConvertFrom-Json }
   if (Test-Path -LiteralPath $dziennik) { $r.Dziennik = [System.IO.File]::ReadAllText($dziennik, [System.Text.Encoding]::UTF8) }
   if (Test-Path -LiteralPath "$($kopia.Raport).zwis") { $r.Wyjscie += " | okno nie zamknelo sie samo (bezpiecznik 90 s)" }
@@ -441,6 +524,119 @@ $OPISY_NIEP = [ordered]@{
   "uciecie" = "okno niepowodzenia: dlugi powod miesci sie bez uciecia"
 }
 
+# ---------------------------------------------------------------- okno decyzji
+$MD_DEC = Join-Path $katMr "przypomnienia-wyniki\1.md"
+$SESJA_DEC = "sesja-okno-decyzji"
+$TYTUL_DEC = "Przypomnienie #1 – potrzebna Twoja decyzja"
+$PYT = "Grafiki PT02: od czego zacząć poprawę niemieckich tekstów?"
+$OPCJE = @("Jeden zapach na próbę", "Od razu wszystkie")
+$PYT_DL = ("Grafiki PT02 dla wszystkich zapachów: w opisach po niemiecku są literówki i zdania przetłumaczone słowo w słowo, " +
+           "a część napisów na zdjęciach nie mieści się w ramkach. Od czego zacząć poprawę, żeby jak najszybciej było widać efekt w sprzedaży?")
+$OPCJE_DL = @("Lawenda na próbę", "Od razu wszystkie zapachy",
+              "Najpierw tylko te zapachy, które w ostatnich 14 miesiącach miały najwięcej zakupów z wyszukiwania na Amazon DE, a resztę zostaw na później, gdy zobaczymy wynik",
+              "Wstrzymaj & wróć za tydzień")
+$ZROB = 'Kliknij w Seller Central „Zatwierdź wysyłkę” dla wysyłki FBA15K do magazynu w Niemczech.'   # „” to dla PS cudzyslow - tylko w '...'
+$RAPORT_DEC = "WYNIK: POTRZEBUJE_CIEBIE: ...`r`n`r`nSprawdziłem grafiki PT02 w 12 zapachach.`r`nZażółć gęślą jaźń - polskie litery w raporcie."
+$RAPORT_DL = $RAPORT_DEC + (@(1..30 | ForEach-Object { "`r`nLinia $_ raportu: co sprawdziłem i co wyszło w zapachu numer $_." }) -join "")
+function Napis-PS([string]$t) { return "'" + $t.Replace("'", "''") + "'" }
+# Kopia pokazuje okno decyzji dla #1 zamiast zwyklego okna; $w jak z Ocen-Przebieg.
+function Wstaw-Decyzje([string]$rodzaj, [string]$zdanie, [string[]]$opcje, [string]$raport) {
+  $op = (@($opcje) | ForEach-Object { Napis-PS $_ }) -join ", "
+  $w = "([pscustomobject]@{ Wynik = 'czlowiek'; Rodzaj = $(Napis-PS $rodzaj); CoZrobic = $(Napis-PS $zdanie); Opcje = @($op); Sesja = $(Napis-PS $SESJA_DEC); Raport = $(Napis-PS $raport) })"
+  return @{ K = 'try { Okno-Przypomnien $doOkna } finally {'
+            Z = "try { Okno-Decyzji (@(`$doOkna | Where-Object { `$_.id -eq 1 })[0]) $w $(Napis-PS $projekt) 'C:\atrapa\claude.exe' $(Napis-PS $MD_DEC) } finally {" }
+}
+
+# $o: Przyciski - widoczne "napis=akcja" po kolei; Szczegoly - rozwiniete?; Raport - tekst w nich;
+# Data - termin #1 po przebiegu; Dziennik - wzory, ktore musza stac; Terminal / Odpal - ile wywolan
+# atrap; Klik - czy klik zamknal okno od razu; Wielowierszowy - napis przycisku, ktory musi sie zawinac.
+function Ocen-Decyzji($u, [string]$zdanie, [hashtable]$o) {
+  $wy = [ordered]@{}
+  $r = $u.Raport
+  $ok = (-not $u.Zabity) -and ($u.Kod -eq 0) -and $r -and (-not $r.Wywrotka) -and ($u.Dziennik -notmatch 'WYWROTKA') -and ($u.Dziennik -notmatch 'samoczynne') -and
+        ($u.Dziennik -match 'okno decyzji pokazane: #1 \((pytanie|czynnosc)\)') -and ($r.Watek -eq "STA") -and (@($r.Uwagi).Count -eq 0) -and (-not $u.Bledy)
+  $wy["przebieg"] = @($ok, "kod $($u.Kod), zabity=$($u.Zabity), wywrotka '$($r.Wywrotka)', uwagi '$(@($r.Uwagi) -join '; ')', ostrzezenia '$($u.Bledy)', wyjscie '$($u.Wyjscie)'")
+  if (-not $r) { foreach ($n in @("teksty", "przyciski", "szczegoly", "uciecie", "po")) { $wy[$n] = @($false, "brak raportu z okna") }; return $wy }
+  $k = @($r.Kontrolki | Where-Object { $_.Widoczny })
+  $pola = @($k | Where-Object { $_.Typ -eq "TextBox" })
+  $zd = @($pola | Where-Object { $_.Tekst -ceq $zdanie })
+  $inne = @($k | Where-Object { ($_.Typ -ne "FlowLayoutPanel") -and ($_.Tekst -cne $zdanie) } | ForEach-Object { $_.Pkt } | Measure-Object -Maximum).Maximum
+  $etykiety = @($k | Where-Object { $_.Typ -eq "Label" })
+  $wy["teksty"] = @((($r.Tytul -ceq $TYTUL_DEC) -and ($zd.Count -eq 1) -and ($zd[0].Pkt -gt $inne) -and ($etykiety.Count -eq 0)),
+                    "tytul '$($r.Tytul)', zdanie w polu: $($zd.Count) (czcionka $(@($zd | ForEach-Object { $_.Pkt }) -join '') pkt, reszta najwyzej $inne pkt), Label $($etykiety.Count)")
+  $przyc = @($k | Where-Object { $_.Typ -eq "Button" } | ForEach-Object { "$($_.Tekst)=$($_.Akcja)" }) -join ", "
+  $wy["przyciski"] = @(($przyc -ceq $o.Przyciski), "przyciski: $przyc")
+  $rap = @($pola | Where-Object { $_.Tekst -cne $zdanie })
+  $kop = @($r.Kopiuj | Where-Object { $_.NapisPo -eq "Skopiowano" })
+  if ($o.Szczegoly) {
+    $tekstSz = "Przypomnienie #1: $tresc1`r`nPełny raport: $MD_DEC`r`n`r`n$($o.Raport)"
+    # Bez -Schowek tylko obecnosc przycisku Kopiuj (z -Schowek tez to, co wklada do schowka).
+    $widacKopiuj = @($k | Where-Object { ($_.Typ -eq "Button") -and ($_.Tekst -eq "Kopiuj") }).Count -eq 1
+    $okKop = $widacKopiuj -and ((-not $Schowek) -or (($kop.Count -eq 1) -and ($kop[0].Schowek -ceq $tekstSz)))
+    $okSz = ($rap.Count -eq 1) -and ($rap[0].Tekst -ceq $tekstSz) -and $okKop
+    $wy["szczegoly"] = @($okSz, "rozwiniete: pol z raportem $($rap.Count), tekst zgodny: $(($rap.Count -eq 1) -and ($rap[0].Tekst -ceq $tekstSz)), widac Kopiuj: $widacKopiuj, Kopiuj do schowka: $(if ($Schowek) { @($kop | ForEach-Object { $_.Schowek -ceq $tekstSz }) -join '' } else { 'nie sprawdzane (bez -Schowek)' })")
+  } else {
+    $wy["szczegoly"] = @((($rap.Count -eq 0) -and (@($k | Where-Object { $_.Tekst -eq "Kopiuj" }).Count -eq 0)), "zwiniete: widocznych pol poza zdaniem $($rap.Count), widoczny Kopiuj: $(@($k | Where-Object { $_.Tekst -eq 'Kopiuj' }).Count)")
+  }
+  $zleU = @()
+  foreach ($c in $k | Where-Object { $_.Typ -ne "FlowLayoutPanel" }) {
+    $nazwa = "'$($c.Tekst.Substring(0, [Math]::Min(25, $c.Tekst.Length)))'"
+    if (($c.WOknieDol -gt $r.KlientWys) -or ($c.WOkniePrawa -gt $r.KlientSzer) -or ($c.Prawa -gt $c.SzerRodzica)) { $zleU += "$nazwa poza oknem (dol $($c.WOknieDol)/$($r.KlientWys), prawa $($c.WOkniePrawa)/$($r.KlientSzer))" }
+    if (($c.Typ -eq "TextBox") -and ($c.Paski -eq "None") -and (($c.PierwszaY -ne 0) -or (($c.OstatniaY + $c.WysCzcionki) -gt $c.WysWnetrza))) { $zleU += "$nazwa uciete: linii $($c.Linii), ostatnia y=$($c.OstatniaY)+$($c.WysCzcionki) > $($c.WysWnetrza)" }
+    if (($c.Typ -eq "Button") -and ($c.Potrzebna -gt $c.Wys)) { $zleU += "$nazwa przycisk za niski: $($c.Wys) < $($c.Potrzebna)" }
+  }
+  if ($o.Wielowierszowy) {
+    $b = @($k | Where-Object { ($_.Typ -eq "Button") -and ($_.Tekst -ceq $o.Wielowierszowy) })
+    $jeden = @($k | Where-Object { ($_.Typ -eq "Button") -and ($_.Akcja -eq "opcja") -and ($_.Tekst -cne $o.Wielowierszowy) } | ForEach-Object { $_.Wys } | Measure-Object -Maximum).Maximum
+    if (($b.Count -ne 1) -or ($b[0].Wys -le $jeden)) { $zleU += "dluga odpowiedz nie zawinieta: wys $(@($b | ForEach-Object { $_.Wys }) -join '') przy jednowierszowych $jeden" }
+  }
+  $wy["uciecie"] = @((($zleU.Count -eq 0) -and ($pola.Count -gt 0)), "okno $($r.KlientSzer)x$($r.KlientWys); $(if ($zleU) { $zleU -join '; ' } else { 'nic nie uciete' })")
+  $zleP = @()
+  $data = [regex]::Match($u.Przypomnienia, "(?m)^- \[.\] #1 (\d{4}-\d{2}-\d{2}) ").Groups[1].Value
+  if ($data -ne $o.Data) { $zleP += "termin #1 '$data' zamiast '$($o.Data)'" }
+  foreach ($wz in @($o.Dziennik)) { if ($u.Dziennik -notmatch $wz) { $zleP += "w dzienniku brak '$wz'" } }
+  if ($u.Terminal.Count -ne $o.Terminal) { $zleP += "terminali $($u.Terminal.Count) zamiast $($o.Terminal)" }
+  if ($u.Odpal.Count -ne $o.Odpal) { $zleP += "procesow w tle $($u.Odpal.Count) zamiast $($o.Odpal)" }
+  if ($o.Klik -and -not ($r.Klik -and $r.Klik.Zamkniete -and ($r.Klik.Ms -lt 3000))) { $zleP += "klik nie zamknal okna od razu: $($r.Klik | ConvertTo-Json -Compress)" }
+  if ($o.Po) { $zleP += @(& $o.Po $u) }
+  $wy["po"] = @(($zleP.Count -eq 0), "$(if ($zleP) { $zleP -join '; ' } else { "termin #1 $data, terminali $($u.Terminal.Count), procesow w tle $($u.Odpal.Count)" })")
+  return $wy
+}
+$OPISY_DEC = [ordered]@{
+  "przebieg" = "przeszla bez wywrotki i bez ostrzezen, wpis 'okno decyzji pokazane'"
+  "teksty" = "tytul 'Przypomnienie #1 – potrzebna Twoja decyzja', zdanie w polu i wieksza czcionka niz reszta, zadnego Label"
+  "przyciski" = "wlasciwe przyciski po kolei"
+  "szczegoly" = "szczegoly (raport Claude + Kopiuj) zwiniete albo po rozwinieciu kompletne i kopiowalne"
+  "uciecie" = "nic nie wystaje poza okno, tekst pol i przyciskow bez uciecia"
+  "po" = "po zamknieciu / kliknieciu: termin, dziennik, terminal i proces w tle jak trzeba"
+}
+$PRZYC_PYT = "Jeden zapach na próbę=opcja, Od razu wszystkie=opcja, Odłóż na jutro=odloz, Otwórz rozmowę=rozmowa, Szczegóły ▸=szczegoly"
+$WIADOMOSC_OPCJI = "Użytkownik wybrał: Od razu wszystkie. Kontynuuj zadanie."
+$PRZYPADKI_DEC = [ordered]@{
+  "decyzja" = @{ Opis = "okno decyzji (PYTANIE, makieta), krzyzyk"; Wstaw = (Wstaw-Decyzje "pytanie" $PYT $OPCJE $RAPORT_DEC); Zdanie = $PYT
+    O = @{ Przyciski = $PRZYC_PYT; Data = $jutro; Terminal = 0; Odpal = 0; Dziennik = @('okno decyzji #1 zamkniete krzyzykiem - na jutro - ok') } }
+  "decyzja-dluga" = @{ Opis = "okno decyzji: dlugie pytanie i 4 odpowiedzi, jedna dluzsza niz okno"; Wstaw = (Wstaw-Decyzje "pytanie" $PYT_DL $OPCJE_DL $RAPORT_DEC); Zdanie = $PYT_DL
+    O = @{ Przyciski = ((@($OPCJE_DL | ForEach-Object { "$_=opcja" }) + @("Odłóż na jutro=odloz", "Otwórz rozmowę=rozmowa", "Szczegóły ▸=szczegoly")) -join ", ")
+           Data = $jutro; Terminal = 0; Odpal = 0; Dziennik = @('zamkniete krzyzykiem - na jutro - ok'); Wielowierszowy = $OPCJE_DL[2] } }
+  "decyzja-czynnosc" = @{ Opis = "okno decyzji (ZROB) z rozwinietymi szczegolami (dlugi raport)"; Wstaw = (Wstaw-Decyzje "czynnosc" $ZROB @() $RAPORT_DL); Zdanie = $ZROB; Przed = "Szczegóły ▸"
+    O = @{ Przyciski = "Zrobione=zrobilem, Odłóż na jutro=odloz, Otwórz rozmowę=rozmowa, Szczegóły ▾=szczegoly, Kopiuj="; Szczegoly = $true; Raport = $RAPORT_DL
+           Data = $jutro; Terminal = 0; Odpal = 0; Dziennik = @('przycisk Szczegoly #1: rozwiniete', 'zamkniete krzyzykiem - na jutro - ok') } }
+  "decyzja-opcja" = @{ Opis = "klik odpowiedzi: wznowienie tej rozmowy w tle, okno od razu zamkniete, bez terminala"; Wstaw = (Wstaw-Decyzje "pytanie" $PYT $OPCJE $RAPORT_DEC); Zdanie = $PYT; Klik = "Od razu wszystkie"
+    O = @{ Przyciski = $PRZYC_PYT; Data = $dzis; Terminal = 0; Odpal = 1; Klik = $true; Dziennik = @("przycisk 'Od razu wszystkie' #1: wznawiam rozmowe '$SESJA_DEC' w tle", 'okno decyzji zamkniete - obsluzone')
+           Po = { param($u)
+             $z = @()
+             if ($u.Odpal.Count -eq 1) {
+               $wz = $null; try { $wz = $u.Odpal[0].plik | ConvertFrom-Json } catch { $z += "plik wznowienia nieczytelny: '$($u.Odpal[0].plik)'" }
+               if ("$($u.Odpal[0].id)" -ne "1" -or -not $wz -or $wz.sesja -ne $SESJA_DEC -or $wz.wiadomosc -cne $WIADOMOSC_OPCJI) { $z += "wznowienie: id '$($u.Odpal[0].id)', plik '$($u.Odpal[0].plik)'" }
+             }
+             $z } } }
+  "decyzja-odloz" = @{ Opis = "klik 'Odloz na jutro': na jutro, okno zamkniete, nic w tle"; Wstaw = (Wstaw-Decyzje "pytanie" $PYT $OPCJE $RAPORT_DEC); Zdanie = $PYT; Klik = "Odłóż na jutro"
+    O = @{ Przyciski = $PRZYC_PYT; Data = $jutro; Terminal = 0; Odpal = 0; Klik = $true; Dziennik = @('przycisk Odloz na jutro #1 - ok', 'okno decyzji zamkniete - obsluzone') } }
+  "decyzja-rozmowa" = @{ Opis = "klik 'Otworz rozmowe': terminal z claude --resume tej rozmowy, zostaje na dzis"; Wstaw = (Wstaw-Decyzje "pytanie" $PYT $OPCJE $RAPORT_DEC); Zdanie = $PYT; Klik = "Otwórz rozmowę"
+    O = @{ Przyciski = $PRZYC_PYT; Data = $dzis; Terminal = 1; Odpal = 0; Klik = $true; Dziennik = @('przycisk Otworz rozmowe #1: ATRAPA terminala \(zostaje w toku\)')
+           Po = { param($u) if (($u.Terminal.Count -eq 1) -and -not "$($u.Terminal[0].skrypt)".Contains("--resume '$SESJA_DEC'")) { "terminal bez --resume '$SESJA_DEC'" } } } }
+}
+
 function Pompuj-Schowek([int]$ms) { $do = [datetime]::Now.AddMilliseconds($ms); while ([datetime]::Now -lt $do) { [System.Windows.Forms.Application]::DoEvents(); Start-Sleep -Milliseconds 20 } }
 function Schowek-Stan {
   $s = [pscustomobject]@{ Tekst = $null; Formaty = [ordered]@{}; Nieodczytane = @() }
@@ -452,7 +648,11 @@ function Schowek-Stan {
 
 # ---------------------------------------------------------------- przebiegi
 $schowek = $null; $stan = $null
-if ([System.Threading.Thread]::CurrentThread.ApartmentState -ne "STA") {
+# Oceny i sabotaze, ktore wymagaja schowka - bez -Schowek nie sa ani uruchamiane, ani liczone.
+$PROBY_SCHOWKA = @("zaznaczenie", "kopiuj", "kopiuj-zajety", "kopiuj-blad")
+if (-not $Schowek) {
+  Write-Host "próby schowka pominięte (użyj -Schowek)"
+} elseif ([System.Threading.Thread]::CurrentThread.ApartmentState -ne "STA") {
   Wynik "watek STA (schowek)" $false "test musi chodzic w STA (powershell.exe 5.1 -File), inaczej nie zachowa schowka uzytkownika"
 } else {
   # Zachowanie schowka uzytkownika: wszystkie formaty, ktore da sie odczytac; nieodczytane wymienione.
@@ -468,15 +668,17 @@ if ([System.Threading.Thread]::CurrentThread.ApartmentState -ne "STA") {
   }
   if (-not $stan) { Wynik "schowek uzytkownika odczytany" $false "brak dwoch zgodnych odczytow w 10 probach - test nie rusza schowka" }
 }
-if ($stan) {
-  $schowek = $stan.Formaty; $nieodczytane = $stan.Nieodczytane; $tekstPrzed = $stan.Tekst
-  Write-Host "Schowek uzytkownika: zapamietane formaty $($schowek.Count) ($((@($schowek.Keys)) -join ', ')); nieodczytane: $($nieodczytane -join ', ')"
+if ($stan -or -not $Schowek) {
+  if ($stan) {
+    $schowek = $stan.Formaty; $nieodczytane = $stan.Nieodczytane; $tekstPrzed = $stan.Tekst
+    Write-Host "Schowek uzytkownika: zapamietane formaty $($schowek.Count) ($((@($schowek.Keys)) -join ', ')); nieodczytane: $($nieodczytane -join ', ')"
+  }
 
   try {
     $prawdziwa = Kopia "prawdziwa" @()
     $u = Uruchom $prawdziwa
     $oc = Ocen $u
-    foreach ($n in $OPISY.Keys) { Wynik $OPISY[$n] $oc[$n][0] $oc[$n][1] }
+    foreach ($n in $OPISY.Keys) { if ($Schowek -or ($PROBY_SCHOWKA -notcontains $n)) { Wynik $OPISY[$n] $oc[$n][0] $oc[$n][1] } }
     Write-Host "Zrzut okna: $($prawdziwa.Zrzut) (okno $($u.Raport.Okno), ekran $($u.Raport.Ekran))"
 
     $sabotaze = @(
@@ -498,6 +700,7 @@ if ($stan) {
     $nr = 0
     foreach ($s in $sabotaze) {
       $nr++
+      if ((-not $Schowek) -and ($PROBY_SCHOWKA -contains $s.Sprawdzenie)) { continue }
       try {
         $kop = Kopia "sabotaz$nr" @(@{ K = $s.K; Z = $s.Z }) -Zajety ($s.Sprawdzenie -like "kopiuj-*")
       } catch { Wynik "sabotaz '$($s.Nazwa)' wylapany" $false "przygotowanie: $($_.Exception.Message)"; continue }
@@ -523,27 +726,56 @@ if ($stan) {
       $os = Ocen-Niepowodzenia (Uruchom $kop)
       Wynik "negatywna: sabotaz '$($s.Nazwa)' wylapany przez '$($s.Sprawdzenie)'" ((-not $os[$s.Sprawdzenie][0]) -and $os["przebieg"][0]) "z sabotazem: $($os[$s.Sprawdzenie][1])"
     }
+
+    # Okno decyzji (bez prob z trzymanym schowkiem).
+    foreach ($nazwa in $PRZYPADKI_DEC.Keys) {
+      $c = $PRZYPADKI_DEC[$nazwa]
+      $kd = Kopia $nazwa @($c.Wstaw) -Zajety $false -Przed "$($c.Przed)" -Klik "$($c.Klik)"
+      $od = Ocen-Decyzji (Uruchom $kd) $c.Zdanie $c.O
+      foreach ($n in $OPISY_DEC.Keys) { Wynik "$($c.Opis): $($OPISY_DEC[$n])" $od[$n][0] $od[$n][1] }
+      Write-Host "Zrzut okna decyzji ($nazwa): $($kd.Zrzut)"
+    }
+    $sabotazeD = @(
+      @{ Nazwa = "szczegoly rozwiniete od razu"; Przypadek = "decyzja"; Sprawdzenie = "szczegoly"
+         K = '$panel.Visible = $false'; Z = '$panel.Visible = $true' },
+      @{ Nazwa = "stala wysokosc przycisku odpowiedzi"; Przypadek = "decyzja-dluga"; Sprawdzenie = "uciecie"
+         K = '+ $nat.Height - $jeden.Height))'; Z = '* 0 + 34))' },
+      @{ Nazwa = "krzyzyk w oknie decyzji bez przeniesienia na jutro"; Przypadek = "decyzja"; Sprawdzenie = "po"
+         K = 'if ($script:Pozostalo -gt 0) { Zamknij-Decyzje-Krzyzykiem }'; Z = 'if ($false) { }' },
+      @{ Nazwa = "odpowiedz otwiera terminal zamiast wznowic rozmowe w tle"; Przypadek = "decyzja-opcja"; Sprawdzenie = "po"
+         K = '"opcja"    { return (Wznow-W-Tle'; Z = '"opcja" { $null = Okno-Po-Przebiegu $p $p.katalog $p.claude $p.wynikPrzebiegu $p.md; return $true }; "opcja-sabotaz" { return (Wznow-W-Tle' })
+    foreach ($s in $sabotazeD) {
+      $nr++
+      $c = $PRZYPADKI_DEC[$s.Przypadek]
+      try { $kop = Kopia "sabotaz$nr" @($c.Wstaw, @{ K = $s.K; Z = $s.Z }) -Zajety $false -Przed "$($c.Przed)" -Klik "$($c.Klik)" }
+      catch { Wynik "sabotaz '$($s.Nazwa)' wylapany" $false "przygotowanie: $($_.Exception.Message)"; continue }
+      $os = Ocen-Decyzji (Uruchom $kop) $c.Zdanie $c.O
+      Wynik "negatywna: sabotaz '$($s.Nazwa)' wylapany przez '$($s.Sprawdzenie)'" ((-not $os[$s.Sprawdzenie][0]) -and $os["teksty"][0]) "z sabotazem: $($os[$s.Sprawdzenie][1])"
+    }
   } catch {
     Wynik "WYWROTKA TESTU" $false "$($_.Exception.Message) @ $($_.InvocationInfo.PositionMessage)"
   } finally {
-    # Przywrocenie schowka uzytkownika - z ponawianiem jak Do-Schowka (bez wlasnego czekania .NET,
-    # ktore przy programie czytajacym schowek czeka na prozno) i sprawdzeniem dwoma odczytami.
-    $nowy = New-Object System.Windows.Forms.DataObject
-    foreach ($fmt in $schowek.Keys) { $nowy.SetData($fmt, $schowek[$fmt]) }
-    $blad = "nie probowalem"
-    for ($i = 0; $i -lt 30; $i++) {
-      try {
-        if ($schowek.Count -gt 0) { [System.Windows.Forms.Clipboard]::SetDataObject($nowy, $true, 0, 0) } else { [System.Windows.Forms.Clipboard]::SetDataObject((New-Object System.Windows.Forms.DataObject), $true, 0, 0) }
-        $blad = ""; break
-      } catch { $blad = $_.Exception.Message; Pompuj-Schowek 100 }
+    # Przywrocenie schowka uzytkownika (tylko z -Schowek - bez niego test schowka nie ruszal) - z
+    # ponawianiem jak Do-Schowka (bez wlasnego czekania .NET, ktore przy programie czytajacym schowek
+    # czeka na prozno) i sprawdzeniem dwoma odczytami.
+    if ($stan) {
+      $nowy = New-Object System.Windows.Forms.DataObject
+      foreach ($fmt in $schowek.Keys) { $nowy.SetData($fmt, $schowek[$fmt]) }
+      $blad = "nie probowalem"
+      for ($i = 0; $i -lt 30; $i++) {
+        try {
+          if ($schowek.Count -gt 0) { [System.Windows.Forms.Clipboard]::SetDataObject($nowy, $true, 0, 0) } else { [System.Windows.Forms.Clipboard]::SetDataObject((New-Object System.Windows.Forms.DataObject), $true, 0, 0) }
+          $blad = ""; break
+        } catch { $blad = $_.Exception.Message; Pompuj-Schowek 100 }
+      }
+      $po = $null; $zgodne = $false
+      for ($i = 0; ($i -lt 10) -and (-not $zgodne); $i++) {
+        Pompuj-Schowek 200
+        try { $po = (Schowek-Stan).Tekst } catch { $po = "BLAD ODCZYTU: $($_.Exception.Message)" }
+        $zgodne = ("$po" -ceq "$tekstPrzed") -and (($null -eq $po) -eq ($null -eq $tekstPrzed))
+      }
+      Wynik "schowek uzytkownika przywrocony" ((-not $blad) -and $zgodne) ("tekst przed: $(if ($null -eq $tekstPrzed) { 'brak' } else { "$($tekstPrzed.Length) zn." }), po: $(if ($null -eq $po) { 'brak' } else { "$($po.Length) zn." }); formatow $($schowek.Count)$(if ($blad) { "; zapis: $blad" })")
     }
-    $po = $null; $zgodne = $false
-    for ($i = 0; ($i -lt 10) -and (-not $zgodne); $i++) {
-      Pompuj-Schowek 200
-      try { $po = (Schowek-Stan).Tekst } catch { $po = "BLAD ODCZYTU: $($_.Exception.Message)" }
-      $zgodne = ("$po" -ceq "$tekstPrzed") -and (($null -eq $po) -eq ($null -eq $tekstPrzed))
-    }
-    Wynik "schowek uzytkownika przywrocony" ((-not $blad) -and $zgodne) ("tekst przed: $(if ($null -eq $tekstPrzed) { 'brak' } else { "$($tekstPrzed.Length) zn." }), po: $(if ($null -eq $po) { 'brak' } else { "$($po.Length) zn." }); formatow $($schowek.Count)$(if ($blad) { "; zapis: $blad" })")
   }
 }
 
