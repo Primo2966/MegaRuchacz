@@ -3,7 +3,7 @@
 # przypomnieniu, dluga tresc bez uciecia, porazka schowka widoczna na przycisku i w dzienniku.
 #   powershell -ExecutionPolicy Bypass -File zasobnik\test-terminy-okno.ps1 [-Zrodlo <repo>] [-Zrzuty <kat>]
 # Wszystko na kopii terminy.ps1, sztucznym katalogu domowym i testowym pliku przypomnien (tylko
-# tryb "przypomnij" - nic sie samo nie uruchamia). Kopia: okno poza ekranem (-5000, 0), bez paska
+# tryb "przypomnij"; kopia kieruje go do okna zamiast w tle). Kopia: okno poza ekranem (-5000, 0), bez paska
 # zadan, bez aktywacji (nie zabiera klawiatury), bez TopMost, klawiatura wylaczona, wlasne zamki,
 # zegar, ktory po pomiarach zamyka okno. Proces kopii bez okna konsoli, ubijany po 120 s.
 # Sabotaze: kopie z Label zamiast pola, zepsutym "Kopiuj", stala wysokoscia pola, cichym bledem
@@ -345,7 +345,9 @@ function Kopia([string]$wariant, [hashtable[]]$podmiany, [bool]$Zajety = $true, 
     @{ K = 'function Pokaz-Blad([string]$tekst) {'; Z = $atrapaBledu.Replace('__LOG__', $logBledow).TrimEnd() },
     @{ K = '[void]$f.ShowDialog()'; Z = $petla.Replace('__RAPORT__', $raport) },
     @{ K = '"Local\MegaRuchacz-Terminy-Start"'; Z = '"Local\MegaRuchacz-Terminy-Start-TEST-OKNA"' },
-    @{ K = '"Local\MegaRuchacz-Terminy-Okno"'; Z = '"Local\MegaRuchacz-Terminy-Okno-TEST-OKNA"' })
+    @{ K = '"Local\MegaRuchacz-Terminy-Okno"'; Z = '"Local\MegaRuchacz-Terminy-Okno-TEST-OKNA"' },
+    # od cd43606 "przypomnij" idzie w tle; test sprawdza rysowanie okna, wiec kopia wymusza stara droge do okna
+    @{ K = 'if ($p.status -eq "otwarte") {   # oba tryby'; Z = 'if ($p.status -eq "otwarte" -and $p.tryb -ne "sam") { $doOkna += $p; continue }; if ($p.status -eq "otwarte") {' })
   $kod = $zrodloSkryptu
   foreach ($p in @($wsp) + @($podmiany)) {
     $n = Ile $kod $p.K

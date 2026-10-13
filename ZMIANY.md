@@ -4,6 +4,13 @@ Każda zmiana wypychana na gita dostaje tu wpis. Numer rośnie wg zasady:
 pierwsza cyfra — przebudowa łamiąca zgodność, druga — nowa funkcja,
 trzecia — poprawka.
 
+## 0.32.1 — 2026-10-13
+
+- **Przypomnienia oznaczone „tylko przypomnij” też robią się same w tle** — wcześniej pokazywały okienko i trzeba było
+  kliknąć „Zrób teraz” (tak było z #10, które Claude potem załatwił bez żadnej pomocy). Teraz każde przypomnienie
+  najpierw próbuje Claude w tle; okno tylko, gdy naprawdę potrzebna Twoja decyzja albo coś się nie udało. Zasada dla AI
+  nie każe już dodawać `--tylko-przypomnij` (flaga przyjmowana dalej, bez skutku).
+
 ## 0.32.0 — 2026-10-12
 
 - **Gdy przypomnienie potrzebuje Twojej decyzji — małe okienko z pytaniem i przyciskami zamiast terminala z długim
