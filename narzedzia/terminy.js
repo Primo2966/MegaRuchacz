@@ -9,10 +9,14 @@
 //              starcie i co godzine 8-20) SAM puszcza Claude Code w tle, bez okna ("claude -p"
 //              w katalogu projektu); status "w toku". Wynik zawsze w ~\.claude\mr\przypomnienia-
 //              wyniki\<id>.json i .md; "nic do zrobienia" = odhaczone bez okna, "potrzebny
-//              czlowiek" albo blad = okno terminala z ta sama rozmowa. Najwyzej JEDNO
-//              samoczynne uruchomienie na przypomnienie. Nie odhaczone do nastepnego dnia ->
+//              czlowiek" = male okno decyzji, blad = samo na jutro i okno niepowodzenia. Najwyzej
+//              JEDNO samoczynne uruchomienie na przypomnienie. Nie odhaczone do nastepnego dnia ->
 //              okno z przyciskami i adnotacja, ze automat nie dokonczyl.
-//   przypomnij - tylko okno z przyciskami "Zrob teraz / Jutro / Zrobione" (potrzebny czlowiek).
+//   przypomnij - od 2026-10-13 dziala tak samo jak "sam" (najpierw Claude w tle, okno tylko przy
+//              problemie). Do tej pory dawal od razu okno z przyciskami, bo zakladajacy zgadywal,
+//              ze potrzebny bedzie czlowiek - #10 stalo tak 12.10 i 13.10, a Claude w tle zrobil je
+//              potem bez pomocy. O czlowieku decyduje Claude po probie (POTRZEBUJE_CIEBIE). Tryb
+//              zostaje w pliku i w --tylko-przypomnij dla zgodnosci ze starymi liniami i wywolaniami.
 // Do tego hook SessionStart Claude Code ("start") - na starcie KAZDEGO okna mowi AI, co jest
 // zalegle; brak zaleglych = brak wyjscia. Hook uklada straznik (Wzory-Hookow-Globalnych,
 // rodzaj "terminy").
@@ -30,7 +34,8 @@
 //   node narzedzia\terminy.js dodaj <kiedy> <projekt> "<tresc>" ["<jak sprawdzic>"] [--tylko-przypomnij]
 //       kiedy: RRRR-MM-DD | DD.MM.RRRR | dzis | jutro | pojutrze | +N | "za N dni" |
 //              "za tydzien" | "za N tygodni";  projekt: sciezka albo nazwa, "." = biezacy katalog
-//       --tryb sam|przypomnij (--tylko-przypomnij = --tryb przypomnij)
+//       --tryb sam|przypomnij (--tylko-przypomnij = --tryb przypomnij; od 2026-10-13 oba tryby
+//       dzialaja tak samo - flaga tylko oznacza linie, zachowana dla starych wywolan)
 //   node narzedzia\terminy.js lista [--wszystkie]
 //   node narzedzia\terminy.js zrobione <id> [<id>...]          (tez: odhacz)
 //   node narzedzia\terminy.js przesun <id> <kiedy>             (wraca do "otwarte")
@@ -61,8 +66,9 @@ const NAGLOWEK = [
   "",
   "Plik tej maszyny. Prowadzi go `narzedzia/terminy.js` (dodaj, lista, zrobione, przesun).",
   "Jedna linia = jedno przypomnienie: `- [ ] #id termin | projekt | treść | sprawdź: jak | tryb: sam | dodane data`.",
-  "`[ ]` czeka, `[~]` w toku (uruchomione, czeka na odhaczenie), `[x]` zrobione. Tryb `sam` = w dniu terminu",
-  "MegaRuchacz sam otwiera Claude Code z tym zadaniem; `przypomnij` = tylko okno z przyciskami.",
+  "`[ ]` czeka, `[~]` w toku (uruchomione, czeka na odhaczenie), `[x]` zrobione. W dniu terminu MegaRuchacz",
+  "sam robi zadanie z Claude Code w tle; okno pokazuje tylko, gdy potrzebny człowiek albo coś nie wyszło.",
+  "Tryb `przypomnij` działa tak samo jak `sam` (zostaje dla zgodności ze starszymi liniami).",
   "Można poprawiać ręcznie, byle zachować układ linii.",
   "",
 ];
@@ -290,7 +296,8 @@ function dodaj(poz, opcje) {
     if (!linie.length) linie = NAGLOWEK.slice();   // nowy plik: naglowek z pusta linia pod spodem
     linie.push(linia(p), "");
     zapisz(plik, linie.join(w.nl));
-    const jak = tryb === "sam" ? "MegaRuchacz sam otworzy Claude Code z tym zadaniem" : "tylko okno z przypomnieniem";
+    // Oba tryby tak samo od 2026-10-13 (zasobnik	erminy.ps1) - "przypomnij" juz nie znaczy "tylko okno".
+    const jak = "MegaRuchacz zrobi je sam w tle, okno tylko gdy potrzebny człowiek albo coś nie wyjdzie";
     console.log(`Dodane przypomnienie #${id} na ${p.termin} (${opisTerminu(d, odDnia)}, tryb ${tryb}: ${jak}): ${projekt} - ${tresc}`);
     console.log(`Plik: ${plik}`);
     ostrzezNieczytelne(w);
@@ -447,7 +454,7 @@ function start(poz, opcje) {
     const pozycje = zal.map((p) => {
       let stanP = opisTerminu(zTekstu(p.termin), odDnia);
       if (p.status === "w toku") stanP += p.tryb === "sam" ? `, automat uruchomił je ${p.wTokuOd} i nie dokończył` : `, uruchomione ${p.wTokuOd}, nie odhaczone`;
-      else if (p.tryb === "sam") stanP += ", uruchomi się samo";
+      else stanP += ", uruchomi się samo";   // oba tryby (od 2026-10-13 "przypomnij" tez w tle)
       let l = `- #${p.id} [${p.termin}, ${stanP}] ${p.projekt}: ${p.tresc}`;
       if (p.sprawdz) l += ` (sprawdź: ${p.sprawdz})`;
       return l;

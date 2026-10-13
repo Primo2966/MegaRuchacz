@@ -2,7 +2,10 @@
 # Wola go nadzorca (zasobnik\nadzorca\stan-terminy.ps1) przy starcie i co godzine 8-20; mozna
 # tez recznie. Plik przypomnien i cala jego logike ma narzedzia\terminy.js - tutaj tylko:
 #
-#   1. tryb "sam", termin dzis albo wczesniej, jeszcze nieuruchomione -> NAJPIERW status "w toku"
+#   1. termin dzis albo wczesniej, jeszcze nieuruchomione, tryb "sam" i od 2026-10-13 takze
+#      "przypomnij" (tryb juz niczego nie rozdziela - o czlowieku decyduje Claude po probie,
+#      POTRZEBUJE_CIEBIE; #10 "przypomnij" stalo dwa dni w oknie, choc dalo sie je zrobic w tle)
+#      -> NAJPIERW status "w toku"
 #      (terminy.js w-toku), POTEM osobny proces bez okna (ten skrypt z -Wykonaj <id>), ktory
 #      puszcza "claude -p" w katalogu projektu (2026-10-08: okno z dlugim raportem przy kazdym
 #      zadaniu bylo zbedne, a wynik ginal przy jego zamknieciu). W tej kolejnosci, bo wywrotka
@@ -29,8 +32,8 @@
 #                      bez limitu dni, a czlowiek dostaje male okno "Nie udalo sie ... Przeniesione
 #                      na jutro" z przyciskami "Sprobuj teraz" / "Odloz na jutro" - nigdy terminal
 #                      z surowa rozmowa Claude (decyzja uzytkownika 2026-10-12).
-#   2. okno z przyciskami "Zrob teraz / Jutro / Zrobione" dla: trybu "przypomnij", spraw "w toku"
-#      od wczoraj albo dawniej (automat nie dokonczyl) i uruchomien, ktore sie nie udaly. Okno
+#   2. okno z przyciskami "Zrob teraz / Jutro / Zrobione" dla: spraw "w toku" od wczoraj albo
+#      dawniej (automat nie dokonczyl) i uruchomien, ktore sie nie udaly. Okno
 #      stoi na wierzchu i na pasku zadan, dopoki ktos nie kliknie. Krzyzyk przy nieobsluzonych
 #      = wroci za 2 godziny (odlozone_do w przypomnienia-okno.txt). Tekst w oknie da sie
 #      zaznaczyc mysza, a przycisk "Kopiuj" daje do schowka naglowek i tresc przypomnienia.
@@ -376,7 +379,7 @@ function Uruchom-Claude($p, [string]$jak) {
   return (Otworz-Terminal $kat "$($p.id)" $start)
 }
 
-# ------------------------------------------------------ tryb "sam": Claude Code w tle
+# ----------------------------------------- tryb "sam" i "przypomnij": Claude Code w tle
 
 # Osobny proces bez okna (ten skrypt z -Wykonaj <id>) - glowny przebieg nie czeka na Claude,
 # wiec zamek startu trwa sekundy; Claude po kolei pilnuje kolejka w procesie. Zwraca opis albo rzuca.
@@ -1267,7 +1270,10 @@ try {
   $uruchomione = 0
   foreach ($p in $zalegle) {
     $p | Add-Member -NotePropertyName uwaga -NotePropertyValue "" -Force
-    if ($p.status -eq "otwarte" -and $p.tryb -eq "sam") {
+    # Tryb "przypomnij" tez najpierw w tle (2026-10-13): zakladajacy zgaduje, ze potrzebny bedzie
+    # czlowiek - #10 "przypomnij" stalo 12.10 i 13.10 w oknie, a Claude w tle zrobil je potem bez
+    # niczyjej pomocy. Czy czlowiek jest potrzebny, mowi Claude po probie (POTRZEBUJE_CIEBIE).
+    if ($p.status -eq "otwarte") {   # oba tryby
       # Procesy w tle ruszaja od razu wszystkie, ale Claude po kolei - czekaja w kolejce (Zajmij-Kolejke).
       if (-not (Zmien-Status "w-toku" @("$($p.id)") "samoczynne #$($p.id): status w toku")) {
         $p.uwaga = "Automat nie zdołał oznaczyć sprawy jako »w toku« i jej nie uruchomił: $($script:OstatniBladStatusu)"
@@ -1276,7 +1282,7 @@ try {
       }
       try {
         $jak = Odpal-W-Tle $p
-        Dopisz-Dziennik "samoczynne #$($p.id) ($($p.termin), $($p.projekt)): $jak"
+        Dopisz-Dziennik "samoczynne #$($p.id) ($($p.termin), $($p.projekt), tryb $($p.tryb)): $jak"
         $uruchomione++
       } catch {
         Dopisz-Dziennik "samoczynne #$($p.id) - NIE URUCHOMILEM zadania w tle: $($_.Exception.Message)"
@@ -1286,14 +1292,16 @@ try {
       }
       continue
     }
-    if ($p.status -eq "otwarte") { $doOkna += $p; continue }   # tryb "przypomnij"
     # "w toku": od dzis = jeszcze chodzi, nie przeszkadzamy; od wczoraj albo dawniej = nie dokonczone
     $od = "$($p.wTokuOd)"
     if ($od.Length -ge 10 -and $od.Substring(0, 10) -lt $dzis) {
-      if ($p.tryb -eq "sam") {
+      # Raport z przebiegu w tle = uruchomil automat; bez niego "przypomnij" sprzed 2026-10-13
+      # mogl ruszyc tylko z przycisku "Zrob teraz".
+      $md = Join-Path $KatWynikow "$($p.id).md"
+      $zTla = Test-Path -LiteralPath $md
+      if ($p.tryb -eq "sam" -or $zTla) {
         $p.uwaga = "Automat uruchomił to zadanie $od, ale nie zostało dokończone (nie odhaczone)."
-        $md = Join-Path $KatWynikow "$($p.id).md"
-        if (Test-Path -LiteralPath $md) { $p.uwaga += " Raport z przebiegu: $md" }
+        if ($zTla) { $p.uwaga += " Raport z przebiegu: $md" }
       }
       else { $p.uwaga = "Uruchomione $od, ale nie zostało dokończone (nie odhaczone)." }
       $doOkna += $p

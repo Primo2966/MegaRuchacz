@@ -1,7 +1,7 @@
 ﻿# Sprawdzenie trybu "sam" w tle (zasobnik\terminy.ps1, 2026-10-08): claude -p bez okna, znacznik
 # WYNIK w pierwszej linii odpowiedzi, wynik zawsze na trwale w ~\.claude\mr\przypomnienia-wyniki\
 # <id>.json + .md, okno terminala (claude --resume z naglowkiem MUSISZ) tylko gdy potrzebny
-# czlowiek, odhaczenie tylko przy "nic", tryb "przypomnij" bez zmian.
+# czlowiek, odhaczenie tylko przy "nic".
 # Od 2026-10-12 (awaria 08:03 - trzy rownolegle claude -p padly na odswiezaniu logowania): Claude
 # po kolei (kolejka), blad przejsciowy ponawiany do 3 razy, kazdy blad = zadanie samo na jutro
 # i okno niepowodzenia (nigdy terminal), powod bledu takze z odpowiedzi Claude, "Zrob teraz"
@@ -29,6 +29,10 @@
 # wznawiaja te sama rozmowe w tle (claude -p --resume), "Otworz rozmowe" otwiera terminal, krzyzyk
 # przenosi na jutro. Sabotaze: terminal jak dawniej, wznowienie bez --resume, wznowienie bez umowy
 # WYNIK, "Zrobione" odhacza od razu, krzyzyk zostawia w toku, parser bez PYTANIE / ZROB.
+# Od 2026-10-13 tryb "przypomnij" jak "sam" (#10 stalo dwa dni w oknie, choc Claude w tle zrobil je
+# potem sam): najpierw Claude w tle, przy NIC zadnego okna, przy POTRZEBUJE_CIEBIE okno decyzji;
+# "Zrob teraz" sprawdzany na sprawie "w toku" od wczoraj. Sabotaze: "przypomnij" prosto do okna
+# (przy NIC i przy POTRZEBUJE_CIEBIE), "przypomnij" w tle i do tego okno.
 param(
   [string]$Zrodlo = (Split-Path -Parent $PSScriptRoot)
 )
@@ -213,6 +217,7 @@ function Linie-Json([string]$f) { return @((Czytaj $f) -split "\r?\n" | Where-Ob
 # ---------------------------------------------------------------- przebieg
 $dzis = (Get-Date).ToString("yyyy-MM-dd")
 $jutro = (Get-Date).AddDays(1).ToString("yyyy-MM-dd")
+$wczoraj = (Get-Date).AddDays(-1).ToString("yyyy-MM-dd")
 function Linia([int]$id, [string]$tresc, [string]$tryb, [string]$proj = $projekt) { return "- [ ] #$id $dzis | $proj | $tresc | sprawdź: w logach | tryb: $tryb | dodane $dzis" }
 $TRESC = "Sprawdzić logi synchronizacji eBay i porównać stany (zażółć)"
 
@@ -600,9 +605,32 @@ $PRZYPADKI = [ordered]@{
       }
       if ((Stan-Linii $u.Przypomnienia 1) -ne "x") { $z += "nie odhaczone: '$(Stan-Linii $u.Przypomnienia 1)'" }
       $z } }
+  # Tryb "przypomnij" od 2026-10-13 jak "sam": najpierw Claude w tle, okno tylko przy problemie
+  # (12.10 i 13.10 #10 "przypomnij" stalo w oknie, a Claude w tle zrobil je potem bez czlowieka).
+  "przypomnij-nic" = @{ Opis = "tryb 'przypomnij' + NIC_NIE_MUSISZ: Claude w tle, zadnego okna, wynik zapisany, odhaczone"; Scen = "nic"
+    Linie = { @(Linia 1 $TRESC "przypomnij") }
+    Ocena = { param($u)
+      $z = @(Usterki-Wspolne $u "nic")
+      if ($u.Json -and $u.Json.wynik -ne "nic") { $z += "wynik '$($u.Json.wynik)'" }
+      if ($u.OknoPrzyp.Trim()) { $z += "okno przypomnien z '$($u.OknoPrzyp.Trim())' - przy 'nic' zadnego okna" }
+      if ($u.Okna.Count -ne 0 -or $u.Niep.Count -ne 0 -or $u.Decyzje.Count -ne 0) { $z += "okna: terminal $($u.Okna.Count), niepowodzenia $($u.Niep.Count), decyzji $($u.Decyzje.Count)" }
+      if ((Stan-Linii $u.Przypomnienia 1) -ne "x") { $z += "nie odhaczone: '$(Stan-Linii $u.Przypomnienia 1)'" }
+      if ($u.Dziennik -notmatch 'samoczynne #1 \([^)]*tryb przypomnij\): w tle') { $z += "w dzienniku brak 'samoczynne #1 (... tryb przypomnij): w tle'" }
+      $z }
+    Dzialal = { param($u) ($u.Kod -eq 0) -and (($u.Claude.Count -ge 1) -or $u.OknoPrzyp.Trim()) } }
+  "przypomnij-pytanie" = @{ Opis = "tryb 'przypomnij' + POTRZEBUJE_CIEBIE: Claude w tle, potem okno decyzji (nie zwykle okno), zostaje w toku"; Scen = "pytanie"
+    Linie = { @(Linia 1 $TRESC "przypomnij") }
+    Ocena = { param($u)
+      $z = @(Usterki-Wspolne $u "pytanie" 1)
+      $z += @(Usterki-Decyzji $u "pytanie" $PYT $OPCJE "sesja-test-pytanie")
+      if ($u.OknoPrzyp.Trim()) { $z += "zwykle okno przypomnien z '$($u.OknoPrzyp.Trim())' obok okna decyzji" }
+      if ((Stan-Linii $u.Przypomnienia 1) -ne "~") { $z += "status '$(Stan-Linii $u.Przypomnienia 1)' zamiast w toku" }
+      $z }
+    Dzialal = { param($u) ($u.Kod -eq 0) -and (($u.Claude.Count -ge 1) -or $u.OknoPrzyp.Trim()) } }
+  # Do zwyklego okna trafia juz tylko sprawa "w toku" od wczoraj (automat nie dokonczyl).
   "zrob-teraz" = @{ Opis = "'Zrob teraz' przy zajetej kolejce: Claude rusza dopiero po jej zwolnieniu, okno mowi, ze czeka"
     Scen = "nic"; Env = @{ MR_TEST_ZROB_TERAZ = "1" }
-    Linie = { @(Linia 1 "Kliknąć w Seller Central" "przypomnij") }
+    Linie = { @("- [~] #1 $wczoraj | $projekt | Kliknąć w Seller Central | tryb: przypomnij | dodane $wczoraj | w toku $wczoraj 10:00") }
     Ocena = { param($u) @(Usterki-Zrob-Teraz $u) }
     Dzialal = { param($u) ($u.Kod -eq 0) -and ($u.Okna.Count -eq 1) } }
 }
@@ -641,19 +669,21 @@ try {
     }
   }
 
-  # Tryb "przypomnij" bez zmian: do okna z przyciskami, bez claude, bez wyniku; obok "sam" (#2).
+  # "przypomnij" (#1) obok "sam" (#2) przy NIC_NIE_MUSISZ: oba w tle, po kolei, oba z wynikiem i
+  # odhaczone, zadnego okna - tryb nie rozdziela juz spraw na "w tle" i "do okna".
   $lin = @((Linia 1 "Kliknąć w Seller Central" "przypomnij"), (Linia 2 $TRESC "sam"))
   $u = Uruchom $prawdziwa "nic" $lin
   $z = @()
   if ($u.Kod -ne 0 -or $u.Dziennik -match 'WYWROTKA') { $z += "kod $($u.Kod), wyjscie '$($u.Wyjscie)'" }
-  if ($u.OknoPrzyp.Trim() -ne "#1") { $z += "okno przypomnien z '$($u.OknoPrzyp.Trim())' zamiast #1" }
-  if ($u.Przypomnienia -notmatch [regex]::Escape($lin[0])) { $z += "linia #1 zmieniona" }
-  if (Test-Path -LiteralPath (Join-Path $katWynikow "1.json")) { $z += "jest wynik dla #1" }
-  if ($u.Claude.Count -ne 1 -or $u.Claude[0].wTle -ne "2") { $z += "claude wolany $($u.Claude.Count) razy, dla '$(@($u.Claude | ForEach-Object { $_.wTle }) -join ',')'" }
-  if ((Stan-Linii $u.Przypomnienia 2) -ne "x" -or -not (Test-Path -LiteralPath (Join-Path $katWynikow "2.json"))) { $z += "#2 (sam, nic) nie odhaczone albo bez wyniku" }
-  if ($u.Okna.Count -ne 0) { $z += "okna terminala: $($u.Okna.Count)" }
+  if ($u.OknoPrzyp.Trim()) { $z += "okno przypomnien z '$($u.OknoPrzyp.Trim())'" }
+  $dla = @($u.Claude | ForEach-Object { $_.wTle } | Sort-Object)
+  if (($dla -join ",") -ne "1,2") { $z += "claude wolany $($u.Claude.Count) razy, dla '$($dla -join ',')' zamiast 1,2" }
+  foreach ($id in 1, 2) {
+    if ((Stan-Linii $u.Przypomnienia $id) -ne "x" -or -not (Test-Path -LiteralPath (Join-Path $katWynikow "$id.json"))) { $z += "#$id nie odhaczone albo bez wyniku" }
+  }
+  if ($u.Okna.Count -ne 0 -or $u.Niep.Count -ne 0 -or $u.Decyzje.Count -ne 0) { $z += "okna: terminal $($u.Okna.Count), niepowodzenia $($u.Niep.Count), decyzji $($u.Decyzje.Count)" }
   if ($u.Zostale.Count -gt 0) { $z += "zostaly procesy: $($u.Zostale -join ', ')" }
-  Wynik "tryb 'przypomnij' bez zmian: okno z przyciskami, bez claude i bez wyniku" ($z.Count -eq 0) "$(if ($z) { $z -join ' | ' } else { 'ok' })"
+  Wynik "'przypomnij' obok 'sam' przy NIC_NIE_MUSISZ: oba w tle, oba odhaczone, zadnego okna" ($z.Count -eq 0) "$(if ($z) { $z -join ' | ' } else { 'ok' })"
 
   # Rozbior prosby z linii WYNIK: POTRZEBUJE_CIEBIE (Rozbierz-Prosbe wyjeta z terminy.ps1 i zdefiniowana
   # tutaj; sabotaz = ta sama funkcja z jedna podmiana). Odpowiedzi nie sa ucinane ani obcinane do 4.
@@ -745,7 +775,13 @@ try {
     @{ Nazwa = "odmowa uprawnien jako 'czlowiek'"; Przypadek = "odmowa"
        K = 'if ($odmowy.Count -gt 0) {'; Z = 'if ($false) {' },
     @{ Nazwa = "odmowa przy 'nic' w ciszy"; Przypadek = "odmowa-nic"
-       K = 'if (($w.Wynik -eq "nic") -and @($w.Odmowy).Count -gt 0) {'; Z = 'if ($false) {' })
+       K = 'if (($w.Wynik -eq "nic") -and @($w.Odmowy).Count -gt 0) {'; Z = 'if ($false) {' },
+    @{ Nazwa = "'przypomnij' prosto do okna jak dawniej (bez Claude w tle)"; Przypadek = "przypomnij-nic"
+       K = 'if ($p.status -eq "otwarte") {   # oba tryby'; Z = 'if ($p.status -eq "otwarte" -and $p.tryb -ne "sam") { $doOkna += $p; continue }; if ($p.status -eq "otwarte") {' },
+    @{ Nazwa = "'przypomnij' w tle i do tego okno"; Przypadek = "przypomnij-nic"
+       K = 'if ($p.status -eq "otwarte") {   # oba tryby'; Z = 'if ($p.status -eq "otwarte") { if ($p.tryb -ne "sam") { $doOkna += $p }' },
+    @{ Nazwa = "'przypomnij' przy POTRZEBUJE_CIEBIE prosto do okna"; Przypadek = "przypomnij-pytanie"
+       K = 'if ($p.status -eq "otwarte") {   # oba tryby'; Z = 'if ($p.status -eq "otwarte" -and $p.tryb -ne "sam") { $doOkna += $p; continue }; if ($p.status -eq "otwarte") {' })
   $nr = 0
   foreach ($s in $sabotaze) {
     $nr++
