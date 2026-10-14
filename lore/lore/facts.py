@@ -207,8 +207,22 @@ FACTS_SCHEMA = json.dumps({
     "required": ["fakty"],
     "additionalProperties": False,
 }, ensure_ascii=False)
+# --tools "" and --system-prompt: the clean start. --safe-mode drops the user's customizations, but
+#   not Claude Code's own baggage: the descriptions of every built-in tool and the default system
+#   prompt of a coding agent went with each call. Measured 2026-10-14 (claude -p, sonnet, the same
+#   trivial question and FACTS_SCHEMA): 20 115 tokens of input and $0.081 cold ($0.016 with the
+#   prefix cached) before, 1 446 tokens and $0.003 cold ($0.002 cached) after; the structured
+#   answer to --json-schema still comes back. The extractor needs no tool — every prompt here says
+#   so. --strict-mcp-config and --disable-slash-commands saved nothing on top (safe-mode already
+#   drops MCP and skills); --setting-sources "" is NOT used: it would also drop the user's effort
+#   level, which changes how the model works, not only what it is told.
+#   The system prompt is ASCII and free of ^ & | < > % — it goes in argv through claude.cmd (cmd.exe).
+CLEAN_SYSTEM_PROMPT = ("You are a non-interactive extraction step of a batch job. Follow the instruction"
+                       " in the user message exactly and return the result only in the requested"
+                       " structured output shape.")
 MODEL_ARGS = ("-p", "--safe-mode", "--no-session-persistence", "--permission-prompts", "none",
-              "--model", "sonnet", "--output-format", "json", "--json-schema", FACTS_SCHEMA)
+              "--model", "sonnet", "--tools", "", "--system-prompt", CLEAN_SYSTEM_PROMPT,
+              "--output-format", "json", "--json-schema", FACTS_SCHEMA)
 
 PROMPT = """Na wejściu (stdin) dostajesz fragmenty rozmów użytkownika z agentem AI.
 
@@ -692,6 +706,12 @@ OPENCODE_ENV = (("XDG_CONFIG_HOME", CONFIG_SLOT), ("OPENCODE_DISABLE_CLAUDE_CODE
                 ("OPENCODE_DISABLE_EXTERNAL_SKILLS", "1"), ("OPENCODE_DISABLE_PROJECT_CONFIG", "1"),
                 ("OPENCODE_PERMISSION", '{"*":"deny"}'))
 OPENCODE_MODEL_ENV = "LORE_OPENCODE_MODEL"
+# Claude Code writes every prompt into the prompt cache, and the write is billed at twice the input
+# price (the one-hour cache); a call of this module is one question, read once and never again —
+# with the clean start (MODEL_ARGS) there is no shared prefix left to reuse either. Measured
+# 2026-10-14 (claude -p, sonnet, the same 18 700-token question): $0.0722 with the cache, $0.0381
+# with DISABLE_PROMPT_CACHING=1, the same structured answer. The answer itself does not change.
+CLAUDE_ENV = (("DISABLE_PROMPT_CACHING", "1"),)
 FORGET_TIMEOUT_S = 60
 
 # best first: when both are installed Claude Code wins, because its switches and its JSON envelope
@@ -702,7 +722,7 @@ FORGET_TIMEOUT_S = 60
 MODEL_CLIS = (
     # name, switches before the prompt, instruction goes on stdin too, switches read off the tool,
     # and optionally: (environment variables, the variable naming the model for `-m`)
-    ("claude", MODEL_ARGS, False, True),
+    ("claude", MODEL_ARGS, False, True, (CLAUDE_ENV, "")),
     ("codex", CODEX_ARGS, True, True),
     ("opencode", OPENCODE_ARGS, True, True, (OPENCODE_ENV, OPENCODE_MODEL_ENV)),
 )

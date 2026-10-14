@@ -90,7 +90,8 @@ def test_kolejka_w_formacie_umowy_bez_autora(klient, capsys):
     assert (klient.home / "przeglad" / "tagi" / ".stan" / "koszt.tsv").exists()
     assert sorted(p.name for p in klient.tmp.iterdir()) == ["home", "lore.db", "wywolania"]
     st = klient.stan()
-    assert st["status"] == "komplet" and st["paczki"] == {"wszystkie": 2, "ok": 2, "bledy": 0, "do_zrobienia": 0}
+    # dwa male projekty w jednej paczce (polacz_paczki - domyslnie u klienta)
+    assert st["status"] == "komplet" and st["paczki"] == {"wszystkie": 1, "ok": 1, "bledy": 0, "do_zrobienia": 0}
     assert st["kolejka"] == str(pliki[0]) and st["wpisow_w_kolejce"] == 3
     m = klient.znacznik()
     assert m and m[1] == "ok" and m[2].startswith("komplet")
@@ -109,10 +110,27 @@ def test_prompty_klienta_bez_primo(klient):
         P.zamien("tekst bez frazy", [("Primo", "ta osoba")])
 
 
+def test_laczenie_projektow_mniej_wywolan_a_zrodla_przy_swoich_projektach(klient):
+    assert P.main(klient.argi) == 0
+    assert klient.wywolania().count("paczka") == 1  # dwa projekty, jedno wywolanie
+    [plik] = (klient.home / "przeglad" / ".stan" / "paczki").glob("*.json")
+    paczka = json.loads(plik.read_text(encoding="utf-8"))
+    assert paczka["projekt"] == "C--Users-Ela-dokumenty+C--Users-Ela-wysylki"
+    po_chunku = {u["chunk_id"]: u["projekt"] for u in paczka["ustalenia"]}
+    assert po_chunku == {1: "C--Users-Ela-dokumenty", 3: "C--Users-Ela-wysylki", 4: "C--Users-Ela-wysylki"}
+    w, _ = P.wczytaj(P.polacz_baze(klient.baza))
+    osobno = P.paczki(w, osoba=P.OSOBA_KLIENT)
+    razem = P.paczki(w, osoba=P.OSOBA_KLIENT, laczenie=True)
+    assert len(osobno) == 2 and len(razem) == 1
+    assert razem[0].material == "\n\n".join(p.material for p in osobno)  # material bez zmian, tylko sklejony
+    pod_sufitem = P.polacz_paczki(osobno, max(len(p.material) for p in osobno) + 1)
+    assert [p.klucz for p in pod_sufitem] == [p.klucz for p in osobno]  # nie mieszcza sie razem - klucze jak bez laczenia
+
+
 def test_wznowienie_bez_powtorek_i_bez_dubli_w_kolejce(klient):
     assert P.main(klient.argi) == 0
     pierwszy = klient.wywolania()
-    assert pierwszy.count("paczka") == 2 and "tagi" in pierwszy
+    assert pierwszy.count("paczka") == 1 and "tagi" in pierwszy
     assert P.main(klient.argi) == 0
     assert klient.wywolania() == pierwszy  # ani paczka, ani konsolidacja, ani tagi drugi raz
     assert len(klient.kolejka()) == 1  # podwojny przebieg nie dubluje kolejki
@@ -151,6 +169,7 @@ def test_pliki_kolejki_sortuja_sie_w_kolejnosci_zapisu_mimo_tej_samej_chwili(tmp
 
 def test_nieudana_paczka_znacznik_blad_bez_kolejki_i_wznowienie(klient, monkeypatch):
     monkeypatch.setenv("ATRAPA_PADA_NA", "Klientom nic")  # pada paczka projektu wysylki
+    klient.argi.append("--no-laczenie")  # paczka na projekt: jedna pada, druga nie
     assert P.main(klient.argi) == 1
     assert klient.kolejka() == []  # z dziurami nic nie idzie do kolejki
     m = klient.znacznik()

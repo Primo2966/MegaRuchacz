@@ -1835,3 +1835,17 @@ def test_the_model_is_asked_about_the_current_facts_that_may_be_promoted(known_r
     watched = facts.watched_facts()
 
     assert watched.facts == [AUTO_FACT, CURRENT_AUTO, SLEEPING_FACT]
+
+
+# ---------------------------------------------------------------- the clean start
+
+def test_clean_start_flags_are_in_the_model_call():
+    """The clean start (2026-10-14): no built-in tools, a short system prompt instead of the coding
+    agent's one — and the schema still last, where lore.mining and the history review expect it."""
+    args = list(facts.MODEL_ARGS)
+    assert args[args.index("--tools") + 1] == ""
+    assert args[args.index("--system-prompt") + 1] == facts.CLEAN_SYSTEM_PROMPT
+    assert not set("^&|<>%\"") & set(facts.CLEAN_SYSTEM_PROMPT)  # argv goes through cmd.exe
+    assert facts.CLEAN_SYSTEM_PROMPT.isascii()
+    assert args[-2:] == ["--json-schema", facts.FACTS_SCHEMA]
+    assert "--setting-sources" not in args  # it would drop the user's effort level too

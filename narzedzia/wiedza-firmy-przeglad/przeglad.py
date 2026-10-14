@@ -81,6 +81,7 @@ SZUM = ("<local-command", "<command-name>", "<command-message>", "Caveat: The me
 ORCA = "orca"
 
 MAX_PACZKA = facts.MAX_INPUT_CHARS  # ten sam sufit kosztu jednego wywolania co dzienny automat
+MAX_PACZKA_KLIENT = MAX_PACZKA
 # Jedna wklejka potrafi miec 72 000 znakow (strony Seller Central, logi). Glowa i ogon zostaja,
 # srodek jest wyciety GLOSNO (znacznik mowi ile) - jak w lore.selection, tylko z szerszym oknem,
 # bo tu czytamy cala historie, a nie same poprawki.
@@ -103,9 +104,12 @@ POZIOMY = ("jawne", "wewnetrzne", "wrazliwe")
 # Zmiana promptu = inny klucz paczki = paczka przerabiana od nowa (stare wyniki zostaja na dysku).
 WERSJA = "1"
 
-# Flagi z lore.facts.MODEL_ARGS (safe-mode, bez zapisu sesji, sonnet, json) - bez jego schematu.
+# Flagi z lore.facts.MODEL_ARGS (safe-mode, bez zapisu sesji, sonnet, bez narzedzi i z krotkim promptem
+# systemowym zamiast domyslnego - czysty start, json) - bez jego schematu.
 assert facts.MODEL_ARGS[-2] == "--json-schema", "lore.facts.MODEL_ARGS zmienil ksztalt"
 FLAGI_MODELU = facts.MODEL_ARGS[:-1]
+# ...i to samo srodowisko co tam (facts.CLAUDE_ENV: bez zapisu do cache - kazde wywolanie czytane raz),
+# skladane przy kazdym wywolaniu na biezacym os.environ.
 POLA_TOKENOW = facts.TOKEN_FIELDS
 
 # Bez ^ & | < > % - schemat idzie w argv przez claude.cmd, czyli przez cmd.exe.
@@ -354,6 +358,10 @@ class Paczka:
     do: str
     daty: dict = field(default_factory=dict)  # chunk_id -> RRRR-MM-DD (czas lokalny)
     klucz: str = ""
+    projekty: dict = field(default_factory=dict)  # chunk_id -> projekt; pusty = wszystko z `projekt`
+
+    def projekt_chunku(self, chunk_id) -> str:
+        return self.projekty.get(chunk_id, self.projekt)
 
     def nazwa(self) -> str:
         return f"{self.projekt} #{self.chunk_ids[0]}..#{self.chunk_ids[-1]}"
@@ -363,10 +371,48 @@ def _linia(w: Wiadomosc, osoba: str = TURY["user"]) -> str:
     return f"[#{w.chunk_id} {ts_to_local(w.ts)} {osoba if w.kto == 'user' else TURY[w.kto]}] {w.tekst}"
 
 
-def paczki(wiadomosci: list[Wiadomosc], limit: int = MAX_PACZKA, osoba: str = TURY["user"]) -> list[Paczka]:
+def paczki(wiadomosci: list[Wiadomosc], limit: int = MAX_PACZKA, osoba: str = TURY["user"],
+           laczenie: bool = False) -> list[Paczka]:
     """Paczki w obrebie projektu; rozmowy po kolei wedlug ich pierwszej wypowiedzi, w rozmowie po
     kolei. Rozmowa nie jest rwana na sile - paczka konczy sie dopiero, gdy nastepna wypowiedz
-    by sie nie zmiescila. `osoba` - naglowek tur czlowieka (u klienta nie "Primo")."""
+    by sie nie zmiescila. `osoba` - naglowek tur czlowieka (u klienta nie "Primo").
+    `laczenie`: niepelne paczki roznych projektow sklejone (polacz_paczki) - mniej wywolan."""
+    out = _paczki_projektow(wiadomosci, limit, osoba)
+    return polacz_paczki(out, limit) if laczenie else out
+
+
+def polacz_paczki(pacz: list[Paczka], limit: int) -> list[Paczka]:
+    """Paczki roznych projektow, ktore razem mieszcza sie w `limit`, w jednej paczce (pierwsza
+    pasujaca od najwiekszej) - kazde wywolanie modelu to instrukcja i narzut startu od nowa, a dzien
+    pracownika to zwykle kilka projektow po kilkanascie-kilkadziesiat tysiecy znakow. Material
+    paczek sklejony bez zmian (kazda rozmowa ma swoj naglowek), projekt kazdej wypowiedzi zostaje
+    w `projekty`. Paczka, ktora zostaje sama, ma ten sam klucz co bez laczenia (wznawialnosc)."""
+    kosze: list[list[Paczka]] = []
+    for p in sorted(pacz, key=lambda p: -len(p.material)):
+        for k in kosze:
+            if sum(len(x.material) + 2 for x in k) + len(p.material) <= limit:
+                k.append(p)
+                break
+        else:
+            kosze.append([p])
+    kolejnosc = {id(p): i for i, p in enumerate(pacz)}
+    out = []
+    for k in sorted(kosze, key=lambda k: min(kolejnosc[id(p)] for p in k)):
+        if len(k) == 1:
+            out.append(k[0])
+            continue
+        k.sort(key=lambda p: kolejnosc[id(p)])
+        nazwa = "+".join(p.projekt for p in k)
+        material = "\n\n".join(p.material for p in k)
+        q = Paczka(nazwa, [c for p in k for c in p.chunk_ids], material, min(p.od for p in k), max(p.do for p in k),
+                   {c: d for p in k for c, d in p.daty.items()},
+                   projekty={c: p.projekt for p in k for c in p.chunk_ids})
+        q.klucz = hashlib.sha1(f"{WERSJA}\n{nazwa}\n{material}".encode("utf-8")).hexdigest()[:16]
+        out.append(q)
+    return out
+
+
+def _paczki_projektow(wiadomosci: list[Wiadomosc], limit: int, osoba: str) -> list[Paczka]:
     po_projekcie: dict[str, dict[str, list[Wiadomosc]]] = {}
     for w in wiadomosci:
         po_projekcie.setdefault(w.projekt, {}).setdefault(w.sesja, []).append(w)
@@ -501,6 +547,7 @@ def zapytaj(instrukcja: str, material: str, schemat: str, limit_s: int) -> Odpow
     try:
         try:
             r = subprocess.run(argv, input=f"{instrukcja}{material}", capture_output=True, cwd=pusty,
+                               env={**os.environ, **dict(facts.CLAUDE_ENV)},
                                text=True, encoding="utf-8", errors="replace", timeout=limit_s)
         except subprocess.TimeoutExpired as e:
             raise BladModelu(f"przekroczony czas {limit_s} s") from e
@@ -665,10 +712,11 @@ def sprawdz_ustalenia(dane: dict, p: Paczka, tematy: set[str]) -> tuple[list[dic
         else:
             powod = sekret(tresc)
         if powod:
-            odrzucone.append({"powod": powod, "projekt": p.projekt, "chunk_id": s.get("chunk_id"),
+            odrzucone.append({"powod": powod, "projekt": p.projekt_chunku(s.get("chunk_id")), "chunk_id": s.get("chunk_id"),
                               "tresc": selection.redact_sample(tresc)[:300]})
             continue
         chunk = s.get("chunk_id")
+        projekt = p.projekt_chunku(chunk)
         niepewne, uwaga = bool(s.get("niepewne")), " ".join(str(s.get("powod") or "").split())
         if chunk not in p.daty:
             niepewne = True
@@ -680,7 +728,7 @@ def sprawdz_ustalenia(dane: dict, p: Paczka, tematy: set[str]) -> tuple[list[dic
         else:
             data = p.daty[chunk]
         przyjete.append({"tresc": tresc, "temat": s["temat"], "poufnosc": s["poufnosc"],
-                         "data_ustalenia": data, "projekt": p.projekt, "chunk_id": chunk,
+                         "data_ustalenia": data, "projekt": projekt, "chunk_id": chunk,
                          "niepewne": niepewne, "powod": uwaga})
     return przyjete, odrzucone
 
@@ -1313,6 +1361,11 @@ def main(argv: list[str] | None = None) -> int:
     a.add_argument("--zasady", type=Path, default=None)
     a.add_argument("--istniejace", type=Path, nargs="*", default=None)
     a.add_argument("--limit-czasu", type=int, default=LIMIT_CZASU_PACZKA_S)
+    a.add_argument("--max-paczka", type=int, default=None,
+                   help=f"sufit znakow materialu paczki (domyslnie {MAX_PACZKA}, w profilu klient {MAX_PACZKA_KLIENT})")
+    a.add_argument("--laczenie", action=argparse.BooleanOptionalAction, default=None,
+                   help="sklejaj niepelne paczki roznych projektow (domyslnie tylko w profilu klient - u Primo"
+                        " zmienilyby klucze paczek juz przerobionych)")
     o = a.parse_args(argv)
     klient = o.profil == "klient"
     home = klient_home() if klient else None
@@ -1320,6 +1373,8 @@ def main(argv: list[str] | None = None) -> int:
     o.format = o.format or ("json" if klient else "md")
     if o.rownolegle is None:
         o.rownolegle = ROWNOLEGLE_KLIENT if klient else ROWNOLEGLE
+    if o.max_paczka is None:
+        o.max_paczka = MAX_PACZKA_KLIENT if klient else MAX_PACZKA
     if o.wyniki is None:
         o.wyniki = home / "przeglad" if klient else WYNIKI
     if o.istniejace is None:
@@ -1327,6 +1382,8 @@ def main(argv: list[str] | None = None) -> int:
     odmowa = ""
     if o.rownolegle < 1:
         odmowa = "--rownolegle musi byc >= 1"
+    elif o.max_paczka < 10_000:
+        odmowa = "--max-paczka ponizej 10 000 znakow - paczka mniejsza niz jedna dluga wiadomosc"
     elif klient and o.format != "json":
         odmowa = "profil klient pisze tylko --format json (kolejka wysylki)"
     elif klient and (o.tematy or o.zasady):
@@ -1370,7 +1427,8 @@ def _przebieg(o, klient: bool, home: Path | None, znacznik: Path | None) -> int:
             zapisz_znacznik(znacznik, False, f"ODMOWA: w Lore nie ma wypowiedzi z projektow: {', '.join(brak)}")
             print(f"ODMOWA: w Lore nie ma wypowiedzi z projektow: {', '.join(brak)}", file=sys.stderr)
             return 2
-    pacz = paczki(wiadomosci, osoba=OSOBA_KLIENT if klient else TURY["user"])
+    pacz = paczki(wiadomosci, o.max_paczka, osoba=OSOBA_KLIENT if klient else TURY["user"],
+                  laczenie=o.laczenie if o.laczenie is not None else klient)
     instrukcja = instrukcja_paczki(tematy, zasady, klient)
     schemat = schemat_paczki(tematy)
     stan = Stan(o.wyniki)
