@@ -147,7 +147,7 @@ Każde ustalenie:
 - "poufnosc": "jawne", "wewnetrzne" albo "wrazliwe" według reguł niżej; przy wątpliwości wyższa.
 - "data_ustalenia": data RRRR-MM-DD z nagłówka wypowiedzi, z której pochodzi ustalenie.
 - "chunk_id": numer z nagłówka tej wypowiedzi (sama liczba, bez #).
-- "niepewne": true, gdy nie wiadomo, czy to obowiązuje (sama propozycja, decyzja mogła się później zmienić, sprzeczne wypowiedzi, nie wiadomo, czy to zasada firmy, czy jednorazowa prośba) albo nie wiadomo, jaki dać poziom — wtedy w "powod" krótko dlaczego. W przeciwnym razie false.
+- Primo NIE podejmuje żadnych decyzji o wpisach - rozstrzygasz sam. Oferty, wyceny i propozycje z rozmów (np. od dostawców) zapisuj jako fakt z datą („oferta X z dnia RRRR-MM-DD: ...”), nie jako decyzję. Bieżący stan (co w toku, co czeka, liczby z danego dnia) pomijasz. Gdy nie wiesz, czy coś obowiązuje, a nie da się tego zapisać jako faktu z datą - pomiń wpis. "niepewne": true tylko jako wskazówka dla późniejszego scalania (decyzja mogła się zmienić), z krótkim powodem w "powod"; inaczej false.
 
 TAJNE nie zapisujesz wcale: hasła, klucze API, tokeny, dane logowania, pełne numery kart, dane dostępowe (adres serwera razem z loginem lub hasłem). Zamiast nich, jeśli to przydatne, ustalenie "gdzie leżą" — bez samej wartości. Ile takich rzeczy pominąłeś, podaj w "pominiete_tajne". Nie zapisuj danych osobowych klientów (imię, adres, e-mail, numer zamówienia konkretnego klienta) — zapisz sam wniosek. Wklejek (e-maile, logi, strony) nie przepisuj, tylko wniosek. "[MASKED]" w materiale to wycięty sekret — nie odtwarzaj go.
 
@@ -157,12 +157,12 @@ PROMPT_KONSOLIDACJI = """Na wejściu (pod tą instrukcją) dostajesz ustalenia z
 
 Zrób z tego czystą listę do zatwierdzenia przez Primo:
 1. Duplikaty i wpisy mówiące to samo innymi słowami połącz w jeden — weź najpełniejsze sformułowanie, w "zrodla" podaj wszystkie połączone identyfikatory E.
-2. Gdy decyzja zmieniała się w czasie, zostaw tylko najnowszą wersję (z datą najnowszego wpisu), a starsze wersje wymień w jej "zrodla". Gdy nie da się ustalić, która wersja obowiązuje, zostaw jedną i oznacz ją jako niepewną.
+2. Gdy decyzja zmieniała się w czasie, zostaw tylko najnowszą wersję (z datą najnowszego wpisu), a starsze wersje wymień w jej "zrodla". Gdy nie da się ustalić, która wersja obowiązuje, zostaw NAJNOWSZĄ.
 3. Nie powtarzaj tego, co już mówi któryś wpis S (jest na serwerze). Jeśli wpis E dodaje do S coś nowego, zapisz tylko tę nową część.
 4. Wyrzuć to, co nie jest trwałym ustaleniem (stan zadań, jednorazowe sprawy, szczegóły kodu), oraz wszystko, co zawiera hasło, klucz, token, dane logowania albo dane osobowe klienta.
 5. Niczego nie dopisuj od siebie — tylko to, co jest we wpisach E. Treść: 1–2 pełne zdania po polsku, zrozumiałe bez rozmowy, bez markdown.
 6. Poziom poufności według reguł niżej; przy łączeniu najwyższy z łączonych.
-7. "niepewne": true dla wpisów, o których Primo musi zdecydować (niepewne źródło, sprzeczność, mogło się zdezaktualizować, wątpliwy poziom); w "powod" krótko dlaczego. Pozostałe false.
+7. Primo NIE podejmuje żadnych decyzji - rozstrzygasz sam: wpis będący bieżącym stanem albo jednorazową sprawą usuń; ofertę lub propozycję zapisz jako fakt z datą; przy sprzeczności zostaw najnowszą wersję. "niepewne" ustaw na false we wszystkich wpisach, a "powod" zostaw pusty.
 8. "data_ustalenia": RRRR-MM-DD. Każdy wpis wyniku musi mieć w "zrodla" co najmniej jeden identyfikator E.
 
 To jest automat: odpowiedź leci prosto do pliku. Nie zadawaj pytań i nie sięgaj po narzędzia. Jeśli nie zostaje nic, zwróć pustą listę."""
