@@ -15,7 +15,7 @@ Uruchomienie (srodowisko uv Lore - ma `cryptography`):
         C:\\dev\\claude-worker\\narzedzia\\wiedza-firmy-klient\\klient.py tick
 
 Pliki w <home> = %WIEDZA_FIRMY_KLIENT_HOME% (domyslnie ~\\.claude\\mr\\wiedza-firmy):
-konfiguracja.json ({serwer_url, jftools_url} - wpisuje instalator; w repo nie ma zadnych adresow),
+konfiguracja.json (opcjonalny: serwer_url i jftools_url nadpisuja client-config i adres domyslny),
 stan.json, klucz\\, token.dpapi, tematy-cache.json, kolejka\\, wyslano\\, odrzucone\\, klient.log,
 znaczniki\\{zgloszenie,token,przeglad,wysylka,status}.txt (`czas|ok|opis` albo `czas|blad|opis`).
 
@@ -50,6 +50,9 @@ from pathlib import Path
 from urllib.parse import urlparse
 
 HOME_ZMIENNA = "WIEDZA_FIRMY_KLIENT_HOME"
+# Publiczne trasy wtyczki JFTools (domena publiczna). Adresu serwera wiedzy (LAN) w kodzie nie ma -
+# podaje go JFTools trasa GET client-config {"jfwiedza_url"}; konfiguracja.json moze nadpisac oba.
+JFTOOLS_DOMYSLNY = "https://tools.jfinvesting.pl/api/public/mcp-ecommerce-sterowanie"
 NAZWA_MCP = "jfwiedza"
 PACZKA = 100
 LIMIT_HTTP_S = 20
@@ -307,6 +310,7 @@ class Klient:
         self.zamek_przegladu = Zamek(home / "przeglad.lock")
         self.stan: dict = {}
         self._token: str | None = None
+        self._obce_tokeny: set[str] = set()  # token z istniejacego wpisu MCP (np. reczny token admina)
         self.przeglad_trwa = False  # przeglad w innym procesie - to nie blad ticka
 
     # -------------------------------------------------- stan, znaczniki, log
@@ -326,8 +330,9 @@ class Klient:
 
     def maskuj(self, tekst: str) -> str:
         tekst = re.sub(r"Bearer\s+\S+", "Bearer ***", str(tekst))
-        if self._token:
-            tekst = tekst.replace(self._token, "***")
+        for t in (self._token, *self._obce_tokeny):
+            if t:
+                tekst = tekst.replace(t, "***")
         return tekst
 
     def znacznik(self, krok: str, ok: bool, opis: str) -> bool:
@@ -358,21 +363,37 @@ class Klient:
         zapisz_json(self.stan_plik, self.stan)
 
     def konfiguracja(self) -> tuple[str, str]:
-        """(serwer_url, jftools_url) z konfiguracja.json - domyslnych adresow w kodzie nie ma."""
-        try:
-            d = czytaj_json(self.konf_plik)
-        except FileNotFoundError as e:
-            raise BladKlienta(f"brak {self.konf_plik} - uruchom instalator MegaRuchacza (modul Wiedza firmy)") from e
-        except (OSError, ValueError) as e:
-            raise BladKlienta(f"zepsuty {self.konf_plik}: {jedna_linia(e, 200)}") from e
-        if not isinstance(d, dict):
-            raise BladKlienta(f"{self.konf_plik} to nie obiekt JSON")
+        """(serwer_url, jftools_url). jftools: konfiguracja.json albo JFTOOLS_DOMYSLNY. serwer: konfiguracja.json,
+        inaczej GET {jftools}/client-config -> jfwiedza_url (zapamietany w stan.json na wypadek awarii JFTools)."""
+        d: dict = {}
+        if self.konf_plik.exists():
+            try:
+                d = czytaj_json(self.konf_plik)
+            except (OSError, ValueError) as e:
+                raise BladKlienta(f"zepsuty {self.konf_plik}: {jedna_linia(e, 200)}") from e
+            if not isinstance(d, dict):
+                raise BladKlienta(f"{self.konf_plik} to nie obiekt JSON")
+        jftools = str(d.get("jftools_url") or JFTOOLS_DOMYSLNY).strip().rstrip("/")
         serwer = str(d.get("serwer_url") or "").strip().rstrip("/")
-        jftools = str(d.get("jftools_url") or "").strip().rstrip("/")
-        brak = [n for n, w in (("serwer_url", serwer), ("jftools_url", jftools)) if not w]
-        if brak:
-            raise BladKlienta(f"w {self.konf_plik} brakuje: {', '.join(brak)}")
-        return serwer, jftools
+        if serwer:
+            return serwer, jftools
+        try:
+            odp = zapytanie("GET", f"{jftools}/client-config")
+            serwer = odp.pole("jfwiedza_url").strip().rstrip("/") if odp.kod == 200 else ""
+            blad = "" if serwer else f"client-config bez jfwiedza_url: {odp.opis_bledu()}"
+        except BladSieci as e:
+            blad = str(e)
+        if serwer:
+            self.stan.pop("client_config_blad", None)
+            self.stan.update({"serwer_url": serwer, "serwer_url_pobrano": teraz()})
+            return serwer, jftools
+        self.stan["client_config_blad"] = {"czas": teraz(), "opis": jedna_linia(blad, 300)}
+        if self.stan.get("serwer_url"):
+            self.loguj(f"UWAGA: JFTools nie podal adresu serwera wiedzy ({blad}) - uzywam ostatniego znanego "
+                       f"z {self.stan.get('serwer_url_pobrano')}")
+            return str(self.stan["serwer_url"]), jftools
+        raise BladKlienta(f"nie znam adresu serwera wiedzy - JFTools client-config: {blad}; ponowie przy nastepnym "
+                          f"uruchomieniu")
 
     def polecenie(self, klucz: str) -> list[str] | None:
         try:
@@ -517,7 +538,23 @@ class Klient:
     def _tekst(r: subprocess.CompletedProcess) -> str:
         return (r.stdout or b"").decode("utf-8", "replace") + (r.stderr or b"").decode("utf-8", "replace")
 
+    def wpis_dziala(self, url_wpisu: str, token_wpisu: str, url: str) -> bool:
+        """Istniejacy wpis MCP dziala, gdy GET /klient/status z jego tokenem pod jego adresem nie daje 401.
+        Brak polaczenia: adres jak nasz = nie wiadomo (BladSieci, ponowienie), inny adres = martwy wpis."""
+        baza = url_wpisu[:-len("/mcp")] if url_wpisu.endswith("/mcp") else url_wpisu
+        if not baza:
+            return False
+        try:
+            odp = zapytanie("GET", f"{baza}/klient/status", token=token_wpisu or None)
+        except BladSieci:
+            if url_wpisu == url:
+                raise
+            return False
+        return odp.kod != 401
+
     def podlacz_mcp(self, serwer: str, token: str) -> str:
+        """Dodaje wpis jfwiedza, gdy go nie ma; podmienia tylko wpis, ktory nie dziala (401). Dzialajacy wpis
+        z innym tokenem (np. reczny token admina) zostaje nietkniety."""
         url = f"{serwer}/mcp"
         skrot = hashlib.sha256(token.encode("utf-8")).hexdigest()
         mcp = self.stan.get("mcp") or {}
@@ -526,8 +563,19 @@ class Klient:
             return "MCP podlaczony (sprawdzony niedawno)"
         r = self.claude("mcp", "get", NAZWA_MCP)
         jest = r.returncode == 0
-        if jest and f"Bearer {token}" in self._tekst(r) and url in self._tekst(r):
-            opis = "MCP podlaczony"
+        zmien = True
+        obcy = False
+        if jest:
+            tekst = self._tekst(r)
+            m_tok = re.search(r"Authorization:\s*Bearer\s+(\S+)", tekst)
+            m_url = re.search(r"URL:\s*(\S+)", tekst)
+            token_wpisu, url_wpisu = (m_tok.group(1) if m_tok else ""), (m_url.group(1) if m_url else "")
+            if token_wpisu and token_wpisu != token:
+                self._obce_tokeny.add(token_wpisu)
+            if token_wpisu == token or self.wpis_dziala(url_wpisu, token_wpisu, url):
+                zmien, obcy = False, token_wpisu != token
+        if not zmien:
+            opis = "MCP podlaczony" + (" (istniejacy wpis z innym tokenem dziala - zostawiony)" if obcy else "")
         else:
             if jest:
                 r = self.claude("mcp", "remove", NAZWA_MCP, "-s", "user")
@@ -540,8 +588,9 @@ class Klient:
             r = self.claude("mcp", "get", NAZWA_MCP)
             if r.returncode != 0 or f"Bearer {token}" not in self._tekst(r):
                 raise BladKlienta(f"po `claude mcp add` wpis {NAZWA_MCP} nie ma nowego tokenu")
-            opis = "MCP podmieniony (inny token albo adres)" if jest else "MCP dodany"
-        self.stan["mcp"] = {"token_sha256": skrot, "url": url, "sprawdzono_ts": time.time(), "sprawdzono": teraz()}
+            opis = "MCP podmieniony (stary wpis nie dzialal)" if jest else "MCP dodany"
+        self.stan["mcp"] = {"token_sha256": skrot, "url": url, "obcy_token": obcy, "sprawdzono_ts": time.time(),
+                            "sprawdzono": teraz()}
         return opis
 
     def krok_token(self, serwer: str) -> bool:

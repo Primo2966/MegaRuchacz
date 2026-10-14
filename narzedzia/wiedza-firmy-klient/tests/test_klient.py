@@ -48,6 +48,8 @@ class Atrapa:
         self.pady: Counter = Counter()  # sciezka -> ile razy jeszcze odpowiedziec 500
         self.wywolania: list[tuple[str, str]] = []
         self.limit_429 = 0  # ile razy register-self odpowie 429
+        self.jfwiedza_url = ""  # odpowiedz GET client-config (ustawia Srodowisko)
+        self.obce_tokeny: set[str] = set()  # tokeny spoza /klient/token, ktore dzialaja (np. reczny admina)
         self.zamek = threading.Lock()
 
     def zajeta(self, nazwa: str, poza: str | None) -> bool:
@@ -66,6 +68,8 @@ class Atrapa:
             if self.pady[sciezka] > 0:
                 self.pady[sciezka] -= 1
                 return 500, {"error": "atrapa: awaria"}
+            if (metoda, sciezka) == ("GET", f"{JFTOOLS}/client-config"):
+                return 200, {"jfwiedza_url": self.jfwiedza_url}
             if (metoda, sciezka) == ("POST", f"{JFTOOLS}/register-self"):
                 # ksztalt jak w wtyczce (K3-Z2.md): computerId liczba, zajeta nazwa -> NAZWA-2, 400/429 z "error"
                 if self.limit_429 > 0:
@@ -106,6 +110,9 @@ class Atrapa:
                 self.wydane[cid] = secrets.token_urlsafe(32)
                 return 200, {"token": self.wydane[cid], "osoba": f"komputer-{cid}"}
             cid = self.komputer_z_tokenu(naglowki.get("Authorization") or "")
+            if cid is None and (naglowki.get("Authorization") or "")[7:] in self.obce_tokeny:
+                if (metoda, sciezka) == ("GET", "/klient/status"):
+                    return 403, {"status": "nieznany"}  # dziala (nie 401), ale to nie komputer
             if cid is None:
                 return 401, {"kod": "zly_token"}
             if (metoda, sciezka) == ("GET", "/klient/status"):
@@ -177,12 +184,13 @@ class Srodowisko:
         self.claude_stan = tmp / "claude-stan.json"
         self.przeglad_log = tmp / "przeglad-wywolania.txt"
         self.url = f"http://127.0.0.1:{port}"
-        self.ustaw_konfiguracje(self.url)
+        atrapa.jfwiedza_url = self.url  # adres serwera wiedzy z JFTools client-config
+        self.ustaw_konfiguracje(None)
 
-    def ustaw_konfiguracje(self, serwer: str, jftools: str | None = None) -> None:
+    def ustaw_konfiguracje(self, serwer: str | None, jftools: str | None = None) -> None:
         self.home.mkdir(parents=True, exist_ok=True)
         K.zapisz_json(self.home / "konfiguracja.json", {
-            "serwer_url": serwer, "jftools_url": jftools or self.url + JFTOOLS,
+            **({"serwer_url": serwer} if serwer else {}), "jftools_url": jftools or self.url + JFTOOLS,
             "claude_polecenie": [sys.executable, str(TU / "atrapa_claude.py")],
             "przeglad_polecenie": [sys.executable, str(TU / "atrapa_przeglad.py"), "--profil", "klient", "--format", "json"]})
 
@@ -244,7 +252,8 @@ def test_pelny_przeplyw_pending_active_wysylka(sr):
     cid = str(sr.stan()["computerId"])
     assert a.komputery[cid]["name"] == "TEST-PC-7"  # nazwa oczyszczona do formatu JFTools
     assert token_z_mcp(sr) == a.wydane[cid]
-    assert sr.claude()["serwery"]["jfwiedza"]["url"] == sr.url + "/mcp"
+    assert sr.claude()["serwery"]["jfwiedza"]["url"] == sr.url + "/mcp"  # adres z client-config
+    assert a.ile("GET", f"{JFTOOLS}/client-config") >= 1
     assert sr.przeglady() == 1
     assert json.loads((sr.home / "tematy-cache.json").read_text(encoding="utf-8"))["wersja"] == "v1"
     assert len(sr.kolejka()) == 150
@@ -301,7 +310,7 @@ def test_blad_sieci_ponowienie(sr):
     assert "|ok|" in sr.znacznik("zgloszenie")  # JFTools odpowiada
     assert "|blad|" in sr.znacznik("token") and "ponowie" in sr.znacznik("token")
     assert "|blad|" in sr.znacznik("wysylka") and "|blad|" in sr.znacznik("przeglad")
-    sr.ustaw_konfiguracje(sr.url)
+    sr.ustaw_konfiguracje(None)
     sr.atrapa.status = "active"
     sr.atrapa.pady["/klient/wpisy"] = 1  # pierwsza paczka pada 500
     assert sr.run("tick") == 1
@@ -361,6 +370,30 @@ def test_podmiana_innego_tokenu_w_mcp(sr):
     wywolania = [w[:2] for w in sr.claude()["wywolania"]]
     assert ["mcp", "remove"] in wywolania and ["mcp", "add"] in wywolania
     assert "podmieniony" in sr.znacznik("token")
+
+
+def test_dzialajacy_wpis_mcp_z_innym_tokenem_zostaje(sr):
+    sr.atrapa.obce_tokeny = {"RECZNY-ADMINA"}
+    przed = {"url": sr.url + "/mcp", "headers": ["Authorization: Bearer RECZNY-ADMINA"]}
+    K.zapisz_json(sr.claude_stan, {"serwery": {"jfwiedza": dict(przed)}, "wywolania": []})
+    sr.atrapa.status = "active"
+    assert sr.run("tick") == 0
+    assert sr.claude()["serwery"]["jfwiedza"] == przed
+    wywolania = [w[:2] for w in sr.claude()["wywolania"]]
+    assert ["mcp", "add"] not in wywolania and ["mcp", "remove"] not in wywolania
+    assert "zostawiony" in sr.znacznik("token")
+    assert len(sr.atrapa.wpisy) == 150  # wysylka wlasnym tokenem komputera
+    for p in sr.home.rglob("*"):
+        if p.is_file():
+            assert b"RECZNY-ADMINA" not in p.read_bytes(), p
+
+
+def test_martwy_adres_wpisu_mcp_podmieniany(sr):
+    martwy = f"http://127.0.0.1:{wolny_port()}/mcp"
+    K.zapisz_json(sr.claude_stan, {"serwery": {"jfwiedza": {"url": martwy, "headers": ["Authorization: Bearer x"]}},
+                                   "wywolania": []})
+    assert sr.run("zglos") == 0
+    assert sr.claude()["serwery"]["jfwiedza"]["url"] == sr.url + "/mcp"
 
 
 def test_reinstalacja_wymienia_token(sr):
@@ -425,17 +458,38 @@ def test_bledne_wpisy_zostaja_w_kolejce(sr):
     assert sr.kolejka() == [] and sr.atrapa.odebrane == Counter({"k0": 1, "k1": 2, "k2": 1})
 
 
-def test_brak_konfiguracji_krzyczy(sr):
-    (sr.home / "konfiguracja.json").unlink()
-    assert sr.run("tick") == 1
+def test_client_config_niedostepny(sr):
+    sr.atrapa.pady[f"{JFTOOLS}/client-config"] = 1
+    assert sr.run("tick") == 1  # adresu jeszcze nie zna - wszystkie kroki krzycza
     for krok in ("zgloszenie", "token", "wysylka", "przeglad"):
-        assert "|blad|" in sr.znacznik(krok) and "konfiguracja.json" in sr.znacznik(krok)
-    assert sr.atrapa.wywolania == []
+        assert "|blad|" in sr.znacznik(krok) and "client-config" in sr.znacznik(krok), krok
+    assert sr.atrapa.ile("POST", f"{JFTOOLS}/register-self") == 0
+    assert sr.run("tick") == 0
+    sr.atrapa.pady[f"{JFTOOLS}/client-config"] = 1  # pozniej awaria JFTools: ostatni znany adres
+    sr.atrapa.status = "active"
+    assert sr.run("tick") == 0 and len(sr.atrapa.wpisy) == 150
+    assert "500" in sr.stan()["client_config_blad"]["opis"]
+    assert "ostatniego znanego" in (sr.home / "klient.log").read_text(encoding="utf-8")
+
+
+def test_bez_konfiguracji_domyslny_jftools(sr, monkeypatch):
+    (sr.home / "konfiguracja.json").unlink()
+    adresy = []
+
+    def atrapa_zapytania(metoda, url, cialo=None, token=None):
+        adresy.append(url)
+        return K.Odp(200, {"jfwiedza_url": "http://serwer-wiedzy:1/"})
+    monkeypatch.setattr(K, "zapytanie", atrapa_zapytania)
+    k = K.Klient(sr.home)
+    assert k.konfiguracja() == ("http://serwer-wiedzy:1", K.JFTOOLS_DOMYSLNY)
+    assert adresy == [K.JFTOOLS_DOMYSLNY + "/client-config"]
+    K.zapisz_json(sr.home / "konfiguracja.json", {"serwer_url": "http://inny:2/"})
+    assert k.konfiguracja() == ("http://inny:2", K.JFTOOLS_DOMYSLNY) and len(adresy) == 1
 
 
 def test_brak_domyslnych_adresow_w_kodzie():
     kod = (TU.parent / "klient.py").read_text(encoding="utf-8")
-    assert "192.168." not in kod and "jfinvesting" not in kod and "8766" not in kod
+    assert "192.168." not in kod and "8766" not in kod  # adres serwera wiedzy tylko z JFTools client-config
 
 
 def test_zajeta_nazwa_i_429_z_jftools(sr, monkeypatch):
