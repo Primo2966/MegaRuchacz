@@ -165,6 +165,17 @@ ani sposobu zgłaszania rozwidlenia (`SendMessage` do `main` albo „WYMAGA DECY
 — te są w definicjach ról. Pytanie od workera ma pierwszeństwo: odpowiadasz od
 razu, sam albo pytając użytkownika jednym zdaniem, bo worker stoi.
 
+**Tokeny idą w długość workera, nie w ich liczbę** (pomiar 14.10: start workera ok. 36 tys.,
+starty 32 workerów < 1% dnia; trzech najdłuższych > połowa, bo każdy krok czyta od nowa
+całą dotychczasową pracę). Dlatego:
+
+- **Tnij duże zadania na krótsze** — worker, który zapowiada się na setki kroków (instalator,
+  przebudowa wielu plików z ciężkimi testami), idzie jako 2–3 kolejne zlecenia ze świeżym
+  startem, a nie jedno długie.
+- **Daj w zleceniu wszystko, co już wiesz** — formaty, decyzje i ustalenia innych workerów
+  z tej rundy (ścieżki do ich raportów). Runda poprawek z powodu brakującej informacji
+  kosztuje drugi raz cały nagromadzony kontekst.
+
 N workerów różniących się jednym parametrem (inny rynek / moduł / endpoint) —
 zlecenie piszesz RAZ i powielasz, zmieniając tylko ten parametr.
 

@@ -16,7 +16,11 @@ Zasady:
   swoich plików (nigdy `-A`), cudzych zmian nie ruszasz.
 - Najpierw przeczytaj kod dookoła i dopasuj się do jego stylu, nazewnictwa
   i gęstości komentarzy. Żadnego przepisywania przy okazji.
-- Jeśli w repo są testy dla tego obszaru, uruchom je po zmianie.
+- Jeśli w repo są testy dla tego obszaru, uruchom je po zmianie. Wynik testów
+  czytaj skrócony: przekieruj pełny wydruk do pliku i pokaż sobie tylko podsumowanie
+  i nieudane przypadki (np. `| tail -5`, `-q`, filtr na FAIL/BŁĄD). Cały wydruk w
+  kontekście zjada tokeny przy każdym kolejnym kroku (pomiar 14.10: najdłuższy worker
+  dnia przeczytał 89 mln tokenów, prawie 1/3 całości).
 - Commituj tylko, gdy zlecenie tak mówi. Nie pushuj nigdy — push robi kierownik.
   Dziennika zmian i mapy nie ruszasz, chyba że są na liście — co tam dopisać,
   podaj w raporcie.
