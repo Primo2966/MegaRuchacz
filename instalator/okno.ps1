@@ -9,7 +9,11 @@
 #                albo przez uzytkownika): pyta o folder, zdobywa gita, klonuje repo i otwiera
 #                instalator z klonu. Klon jest konieczny - aktualizacje to git fetch + merge,
 #                folder z ZIP-a nigdy by sie nie odswiezyl (straznik zapisalby "nie-repo" po cichu).
-#   nowy       - MegaRuchacza nie ma: powitanie -> wybor -> podsumowanie -> instalacja -> gotowe.
+#   nowy       - MegaRuchacza nie ma: powitanie z jednym duzym "Zainstaluj" -> instalacja zalecanego
+#                zestawu bez zadnych pytan (z Claude Code) -> gotowe z "Otwórz"; maly odnosnik
+#                "chcę wybrać sam ›" prowadzi droga z wyborem: wybor -> podsumowanie -> instalacja -> gotowe.
+#                W trybie pobieranie powitanie jest takie samo: "Zainstaluj" bierze folder domyslny
+#                (~\MegaRuchacz), a okno z klonu dostaje -Start zainstaluj i od razu instaluje.
 #   zmiana     - jest rejestr ~\.claude\mr\instalacja.json albo slady starej instalacji: wybor
 #                z obecnym stanem -> podsumowanie -> zmiany -> gotowe. Odznaczenie zainstalowanej
 #                czesci pyta w oknie, z polem "usun tez moje dane" (domyslnie odznaczonym).
@@ -31,6 +35,8 @@
 #   -KatalogSkryptow <kat>   skad brac modul-*.ps1, zaleznosci.ps1 i wpisz-zasady.ps1 (testy na atrapach)
 #   -ZrodloKlonu <adres>     skad klonowac w trybie pobieranie (domyslnie GitHub)
 #   -Znacznik <plik>         plik zapisywany, gdy okno stanie (instaluj.bat czeka na niego)
+#   -Start zainstaluj|wybor  tylko w trybie nowy: od razu instalacja zalecanego zestawu albo od razu
+#                            ekran wyboru (okno z klonu po "Zainstaluj" / "chcę wybrać sam" w pobieraniu)
 #   -PozaEkranem             TESTY: okno w (-5000, 0), bez paska zadan i bez aktywacji
 #   -Scenariusz <plik>       TESTY: skrypt wczytany kropka po zbudowaniu okna (klika, robi zrzuty)
 #   -ScenariuszDalej <plik>  TESTY: scenariusz dla okna uruchomionego z klonu
@@ -54,6 +60,7 @@ param(
   [string]$KatalogSkryptow = '',
   [string]$ZrodloKlonu = 'https://github.com/Primo2966/MegaRuchacz.git',
   [string]$Znacznik = '',
+  [string]$Start = '',
   [switch]$Proba,
   [switch]$PozaEkranem,
   [string]$Scenariusz = '',
@@ -144,6 +151,7 @@ function Odmowa-Startu([string]$powod) {
 Zapisz-Dziennik "start okna instalatora: zrodlo $($script:Zrodlo), dom $($script:Dom), proba $($script:Proba), poza ekranem $($script:PozaEkranem)"
 if ($script:DziennikZawiodl) { $script:Wywrotki += $script:DziennikZawiodl }
 if (@('', 'nowy', 'zmiana') -notcontains $trybZParametru) { Odmowa-Startu "nieznany tryb '$trybZParametru' (dozwolone: nowy, zmiana)" }
+if (@('', 'zainstaluj', 'wybor') -notcontains $Start) { Odmowa-Startu "nieznany start '$Start' (dozwolone: zainstaluj, wybor)" }
 
 try {
   Add-Type -AssemblyName System.Windows.Forms
@@ -243,8 +251,9 @@ function Ustal-Stan-Poczatkowy {
   if (@($mod.Values | Where-Object { -not $_ }).Count -eq 0) { $zestaw = 'wszystko' }
   # UsunWszystko: przycisk "Usuń MegaRuchacza" w trybie zmiany (P64) - razem z baza; zapis instalacji
   # zostaje z "baza": false. BazaJest: hook straznika albo zadanie nadzorcy (dane.ps1 Baza-Jest).
+  # Claude: pole "Claude Code" (tylko nowa instalacja) - domyslnie zaznaczone; jest juz = krok "już jest".
   $script:Wybor = [pscustomobject]@{ Moduly = $mod; UsunDane = @{}; KopiaCel = $kp.Cel; KopiaZrodla = $kp.Zrodla; KopiaWykluczenia = $kp.Wykluczenia; Zestaw = $zestaw; Wlasny = $null
-    UsunWszystko = $false; UsunDaneWszystko = $false }
+    UsunWszystko = $false; UsunDaneWszystko = $false; Claude = $true }
   $script:BazaJest = Baza-Jest
   Zapisz-Dziennik "stan poczatkowy: tryb $($script:Tryb), rejestr $($script:Instalacja.zrodlo), baza $($script:BazaJest), obecne $((@($script:Obecne.Keys | Sort-Object | ForEach-Object { "$_=$($script:Obecne[$_])" })) -join ' '), kopia -> $($kp.Cel) ($($kp.Skad), wykluczen $(@($kp.Wykluczenia).Count))"
 }
@@ -275,10 +284,15 @@ try {
   [System.Windows.Forms.Application]::EnableVisualStyles()
   Zbuduj-Okno
   $script:PoTyknieciu = { Odmaluj-Biezacy }
+  if (($script:Tryb -ne 'nowy') -and $Start) { Zapisz-Dziennik "-Start $Start dotyczy tylko nowej instalacji - tryb $($script:Tryb), pomijam" }
   switch ($script:Tryb) {
-    'pobieranie' { Pokaz-Ekran 'folder' }
+    'pobieranie' { Pokaz-Ekran 'powitanie' }
     'zmiana'     { Pokaz-Ekran 'wybor' }
-    default      { Pokaz-Ekran 'powitanie' }
+    default {
+      if ($Start -eq 'zainstaluj') { Zainstaluj-Od-Razu }
+      elseif ($Start -eq 'wybor') { Wybierz-Sam }
+      else { Pokaz-Ekran 'powitanie' }
+    }
   }
 } catch { Odmowa-Startu "okno się nie zbudowało: $($_.Exception.Message) (linia $($_.InvocationInfo.ScriptLineNumber) w $($_.InvocationInfo.ScriptName))" }
 

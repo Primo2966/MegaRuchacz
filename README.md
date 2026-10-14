@@ -184,19 +184,34 @@ moje dane”.
 
 ### Jak zainstalować i zmienić instalację
 
-1. Pobierz MegaRuchacza z GitHuba jako ZIP (zielony przycisk „Code” → „Download ZIP”),
-   rozpakuj i kliknij dwa razy plik `instaluj.bat`. Windows może zapytać, czy
-   uruchomić plik z internetu — zgódź się. Otworzy się okno instalatora.
-2. Jeśli MegaRuchacza nie ma jeszcze na komputerze, okno zapyta o folder (domyślnie
-   `MegaRuchacz` w Twoim folderze użytkownika), pobierze go tam i — gdy trzeba —
-   samo doinstaluje program git.
-3. Zaznacz, co chcesz mieć (części opisane wyżej; przy Kopii zapasowej wskazujesz
-   folder). Przycisk „Wszystko” zaznacza całość.
-4. Przed startem widzisz podsumowanie: co się stanie i jakie programy instalator
-   doinstaluje (bez uprawnień administratora). Potem postęp krok po kroku; gdy coś
-   się nie uda — „Spróbuj ponownie” i „Pokaż szczegóły”.
-5. Na koniec otwórz nowe okno Claude Code (albo Codeksa) — dopiero ono wczyta
-   MegaRuchacza.
+1. Pobierz **jeden plik**:
+   [Zainstaluj-MegaRuchacza.bat](https://github.com/Primo2966/MegaRuchacz/releases/download/instalator/Zainstaluj-MegaRuchacza.bat)
+   i kliknij go dwa razy. Niczego nie rozpakowujesz.
+   - Przeglądarka może ostrzec, że takiego pliku nie pobiera się często albo że może
+     być niebezpieczny — wybierz **„Zachowaj”** (w Edge: „…” przy pobranym pliku →
+     „Zachowaj” → „Pokaż więcej” → „Zachowaj mimo to”).
+   - Windows może pokazać niebieskie okno „System Windows ochronił ten komputer” —
+     kliknij **„Więcej informacji” → „Uruchom mimo to”**.
+2. Otworzy się okno z jednym dużym przyciskiem **„Zainstaluj”** — kliknij go. Nic nie
+   wybierasz i na nic nie odpowiadasz. Instalator sam pobierze MegaRuchacza do folderu
+   `MegaRuchacz` w Twoim folderze użytkownika i doinstaluje to, czego brakuje: Git
+   i Git Bash, Node.js, Python i **Claude Code** — bez uprawnień administratora.
+   Zainstaluje wszystkie części opisane wyżej poza Kopią zapasową (ta wymaga wskazania
+   folderu — dodasz ją później). Trwa to kilka minut; na liście kroków zrobione mają ✔,
+   a pod paskiem stoi zdanie, co dzieje się teraz.
+3. Na koniec: **„Gotowe. Teraz otwórz Claude Code: [Otwórz]”**. Przycisk otwiera okno
+   z Claude Code. **Przy pierwszym otwarciu Claude poprosi o zalogowanie** — zaloguj
+   się swoim kontem; tego instalator nie może zrobić za Ciebie.
+4. Gdy coś się nie uda, okno powie po polsku, co zrobić: najpierw „Spróbuj ponownie”
+   (to, co już się udało, nie powtórzy się). Jeśli błąd wraca — **„Skopiuj raport dla
+   Przemka”** i wklej mu go w wiadomości (Ctrl+V). Raport ma wersję, krok i błąd, bez
+   haseł i kluczy.
+
+**Chcesz wybrać sam?** Pod „Zainstaluj” jest mały odnośnik „chcę wybrać sam ›”:
+wybierasz folder, części (opisane wyżej) i to, czy zainstalować Claude Code
+(domyślnie tak), a przed startem widzisz podsumowanie. Okno instalatora można
+rozciągać i maksymalizować. Kto ma już folder MegaRuchacza, może też kliknąć w nim
+`instaluj.bat`.
 
 **Zmiana instalacji.** Kliknij ikonę MegaRuchacza przy zegarze, a w jej oknie przycisk
 „Zmień instalację” na dole (albo uruchom `instaluj.bat` jeszcze raz). Zaznaczone jest

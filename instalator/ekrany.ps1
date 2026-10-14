@@ -1,8 +1,10 @@
 ﻿# instalator\ekrany.ps1 - czesc okna instalatora (patrz BUDOWA w naglowku instalator\okno.ps1).
 # Okno i jego ekrany: Zbuduj-Okno (naglowek z krokami, pasek z wywrotkami, tresc, pasek
 # przyciskow, nakladka z pytaniem), Pokaz-Ekran i ekrany po kolei - folder (czysty komputer),
-# powitanie, wybor, podsumowanie, postep, gotowe - oraz pytanie w samym oknie (Pokaz-Pytanie)
-# zamiast MessageBox: odznaczenie czesci, przerwanie instalacji.
+# powitanie (duze "Zainstaluj" = Zainstaluj-Od-Razu, "chcę wybrać sam" = Wybierz-Sam), wybor,
+# podsumowanie, postep (karta bledu z "Skopiuj raport dla Przemka": Raport-Bledu, Do-Schowka),
+# gotowe ("Otwórz" = Otworz-Claude) - oraz pytanie w samym oknie (Pokaz-Pytanie) zamiast
+# MessageBox: odznaczenie czesci, przerwanie instalacji. Okno rozciagane: Dopasuj-Do-Rozmiaru.
 # Skad wolane: okno.ps1 (Zbuduj-Okno, pierwszy ekran) i zdarzenia kontrolek okna. Wczytuje go
 # okno.ps1 kropka - poza stanem ekranow same definicje.
 
@@ -32,9 +34,13 @@ $script:SekundyCiszy     = 90
 function Zbuduj-Okno {
   if ($script:PozaEkranem) { $f = New-Object MegaRuchacz.OknoTestowe } else { $f = New-Object System.Windows.Forms.Form }
   $f.Text = $script:TYTUL_OKNA
-  $f.FormBorderStyle = [System.Windows.Forms.FormBorderStyle]::FixedSingle
-  $f.MaximizeBox = $false
+  # Rozciagane i maksymalizowane (uzgodnione 14.10.2026, wzor: okno nadzorcy a1332c3). Mniejsze niz
+  # rozmiar startowy byc nie moze (MinimumSize) - tresc musialaby sie sciskac. Ramke ustawiamy PRZED
+  # ClientSize: Sizable ma grubsza ramke, wiec Size liczy sie dopiero po niej.
+  $f.FormBorderStyle = [System.Windows.Forms.FormBorderStyle]::Sizable
+  $f.MaximizeBox = $true
   $f.ClientSize = New-Object System.Drawing.Size($script:SzerOkna, $script:WysOkna)
+  $f.MinimumSize = $f.Size
   $f.StartPosition = [System.Windows.Forms.FormStartPosition]::Manual
   $f.BackColor = $script:TloOkna
   $f.Font = $script:CzZwykla
@@ -95,7 +101,9 @@ function Zbuduj-Okno {
   # jedno zdanie, dlaczego glowny jest wylaczony.
   $script:Pasek = New-Object System.Windows.Forms.Panel
   $script:Pasek.Dock = [System.Windows.Forms.DockStyle]::Bottom
-  $script:Pasek.Height = 64
+  # Szerokosc okna od razu: przyciski przyklejone do prawej (Anchor) licza odstep od krawedzi
+  # w chwili dodania - przy domyslnych 200 px panelu odjechalyby poza okno (zlapane testem IN1).
+  $script:Pasek.Size = New-Object System.Drawing.Size($script:SzerOkna, 64)
   $script:Pasek.BackColor = $script:TloPaska
   $script:Pasek.Add_Paint({
     param($nadawca, $e)
@@ -104,10 +112,14 @@ function Zbuduj-Okno {
   })
   $script:BAnuluj = Nowy-Przycisk 'Anuluj' 120
   $script:BAnuluj.Location = New-Object System.Drawing.Point($script:Margines, 15)
+  # Prawe przyciski przyklejone do prawej krawedzi - jada za oknem, gdy sie je rozciaga.
+  $prawe = [System.Windows.Forms.AnchorStyles]::Top -bor [System.Windows.Forms.AnchorStyles]::Right
   $script:BDalej = Przycisk-Glowny 'Dalej' 190
   $script:BDalej.Location = New-Object System.Drawing.Point(($script:SzerOkna - $script:Margines - 190), 15)
+  $script:BDalej.Anchor = $prawe
   $script:BWstecz = Nowy-Przycisk 'Wstecz' 120
   $script:BWstecz.Location = New-Object System.Drawing.Point(($script:BDalej.Left - 12 - 120), 15)
+  $script:BWstecz.Anchor = $prawe
   $xStopki = $script:Margines + 120 + 16
   $script:LStopka = Etykieta-Zawijana '' $script:CzMala $script:KolSzary ($script:BWstecz.Left - $xStopki - 12)
   $script:LStopka.Location = New-Object System.Drawing.Point($xStopki, 16)
@@ -163,8 +175,76 @@ function Zbuduj-Okno {
       if ($script:Znacznik) { [System.IO.File]::WriteAllText($script:Znacznik, "$PID $(Get-Date -Format o)") }
     } catch { Zanotuj-Wywrotke "pokazanie okna" $_ }
   })
+  # Zmiana rozmiaru: ekran ukladany od nowa 200 ms po ostatnim ruchu (przeciaganie ramki daje
+  # dziesiatki zdarzen na sekunde, a ulozenie ekranu trwa chwile) - jak w oknie nadzorcy.
+  $f.Add_Resize({
+    try {
+      if (-not $script:ZegarRozmiaru) {
+        $script:ZegarRozmiaru = New-Object System.Windows.Forms.Timer
+        $script:ZegarRozmiaru.Interval = 200
+        $script:ZegarRozmiaru.Add_Tick({
+          $script:ZegarRozmiaru.Stop()
+          try { Dopasuj-Do-Rozmiaru } catch { Zanotuj-Wywrotke "dopasowanie okna do rozmiaru" $_ }
+        })
+      }
+      $script:ZegarRozmiaru.Stop()
+      $script:ZegarRozmiaru.Start()
+    } catch { Zanotuj-Wywrotke "zmiana rozmiaru okna" $_ }
+  })
+  $f.Add_FormClosed({ if ($script:ZegarRozmiaru) { $script:ZegarRozmiaru.Stop() } })
   $script:Okno = $f
   Odswiez-Pasek-Wywrotek
+}
+
+# Po zmianie rozmiaru (zegar z Resize) i w tescie. Szerokosci z wnetrza okna (wyglad.ps1
+# Ustaw-Szerokosci), naglowek i pasek przyciskow dostaja nowe granice, a biezacy ekran jest
+# ukladany od nowa - wszystkie ekrany biora szerokosci z $script:SzerWnetrza przy budowie.
+# Zmiana samej wysokosci nic nie przebudowuje (tresc jest zadokowana i przewija sie sama).
+# Pytanie na wierzchu (nakladka) zostaje - ekran pod nim przebuduje sie, gdy pytanie zniknie.
+function Dopasuj-Do-Rozmiaru([bool]$wymus = $false) {
+  $f = $script:Okno
+  if (-not $f -or $f.IsDisposed) { return }
+  if ($f.WindowState -eq [System.Windows.Forms.FormWindowState]::Minimized) { return }
+  $stara = $script:SzerOkna
+  Ustaw-Szerokosci $f.ClientSize.Width
+  # Tresc wezsza niz okno (SzerTrescMax) stoi na srodku.
+  $lewy = [math]::Max($script:Margines, [int](($f.ClientSize.Width - 20 - $script:SzerTresc) / 2))
+  if ($script:Tresc.Padding.Left -ne $lewy) { $script:Tresc.Padding = New-Object System.Windows.Forms.Padding($lewy, 6, $script:Margines, 12) }
+  if ((-not $wymus) -and ($script:SzerOkna -eq $stara) -and -not ($script:PrzebudujPoPytaniu -and -not $script:Nakladka.Visible)) { return }
+  $script:LPodtytul.MaximumSize = New-Object System.Drawing.Size(($script:SzerOkna - 2 * $script:Margines), 0)
+  $script:LWywrotki.MaximumSize = New-Object System.Drawing.Size(($script:SzerOkna - 2 * $script:Margines), 0)
+  Uloz-Stopke
+  if ($script:Nakladka.Visible) { $script:PrzebudujPoPytaniu = $true; Wysrodkuj-Pytanie; return }
+  Przebuduj-Ekran
+}
+
+# Zdanie miedzy Anuluj a Wstecz - szerokosc do lewej krawedzi Wstecz, ktore jedzie z oknem.
+function Uloz-Stopke {
+  $xStopki = $script:Margines + 120 + 16
+  $script:LStopka.MaximumSize = New-Object System.Drawing.Size([math]::Max(80, ($script:BWstecz.Left - $xStopki - 12)), 0)
+}
+
+# Ten sam ekran od nowa, z zachowaniem tego, co na nim sie dzialo: wpisany folder, karta bledu
+# planu, schowane przyciski po skonczonym planie. Wybor i plan leza w $script:Wybor / $script:Plan,
+# wiec ekrany wyboru, podsumowania i postepu odtwarzaja sie z nich same.
+function Przebuduj-Ekran {
+  $e = $script:Ekran
+  if (-not $e) { return }
+  $script:PrzebudujPoPytaniu = $false
+  if (($e -eq 'folder') -and $script:PoleFolderu -and -not $script:PoleFolderu.IsDisposed) { $script:FolderWpisany = $script:PoleFolderu.Text }
+  $script:Tresc.SuspendLayout()
+  try {
+    Pokaz-Ekran $e
+    if ($e -eq 'postep') {
+      if (@('blad', 'przerwany') -contains $script:PlanStan) { Pokaz-Blad-Planu $script:Plan[$script:PlanIndeks] }
+      elseif ($script:PlanStan -eq 'gotowe') { Ustaw-Przyciski }
+      Odmaluj-Postep
+    }
+  } finally {
+    $script:FolderWpisany = $null
+    $script:Tresc.ResumeLayout($true)
+  }
+  Zapisz-Dziennik "ekran $e ulozony od nowa: okno $($script:SzerOkna) px, tresc $($script:SzerTresc) px"
 }
 
 function Odswiez-Pasek-Wywrotek {
@@ -196,18 +276,25 @@ function Po-Chwili([int]$ms, [scriptblock]$co) {
 
 # --- naglowek, przyciski, wspolne kawalki ---------------------------------------
 
+# Pierwsza instalacja bez wybierania ("Zainstaluj" na powitaniu) ma trzy kroki; dopiero
+# "chcę wybrać sam" ($script:WlasnyWybor) pokazuje droge z wyborem i podsumowaniem.
 function Kroki-Trybu {
   switch ($script:Tryb) {
-    'pobieranie' { return @('Folder', 'Pobieranie') }
+    'pobieranie' {
+      if ($script:WlasnyWybor) { return @('Folder', 'Pobieranie') }
+      return @('Start', 'Pobieranie')
+    }
     'zmiana' { return @('Wybór', 'Podsumowanie', 'Zmiany', 'Gotowe') }
   }
+  if (-not $script:WlasnyWybor) { return @('Start', 'Instalacja', 'Gotowe') }
   return @('Powitanie', 'Wybór', 'Podsumowanie', 'Instalacja', 'Gotowe')
 }
 
 function Indeks-Ekranu([string]$ekran) {
   $mapa = @{ powitanie = 0; wybor = 1; podsumowanie = 2; postep = 3; gotowe = 4 }
-  if ($script:Tryb -eq 'pobieranie') { $mapa = @{ folder = 0; postep = 1 } }
+  if ($script:Tryb -eq 'pobieranie') { $mapa = @{ powitanie = 0; folder = 0; postep = 1 } }
   elseif ($script:Tryb -eq 'zmiana') { $mapa = @{ wybor = 0; podsumowanie = 1; postep = 2; gotowe = 3 } }
+  elseif (-not $script:WlasnyWybor) { $mapa = @{ powitanie = 0; postep = 1; gotowe = 2 } }
   return $mapa[$ekran]
 }
 
@@ -322,6 +409,8 @@ function Karta-Proby {
 function Pokaz-Ekran([string]$nazwa) {
   $script:Ekran = $nazwa
   Ukryj-Pytanie
+  # Enter = glowny przycisk paska; powitanie podmienia go na swoj duzy "Zainstaluj".
+  $script:Okno.AcceptButton = $script:BDalej
   $script:Tresc.SuspendLayout()
   try {
     Wyczysc-Panel $script:Tresc
@@ -448,6 +537,9 @@ function Ukryj-Pytanie {
     Ustaw-Wlaczony $script:BDalej $script:StanPrzyciskow.D
     $script:StanPrzyciskow = $null
   }
+  # Okno zmienilo rozmiar, gdy stalo pytanie - ekran pod nim ukladany od nowa zegarem, czyli PO
+  # obsluzeniu odpowiedzi (ta jeszcze zmienia wybor na obecnym ekranie).
+  if ($script:PrzebudujPoPytaniu -and $script:ZegarRozmiaru) { $script:ZegarRozmiaru.Stop(); $script:ZegarRozmiaru.Start() }
 }
 
 function Pytanie-O-Przerwanie([bool]$zamknij) {
@@ -511,6 +603,7 @@ function Ekran-Folder($root) {
   $script:PoleFolderu.Width = $szw - 130
   $script:PoleFolderu.Margin = New-Object System.Windows.Forms.Padding(0, 4, 10, 0)
   $script:PoleFolderu.Text = $script:FolderDocelowy
+  if ($script:FolderWpisany) { $script:PoleFolderu.Text = $script:FolderWpisany }   # ekran ukladany od nowa po zmianie rozmiaru
   $script:PoleFolderu.Add_TextChanged({ try { Sprawdz-Folder } catch { Zanotuj-Wywrotke "sprawdzenie folderu" $_ } })
   $bz = Nowy-Przycisk 'Zmień…' 120
   $bz.Margin = New-Object System.Windows.Forms.Padding(0)
@@ -544,7 +637,9 @@ function Ekran-Folder($root) {
   $k2.Controls.Add((Punkt-Numer 2 'Pobiorę MegaRuchacza do wybranego folderu.' ''))
   $k2.Controls.Add((Punkt-Numer 3 'Otworzę instalator z nowego folderu.' 'Tam wybierzesz, co chcesz mieć - do tego czasu nic poza pobraniem się nie stanie.'))
   $root.Controls.Add($k2)
-  Ustaw-Przyciski -Anuluj 'Anuluj' -Dalej 'Dalej' -PoAnuluj { Zamknij-Okno } -PoDalej {
+  # Wstecz - tylko gdy na folder przyszlo sie z powitania ("chcę wybrać sam"); folder pokazany
+  # dlatego, ze domyslny sie nie nadaje (Zainstaluj-Od-Razu), wraca na powitanie tak samo.
+  Ustaw-Przyciski -Anuluj 'Anuluj' -Wstecz 'Wstecz' -Dalej 'Dalej' -PoAnuluj { Zamknij-Okno } -PoWstecz { $script:WlasnyWybor = $false; Pokaz-Ekran 'powitanie' } -PoDalej {
     $o = Ocen-Folder $script:PoleFolderu.Text
     if ($o.Blad) { Sprawdz-Folder; return }
     $script:FolderDocelowy = [System.IO.Path]::GetFullPath($script:PoleFolderu.Text.Trim()).TrimEnd('\')
@@ -558,10 +653,12 @@ function Plan-Pobierania {
   $plan = New-Object System.Collections.ArrayList
   $a = @('-Co', 'git', '-Zrodlo', $script:Zrodlo)
   if ($script:Proba) { $a += '-Proba' }
-  [void]$plan.Add((Nowe-Zadanie -Id 'git' -Napis 'Program git (pobiera poprawki MegaRuchacza)' -Plik $skrypt -Argumenty $a -Umowa $true))
+  [void]$plan.Add((Nowe-Zadanie -Id 'git' -Napis 'Git i Git Bash' -Plik $skrypt -Argumenty $a -Umowa $true))
   $a2 = @('-Co', 'klon', '-Folder', $script:FolderDocelowy, '-Adres', $script:ZrodloKlonu)
-  [void]$plan.Add((Nowe-Zadanie -Id 'klon' -Napis "MegaRuchacz do folderu $($script:FolderDocelowy)" -Plik $skrypt -Argumenty $a2 -Umowa $true))
-  [void]$plan.Add((Nowe-Zadanie -Id 'uruchom' -Napis 'Instalator z nowego folderu' -Wewnetrzne { param($z) Uruchom-Z-Klonu $z }))
+  [void]$plan.Add((Nowe-Zadanie -Id 'klon' -Napis "MegaRuchacz (do folderu $($script:FolderDocelowy))" -Plik $skrypt -Argumenty $a2 -Umowa $true))
+  $n3 = 'Instalacja w nowym oknie'
+  if ($script:WlasnyWybor) { $n3 = 'Wybór części w nowym oknie' }
+  [void]$plan.Add((Nowe-Zadanie -Id 'uruchom' -Napis $n3 -Wewnetrzne { param($z) Uruchom-Z-Klonu $z }))
   return ,$plan
 }
 
@@ -576,6 +673,8 @@ function Uruchom-Z-Klonu($z) {
     $zn = Join-Path ([System.IO.Path]::GetTempPath()) ("MegaRuchacz-okno-" + [guid]::NewGuid().ToString('N').Substring(0, 8) + '.txt')
     $a = @('-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', $okno, '-Znacznik', $zn)
     if ($script:Dom -ne $HOME) { $a += @('-KatalogDomowy', $script:Dom) }
+    # "Zainstaluj" na powitaniu = okno z klonu od razu instaluje; "chcę wybrać sam" = od razu wybor.
+    if ($script:WlasnyWybor) { $a += @('-Start', 'wybor') } else { $a += @('-Start', 'zainstaluj') }
     if ($script:Proba) { $a += '-Proba' }
     if ($script:KatalogSkryptow) { $a += @('-KatalogSkryptow', $script:KatalogSkryptow) }
     if ($script:PozaEkranem) { $a += '-PozaEkranem' }
@@ -608,49 +707,74 @@ function Uruchom-Z-Klonu($z) {
 
 # --- ekran: powitanie --------------------------------------------------------
 
+# Pierwsza instalacja (tryb nowy i pobieranie) - makieta uzgodniona z uzytkownikiem 14.10.2026:
+# jedno zdanie, DUZY "Zainstaluj" (zalecany zestaw bez zadnych pytan) i maly "chcę wybrać sam ›"
+# do dotychczasowego wyboru czesci. Bez slow typu modul, hook, repo - instaluje tez osoba, ktora
+# nie zna sie na komputerach.
 function Ekran-Powitanie($root) {
-  Ustaw-Podtytul 'Zanim cokolwiek zmienię, pokażę podsumowanie.'
+  Ustaw-Podtytul ''
   $szw = $script:SzerWnetrza
   $k = Nowa-Karta $script:SzerKarty
-  $t = Etykieta-Zawijana 'Cześć! Zainstaluję MegaRuchacza.' $script:CzSrednia $script:KolTekst $szw
-  $t.Margin = New-Object System.Windows.Forms.Padding(0, 0, 0, 8)
+  $k.Padding = New-Object System.Windows.Forms.Padding(22, 26, 22, 22)
+  $t = Etykieta-Zawijana 'Cześć! Zainstaluję MegaRuchacza.' $script:CzTytul $script:KolTekst $szw
+  $t.Margin = New-Object System.Windows.Forms.Padding(0, 0, 0, 10)
   $k.Controls.Add($t)
-  $k.Controls.Add((Akapit 'MegaRuchacz to dodatek do Twojego narzędzia AI. Pamięta, czego się o Tobie dowiedział, umie przeszukać Twoje dawne rozmowy, przy większych zadaniach rozdziela pracę między pomocników i sam dba o swoje aktualizacje.' $script:KolTekst))
-  $k.Controls.Add((Akapit 'Na następnym ekranie wybierzesz, co chcesz mieć. Przed startem pokażę podsumowanie - do tego czasu nic się nie zmieni.'))
+  $k.Controls.Add((Akapit 'Zainstaluję wszystko, czego potrzeba. Nic nie musisz wybierać.' $script:KolTekst $script:CzSrednia))
+  $l = Akapit 'Potrwa to kilka minut.'
+  $l.Margin = New-Object System.Windows.Forms.Padding(0, 0, 0, 20)
+  $k.Controls.Add($l)
+  $script:BZainstaluj = Przycisk-Duzy 'Zainstaluj' 260
+  $script:BZainstaluj.Margin = New-Object System.Windows.Forms.Padding(0, 0, 0, 14)
+  $script:BZainstaluj.Add_Click({ try { Zainstaluj-Od-Razu } catch { Zanotuj-Wywrotke "przycisk Zainstaluj" $_ } })
+  $k.Controls.Add($script:BZainstaluj)
+  $script:BWybierzSam = Przycisk-Odnosnik 'chcę wybrać sam ›'
+  $script:BWybierzSam.Add_Click({ try { Wybierz-Sam } catch { Zanotuj-Wywrotke "odnosnik chce wybrac sam" $_ } })
+  $k.Controls.Add($script:BWybierzSam)
   $root.Controls.Add($k)
+  Ustaw-Przyciski -Anuluj 'Anuluj' -PoAnuluj { Zamknij-Okno }
+  $script:Okno.AcceptButton = $script:BZainstaluj
+  try { [void]$script:BZainstaluj.Select() } catch { Zapisz-Dziennik "fokus na Zainstaluj: $($_.Exception.Message)" }
+}
 
-  $k2 = Nowa-Karta $script:SzerKarty
-  $k2.Controls.Add((Tytul-Karty 'Twoje narzędzia AI'))
-  $jakies = $false
-  foreach ($n in $script:Narzedzia) {
-    $w = Poziomy
-    $w.Margin = New-Object System.Windows.Forms.Padding(0, 0, 0, 4)
-    if ($n.Jest) { $jakies = $true; $zn = Etykieta $script:ZNAK_OK $script:CzZnak $script:KolDobrze }
-    else { $zn = Etykieta $script:ZNAK_POMIN $script:CzZnak $script:KolJasny }
-    $zn.AutoSize = $false
-    $zn.Size = New-Object System.Drawing.Size(26, 24)
-    $zn.Margin = New-Object System.Windows.Forms.Padding(0)
-    $nz = Etykieta $n.Nazwa $script:CzZwyklaGruba $script:KolTekst
-    $nz.AutoSize = $false
-    $nz.Size = New-Object System.Drawing.Size(130, 24)
-    $nz.Margin = New-Object System.Windows.Forms.Padding(0, 2, 0, 0)
-    if ($n.Jest) { $opis = "znalezione ($($n.Slady))"; $kol = $script:KolTekst } else { $opis = 'nie znalezione'; $kol = $script:KolSzary }
-    $op = Etykieta-Zawijana $opis $script:CzZwykla $kol ($szw - 156)
-    $op.Margin = New-Object System.Windows.Forms.Padding(0, 2, 0, 0)
-    $w.Controls.Add($zn); $w.Controls.Add($nz); $w.Controls.Add($op)
-    $k2.Controls.Add($w)
+# "chcę wybrać sam ›": dotychczasowa droga - wybor czesci (w pobieraniu najpierw folder).
+function Wybierz-Sam {
+  $script:WlasnyWybor = $true
+  if ($script:Tryb -eq 'pobieranie') { Pokaz-Ekran 'folder' } else { Pokaz-Ekran 'wybor' }
+}
+
+# "Zainstaluj" na powitaniu (i -Start zainstaluj w oknie z klonu): zalecany zestaw - cztery czesci
+# z makiety P59c (kopia zapasowa nie, bo wymaga wyboru folderu) i Claude Code - od razu na ekran
+# postepu, bez wyboru i podsumowania. W pobieraniu: folder domyslny ~\MegaRuchacz; gdy sie nie
+# nadaje (np. jest tam cos innego), ekran folderu z powodem zamiast zgadywania.
+function Zainstaluj-Od-Razu {
+  $script:WlasnyWybor = $false
+  if ($script:Tryb -eq 'pobieranie') {
+    $o = Ocen-Folder $script:FolderDocelowy
+    if ($o.Blad) {
+      Zapisz-Dziennik "folder domyslny $($script:FolderDocelowy) sie nie nadaje ($($o.Blad)) - pokazuje wybor folderu"
+      $script:WlasnyWybor = $true
+      Pokaz-Ekran 'folder'
+      return
+    }
+    $script:FolderDocelowy = [System.IO.Path]::GetFullPath($script:FolderDocelowy).TrimEnd('\')
+    Uruchom-Plan (Plan-Pobierania)
+    return
   }
-  $odstep = New-Object System.Windows.Forms.Panel
-  $odstep.Size = New-Object System.Drawing.Size(1, 6)
-  $odstep.Margin = New-Object System.Windows.Forms.Padding(0)
-  $k2.Controls.Add($odstep)
-  if ($jakies) { $k2.Controls.Add((Akapit 'MegaRuchacz podłączy się do każdego znalezionego narzędzia.')) }
-  else { $k2.Controls.Add((Akapit 'Nie znalazłem żadnego z tych narzędzi. MegaRuchacz działa tylko razem z jednym z nich - najlepiej najpierw zainstaluj Claude Code, a potem uruchom ten instalator jeszcze raz. Możesz też iść dalej i zainstalować MegaRuchacza już teraz.' $script:KolUwaga $script:CzZwyklaGruba)) }
-  $l = Etykieta-Zawijana "MegaRuchacz leży w folderze $($script:Zrodlo)." $script:CzMala $script:KolSzary $szw
-  $l.Margin = New-Object System.Windows.Forms.Padding(0)
-  $k2.Controls.Add($l)
-  $root.Controls.Add($k2)
-  Ustaw-Przyciski -Anuluj 'Anuluj' -Dalej 'Dalej' -PoAnuluj { Zamknij-Okno } -PoDalej { Pokaz-Ekran 'wybor' }
+  foreach ($id in @($script:MODULY.Keys)) { $script:Wybor.Moduly[$id] = ($id -ne 'kopia') }
+  $script:Wybor.Claude = $true
+  $script:Wybor.Zestaw = 'wlasny'
+  $plan = Zbuduj-Plan
+  $brak = Brakujace-Skrypty $plan
+  if ($brak.Count -gt 0) {
+    # Podsumowanie pokazuje braki czerwona karta i nie da zaczac - lepsze niz blad w polowie.
+    Zapisz-Dziennik "Zainstaluj: brakuje plikow ($($brak -join ', ')) - pokazuje podsumowanie"
+    $script:WlasnyWybor = $true
+    Pokaz-Ekran 'podsumowanie'
+    return
+  }
+  $script:PlanDoWykonania = $plan
+  Zapisz-Dziennik "Zainstaluj: zalecany zestaw bez pytan - $((@($plan | ForEach-Object { $_.Id })) -join ', ')"
+  Uruchom-Plan $plan
 }
 
 # --- ekran: wybor ------------------------------------------------------------
@@ -698,6 +822,8 @@ function Ekran-Wybor($root) {
   $g.Controls.Add($prz)
   $k.Controls.Add($g)
   $k.Controls.Add((Wiersz-Zawsze))
+  $script:CbClaude = $null
+  if (-not $zmiana) { $k.Controls.Add((Wiersz-Claude)) }
   $script:CheckboxyModulow = @{}; $script:TagiModulow = @{}; $script:PanelKopii = $null
   foreach ($id in $script:MODULY.Keys) {
     $k.Controls.Add((Wiersz-Modulu $id))
@@ -712,7 +838,7 @@ function Ekran-Wybor($root) {
   if ($zmiana) {
     Ustaw-Przyciski -Anuluj 'Anuluj' -Dalej 'Zastosuj zmiany' -PoAnuluj { Zamknij-Okno } -PoDalej { Pokaz-Ekran 'podsumowanie' }
   } else {
-    Ustaw-Przyciski -Anuluj 'Anuluj' -Wstecz 'Wstecz' -Dalej 'Dalej' -PoAnuluj { Zamknij-Okno } -PoWstecz { Pokaz-Ekran 'powitanie' } -PoDalej { Pokaz-Ekran 'podsumowanie' }
+    Ustaw-Przyciski -Anuluj 'Anuluj' -Wstecz 'Wstecz' -Dalej 'Dalej' -PoAnuluj { Zamknij-Okno } -PoWstecz { $script:WlasnyWybor = $false; Pokaz-Ekran 'powitanie' } -PoDalej { Pokaz-Ekran 'podsumowanie' }
   }
   Odswiez-Wybor
 }
@@ -815,6 +941,45 @@ function Wiersz-Zawsze {
   # "dodam", gdy bazy brakuje (P64).
   $script:ZnaczekZawsze = $s
   $t.Controls.Add($n, 0, 0); $t.Controls.Add($d, 1, 0); $t.Controls.Add($s, 2, 0)
+  return $t
+}
+
+# Claude Code na ekranie wyboru (tylko nowa instalacja; zlecenie IN1): domyslnie zaznaczone. Gdy juz
+# jest na komputerze, pole stoi zaznaczone i wylaczone - krok na liscie postepu pokaze "już jest".
+function Wiersz-Claude {
+  $kol = Kolumny-Wyboru
+  $t = Nowy-Wiersz-Wyboru
+  $cb = New-Object System.Windows.Forms.CheckBox
+  $cb.Text = 'Claude Code'
+  $cb.Font = $script:CzZwyklaGruba
+  $cb.ForeColor = $script:KolTekst
+  $cb.AutoSize = $true
+  $cb.UseMnemonic = $false
+  $cb.Margin = New-Object System.Windows.Forms.Padding(0, 0, 8, 0)
+  $jest = @($script:Narzedzia | Where-Object { ($_.Id -eq 'claude') -and $_.Jest }).Count -gt 0
+  $opis = 'program, w którym rozmawiasz z AI - zainstaluję go, jeśli go nie ma'
+  if ($jest) { $opis = 'program, w którym rozmawiasz z AI - już jest na tym komputerze'; $script:Wybor.Claude = $true }
+  $cb.Checked = [bool]$script:Wybor.Claude
+  $cb.Enabled = -not $jest
+  $cb.Add_CheckedChanged({
+    param($nadawca, $e)
+    try {
+      if ($script:BezZdarzen) { return }
+      $script:Wybor.Claude = [bool]$nadawca.Checked
+      $script:Wybor.Zestaw = 'wlasny'; $script:Wybor.Wlasny = $null
+      Odswiez-Wybor
+    } catch { Zanotuj-Wywrotke "zaznaczenie Claude Code" $_ }
+  })
+  $d = Etykieta-Zawijana $opis $script:CzZwykla $script:KolSzary ($kol[1] - 10)
+  $d.Margin = New-Object System.Windows.Forms.Padding(0, 2, 10, 0)
+  if (-not $jest) {
+    $d.Tag = $cb
+    $d.Cursor = [System.Windows.Forms.Cursors]::Hand
+    $d.Add_Click({ param($nadawca, $e) try { $nadawca.Tag.Checked = -not $nadawca.Tag.Checked } catch { Zanotuj-Wywrotke "klikniecie opisu Claude Code" $_ } })
+  }
+  $s = Znaczek-Stanu
+  $t.Controls.Add($cb, 0, 0); $t.Controls.Add($d, 1, 0); $t.Controls.Add($s, 2, 0)
+  $script:CbClaude = $cb
   return $t
 }
 
@@ -1093,6 +1258,7 @@ function Odswiez-Wybor {
       $cb = $script:CheckboxyModulow[$id]
       if ($cb -and ($cb.Checked -ne [bool]$script:Wybor.Moduly[$id])) { $cb.Checked = [bool]$script:Wybor.Moduly[$id] }
     }
+    if ($script:CbClaude -and -not $script:CbClaude.IsDisposed -and ($script:CbClaude.Checked -ne [bool]$script:Wybor.Claude)) { $script:CbClaude.Checked = [bool]$script:Wybor.Claude }
   } finally { $script:BezZdarzen = $false }
   if ($script:Tryb -eq 'zmiana') {
     foreach ($id in $script:MODULY.Keys) {
@@ -1128,9 +1294,10 @@ function Odswiez-Wybor {
 # go przywraca (razem z odpowiedziami na pytania o usuniecie - byly juz potwierdzone).
 function Wybierz-Zestaw([string]$zestaw) {
   if ($zestaw -eq 'wszystko') {
-    if ($script:Wybor.Zestaw -ne 'wszystko') { $script:Wybor.Wlasny = @{ Moduly = $script:Wybor.Moduly.Clone(); UsunDane = $script:Wybor.UsunDane.Clone(); UsunWszystko = $script:Wybor.UsunWszystko; UsunDaneWszystko = $script:Wybor.UsunDaneWszystko } }
+    if ($script:Wybor.Zestaw -ne 'wszystko') { $script:Wybor.Wlasny = @{ Moduly = $script:Wybor.Moduly.Clone(); UsunDane = $script:Wybor.UsunDane.Clone(); UsunWszystko = $script:Wybor.UsunWszystko; UsunDaneWszystko = $script:Wybor.UsunDaneWszystko; Claude = $script:Wybor.Claude } }
     $script:Wybor.Zestaw = 'wszystko'
     foreach ($id in @($script:MODULY.Keys)) { $script:Wybor.Moduly[$id] = $true }
+    $script:Wybor.Claude = $true
     $script:Wybor.UsunDane = @{}
     $script:Wybor.UsunWszystko = $false; $script:Wybor.UsunDaneWszystko = $false
   } else {
@@ -1139,6 +1306,7 @@ function Wybierz-Zestaw([string]$zestaw) {
       $script:Wybor.UsunDane = $script:Wybor.Wlasny.UsunDane.Clone()
       $script:Wybor.UsunWszystko = [bool]$script:Wybor.Wlasny.UsunWszystko
       $script:Wybor.UsunDaneWszystko = [bool]$script:Wybor.Wlasny.UsunDaneWszystko
+      $script:Wybor.Claude = [bool]$script:Wybor.Wlasny.Claude
     }
     $script:Wybor.Zestaw = 'wlasny'
   }
@@ -1409,11 +1577,18 @@ function Ekran-Postep($root) {
   $k.Padding = New-Object System.Windows.Forms.Padding(22, 18, 22, 14)
   $script:LPostepTytul = Etykieta $tyt $script:CzSrednia $script:KolTekst
   $k.Controls.Add($script:LPostepTytul)
-  $script:LPostepOpis = Etykieta-Zawijana 'Zwykle trwa to kilka minut. Każdy krok pokaże tu, co właśnie robi.' $script:CzZwykla $script:KolSzary $szw
+  $opis = 'Zwykle trwa to kilka minut. Każdy krok pokaże tu, co właśnie robi.'
+  if (Prosty-Postep) { $opis = 'Zwykle trwa to kilka minut. Nic nie musisz klikać.' }
+  $script:LPostepOpis = Etykieta-Zawijana $opis $script:CzZwykla $script:KolSzary $szw
   $script:LPostepOpis.Margin = New-Object System.Windows.Forms.Padding(0, 4, 0, 0)
   $k.Controls.Add($script:LPostepOpis)
   $script:PasekPostepu = Nowy-Pasek $szw
+  $script:PasekPostepu.Margin = New-Object System.Windows.Forms.Padding(0, 14, 0, 6)
   $k.Controls.Add($script:PasekPostepu)
+  # Jedno zdanie pod paskiem: co sie teraz dzieje (Odmaluj-Postep, Zdanie-Postepu).
+  $script:LTeraz = Etykieta-Zawijana '' $script:CzZwyklaGruba $script:KolTekst $szw
+  $script:LTeraz.Margin = New-Object System.Windows.Forms.Padding(0, 0, 0, 14)
+  $k.Controls.Add($script:LTeraz)
   $script:WierszeZadan = @{}
   foreach ($z in $script:Plan) { $k.Controls.Add((Wiersz-Zadania $z $szw)) }
   $root.Controls.Add($k)
@@ -1423,11 +1598,24 @@ function Ekran-Postep($root) {
   $script:LBleduTytul = Etykieta-Zawijana '' $script:CzGruba $script:KolPilne $szw
   $script:LBleduTresc = Etykieta-Zawijana '' $script:CzZwykla $script:KolTekst $szw
   $script:LBleduTresc.Margin = New-Object System.Windows.Forms.Padding(0, 4, 0, 6)
-  $script:LBleduRada = Etykieta-Zawijana 'Kliknij „Spróbuj ponownie” - kroki, które już się udały, nie powtórzą się. Jeśli błąd wraca, zamknij okno: nic się nie zepsuje, a instalator możesz uruchomić później jeszcze raz.' $script:CzMala $script:KolSzary $szw
+  $script:LBleduRada = Etykieta-Zawijana 'Co zrobić: sprawdź, czy działa internet, i kliknij „Spróbuj ponownie” - to, co już się udało, nie powtórzy się. Jeśli błąd wraca, kliknij „Skopiuj raport dla Przemka” i wklej mu go w wiadomości (Ctrl+V). Nic się nie zepsuje - instalator możesz uruchomić później jeszcze raz.' $script:CzZwykla $script:KolTekst $szw
   $script:LBleduRada.Margin = New-Object System.Windows.Forms.Padding(0, 0, 0, 10)
   $r = Poziomy
   $script:BPonow = Przycisk-Glowny 'Spróbuj ponownie' 180
   $script:BPonow.Margin = New-Object System.Windows.Forms.Padding(0, 0, 10, 0)
+  $script:BKopiujRaport = Nowy-Przycisk 'Skopiuj raport dla Przemka' 230
+  $script:BKopiujRaport.Add_Click({
+    try {
+      $z = $script:Plan[$script:PlanIndeks]
+      $t = Raport-Bledu $z
+      if (Do-Schowka $t) {
+        Ustaw-Tekst $script:LRaportInfo 'Raport jest w schowku - wklej go Przemkowi w wiadomości (Ctrl+V).' $script:KolDobrze
+        Zapisz-Dziennik "raport bledu skopiowany do schowka ($($t.Length) znakow)"
+      } else {
+        Ustaw-Tekst $script:LRaportInfo "Schowek jest zajęty przez inny program. Spróbuj jeszcze raz za chwilę - albo wyślij Przemkowi plik $($script:Dziennik)." $script:KolPilne
+      }
+    } catch { Zanotuj-Wywrotke "przycisk Skopiuj raport" $_ }
+  })
   $script:BSzczegoly = Nowy-Przycisk 'Pokaż szczegóły' 160
   $script:BPonow.Add_Click({
     try {
@@ -1444,7 +1632,10 @@ function Ekran-Postep($root) {
     } catch { Zanotuj-Wywrotke "przycisk Pokaz szczegoly" $_ }
   })
   $r.Controls.Add($script:BPonow)
+  $r.Controls.Add($script:BKopiujRaport)
   $r.Controls.Add($script:BSzczegoly)
+  $script:LRaportInfo = Etykieta-Zawijana '' $script:CzZwyklaGruba $script:KolDobrze $szw
+  $script:LRaportInfo.Margin = New-Object System.Windows.Forms.Padding(0, 8, 0, 0)
   $script:PoleSzczegolow = New-Object System.Windows.Forms.TextBox
   $script:PoleSzczegolow.Multiline = $true
   $script:PoleSzczegolow.ReadOnly = $true
@@ -1456,7 +1647,7 @@ function Ekran-Postep($root) {
   $script:PoleSzczegolow.Size = New-Object System.Drawing.Size($szw, 180)
   $script:PoleSzczegolow.Margin = New-Object System.Windows.Forms.Padding(0, 10, 0, 0)
   $script:PoleSzczegolow.Visible = $false
-  foreach ($c in @($script:LBleduTytul, $script:LBleduTresc, $script:LBleduRada, $r, $script:PoleSzczegolow)) { $script:KartaBledu.Controls.Add($c) }
+  foreach ($c in @($script:LBleduTytul, $script:LBleduTresc, $script:LBleduRada, $r, $script:LRaportInfo, $script:PoleSzczegolow)) { $script:KartaBledu.Controls.Add($c) }
   $root.Controls.Add($script:KartaBledu)
 
   $ld = Etykieta-Zawijana "Pełny zapis instalacji: $($script:Dziennik)" $script:CzMala $script:KolSzary $script:SzerTresc
@@ -1471,10 +1662,10 @@ function Wiersz-Zadania($z, [int]$szw) {
   $w = Poziomy
   $zn = Etykieta $script:ZNAK_CZEKA $script:CzZnak $script:KolJasny
   $zn.AutoSize = $false
-  $zn.Size = New-Object System.Drawing.Size(28, 24)
+  $zn.Size = New-Object System.Drawing.Size(32, 24)
   $zn.Margin = New-Object System.Windows.Forms.Padding(0)
-  $n = Etykieta-Zawijana $z.Napis $script:CzZwykla $script:KolTekst ($szw - 28 - 190)
-  $n.MinimumSize = New-Object System.Drawing.Size(($szw - 28 - 190), 24)
+  $n = Etykieta-Zawijana $z.Napis $script:CzZwykla $script:KolTekst ($szw - 32 - 190)
+  $n.MinimumSize = New-Object System.Drawing.Size(($szw - 32 - 190), 24)
   $n.Margin = New-Object System.Windows.Forms.Padding(0, 2, 0, 0)
   $s = Etykieta '' $script:CzZwykla $script:KolSzary
   $s.AutoSize = $false
@@ -1482,8 +1673,8 @@ function Wiersz-Zadania($z, [int]$szw) {
   $s.TextAlign = [System.Drawing.ContentAlignment]::TopRight
   $s.Margin = New-Object System.Windows.Forms.Padding(0, 2, 0, 0)
   $w.Controls.Add($zn); $w.Controls.Add($n); $w.Controls.Add($s)
-  $d = Etykieta-Zawijana '' $script:CzMala $script:KolSzary ($szw - 28)
-  $d.Margin = New-Object System.Windows.Forms.Padding(28, 0, 0, 6)
+  $d = Etykieta-Zawijana '' $script:CzMala $script:KolSzary ($szw - 32)
+  $d.Margin = New-Object System.Windows.Forms.Padding(32, 0, 0, 6)
   $d.Visible = $false
   $kol.Controls.Add($w)
   $kol.Controls.Add($d)
@@ -1495,7 +1686,12 @@ function Wiersz-Zadania($z, [int]$szw) {
 function Odmaluj-Postep {
   if (($script:Ekran -ne 'postep') -or -not $script:Plan) { return }
   $teraz = Get-Date
+  $prosty = Prosty-Postep
   $kartaBledu = [bool]($script:KartaBledu -and -not $script:KartaBledu.IsDisposed -and $script:KartaBledu.Visible)
+  if ($script:LTeraz -and -not $script:LTeraz.IsDisposed) {
+    $zd = Zdanie-Postepu $teraz
+    Ustaw-Tekst $script:LTeraz $zd.Tekst $zd.Kolor
+  }
   foreach ($z in $script:Plan) {
     $r = $script:WierszeZadan[$z.Id]
     if (-not $r) { continue }
@@ -1503,21 +1699,27 @@ function Odmaluj-Postep {
     switch ($z.Stan) {
       'czeka' { Ustaw-Tekst $r.Znak $script:ZNAK_CZEKA $script:KolJasny; Ustaw-Tekst $r.Stan 'czeka' $script:KolJasny }
       'trwa' {
-        Ustaw-Tekst $r.Znak $script:ZNAKI_TRWA[[int]([math]::Floor($script:Tyk / 2)) % 4] $script:KolMr
+        Ustaw-Tekst $r.Znak $script:ZNAK_TRWA $script:KolMr
         $s = 0.0; if ($z.Od) { $s = ($teraz - $z.Od).TotalSeconds }
         Ustaw-Tekst $r.Stan "trwa... $(Czas-Ludzko $s)" $script:KolTekst
-        $szcz = 'zaczynam...'
-        if ($z.Kroki.Count -gt 0) { $szcz = $z.Kroki[$z.Kroki.Count - 1] }
+        # Pierwsza instalacja: bez technicznych linii skryptu pod wierszem (co sie dzieje, mowi zdanie
+        # pod paskiem) - zostaje tylko uwaga o dlugiej ciszy. Pelne linie sa w szczegolach i dzienniku.
+        $szcz = ''
+        if (-not $prosty) {
+          $szcz = 'zaczynam...'
+          if ($z.Kroki.Count -gt 0) { $szcz = $z.Kroki[$z.Kroki.Count - 1] }
+        }
         $cisza = 0.0; if ($z.OstatniZnak) { $cisza = ($teraz - $z.OstatniZnak).TotalSeconds }
         if ($cisza -gt $script:SekundyCiszy) {
-          $szcz = "$szcz - od $(Czas-Ludzko $cisza) nic nowego. To może być pobieranie dużego pliku; możesz poczekać albo przerwać."
+          $szcz = ("$szcz - od $(Czas-Ludzko $cisza) nic nowego. To może być pobieranie dużego pliku; możesz poczekać albo przerwać." -replace '^ - o', 'O')
           $kolSz = $script:KolUwaga
         }
       }
       'ok' {
         Ustaw-Tekst $r.Znak $script:ZNAK_OK $script:KolDobrze
         $s = 0.0; if ($z.Od -and $z.Koniec) { $s = ($z.Koniec - $z.Od).TotalSeconds }
-        Ustaw-Tekst $r.Stan "gotowe ($(Czas-Ludzko $s))" $script:KolSzary
+        if (Juz-Bylo $z) { Ustaw-Tekst $r.Stan 'już jest' $script:KolSzary }
+        else { Ustaw-Tekst $r.Stan "gotowe ($(Czas-Ludzko $s))" $script:KolSzary }
       }
       'uwaga' {
         Ustaw-Tekst $r.Znak $script:ZNAK_OK $script:KolUwaga
@@ -1538,6 +1740,31 @@ function Odmaluj-Postep {
     $p = Postep-Planu
     if ([math]::Abs($p - [double]$script:PasekPostepu.Tag) -gt 0.001) { $script:PasekPostepu.Tag = $p; $script:PasekPostepu.Invalidate() }
   }
+}
+
+# Pierwsza instalacja (nowa i pobieranie) - postep bez technicznych linii pod wierszami.
+function Prosty-Postep { return (@('nowy', 'pobieranie') -contains $script:Tryb) }
+
+# Jedno zdanie pod paskiem postepu - co sie teraz dzieje, po ludzku (makieta IN1).
+function Zdanie-Postepu($teraz) {
+  $w = @{ Tekst = ''; Kolor = $script:KolTekst }
+  switch ($script:PlanStan) {
+    'gotowe' { $w.Tekst = 'Gotowe.'; $w.Kolor = $script:KolDobrze; return $w }
+    'blad' { $w.Tekst = 'Coś poszło nie tak - niżej jest, co zrobić.'; $w.Kolor = $script:KolPilne; return $w }
+    'przerwany' { $w.Tekst = 'Przerwane.'; $w.Kolor = $script:KolPilne; return $w }
+  }
+  $z = $null
+  foreach ($x in @($script:Plan)) { if ($x.Stan -eq 'trwa') { $z = $x; break } }
+  if (-not $z) { return $w }
+  # Napis bywa rzeczownikiem ("Claude Code", "Pamięć rozmów (Lore)") albo juz zdaniem z czasownikiem
+  # ("Przygotowuję instalację", "Usuwam: ...") - wtedy idzie bez "Teraz".
+  $instaluje = $z.PSObject.Properties['Program'] -or (($z.PSObject.Properties['Akcja']) -and ($z.Akcja -eq 'Instaluj'))
+  if ($z.Napis -match '^\S+(ę|m):?\s') { $w.Tekst = "$($z.Napis)..." }
+  elseif ($instaluje) { $w.Tekst = "Teraz instaluję: $($z.Napis)..." }
+  else { $w.Tekst = "Teraz: $($z.Napis)..." }
+  $cisza = 0.0; if ($z.OstatniZnak) { $cisza = ($teraz - $z.OstatniZnak).TotalSeconds }
+  if ($cisza -gt $script:SekundyCiszy) { $w.Tekst += ' To trwa dłużej - nie zamykaj okna.' }
+  return $w
 }
 
 function Odmaluj-Biezacy {
@@ -1569,7 +1796,10 @@ function Pokaz-Blad-Planu($z) {
   else { $script:LBleduTytul.Text = "Nie udało się: $($z.Napis)" }
   $kom = "$($z.Komunikat)"
   if (-not $kom) { $kom = 'Krok nie powiedział, dlaczego.' }
+  # Powody porazki zaleznosci.ps1 leza w uwagach ("nie udalo sie zainstalowac: claude - powody w uwagach").
+  if (@($z.Uwagi).Count -gt 0) { $kom += " Powody: $(@($z.Uwagi) -join '; ')" }
   $script:LBleduTresc.Text = $kom
+  Ustaw-Tekst $script:LRaportInfo '' $script:KolDobrze
   $script:PoleSzczegolow.Text = Szczegoly-Zadania $z
   $script:PoleSzczegolow.Visible = $false
   $script:BSzczegoly.Text = 'Pokaż szczegóły'
@@ -1579,11 +1809,95 @@ function Pokaz-Blad-Planu($z) {
   try { $script:Tresc.ScrollControlIntoView($script:KartaBledu) } catch { Zapisz-Dziennik "przewiniecie do bledu: $($_.Exception.Message)" }
 }
 
+# --- raport bledu dla Przemka (przycisk w karcie bledu) ----------------------------
+
+# Wersja MegaRuchacza z naglowka ZMIANY.md (jak straznik) i commit z .git - bez wolania gita.
+function Wersja-MegaRuchacza {
+  $w = '?'
+  try {
+    $p = Join-Path $script:Zrodlo 'ZMIANY.md'
+    if (Test-Path -LiteralPath $p) {
+      foreach ($l in [System.IO.File]::ReadLines($p)) { if ($l -match '^##\s+(\d+\.\d+\.\d+)') { $w = $Matches[1]; break } }
+    }
+    $h = Join-Path $script:Zrodlo '.git\HEAD'
+    if (Test-Path -LiteralPath $h) {
+      $ref = ([System.IO.File]::ReadAllText($h)).Trim()
+      $sha = $ref
+      if ($ref -match '^ref:\s*(.+)$') {
+        $plik = Join-Path $script:Zrodlo ('.git\' + ($Matches[1] -replace '/', '\'))
+        $sha = ''
+        if (Test-Path -LiteralPath $plik) { $sha = ([System.IO.File]::ReadAllText($plik)).Trim() }
+        else {
+          $spak = Join-Path $script:Zrodlo '.git\packed-refs'
+          if (Test-Path -LiteralPath $spak) { foreach ($l in [System.IO.File]::ReadLines($spak)) { if ($l.EndsWith(' ' + $Matches[1])) { $sha = $l.Split(' ')[0] } } }
+        }
+      }
+      if ($sha.Length -ge 7) { $w += " (commit $($sha.Substring(0, 7)))" }
+    } else { $w += ' (folder bez .git)' }
+  } catch { Zapisz-Dziennik "wersja do raportu: $($_.Exception.Message)"; $w += " (blad odczytu: $($_.Exception.Message))" }
+  return $w
+}
+
+# Hasla, klucze i tokeny nie wychodza z komputera w raporcie: znane postacie kluczy i wartosci
+# po slowach typu token/haslo/password zamieniane na [UKRYTE].
+function Bez-Sekretow([string]$t) {
+  $wzory = @(
+    'sk-ant-[A-Za-z0-9_\-]{8,}', 'sk-[A-Za-z0-9_\-]{20,}', 'gh[pousr]_[A-Za-z0-9]{20,}', 'github_pat_[A-Za-z0-9_]{20,}',
+    'xox[abprs]-[A-Za-z0-9\-]{10,}', 'AKIA[0-9A-Z]{16}', 'AIza[0-9A-Za-z_\-]{30,}', 'eyJ[A-Za-z0-9_\-]{10,}\.[A-Za-z0-9_\-]{10,}\.[A-Za-z0-9_\-]+',
+    '(?i)(bearer|basic)\s+[A-Za-z0-9._~+/=\-]{8,}',
+    '(?i)(?<=\b(token|haslo|hasło|password|passwd|pwd|secret|sekret|api[_\-]?key|apikey|client[_\-]?secret|refresh[_\-]?token|access[_\-]?token)\b["'']?\s*[:=]\s*["'']?)[^\s"'',;]+',
+    '(?i)(?<=://[^/\s:@]+:)[^@\s/]+(?=@)')
+  foreach ($w in $wzory) { $t = [regex]::Replace($t, $w, '[UKRYTE]') }
+  return $t
+}
+
+# Tekst do schowka: wersja, komputer, krok, blad, uwagi, ostatnie linie kroku i koncowka dziennika
+# instalatora - bez sekretow (Bez-Sekretow na calosci, na samym koncu).
+function Raport-Bledu($z) {
+  $l = New-Object System.Collections.Generic.List[string]
+  $l.Add('Raport instalatora MegaRuchacza')
+  $l.Add("Wersja: $(Wersja-MegaRuchacza)")
+  $l.Add("Kiedy: $(Get-Date -Format 'yyyy-MM-dd HH:mm:ss')")
+  $l.Add("Windows: $([Environment]::OSVersion.VersionString), $(if ([Environment]::Is64BitOperatingSystem) { '64-bit' } else { '32-bit' }), PowerShell $($PSVersionTable.PSVersion)")
+  $t = "Tryb: $($script:Tryb)"
+  if ($script:Proba) { $t += ' (próba)' }
+  if (($script:Tryb -eq 'nowy') -and -not $script:WlasnyWybor) { $t += ', „Zainstaluj” bez wybierania' }
+  $l.Add($t)
+  if ($z) {
+    $l.Add("Krok: $($z.Napis) [$($z.Id)], podejście $($z.Proby), kod wyjścia $($z.Kod)")
+    $l.Add("Błąd: $($z.Komunikat)")
+    foreach ($u in @($z.Uwagi)) { $l.Add("Uwaga: $u") }
+    $l.Add('--- ostatnie linie kroku ---')
+    $linie = @($z.Linie)
+    if ($linie.Count -gt 40) { $linie = $linie[($linie.Count - 40)..($linie.Count - 1)] }
+    foreach ($x in $linie) { $l.Add("$x") }
+  }
+  $l.Add("--- koniec dziennika instalatora ($($script:Dziennik)) ---")
+  try {
+    $dz = @(Get-Content -LiteralPath $script:Dziennik -Tail 60 -Encoding UTF8 -ErrorAction Stop)
+    foreach ($x in $dz) { $l.Add("$x") }
+  } catch { $l.Add("(nie odczytałem dziennika: $($_.Exception.Message))") }
+  return (Bez-Sekretow ($l -join "`r`n"))
+}
+
+# Schowek z ponawianiem: inny program (menedzer schowka, przegladarka) potrafi go trzymac przez
+# chwile - SetText rzuca wtedy wyjatek (pulapka P77). 25 prob co 100 ms; $false = nie wyszlo.
+# Test podmienia te funkcje - prawdziwego schowka uzytkownika nie rusza.
+function Do-Schowka([string]$t) {
+  $ost = ''
+  for ($i = 0; $i -lt 25; $i++) {
+    try { [System.Windows.Forms.Clipboard]::SetText($t); return $true }
+    catch { $ost = $_.Exception.Message; Start-Sleep -Milliseconds 100 }
+  }
+  Zapisz-Dziennik "schowek zajety - raport nie skopiowany (25 prob, ostatni blad: $ost)"
+  return $false
+}
+
 function Po-Udanym-Planie {
   Odmaluj-Postep
   Ustaw-Przyciski
   if ($script:Tryb -eq 'pobieranie') {
-    Ustaw-Tekst $script:LPostepOpis 'Gotowe - instalator otworzył się z nowego folderu. To okno zaraz zniknie.' $script:KolDobrze
+    Ustaw-Tekst $script:LPostepOpis 'Pobrane - dalej idzie w nowym oknie. To okno zaraz zniknie.' $script:KolDobrze
     Po-Chwili 1500 { Zamknij-Okno }
     return
   }
@@ -1599,10 +1913,84 @@ function Nazwy-Narzedzi {
   return (($n[0..($n.Count - 2)] -join ', ') + ' albo ' + $n[$n.Count - 1])
 }
 
+# Claude Code na tym komputerze: polecenie w PATH (okno odswieza PATH po kazdym kroku), a bez niego
+# miejsca, w ktore kladzie go oficjalny instalator (~\.local\bin) i npm.
+function Sciezka-Claude {
+  Odswiez-Path
+  $c = Get-Command claude -CommandType Application -ErrorAction SilentlyContinue | Select-Object -First 1
+  if ($c) { return $c.Source }
+  foreach ($p in @((Join-Path $script:Dom '.local\bin\claude.exe'), (Join-Path $env:APPDATA 'npm\claude.cmd'))) {
+    if ($p -and (Test-Path -LiteralPath $p -PathType Leaf)) { return $p }
+  }
+  return $null
+}
+
+# [Otwórz] na ekranie Gotowe: terminal z Claude Code w folderze domowym. cmd /k - okno zostaje po
+# wyjsciu z Claude (albo z jego bledem do przeczytania). Zmienna CLAUDE_CODE_GIT_BASH_PATH ustawiona
+# przez zaleznosci.ps1 lezy w rejestrze - ten proces jej nie widzi, wiec przekazujemy ja sami.
+# Zwraca '' albo zdanie, co poszlo nie tak. Test podmienia te funkcje (zadne okno nie ma wyskoczyc).
+function Otworz-Claude {
+  $c = Sciezka-Claude
+  if (-not $c) { return 'Nie widzę Claude Code na tym komputerze. Uruchom instalator jeszcze raz - zainstaluje go.' }
+  $bash = [Environment]::GetEnvironmentVariable('CLAUDE_CODE_GIT_BASH_PATH', 'User')
+  if ($bash -and -not $env:CLAUDE_CODE_GIT_BASH_PATH) { $env:CLAUDE_CODE_GIT_BASH_PATH = $bash }
+  Zapisz-Dziennik "otwieram Claude Code: $c w $($script:Dom)"
+  Start-Process -FilePath $env:ComSpec -ArgumentList ('/k ""' + $c + '""') -WorkingDirectory $script:Dom
+  return ''
+}
+
+# Koniec pierwszej instalacji (makieta IN1): "Gotowe. Teraz otwórz Claude Code: [Otwórz]" i zdanie
+# o logowaniu - tego instalator za nikogo nie zrobi.
+function Karta-Otworz-Claude {
+  $szw = $script:SzerWnetrza
+  $k = Nowa-Karta $script:SzerKarty
+  $k.Padding = New-Object System.Windows.Forms.Padding(22, 22, 22, 18)
+  $g = Poziomy
+  $zn = Etykieta $script:ZNAK_OK $script:CzTytul $script:KolDobrze
+  $zn.Margin = New-Object System.Windows.Forms.Padding(0, 0, 8, 0)
+  $t = Etykieta-Zawijana 'Gotowe.' $script:CzTytul $script:KolDobrze ($szw - 40)
+  $g.Controls.Add($zn); $g.Controls.Add($t)
+  $k.Controls.Add($g)
+  $l = Etykieta-Zawijana 'Teraz otwórz Claude Code:' $script:CzSrednia $script:KolTekst $szw
+  $l.Margin = New-Object System.Windows.Forms.Padding(0, 14, 0, 10)
+  $k.Controls.Add($l)
+  $script:BOtworz = Przycisk-Duzy 'Otwórz' 260
+  $script:BOtworz.Margin = New-Object System.Windows.Forms.Padding(0, 0, 0, 12)
+  $script:BOtworz.Add_Click({
+    try {
+      $b = Otworz-Claude
+      if ($b) { Ustaw-Tekst $script:LOtworzInfo $b $script:KolPilne }
+      else { Ustaw-Tekst $script:LOtworzInfo 'Claude Code otwiera się w nowym oknie. To okno możesz już zamknąć.' $script:KolDobrze }
+    } catch {
+      Zanotuj-Wywrotke "przycisk Otworz" $_
+      Ustaw-Tekst $script:LOtworzInfo "Nie udało się otworzyć Claude Code: $($_.Exception.Message)" $script:KolPilne
+    }
+  })
+  $k.Controls.Add($script:BOtworz)
+  $script:LOtworzInfo = Etykieta-Zawijana '' $script:CzZwyklaGruba $script:KolDobrze $szw
+  $script:LOtworzInfo.Margin = New-Object System.Windows.Forms.Padding(0, 0, 0, 8)
+  $k.Controls.Add($script:LOtworzInfo)
+  $k.Controls.Add((Akapit 'Przy pierwszym otwarciu Claude poprosi Cię o zalogowanie - zaloguj się swoim kontem. Tego instalator nie może zrobić za Ciebie.' $script:KolTekst))
+  return $k
+}
+
 function Ekran-Gotowe($root) {
   $szw = $script:SzerWnetrza
   $zmiana = ($script:Tryb -eq 'zmiana')
   Ustaw-Podtytul ''
+  if (($script:Tryb -eq 'nowy') -and -not $script:Proba -and ($script:Wybor.Claude -or (Sciezka-Claude))) {
+    $root.Controls.Add((Karta-Otworz-Claude))
+    $k = Nowa-Karta $script:SzerKarty
+    $k.Controls.Add((Tytul-Karty 'Dobrze wiedzieć'))
+    $k.Controls.Add((Punkt 'Przy zegarze (prawy dolny róg ekranu, czasem pod strzałką ^) jest teraz ikona MegaRuchacza - pokazuje, co MegaRuchacz robi.' $script:KolSzary))
+    $k.Controls.Add((Punkt "Chcesz coś dodać albo usunąć? Uruchom instalator jeszcze raz - plik instaluj.bat w folderze $($script:Zrodlo)." $script:KolSzary))
+    $root.Controls.Add($k)
+    Dodaj-Uwagi-Planu $root
+    Ustaw-Przyciski -Anuluj 'Zamknij' -PoAnuluj { Zamknij-Okno }
+    $script:Okno.AcceptButton = $script:BOtworz
+    try { [void]$script:BOtworz.Select() } catch { Zapisz-Dziennik "fokus na Otworz: $($_.Exception.Message)" }
+    return
+  }
   $k = Nowa-Karta $script:SzerKarty
   $k.Padding = New-Object System.Windows.Forms.Padding(22, 18, 22, 14)
   $g = Poziomy
@@ -1641,16 +2029,19 @@ function Ekran-Gotowe($root) {
     $k.Controls.Add((Punkt-Numer $nr 'Chcesz coś dodać albo usunąć?' "Uruchom instalator jeszcze raz - plik instaluj.bat w folderze $($script:Zrodlo).")); $nr++
   }
   $root.Controls.Add($k)
+  Dodaj-Uwagi-Planu $root
+  Ustaw-Przyciski -Dalej 'Zamknij' -PoDalej { Zamknij-Okno }
+}
 
+# Uwagi krokow (udane, ale z czyms do sprawdzenia) - zolta karta na ekranie Gotowe.
+function Dodaj-Uwagi-Planu($root) {
   $uwagi = @()
   foreach ($z in @($script:Plan)) { foreach ($u in $z.Uwagi) { $uwagi += "$($z.Napis): $u" } }
-  if ($uwagi.Count -gt 0) {
-    $k2 = Nowa-Karta $script:SzerKarty $script:TloUwaga
-    $k2.Controls.Add((Etykieta-Zawijana 'Do sprawdzenia' $script:CzZwyklaGruba $script:KolUwaga $szw))
-    foreach ($u in $uwagi) { $k2.Controls.Add((Punkt $u $script:KolTekst)) }
-    $root.Controls.Add($k2)
-  }
-  Ustaw-Przyciski -Dalej 'Zamknij' -PoDalej { Zamknij-Okno }
+  if ($uwagi.Count -eq 0) { return }
+  $k2 = Nowa-Karta $script:SzerKarty $script:TloUwaga
+  $k2.Controls.Add((Etykieta-Zawijana 'Do sprawdzenia' $script:CzZwyklaGruba $script:KolUwaga $script:SzerWnetrza))
+  foreach ($u in $uwagi) { $k2.Controls.Add((Punkt $u $script:KolTekst)) }
+  $root.Controls.Add($k2)
 }
 
 # Znacznik dla okno.ps1: ten plik wczytal sie do konca.

@@ -64,9 +64,20 @@ $script:PROGRAMY = [ordered]@{
   node   = 'Node.js'
   uv     = 'uv'
   python = 'Python 3.12'
+  claude = 'Claude Code'
 }
 # Baza (aplikacja przy zegarze + aktualizacje) pobiera aktualizacje gitem.
 $script:PROGRAMY_BAZY = @('git')
+# Pierwsza instalacja (tryb nowy): kazdy program osobnym wierszem na liscie postepu (makieta
+# uzgodniona 14.10.2026: "Git i Git Bash, Node, Python, Claude Code, Pamięć rozmów (Lore) ...").
+# Kazda grupa to osobne wywolanie zaleznosci.ps1 - Git Bash dochodzi sam do gita, uv do Pythona.
+# Tryb zmiany zostaje przy jednym kroku "Programy potrzebne do działania".
+$script:GRUPY_PROGRAMOW = [ordered]@{
+  git    = [pscustomobject]@{ Napis = 'Git i Git Bash'; Programy = @('git') }
+  node   = [pscustomobject]@{ Napis = 'Node.js';        Programy = @('node') }
+  python = [pscustomobject]@{ Napis = 'Python';         Programy = @('uv', 'python') }
+  claude = [pscustomobject]@{ Napis = 'Claude Code';    Programy = @('claude') }
+}
 # Ile pobiera z internetu (P63, sekcja D, zmierzone na biurowej): srodowisko Pythona
 # z bibliotekami 196 MB + sam Python 70 MB, model do wyszukiwania 496 MB (tylko Lore),
 # repozytoria polecanych skilli ok. 44 MB.
@@ -366,10 +377,14 @@ function Do-Instalacji($zm) {
   return ,$w
 }
 
+# Claude Code tylko przy pierwszej instalacji i tylko zaznaczone (pole "Claude Code" na ekranie
+# wyboru, domyslnie zaznaczone; "Zainstaluj" na powitaniu bierze je zawsze). Jest juz na komputerze -
+# krok i tak stoi na liscie i konczy sie "już jest".
 function Programy-Dla($ids, [bool]$zBaza) {
   $w = @()
   if ($zBaza) { $w += $script:PROGRAMY_BAZY }
   foreach ($id in @($ids)) { if ($id) { $w += $script:MODULY["$id"].Programy } }
+  if (($script:Tryb -eq 'nowy') -and $script:Wybor -and $script:Wybor.Claude) { $w += 'claude' }
   $u = @()
   foreach ($p in $script:PROGRAMY.Keys) { if ($w -contains $p) { $u += $p } }
   return ,$u
@@ -430,6 +445,32 @@ function Zadanie-Zaleznosci([string]$akcja, $programy) {
   return (Nowe-Zadanie -Id "zaleznosci-$akcja" -Napis "Programy potrzebne do działania: $(Nazwy-Programow $widoczne)" -Plik (Sciezka-Skryptu 'zaleznosci.ps1') -Argumenty $a -Umowa $true)
 }
 
+# Pierwsza instalacja: jeden krok na grupe programow (GRUPY_PROGRAMOW), w kolejnosci grup.
+# Udany krok Claude Code zapisuje w rejestrze, ze Claude Code jest - zasady i moduly instalowane
+# zaraz potem musza go widziec, choc przy starcie okna jeszcze go nie bylo.
+function Zadania-Programow($programy) {
+  $w = New-Object System.Collections.ArrayList
+  foreach ($g in $script:GRUPY_PROGRAMOW.Keys) {
+    $grupa = $script:GRUPY_PROGRAMOW[$g]
+    $moje = @($grupa.Programy | Where-Object { @($programy) -contains $_ })
+    if ($moje.Count -eq 0) { continue }
+    $a = @('-Akcja', 'Instaluj', '-Potrzebne', ($moje -join ','))
+    if ($script:Proba) { $a += '-Proba' }
+    $z = Nowe-Zadanie -Id "programy-$g" -Napis $grupa.Napis -Plik (Sciezka-Skryptu 'zaleznosci.ps1') -Argumenty $a -Umowa $true
+    $z | Add-Member -NotePropertyName Program -NotePropertyValue $g
+    if ($g -eq 'claude') { $z.PoSukcesie = { param($z) Ustaw-Narzedzie 'claude' } }
+    [void]$w.Add($z)
+  }
+  return ,$w
+}
+
+# Krok "programy" skonczyl sie, nic nie instalujac - wszystko juz bylo (zaleznosci.ps1 mowi wtedy
+# "wszystko jest: ..."). Ekran postepu pokazuje przy nim "już jest" zamiast czasu.
+function Juz-Bylo($z) {
+  if (-not $z.PSObject.Properties['Program'] -or -not $z.Wynik) { return $false }
+  return ("$($z.Wynik.komunikat)" -like 'wszystko jest*')
+}
+
 # KOLEJNOSC (umowa P59b, raport P59b sekcja 1): zaleznosci PRZED baza - baza wymaga gita, a do P64
 # okno wolalo baze przed zaleznosci.ps1, wiec na komputerze bez gita krok bazy padal zawsze, takze
 # po "Sprobuj ponownie". Usuniecia ida przed doinstalowaniem programow (nie potrzebuja ich).
@@ -437,8 +478,10 @@ function Zbuduj-Plan {
   $zm = Policz-Zmiany
   $script:ZmianyPlanu = $zm
   $plan = New-Object System.Collections.ArrayList
-  [void]$plan.Add((Nowe-Zadanie -Id 'zapamietaj' -Napis 'Zapamiętuję Twój wybór' -Wewnetrzne { param($z) Zapamietaj-Wybor }))
   $nowa = ($script:Tryb -eq 'nowy')
+  $napisZ = 'Zapamiętuję Twój wybór'
+  if ($nowa) { $napisZ = 'Przygotowuję instalację' }
+  [void]$plan.Add((Nowe-Zadanie -Id 'zapamietaj' -Napis $napisZ -Wewnetrzne { param($z) Zapamietaj-Wybor }))
   if ($zm.UsunWszystko) {
     # Cale odinstalowanie (umowa P59b, pkt 5): Usun KAZDEGO modulu - takze niezainstalowanego, bo
     # Usun na takim jest nieszkodliwy, sprzata resztki starszych wersji, a z -UsunDane zdejmuje dane
@@ -465,7 +508,8 @@ function Zbuduj-Plan {
   $inst = Do-Instalacji $zm
   $zBaza = ($nowa -or $zm.DodajBaze)
   $prog = Programy-Dla $inst $zBaza
-  if ($prog.Count -gt 0) { [void]$plan.Add((Zadanie-Zaleznosci 'Instaluj' $prog)) }
+  if ($nowa) { foreach ($z in (Zadania-Programow $prog)) { [void]$plan.Add($z) } }
+  elseif ($prog.Count -gt 0) { [void]$plan.Add((Zadanie-Zaleznosci 'Instaluj' $prog)) }
   if ($nowa) { [void]$plan.Add((Zadanie-Modulu 'baza' 'Instaluj' $false (Nazwa-Modulu 'baza'))) }
   elseif ($zm.DodajBaze) { [void]$plan.Add((Zadanie-Modulu 'baza' 'Instaluj' $false "Dodaję: $(Nazwa-Modulu 'baza')")) }
   foreach ($id in $inst) {
@@ -519,6 +563,21 @@ function Zapamietaj-Wybor {
   Zapisz-Instalacje $s $script:Dom
   Zapisz-Dziennik "rejestr: zapisany stan poczatkowy ($(Sciezka-Instalacji $script:Dom))"
   return @{ Stan = 'ok'; Komunikat = '' }
+}
+
+# Narzedzie AI zainstalowane przez sam instalator (Claude Code) - do rejestru (pole narzedzia,
+# z ktorego wpisz-zasady i straznik biora liste narzedzi) i do wykrytych przy starcie okna.
+function Ustaw-Narzedzie([string]$id) {
+  foreach ($n in @($script:Narzedzia)) { if ($n.Id -eq $id) { $n.Jest = $true; if (-not $n.Slady) { $n.Slady = 'zainstalowane teraz' } } }
+  if ($script:Proba) { return }
+  $s = Czytaj-Instalacje $script:Dom
+  if ($s.blad) { throw "nie zapisalem w rejestrze, ze jest $id - odczyt rejestru byl bledny: $($s.blad)" }
+  $n = $s.narzedzia
+  if (-not $n) { $n = New-Object PSObject }
+  $n | Add-Member -NotePropertyName $id -NotePropertyValue $true -Force
+  $s | Add-Member -NotePropertyName narzedzia -NotePropertyValue $n -Force
+  Zapisz-Instalacje $s $script:Dom
+  Zapisz-Dziennik "rejestr: narzedzie $id = True"
 }
 
 function Ustaw-Flage-Modulu([string]$id, [bool]$wartosc, [bool]$bezUstawienKopii) {

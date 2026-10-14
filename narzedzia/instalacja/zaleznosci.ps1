@@ -10,6 +10,14 @@
 #                                                              winget Git.Git --scope user. git i bash = jedna paczka.
 #   node    hooki przypomnienia i rejestru workerow           winget OpenJS.NodeJS.LTS --scope user (zip, bez MSI)
 #                                                              albo zip z nodejs.org
+#   claude  Claude Code (pierwsza instalacja z okna;           OFICJALNY instalator natywny z dokumentacji Claude Code
+#           nikt inny go nie zamawia)                          (code.claude.com/docs/en/setup: "irm https://claude.ai/
+#                                                              install.ps1 | iex", sprawdzone 2026-10-14): skrypt
+#                                                              pobrany do pliku i uruchomiony -File w ukrytym procesie;
+#                                                              sam sprawdza sume SHA-256 claude.exe z manifestu, kladzie
+#                                                              go do ~\.local\bin, bez administratora. Katalog ~\.local\bin
+#                                                              dopisujemy do PATH uzytkownika, gdyby instalator tego nie
+#                                                              zrobil. Logowania do konta NIE da sie zrobic za uzytkownika.
 # WSZYSTKO BEZ UPRAWNIEN ADMINISTRATORA: wersje przenosne w katalogu uzytkownika, katalog dopisany
 # do PATH UZYTKOWNIKA (HKCU\Environment, z zachowaniem %ZMIENNYCH% w istniejacych wpisach).
 # Paczki sa sprawdzane suma SHA-256 z tego samego wydania (uv: plik .sha256, Git for Windows: pole
@@ -33,6 +41,9 @@
 #                                uzytkownika CLAUDE_CODE_GIT_BASH_PATH (testy)
 #     [-InstalatorGita <plik>]   (TESTY) gotowy instalator Git for Windows zamiast pobierania z GitHuba,
 #                                bez sumy SHA-256; dostaje te same przelaczniki co prawdziwy
+#     [-InstalatorClaude <plik>] (TESTY) skrypt .ps1 zamiast oficjalnego https://claude.ai/install.ps1 -
+#                                uruchamiany tak samo (ukryty powershell -File); prawdziwego Claude Code
+#                                test nie instaluje
 #     [-Proxy <adres>]           serwer posredniczacy do pobierania (siec firmowa)
 # Sprawdz: ok = wszystkie wymienione sa. Instaluj: ok = po instalacji wszystkie sa i sie uruchamiaja.
 
@@ -45,7 +56,8 @@ param(
   [switch]$BezWinget,
   [switch]$BezZmianyPath,
   [string]$Proxy = "",
-  [string]$InstalatorGita = ""
+  [string]$InstalatorGita = "",
+  [string]$InstalatorClaude = ""
 )
 
 $ErrorActionPreference = "Stop"
@@ -60,7 +72,7 @@ if ($Proxy) { $env:HTTPS_PROXY = $Proxy; $env:HTTP_PROXY = $Proxy }   # dla uv (
 $script:PathStartowy = $env:PATH
 $script:DopisaneDoPath = @()
 
-$Znane = @("uv", "python", "git", "bash", "node")
+$Znane = @("uv", "python", "git", "bash", "node", "claude")
 # -File podaje "uv,python" jako JEDEN napis do [string[]] - dzielimy sami
 $lista = @($Potrzebne | ForEach-Object { $_ -split '[,;\s]+' } | Where-Object { $_ } | ForEach-Object { $_.ToLower() })
 $nieznane = @($lista | Where-Object { $Znane -notcontains $_ })
@@ -235,7 +247,7 @@ function Znajdz([string]$n) {
     return [pscustomobject]@{ Sciezka = $py; Wersja = (Wersja $py) }
   }
   $p = Znajdz-Program $n
-  if (-not $p -and ($n -ne "bash")) {
+  if (-not $p -and (@("uv", "git", "node") -contains $n)) {
     # wersja przenosna mogla trafic do innego katalogu programow (-KatalogProgramow); git tam to
     # MinGit z wersji sprzed 0.33 (bez basha)
     $tu = switch ($n) { "uv" { "uv\uv.exe" } "git" { "git\cmd\git.exe" } "node" { "node\node.exe" } }
@@ -444,6 +456,47 @@ function Instaluj-Node {
   Dopisz-Do-Path-Uzytkownika $cel
 }
 
+# Claude Code - oficjalny instalator natywny (naglowek). Skrypt idzie do pliku i -File, a nie
+# "irm | iex" w tym procesie: ma wlasny $ErrorActionPreference i "exit", ktore zamknelyby ten skrypt
+# bez linii WYNIK. Ukryty proces (Uruchom-Program, CreateNoWindow) - claude.exe install tez bez okna.
+function Instaluj-Claude {
+  $url = "https://claude.ai/install.ps1"
+  $bin = Join-Path $env:USERPROFILE ".local\bin"
+  if ($Proba) { Plan "claude: oficjalny instalator Claude Code ($url, natywny, z dokumentacji code.claude.com) w ukrytym oknie, bez administratora - claude.exe do $bin; $bin do PATH uzytkownika, gdyby go tam nie bylo"; return }
+  $pobrany = $null
+  try {
+    if ($InstalatorClaude) {
+      if (-not (Test-Path -LiteralPath $InstalatorClaude -PathType Leaf)) { throw "nie ma pliku instalatora $InstalatorClaude (-InstalatorClaude)" }
+      $plik = $InstalatorClaude
+      Krok "claude: instalator Claude Code z pliku $plik (-InstalatorClaude, test) - bez pobierania"
+    } else {
+      Krok "claude: pobieram oficjalny instalator Claude Code ($url)"
+      $pobrany = Plik-Tymczasowy "claude-install.ps1"
+      Pobierz-Plik $url $pobrany
+      # Odpowiedz bez param() i bez claude.exe w srodku to nie instalator (np. strona bledu albo
+      # przekierowanie w sieci firmowej) - odmowa zamiast uruchamiania czegos obcego.
+      $tresc = [System.IO.File]::ReadAllText($pobrany)
+      if (($tresc -notmatch 'claude\.exe') -or ($tresc -notmatch '(?m)^\s*param\(')) {
+        $pocz = ($tresc -replace '\s+', ' ').Trim()
+        if ($pocz.Length -gt 120) { $pocz = $pocz.Substring(0, 120) }
+        throw "z $url przyszlo cos, co nie jest instalatorem Claude Code (poczatek: $pocz)"
+      }
+      $plik = $pobrany
+    }
+    Krok "claude: instaluje Claude Code po cichu, tylko dla Ciebie (bez administratora) - to moze potrwac kilka minut"
+    $ps = Join-Path $PSHOME "powershell.exe"
+    $w = Uruchom-Program $ps @("-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-File", $plik) 900
+    if ($w.Kod -ne 0) {
+      $powod = Sedno $w.Tekst
+      if ($w.Tekst -match '(?i)(unable to connect|could not resolve|remote name could not be resolved|timed out|connection)') { $powod = "brak internetu albo claude.ai niedostepne ($powod)" }
+      elseif ($w.Tekst -match '(?i)supported-countries|not available in your region') { $powod = "Claude Code nie jest dostepny w tym kraju albo z tej sieci ($powod)" }
+      throw "oficjalny instalator Claude Code skonczyl sie kodem $($w.Kod): $powod"
+    }
+    Krok "claude: instalator skonczyl bez bledu"
+  } finally { if ($pobrany) { Remove-Item -LiteralPath $pobrany -Force -ErrorAction SilentlyContinue } }
+  if (Test-Path -LiteralPath (Join-Path $bin "claude.exe") -PathType Leaf) { Dopisz-Do-Path-Uzytkownika $bin }
+}
+
 # ---------------------------------------------------------------- przebieg
 
 try {
@@ -466,7 +519,7 @@ try {
       }
       if (-not $przyszedl) {
         try {
-          switch ($n) { "uv" { Instaluj-Uv } "python" { Instaluj-Pythona } "git" { Instaluj-Git-For-Windows "git" } "bash" { Instaluj-Git-For-Windows "bash" } "node" { Instaluj-Node } }
+          switch ($n) { "uv" { Instaluj-Uv } "python" { Instaluj-Pythona } "git" { Instaluj-Git-For-Windows "git" } "bash" { Instaluj-Git-For-Windows "bash" } "node" { Instaluj-Node } "claude" { Instaluj-Claude } }
         } catch {
           if (@("git", "bash") -contains $n) { $script:PowodBasha = $_.Exception.Message }
           Ostrzezenie "${n}: $($_.Exception.Message)"
@@ -513,6 +566,10 @@ try {
     $kom += " Jesli blad wraca, zainstaluj Git for Windows ze strony https://git-scm.com/downloads/win (wystarczy 'Only for me', bez administratora) i uruchom instalator jeszcze raz."
     $inne = @($nadal | Where-Object { $_ -ne "bash" })
     if ($inne.Count -gt 0) { $kom += " Nie udalo sie tez zainstalowac: $($inne -join ', ') - powody w uwagach." }
+  } elseif (($Akcja -eq "Instaluj") -and ($nadal -contains "claude")) {
+    $kom = "Nie udalo sie zainstalowac Claude Code - powod w uwagach. Sprawdz internet i sprobuj ponownie."
+    $inne = @($nadal | Where-Object { $_ -ne "claude" })
+    if ($inne.Count -gt 0) { $kom += " Nie udalo sie tez zainstalowac: $($inne -join ', ')." }
   }
   Zakoncz $false $kom
 } catch {

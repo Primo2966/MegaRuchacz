@@ -42,11 +42,13 @@ $script:CzMalaGruba   = New-Object System.Drawing.Font("Segoe UI Semibold", 8.75
 $script:CzStala       = New-Object System.Drawing.Font("Consolas", 9)
 $script:CzZnak        = New-Object System.Drawing.Font("Segoe UI Semibold", 11)
 
-# Znaki krokow - te same co na ekranie ladowania nadzorcy.
+# Znaki krokow - makieta pierwszej instalacji uzgodniona z uzytkownikiem 14.10.2026: ✔ / ⏳ / ✖.
+# Krecace sie kolko (ZNAKI_TRWA) zostaje przy "Sprawdzam, ktore programy juz sa" na podsumowaniu.
 $script:ZNAK_CZEKA  = [string][char]0x25CB
 $script:ZNAKI_TRWA  = @([string][char]0x25D0, [string][char]0x25D3, [string][char]0x25D1, [string][char]0x25D2)
-$script:ZNAK_OK     = [string][char]0x2713
-$script:ZNAK_BLAD   = [string][char]0x2717
+$script:ZNAK_TRWA   = [string][char]0x23F3
+$script:ZNAK_OK     = [string][char]0x2714
+$script:ZNAK_BLAD   = [string][char]0x2716
 $script:ZNAK_POMIN  = [string][char]0x2013
 
 # --- wymiary -----------------------------------------------------------------
@@ -57,13 +59,22 @@ $script:ZNAK_POMIN  = [string][char]0x2013
 # przewija, gdy ekran jest za niski: nic nie znika pod krawedzia po cichu.
 try { $script:ObszarEkranu = [System.Windows.Forms.Screen]::FromPoint([System.Windows.Forms.Cursor]::Position).WorkingArea }
 catch { $script:ObszarEkranu = [System.Windows.Forms.Screen]::PrimaryScreen.WorkingArea }
-$script:SzerOkna    = [int][math]::Max(760, [math]::Min(900, $script:ObszarEkranu.Width - 40))
 $script:WysOkna     = [int][math]::Max(520, [math]::Min(720, $script:ObszarEkranu.Height - 60))
 $script:Margines    = 28
+# Okno da sie rozciagac i maksymalizowac (ekrany.ps1 Dopasuj-Do-Rozmiaru): tresc rosnie razem z nim,
+# ale najwyzej do tej szerokosci - dalej stoi na srodku. Wiersz tekstu na cala szerokosc
+# zmaksymalizowanego monitora 4K (ponad 3000 px) czyta sie zle, a nic by z tego nie przybylo.
+$script:SzerTrescMax = 1040
+
+# Szerokosci liczone z szerokosci wnetrza okna - przy starcie i po kazdej zmianie rozmiaru.
 # 20 px na pionowy suwak - suwak poziomy nie ma prawa sie pojawic.
-$script:SzerTresc   = $script:SzerOkna - 2 * $script:Margines - 20
-$script:SzerKarty   = $script:SzerTresc
-$script:SzerWnetrza = $script:SzerKarty - 44
+function Ustaw-Szerokosci([int]$szerOkna) {
+  $script:SzerOkna    = $szerOkna
+  $script:SzerTresc   = [int][math]::Min($script:SzerTrescMax, $szerOkna - 2 * $script:Margines - 20)
+  $script:SzerKarty   = $script:SzerTresc
+  $script:SzerWnetrza = $script:SzerKarty - 44
+}
+Ustaw-Szerokosci ([int][math]::Max(760, [math]::Min(900, $script:ObszarEkranu.Width - 40)))
 
 # --- klocki ------------------------------------------------------------------
 
@@ -168,6 +179,35 @@ function Przycisk-Glowny([string]$napis, [int]$szerokosc = 170) {
   $b.UseMnemonic = $false
   $b.Tag = "glowny"
   Ustaw-Wlaczony $b $true
+  return $b
+}
+
+# Duzy przycisk ekranu powitalnego ("Zainstaluj") - jedna decyzja na ekranie, wiec ma byc
+# widoczny z daleka; ten sam niebieski co glowny.
+function Przycisk-Duzy([string]$napis, [int]$szerokosc = 260) {
+  $b = Przycisk-Glowny $napis $szerokosc
+  $b.Font = $script:CzSrednia
+  $b.Size = New-Object System.Drawing.Size($szerokosc, 52)
+  return $b
+}
+
+# Przycisk wygladajacy jak odnosnik ("chcę wybrać sam ›") - zwykly Button, a nie LinkLabel,
+# bo ma PerformClick (test klika go tak samo jak pozostale) i fokus z klawiatury.
+function Przycisk-Odnosnik([string]$napis) {
+  $b = New-Object System.Windows.Forms.Button
+  $b.Text = $napis
+  $b.Font = $script:CzZwykla
+  $b.ForeColor = $script:KolMr
+  $b.BackColor = $script:TloKarty
+  $b.FlatStyle = [System.Windows.Forms.FlatStyle]::Flat
+  $b.FlatAppearance.BorderSize = 0
+  $b.FlatAppearance.MouseOverBackColor = $script:TloOkna
+  $b.FlatAppearance.MouseDownBackColor = $script:TloOkna
+  $b.AutoSize = $true
+  $b.AutoSizeMode = [System.Windows.Forms.AutoSizeMode]::GrowAndShrink
+  $b.Cursor = [System.Windows.Forms.Cursors]::Hand
+  $b.UseMnemonic = $false
+  $b.Margin = New-Object System.Windows.Forms.Padding(0)
   return $b
 }
 

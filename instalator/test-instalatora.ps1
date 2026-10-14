@@ -101,12 +101,25 @@ param([string]$Akcja = '', [string[]]$Potrzebne = @(), [switch]$Proba)
 [System.IO.File]::AppendAllText((Join-Path $PSScriptRoot 'wywolania.log'), ("{0}|zaleznosci|{1}|Potrzebne={2}|Proba={3}`r`n" -f (Get-Date -Format 'HH:mm:ss.fff'), $Akcja, ($Potrzebne -join '#'), [bool]$Proba), (New-Object System.Text.UTF8Encoding($false)))
 $lista = @($Potrzebne | ForEach-Object { "$_" -split ',' } | Where-Object { $_ })
 $jest = @('git', 'node')
+# Claude Code: plik claude-jest.txt obok = juz jest; claude-pada.txt = instalacja pada (z sekretem
+# w wyjsciu - raport dla Przemka ma go ukryc).
+if (Test-Path -LiteralPath (Join-Path $PSScriptRoot 'claude-jest.txt')) { $jest += 'claude' }
+if (($Akcja -eq 'Instaluj') -and ($lista -contains 'claude') -and (Test-Path -LiteralPath (Join-Path $PSScriptRoot 'claude-pada.txt'))) {
+  Write-Output 'KROK: claude: brak'
+  Write-Output 'KROK: claude: pobieram oficjalny instalator Claude Code (https://claude.ai/install.ps1)'
+  Start-Sleep -Milliseconds 300
+  Write-Output 'claude: Authorization: Bearer sk-ant-oat01-TAJNYTOKEN1234567890abcdef, token=ghp_TAJNE1234567890abcdefghij'
+  Write-Output 'UWAGA: claude: oficjalny instalator Claude Code skonczyl sie kodem 1: brak internetu albo claude.ai niedostepne (Failed to download binary)'
+  Write-Output ('WYNIK: ' + (ConvertTo-Json -InputObject ([ordered]@{ ok = $false; komunikat = 'Nie udalo sie zainstalowac Claude Code - powod w uwagach. Sprawdz internet i sprobuj ponownie.'; kroki = [string[]]@('claude: brak'); brakuje = [string[]]@('claude') }) -Compress))
+  exit 1
+}
 $brak = @($lista | Where-Object { $jest -notcontains $_ })
 $kroki = @()
 foreach ($p in $lista) {
   if ($Akcja -eq 'Sprawdz') { if ($jest -contains $p) { $t = "$p - jest" } else { $t = "$p - brak, doinstaluję" } }
   else { if ($jest -contains $p) { $t = "$p - już jest" } else { $t = "Instaluję $p" } }
   $kroki += $t; Write-Output "KROK: $t"; Start-Sleep -Milliseconds 250
+  if (($p -eq 'claude') -and ($Akcja -eq 'Instaluj') -and ($jest -notcontains 'claude')) { Start-Sleep -Milliseconds 1500 }
 }
 # Jak prawdziwy zaleznosci.ps1 (P59b): Sprawdz z brakami = ok:false i kod 1, komunikat techniczny.
 $kom = 'wszystko jest: ' + ($lista -join ', ')
@@ -232,6 +245,16 @@ function Test-Koniec {
   if ($script:Okno -and -not $script:Okno.IsDisposed) { $script:Okno.Close() }
 }
 function Tak([bool]$w, [string]$opis) { if ($w) { return "TAK $opis" } return "NIE $opis" }
+# Wszystkie widoczne napisy pod kontrolka (w glab) - do sprawdzania tekstow ekranu.
+function Test-Teksty($c) {
+  $l = @()
+  foreach ($d in $c.Controls) {
+    if (-not $d.Visible) { continue }
+    if ((($d -is [System.Windows.Forms.Label]) -or ($d -is [System.Windows.Forms.ButtonBase])) -and $d.Text) { $l += $d.Text }
+    $l += @(Test-Teksty $d)
+  }
+  return $l
+}
 Test-Pisz "TRYB $($script:Tryb)"
 $script:TestZegar = New-Object System.Windows.Forms.Timer
 $script:TestZegar.Interval = 250
@@ -346,8 +369,8 @@ if (Chce 'nowa') {
 $script:SekundyCiszy = 2
 $script:TestKroki = @(
   @{ N = 'powitanie'; Czekaj = { $script:Ekran -eq 'powitanie' }; Zrzut = '1-powitanie'; Sprawdz = { Tak ($script:Tryb -eq 'nowy') "tryb $($script:Tryb)" } },
-  @{ N = 'dalej do wyboru'; Zrob = { $script:BDalej.PerformClick() } },
-  @{ N = 'wybor - stan z makiety'; Czekaj = { $script:Ekran -eq 'wybor' }; Zrzut = '2-wybor'; Sprawdz = { $m = $script:Wybor.Moduly; Tak ($m.wiedza -and $m.lore -and $m.kierownik -and $m.skille -and -not $m.kopia -and $script:Wybor.Zestaw -eq 'wlasny' -and -not $script:PanelKopii.Visible) "cztery zaznaczone, kopia nie, zestaw $($script:Wybor.Zestaw)" } },
+  @{ N = 'chce wybrac sam'; Zrob = { $script:BWybierzSam.PerformClick() } },
+  @{ N = 'wybor - stan z makiety'; Czekaj = { $script:Ekran -eq 'wybor' }; Zrzut = '2-wybor'; Sprawdz = { $m = $script:Wybor.Moduly; Tak ($m.wiedza -and $m.lore -and $m.kierownik -and $m.skille -and -not $m.kopia -and $script:Wybor.Zestaw -eq 'wlasny' -and -not $script:PanelKopii.Visible -and $script:Wybor.Claude -and $script:CbClaude.Checked) "cztery zaznaczone, kopia nie, Claude Code zaznaczone, zestaw $($script:Wybor.Zestaw)" } },
   @{ N = 'zestaw Wszystko'; Zrob = { $script:BWszystko.PerformClick() }; Sprawdz = { $m = $script:Wybor.Moduly; Tak ($m.kopia -and $script:CheckboxyModulow.kopia.Checked -and $script:PanelKopii.Visible -and $script:Wybor.Zestaw -eq 'wszystko') "wszystko zaznaczone, panel kopii widoczny" } },
   @{ N = 'zestaw Wlasny przywraca'; Zrob = { $script:BWlasny.PerformClick() }; Sprawdz = { $m = $script:Wybor.Moduly; Tak ((-not $m.kopia) -and $m.wiedza -and (-not $script:CheckboxyModulow.kopia.Checked)) "wrocil wlasny wybor (kopia odznaczona)" } },
   @{ N = 'zaznacz kopie'; Zrob = { $script:CheckboxyModulow.kopia.Checked = $true } },
@@ -357,7 +380,7 @@ $script:TestKroki = @(
   @{ N = 'kopia w srodku zrodla blokuje'; Czekaj = { -not $script:BDalej.Enabled }; Zrzut = '2c-kopia-zly-folder'; Sprawdz = { Tak (($script:LCelInfo.Text -like '*kopiowałaby samą siebie*') -and ($script:LStopka.Text -like '*kopii*')) "komunikat: $($script:LCelInfo.Text)" } },
   @{ N = 'dobry folder kopii'; Zrob = { $script:PoleCelu.Text = '__KOPIE__' }; Sprawdz = { Tak $script:BDalej.Enabled "Dalej znow wlaczone" } },
   @{ N = 'do podsumowania'; Zrob = { $script:BDalej.PerformClick() } },
-  @{ N = 'podsumowanie'; Czekaj = { ($script:Ekran -eq 'podsumowanie') -and $script:Sprawdzenie -and ($script:Sprawdzenie.Zadanie.Stan -ne 'trwa') }; Zrzut = '3-podsumowanie'; Sprawdz = { Tak (($script:LProgramy.Text -like 'Brakuje: uv, Python 3.12 - doinstaluję*') -and $script:BDalej.Enabled -and ($script:BDalej.Text -eq 'Zainstaluj')) "programy: $($script:LProgramy.Text)" } },
+  @{ N = 'podsumowanie'; Czekaj = { ($script:Ekran -eq 'podsumowanie') -and $script:Sprawdzenie -and ($script:Sprawdzenie.Zadanie.Stan -ne 'trwa') }; Zrzut = '3-podsumowanie'; Sprawdz = { Tak (($script:LProgramy.Text -like 'Brakuje: uv, Python 3.12, Claude Code - doinstaluję*') -and $script:BDalej.Enabled -and ($script:BDalej.Text -eq 'Zainstaluj')) "programy: $($script:LProgramy.Text)" } },
   @{ N = 'zainstaluj'; Zrob = { $script:BDalej.PerformClick() } },
   @{ N = 'postep w trakcie'; Czekaj = { ($script:Ekran -eq 'postep') -and (@($script:Plan | Where-Object { ($_.Stan -eq 'trwa') -and ($_.Kroki.Count -gt 0) -and ($_.Id -like 'baza*') }).Count -gt 0) }; Zrzut = '4-postep' },
   @{ N = 'blad lore'; Czekaj = { $script:PlanStan -eq 'blad' }; Limit = 60; Zrzut = '4b-blad'; Sprawdz = { $z = $script:Plan[$script:PlanIndeks]; Tak (($z.Id -eq 'lore-Instaluj') -and ($script:LBleduTresc.Text -like '*huggingface*') -and $script:KartaBledu.Visible -and ($script:BAnuluj.Text -eq 'Zamknij')) "krok $($z.Id): $($script:LBleduTresc.Text)" } },
@@ -379,13 +402,118 @@ $script:TestKroki = @(
   $w = Wszystkie-Wywolania
   $kol = Kolejnosc $w
   # P64: programy PRZED baza (umowa P59b - baza wymaga gita)
-  $ocz = 'zaleznosci:Sprawdz > zaleznosci:Instaluj > modul-baza:Instaluj > modul-lore:Instaluj > modul-lore:Instaluj > modul-wiedza:Instaluj > modul-kierownik:Instaluj > modul-skille:Instaluj > modul-kopia:Instaluj > wpisz-zasady:Proba=False'
+  # IN1: przy pierwszej instalacji kazdy program osobnym krokiem (osobne wywolanie), Claude Code przed baza
+  $ocz = 'zaleznosci:Sprawdz > zaleznosci:Instaluj > zaleznosci:Instaluj > zaleznosci:Instaluj > zaleznosci:Instaluj > modul-baza:Instaluj > modul-lore:Instaluj > modul-lore:Instaluj > modul-wiedza:Instaluj > modul-kierownik:Instaluj > modul-skille:Instaluj > modul-kopia:Instaluj > wpisz-zasady:Proba=False'
   Wynik 'nowa instalacja - kolejnosc skryptow' ($kol -eq $ocz) $kol
-  $pot = @($w | Where-Object { $_ -like '*|zaleznosci|Instaluj|*' })
-  Wynik 'nowa instalacja - lista programow jednym napisem' (($pot.Count -eq 1) -and ($pot[0] -like '*Potrzebne=git,node,uv,python|*')) "$($pot -join ' ')"
+  $pot = @($w | Where-Object { $_ -like '*|zaleznosci|Instaluj|*' } | ForEach-Object { ($_ -split '\|')[3] })
+  Wynik 'nowa instalacja - programy osobno: git, node, uv+python, claude' (($pot -join ' ; ') -eq 'Potrzebne=git ; Potrzebne=node ; Potrzebne=uv,python ; Potrzebne=claude') "$($pot -join ' ; ')"
   $rej = Czytaj-Rejestr $dom
-  $ok = $rej -and $rej.moduly.wiedza -and $rej.moduly.lore -and $rej.moduly.kierownik -and $rej.moduly.skille -and $rej.moduly.kopia -and ($rej.kopia.cel -eq $kopie) -and (@($rej.kopia.zrodla).Count -ge 1) -and ($null -ne $rej.narzedzia) -and ($null -ne $rej.kopia.PSObject.Properties['wykluczenia']) -and (@($rej.kopia.wykluczenia).Count -eq 0)
+  $ok = $rej -and $rej.moduly.wiedza -and $rej.moduly.lore -and $rej.moduly.kierownik -and $rej.moduly.skille -and $rej.moduly.kopia -and ($rej.kopia.cel -eq $kopie) -and (@($rej.kopia.zrodla).Count -ge 1) -and ($null -ne $rej.narzedzia) -and ($rej.narzedzia.claude -eq $true) -and ($null -ne $rej.kopia.PSObject.Properties['wykluczenia']) -and (@($rej.kopia.wykluczenia).Count -eq 0)
   Wynik 'nowa instalacja - rejestr' $ok ($(if ($rej) { $rej | ConvertTo-Json -Compress -Depth 5 } else { 'brak pliku' }))
+}
+
+# --- A2. pierwsza instalacja jednym przyciskiem (IN1) ------------------------------
+# Powitanie: jedno zdanie, duzy "Zainstaluj", maly "chcę wybrać sam ›". "Zainstaluj" = od razu postep:
+# bez wyboru, bez podsumowania i bez sprawdzania programow (zero pytan), kazdy program osobnym
+# wierszem, Claude Code brak -> instalacja (atrapa), zdanie pod paskiem, na koncu "Gotowe" z [Otwórz]
+# (Otworz-Claude podmienione - zadne okno nie wyskakuje).
+function Zainstaluj-Dla-Testu-Otworz {
+  return @'
+function Otworz-Claude { $script:TestOtworzono = ($script:TestOtworzono + 1); return '' }
+'@
+}
+if (Chce 'szybka') {
+  $dom = Nowy-Dom 'szybka'
+  [System.IO.File]::WriteAllText((Join-Path $dom 'atrapa-lore-raz.txt'), 'bez bledu lore')
+  [System.IO.File]::WriteAllText((Join-Path $dom 'atrapa-wolno.txt'), '1')
+  Remove-Item -LiteralPath (Join-Path $Atrapy 'claude-jest.txt'), (Join-Path $Atrapy 'claude-pada.txt') -Force -ErrorAction SilentlyContinue
+  $sc = Zapisz-Scenariusz 'szybka' ((Zainstaluj-Dla-Testu-Otworz) + @'
+$script:TestOtworzono = 0
+$script:TestKroki = @(
+  @{ N = 'powitanie'; Czekaj = { $script:Ekran -eq 'powitanie' }; Zrzut = '30-pierwsza-powitanie'; Sprawdz = { Tak (($script:Tryb -eq 'nowy') -and $script:BZainstaluj.Visible -and ($script:BZainstaluj.Height -ge 48) -and $script:BWybierzSam.Visible -and (-not $script:BDalej.Visible) -and ($script:Okno.AcceptButton -eq $script:BZainstaluj) -and ((@($script:PanelKrokow.Controls | ForEach-Object { $_.Text }) -join '') -like '*Start*Instalacja*Gotowe*')) "duzy Zainstaluj ($($script:BZainstaluj.Height) px), odnosnik, Enter = Zainstaluj, kroki: $((@($script:PanelKrokow.Controls | ForEach-Object { $_.Text })) -join ' ')" } },
+  @{ N = 'teksty bez zargonu'; Sprawdz = { $t = (@(Test-Teksty $script:Tresc)) -join ' | '; Tak (($t -like '*Zainstaluję wszystko, czego potrzeba. Nic nie musisz wybierać.*') -and ($t -notmatch '(?i)modu|hook|repo')) "teksty: $t" } },
+  @{ N = 'zainstaluj'; Zrob = { $script:BZainstaluj.PerformClick() } },
+  @{ N = 'od razu postep, bez pytan'; Czekaj = { $script:Ekran -eq 'postep' }; Sprawdz = { $ids = @($script:Plan | ForEach-Object { $_.Id }) -join ','; Tak (($ids -eq 'zapamietaj,programy-git,programy-node,programy-python,programy-claude,baza-Instaluj,lore-Instaluj,wiedza-Instaluj,kierownik-Instaluj,skille-Instaluj,zasady') -and (-not $script:Sprawdzenie) -and (-not $script:Nakladka.Visible)) "plan: $ids" } },
+  @{ N = 'claude w trakcie'; Czekaj = { $z = @($script:Plan | Where-Object { $_.Id -eq 'programy-claude' })[0]; ($z.Stan -eq 'trwa') -and ($z.Kroki.Count -gt 0) }; Limit = 60; Zrzut = '31-pierwsza-postep'; Sprawdz = { $r = $script:WierszeZadan['programy-claude']; Tak (($script:LTeraz.Text -eq 'Teraz instaluję: Claude Code...') -and ($r.Znak.Text -eq [string][char]0x23F3) -and (-not $r.Szczegol.Visible) -and ($script:WierszeZadan['programy-git'].Znak.Text -eq [string][char]0x2714)) "zdanie: '$($script:LTeraz.Text)', znak: $($r.Znak.Text), szczegol widoczny: $($r.Szczegol.Visible)" } },
+  @{ N = 'wiedza w trakcie (wolna)'; Czekaj = { $z = @($script:Plan | Where-Object { $_.Id -eq 'wiedza-Instaluj' })[0]; ($z.Stan -eq 'trwa') -and ($z.Kroki.Count -gt 0) }; Limit = 60; Zrzut = '32-pierwsza-postep-dalej'; Sprawdz = { $c = @($script:Plan | Where-Object { $_.Id -eq 'programy-claude' })[0]; $g = @($script:Plan | Where-Object { $_.Id -eq 'programy-git' })[0]; Tak (($c.Stan -eq 'ok') -and ($script:WierszeZadan['programy-claude'].Stan.Text -like 'gotowe (*') -and ($script:WierszeZadan['programy-git'].Stan.Text -eq 'już jest') -and ($script:LTeraz.Text -eq 'Teraz instaluję: Wiedza o Tobie...')) "claude: $($script:WierszeZadan['programy-claude'].Stan.Text), git: $($script:WierszeZadan['programy-git'].Stan.Text), zdanie: $($script:LTeraz.Text)" } },
+  @{ N = 'gotowe z Otworz'; Czekaj = { $script:Ekran -eq 'gotowe' }; Limit = 120; Zrzut = '33-pierwsza-gotowe'; Sprawdz = { $t = (@(Test-Teksty $script:Tresc)) -join ' | '; Tak ($script:BOtworz -and $script:BOtworz.Visible -and ($script:BOtworz.Text -eq 'Otwórz') -and ($t -like '*Gotowe.*Teraz otwórz Claude Code:*zalogowanie*') -and ($script:Okno.AcceptButton -eq $script:BOtworz)) "karta: $t" } },
+  @{ N = 'Otworz'; Zrob = { $script:BOtworz.PerformClick() }; Sprawdz = { Tak (($script:TestOtworzono -eq 1) -and ($script:LOtworzInfo.Text -like 'Claude Code otwiera się*')) "wywolan Otworz-Claude: $($script:TestOtworzono), komunikat: $($script:LOtworzInfo.Text)" } }
+)
+'@)
+  Wyczysc-Wywolania
+  $r = Uruchom-Ps $Okno (Argumenty-Okna $dom $sc.Plik $Atrapy) 300
+  [void](Ocen-Raport 'pierwsza instalacja jednym przyciskiem' $sc $r)
+  $w = Wszystkie-Wywolania
+  Wynik 'pierwsza instalacja - zadnego sprawdzania przed startem (zero pytan), Claude Code przed baza' ((Kolejnosc $w) -eq 'zaleznosci:Instaluj > zaleznosci:Instaluj > zaleznosci:Instaluj > zaleznosci:Instaluj > modul-baza:Instaluj > modul-lore:Instaluj > modul-wiedza:Instaluj > modul-kierownik:Instaluj > modul-skille:Instaluj > wpisz-zasady:Proba=False') (Kolejnosc $w)
+  $rej = Czytaj-Rejestr $dom
+  Wynik 'pierwsza instalacja - rejestr: cztery czesci, bez kopii, Claude Code zapisany' ($rej -and $rej.moduly.wiedza -and $rej.moduly.lore -and $rej.moduly.kierownik -and $rej.moduly.skille -and (-not $rej.moduly.kopia) -and ($rej.narzedzia.claude -eq $true)) ($(if ($rej) { $rej | ConvertTo-Json -Compress -Depth 5 } else { 'brak pliku' }))
+}
+
+# --- A3. Claude Code juz jest: krok "już jest" -----------------------------------------
+if (Chce 'claudejest') {
+  $dom = Nowy-Dom 'claudejest'
+  [System.IO.File]::WriteAllText((Join-Path $dom 'atrapa-lore-raz.txt'), 'bez bledu lore')
+  [System.IO.File]::WriteAllText((Join-Path $Atrapy 'claude-jest.txt'), '1')
+  $sc = Zapisz-Scenariusz 'claudejest' ((Zainstaluj-Dla-Testu-Otworz) + @'
+$script:TestKroki = @(
+  @{ N = 'zainstaluj'; Czekaj = { $script:Ekran -eq 'powitanie' }; Zrob = { $script:BZainstaluj.PerformClick() } },
+  @{ N = 'claude juz jest'; Czekaj = { (@($script:Plan | Where-Object { $_.Id -eq 'programy-claude' })[0].Stan -eq 'ok') -and ($script:Ekran -eq 'postep') }; Limit = 60; Zrzut = '34-claude-juz-jest'; Sprawdz = { $r = $script:WierszeZadan['programy-claude']; Tak (($r.Znak.Text -eq [string][char]0x2714) -and ($r.Stan.Text -eq 'już jest')) "znak $($r.Znak.Text), stan '$($r.Stan.Text)'" } },
+  @{ N = 'gotowe'; Czekaj = { $script:Ekran -eq 'gotowe' }; Limit = 120 }
+)
+'@)
+  Wyczysc-Wywolania
+  $r = Uruchom-Ps $Okno (Argumenty-Okna $dom $sc.Plik $Atrapy) 240
+  Remove-Item -LiteralPath (Join-Path $Atrapy 'claude-jest.txt') -Force -ErrorAction SilentlyContinue
+  [void](Ocen-Raport 'Claude Code juz jest' $sc $r)
+}
+
+# --- A4. blad instalacji Claude Code (proba negatywna) --------------------------------
+# Krok Claude Code pada: plan staje, ekran "Gotowe" nie ma prawa sie pokazac (sprawdzane jeszcze po
+# 4 s), karta bledu mowi po polsku, co zrobic, a "Skopiuj raport dla Przemka" daje do (podmienionego)
+# schowka wersje, krok i blad - bez sekretow, ktore atrapa celowo wypisala. Do tego zmiana rozmiaru
+# okna z widoczna karta bledu: karta zostaje.
+if (Chce 'bladclaude') {
+  $dom = Nowy-Dom 'bladclaude'
+  [System.IO.File]::WriteAllText((Join-Path $Atrapy 'claude-pada.txt'), '1')
+  $sc = Zapisz-Scenariusz 'bladclaude' ((Zainstaluj-Dla-Testu-Otworz) + @'
+$script:TestSchowek = $null
+function Do-Schowka([string]$t) { $script:TestSchowek = $t; return $true }
+$script:TestKroki = @(
+  @{ N = 'zainstaluj'; Czekaj = { $script:Ekran -eq 'powitanie' }; Zrob = { $script:BZainstaluj.PerformClick() } },
+  @{ N = 'blad Claude Code'; Czekaj = { $script:PlanStan -eq 'blad' }; Limit = 60; Zrzut = '35-blad-claude'; Sprawdz = { $z = $script:Plan[$script:PlanIndeks]; Tak (($z.Id -eq 'programy-claude') -and $script:KartaBledu.Visible -and ($script:LBleduTytul.Text -eq 'Nie udało się: Claude Code') -and ($script:LBleduTresc.Text -like '*Nie udalo sie zainstalowac Claude Code*brak internetu*') -and ($script:LBleduRada.Text -like 'Co zrobić:*Skopiuj raport dla Przemka*') -and $script:BKopiujRaport.Visible -and ($script:WierszeZadan['programy-claude'].Znak.Text -eq [string][char]0x2716) -and ($script:LTeraz.Text -like 'Coś poszło nie tak*')) "krok $($z.Id); $($script:LBleduTytul.Text): $($script:LBleduTresc.Text)" } },
+  @{ N = 'proba negatywna: nie ma Gotowe (4 s pozniej)'; Czekaj = { if (-not $script:TestOd4) { $script:TestOd4 = Get-Date }; ((Get-Date) - $script:TestOd4).TotalSeconds -gt 4 }; Sprawdz = { $b = @($script:Plan | Where-Object { $_.Id -eq 'baza-Instaluj' })[0]; Tak (($script:Ekran -eq 'postep') -and ($script:PlanStan -eq 'blad') -and ($b.Stan -eq 'czeka') -and -not $script:BOtworz) "ekran $($script:Ekran), plan $($script:PlanStan), baza $($b.Stan)" } },
+  @{ N = 'skopiuj raport'; Zrob = { $script:BKopiujRaport.PerformClick() }; Sprawdz = { $t = "$($script:TestSchowek)"; Tak (($t -like 'Raport instalatora MegaRuchacza*') -and ($t -match 'Wersja: \d+\.\d+\.\d+') -and ($t -like '*Krok: Claude Code `[programy-claude`]*') -and ($t -like '*Błąd: Nie udalo sie zainstalowac Claude Code*') -and ($t -like '*brak internetu*') -and ($t -like '*--- koniec dziennika instalatora*') -and ($t -notmatch 'TAJNYTOKEN|TAJNE1234') -and ($t -like '*[UKRYTE]*') -and ($script:LRaportInfo.Text -like 'Raport jest w schowku*')) "dlugosc $($t.Length); sekret w raporcie: $($t -match 'TAJNYTOKEN|TAJNE1234'); poczatek: $(($t -split "`r`n" | Select-Object -First 6) -join ' / ')" } },
+  @{ N = 'zrzut po skopiowaniu'; Zrzut = '36-blad-claude-skopiowany' },
+  @{ N = 'rozciagnij z bledem'; Zrob = { $script:TestSzer = $script:SzerTresc; $script:Okno.Size = New-Object System.Drawing.Size(($script:Okno.Width + 300), ($script:Okno.Height + 100)) } },
+  @{ N = 'karta bledu po rozciagnieciu'; Czekaj = { $script:SzerTresc -gt $script:TestSzer }; Zrzut = '37-blad-claude-szeroko'; Sprawdz = { Tak ($script:KartaBledu.Visible -and ($script:KartaBledu.Width -ge $script:SzerKarty) -and ($script:BAnuluj.Text -eq 'Zamknij') -and ($script:LBleduTytul.Text -eq 'Nie udało się: Claude Code') -and ($script:Ekran -eq 'postep')) "karta $($script:KartaBledu.Width) px, tresc $($script:SzerTresc) px" } }
+)
+'@)
+  Wyczysc-Wywolania
+  $r = Uruchom-Ps $Okno (Argumenty-Okna $dom $sc.Plik $Atrapy) 180
+  Remove-Item -LiteralPath (Join-Path $Atrapy 'claude-pada.txt') -Force -ErrorAction SilentlyContinue
+  [void](Ocen-Raport 'blad Claude Code (proba negatywna)' $sc $r)
+  $w = Wszystkie-Wywolania
+  Wynik 'blad Claude Code - po nim nic sie nie wykonalo' (@($w | Where-Object { $_ -like '*|modul-*' -or $_ -like '*|wpisz-zasady|*' }).Count -eq 0) (Kolejnosc $w)
+}
+
+# --- A5. okno rozciagane i maksymalizowane ------------------------------------------
+if (Chce 'rozciaganie') {
+  $dom = Nowy-Dom 'rozciaganie'
+  $sc = Zapisz-Scenariusz 'rozciaganie' @'
+$script:TestKroki = @(
+  @{ N = 'ramka i minimum'; Czekaj = { $script:Ekran -eq 'powitanie' }; Sprawdz = { $script:TestMin = $script:Okno.MinimumSize; $script:TestKarta = $script:Tresc.Controls[0].Controls[0].Width; Tak (($script:Okno.FormBorderStyle -eq [System.Windows.Forms.FormBorderStyle]::Sizable) -and $script:Okno.MaximizeBox -and ($script:Okno.MinimumSize -eq $script:Okno.Size)) "ramka $($script:Okno.FormBorderStyle), MaximizeBox $($script:Okno.MaximizeBox), MinimumSize $($script:Okno.MinimumSize) = Size $($script:Okno.Size)" } },
+  @{ N = 'szerzej o 400'; Zrob = { $script:TestSzer = $script:SzerTresc; $script:Okno.Size = New-Object System.Drawing.Size(($script:Okno.Width + 400), ($script:Okno.Height + 150)) } },
+  @{ N = 'powitanie rosnie'; Czekaj = { $script:SzerTresc -gt $script:TestSzer }; Zrzut = '40-szeroko-powitanie'; Sprawdz = { $k = $script:Tresc.Controls[0].Controls[0]; Tak (($k.Width -gt $script:TestKarta) -and ($script:BZainstaluj.Visible) -and ($script:BAnuluj.Left -eq $script:Margines)) "karta $($script:TestKarta) -> $($k.Width) px" } },
+  @{ N = 'wybor szeroko'; Zrob = { $script:BWybierzSam.PerformClick() } },
+  @{ N = 'wybor - kolumny i przyciski za oknem'; Czekaj = { $script:Ekran -eq 'wybor' }; Zrzut = '41-szeroko-wybor'; Sprawdz = { Tak (($script:BDalej.Right -eq ($script:Pasek.ClientSize.Width - $script:Margines)) -and ($script:CheckboxyModulow.wiedza.Parent.Width -ge ($script:SzerWnetrza - 2))) "Dalej prawa krawedz $($script:BDalej.Right) / pasek $($script:Pasek.ClientSize.Width); wiersz $($script:CheckboxyModulow.wiedza.Parent.Width) / wnetrze $($script:SzerWnetrza)" } },
+  @{ N = 'kopia i Wszystko'; Zrob = { $script:CheckboxyModulow.kopia.Checked = $true; $script:BWszystko.PerformClick() }; Sprawdz = { Tak ($script:PanelKopii.Visible) 'panel kopii' } },
+  @{ N = 'tekst zawija sie zamiast uciac (waskie okno)'; Zrob = { $script:TestSzer = $script:SzerTresc; $script:Okno.Size = New-Object System.Drawing.Size(400, 300) } },
+  @{ N = 'nie mniej niz minimum'; Czekaj = { $script:SzerTresc -lt $script:TestSzer }; Zrzut = '42-minimum-wybor'; Sprawdz = { Tak (($script:Okno.Width -ge $script:TestMin.Width) -and ($script:Okno.Height -ge $script:TestMin.Height)) "okno $($script:Okno.Size), minimum $($script:TestMin)" } },
+  @{ N = 'maksymalizacja (bez pokazywania - stan okna testowego)'; Sprawdz = { Tak ($script:Okno.MaximizeBox -and ($script:Okno.FormBorderStyle -ne [System.Windows.Forms.FormBorderStyle]::FixedSingle)) 'przycisk maksymalizacji wlaczony' } }
+)
+'@
+  $r = Uruchom-Ps $Okno (Argumenty-Okna $dom $sc.Plik $Atrapy) 120
+  [void](Ocen-Raport 'okno rozciagane' $sc $r)
 }
 
 # --- B. tryb zmiany --------------------------------------------------------------
@@ -587,9 +715,7 @@ if (Chce 'proba') {
   $sc = Zapisz-Scenariusz 'proba' @'
 $script:TestKroki = @(
   @{ N = 'powitanie z karta proby'; Czekaj = { $script:Ekran -eq 'powitanie' }; Zrzut = '15-proba-powitanie' },
-  @{ N = 'dalej'; Zrob = { $script:BDalej.PerformClick() } },
-  @{ N = 'dalej 2'; Czekaj = { $script:Ekran -eq 'wybor' }; Zrob = { $script:BDalej.PerformClick() } },
-  @{ N = 'zainstaluj'; Czekaj = { ($script:Ekran -eq 'podsumowanie') -and $script:Sprawdzenie -and ($script:Sprawdzenie.Zadanie.Stan -ne 'trwa') }; Zrob = { $script:BDalej.PerformClick() } },
+  @{ N = 'zainstaluj od razu (proba)'; Zrob = { $script:BZainstaluj.PerformClick() } },
   @{ N = 'blad lore w probie'; Czekaj = { $script:PlanStan -eq 'blad' }; Limit = 60; Zrob = { $script:BPonow.PerformClick() } },
   @{ N = 'gotowe w probie'; Czekaj = { $script:Ekran -eq 'gotowe' }; Limit = 90; Zrzut = '16-proba-gotowe'; Sprawdz = { Tak ((@($script:Plan | Where-Object { $_.Id -eq 'zapamietaj' })[0].Stan -eq 'pominiety')) "zapis wyboru pominiety" } }
 )
@@ -609,7 +735,7 @@ if (Chce 'umowa') {
   $dom = Nowy-Dom 'umowa'
   $sc = Zapisz-Scenariusz 'umowa' @'
 $script:TestKroki = @(
-  @{ N = 'dalej'; Czekaj = { $script:Ekran -eq 'powitanie' }; Zrob = { $script:BDalej.PerformClick() } },
+  @{ N = 'chce wybrac sam'; Czekaj = { $script:Ekran -eq 'powitanie' }; Zrob = { $script:BWybierzSam.PerformClick() } },
   @{ N = 'dalej 2'; Czekaj = { $script:Ekran -eq 'wybor' }; Zrob = { $script:BDalej.PerformClick() } },
   @{ N = 'zainstaluj'; Czekaj = { ($script:Ekran -eq 'podsumowanie') -and $script:Sprawdzenie -and ($script:Sprawdzenie.Zadanie.Stan -ne 'trwa') }; Zrob = { $script:BDalej.PerformClick() } },
   @{ N = 'brak WYNIK = blad'; Czekaj = { $script:PlanStan -eq 'blad' }; Limit = 60; Zrzut = '17-umowa-brak-wyniku'; Sprawdz = { Tak ($script:LBleduTresc.Text -like '*bez wyniku*koniec bez wyniku*') "$($script:LBleduTresc.Text)" } },
@@ -633,7 +759,7 @@ if (Chce 'brak') {
   $dom = Nowy-Dom 'brak'
   $sc = Zapisz-Scenariusz 'brak' @'
 $script:TestKroki = @(
-  @{ N = 'dalej'; Czekaj = { $script:Ekran -eq 'powitanie' }; Zrob = { $script:BDalej.PerformClick() } },
+  @{ N = 'chce wybrac sam'; Czekaj = { $script:Ekran -eq 'powitanie' }; Zrob = { $script:BWybierzSam.PerformClick() } },
   @{ N = 'dalej 2'; Czekaj = { $script:Ekran -eq 'wybor' }; Zrob = { $script:BDalej.PerformClick() } },
   @{ N = 'podsumowanie blokuje'; Czekaj = { $script:Ekran -eq 'podsumowanie' }; Zrzut = '18-brak-skryptu'; Sprawdz = { Tak ((-not $script:BDalej.Enabled) -and ($script:LStopka.Text -like '*Brakuje plików*')) "Zainstaluj wylaczone: $($script:LStopka.Text)" } }
 )
@@ -649,7 +775,7 @@ if (Chce 'przerwij') {
   [System.IO.File]::WriteAllText((Join-Path $dom 'atrapa-lore-raz.txt'), 'bez bledu lore')
   $sc = Zapisz-Scenariusz 'przerwij' @'
 $script:TestKroki = @(
-  @{ N = 'dalej'; Czekaj = { $script:Ekran -eq 'powitanie' }; Zrob = { $script:BDalej.PerformClick() } },
+  @{ N = 'chce wybrac sam'; Czekaj = { $script:Ekran -eq 'powitanie' }; Zrob = { $script:BWybierzSam.PerformClick() } },
   @{ N = 'dalej 2'; Czekaj = { $script:Ekran -eq 'wybor' }; Zrob = { $script:BDalej.PerformClick() } },
   @{ N = 'zainstaluj'; Czekaj = { ($script:Ekran -eq 'podsumowanie') -and $script:Sprawdzenie -and ($script:Sprawdzenie.Zadanie.Stan -ne 'trwa') }; Zrob = { $script:BDalej.PerformClick() } },
   @{ N = 'zamkniecie w trakcie pyta'; Czekaj = { (@($script:Plan | Where-Object { ($_.Id -eq 'wiedza-Instaluj') -and ($_.Stan -eq 'trwa') -and ($_.Kroki.Count -gt 0) }).Count -gt 0) }; Limit = 60; Zrob = { $script:Okno.Close() } },
@@ -711,12 +837,12 @@ exit $LASTEXITCODE
   $dom = Nowy-Dom 'bezbasha'
   $sc = Zapisz-Scenariusz 'bezbasha' @'
 $script:TestKroki = @(
-  @{ N = 'dalej'; Czekaj = { $script:Ekran -eq 'powitanie' }; Zrob = { $script:BDalej.PerformClick() } },
-  @{ N = 'tylko skille (git)'; Czekaj = { $script:Ekran -eq 'wybor' }; Zrob = { foreach ($m in @('wiedza', 'lore', 'kierownik')) { $script:CheckboxyModulow.$m.Checked = $false }; $script:CheckboxyModulow.skille.Checked = $true } },
+  @{ N = 'chce wybrac sam'; Czekaj = { $script:Ekran -eq 'powitanie' }; Zrob = { $script:BWybierzSam.PerformClick() } },
+  @{ N = 'tylko skille (git), bez Claude Code'; Czekaj = { $script:Ekran -eq 'wybor' }; Zrob = { foreach ($m in @('wiedza', 'lore', 'kierownik')) { $script:CheckboxyModulow.$m.Checked = $false }; $script:CheckboxyModulow.skille.Checked = $true; if ($script:CbClaude.Enabled) { $script:CbClaude.Checked = $false } } },
   @{ N = 'do podsumowania'; Zrob = { $script:BDalej.PerformClick() } },
-  @{ N = 'podsumowanie - brakuje Git i Git Bash'; Czekaj = { ($script:Ekran -eq 'podsumowanie') -and $script:Sprawdzenie -and ($script:Sprawdzenie.Zadanie.Stan -ne 'trwa') }; Limit = 120; Zrzut = '27-bez-basha-podsumowanie'; Sprawdz = { $ids = @($script:PlanDoWykonania | ForEach-Object { $_.Id }) -join ','; Tak (($ids -eq 'zapamietaj,zaleznosci-Instaluj,baza-Instaluj,skille-Instaluj,zasady') -and ($script:LProgramy.Text -like 'Brakuje: Git, Git Bash *')) "plan: $ids; programy: $($script:LProgramy.Text)" } },
+  @{ N = 'podsumowanie - brakuje Git i Git Bash'; Czekaj = { ($script:Ekran -eq 'podsumowanie') -and $script:Sprawdzenie -and ($script:Sprawdzenie.Zadanie.Stan -ne 'trwa') }; Limit = 120; Zrzut = '27-bez-basha-podsumowanie'; Sprawdz = { $ids = @($script:PlanDoWykonania | ForEach-Object { $_.Id }) -join ','; $ocz = 'zapamietaj,programy-git,baza-Instaluj,skille-Instaluj,zasady'; if ($script:Wybor.Claude) { $ocz = 'zapamietaj,programy-git,programy-claude,baza-Instaluj,skille-Instaluj,zasady' }; Tak (($ids -eq $ocz) -and ($script:LProgramy.Text -like 'Brakuje: Git, Git Bash*')) "plan: $ids; programy: $($script:LProgramy.Text)" } },
   @{ N = 'zainstaluj'; Zrob = { $script:BDalej.PerformClick() } },
-  @{ N = 'blad w oknie, nie sukces'; Czekaj = { @('blad', 'gotowe') -contains $script:PlanStan }; Limit = 180; Zrzut = '28-bez-basha-blad'; Sprawdz = { $z = $script:Plan[$script:PlanIndeks]; $b = @($script:Plan | Where-Object { $_.Id -eq 'baza-Instaluj' })[0]; Tak (($script:PlanStan -eq 'blad') -and ($z.Id -eq 'zaleznosci-Instaluj') -and ($z.Napis -eq 'Programy potrzebne do działania: Git, Git Bash') -and $script:KartaBledu.Visible -and ($script:LBleduTresc.Text -like 'Nie ma Git Bash*') -and ($b.Stan -eq 'czeka') -and ($script:Ekran -ne 'gotowe')) "plan $($script:PlanStan), krok $($z.Id) ($($z.Napis)), baza: $($b.Stan); $($script:LBleduTresc.Text)" } }
+  @{ N = 'blad w oknie, nie sukces'; Czekaj = { @('blad', 'gotowe') -contains $script:PlanStan }; Limit = 180; Zrzut = '28-bez-basha-blad'; Sprawdz = { $z = $script:Plan[$script:PlanIndeks]; $b = @($script:Plan | Where-Object { $_.Id -eq 'baza-Instaluj' })[0]; Tak (($script:PlanStan -eq 'blad') -and ($z.Id -eq 'programy-git') -and ($z.Napis -eq 'Git i Git Bash') -and $script:KartaBledu.Visible -and ($script:LBleduTresc.Text -like 'Nie ma Git Bash*') -and ($b.Stan -eq 'czeka') -and ($script:Ekran -ne 'gotowe')) "plan $($script:PlanStan), krok $($z.Id) ($($z.Napis)), baza: $($b.Stan); $($script:LBleduTresc.Text)" } }
 )
 '@
   $k = [Microsoft.Win32.Registry]::CurrentUser.OpenSubKey('Environment')
@@ -741,6 +867,7 @@ function Kopia-Bez-Gita([string]$cel) {
   Copy-Item -LiteralPath (Join-Path $Repo 'narzedzia\instalacja\stan.ps1') -Destination (Join-Path $m 'narzedzia\instalacja')
   Copy-Item -LiteralPath (Join-Path $Repo 'logo.png') -Destination $m
   Copy-Item -LiteralPath (Join-Path $Repo 'instaluj.bat') -Destination $m
+  Copy-Item -LiteralPath (Join-Path $Repo 'Zainstaluj-MegaRuchacza.bat') -Destination $m
   return $m
 }
 
@@ -754,24 +881,50 @@ if (Chce 'pobieranie') {
     New-Item -ItemType Directory -Force -Path (Join-Path $ZrodloKlonu 'instalator') | Out-Null
     Copy-Item -Path (Join-Path $Repo 'instalator\*.ps1') -Destination (Join-Path $ZrodloKlonu 'instalator') -Force
     Copy-Item -LiteralPath (Join-Path $Repo 'instaluj.bat') -Destination $ZrodloKlonu -Force
+    Copy-Item -LiteralPath (Join-Path $Repo 'Zainstaluj-MegaRuchacza.bat') -Destination $ZrodloKlonu -Force
     & git -C $ZrodloKlonu add -A 2>&1 | Out-Null
     & git -C $ZrodloKlonu -c user.name=test -c user.email=test@example.invalid commit --quiet -m 'test: instalator' 2>&1 | Out-Null
     $ErrorActionPreference = $poprz
   }
-  foreach ($wariant in @('github', 'lokalny')) {
+  # github / lokalny: "chcę wybrać sam" -> folder -> klon -> okno z klonu na wyborze (-Start wybor).
+  # szybki (IN1, jeden plik): "Zainstaluj" -> folder domyslny ~\MegaRuchacz bez pytania -> klon ->
+  # okno z klonu od razu instaluje (-Start zainstaluj) az do Gotowe.
+  foreach ($wariant in @('github', 'lokalny', 'szybki')) {
     $dom = Nowy-Dom "pobieranie-$wariant"
     $zip = Kopia-Bez-Gita (Join-Path $Robocze "zip-$wariant")
     $cel = Join-Path $Robocze "cel-$wariant\MegaRuchacz"
     $adres = 'https://github.com/Primo2966/MegaRuchacz.git'
-    if ($wariant -eq 'lokalny') { $adres = $ZrodloKlonu }
-    $sc2 = Zapisz-Scenariusz "z-klonu-$wariant" @'
+    if ($wariant -ne 'github') { $adres = $ZrodloKlonu }
+    if ($wariant -eq 'szybki') {
+      $cel = Join-Path $dom 'MegaRuchacz'
+      [System.IO.File]::WriteAllText((Join-Path $dom 'atrapa-lore-raz.txt'), 'bez bledu lore')
+      $sc2 = Zapisz-Scenariusz "z-klonu-$wariant" @'
+$script:TestKroki = @(
+  @{ N = 'okno z klonu od razu instaluje'; Czekaj = { $script:Ekran -eq 'postep' }; Zrzut = '0e-z-klonu-instaluje'; Sprawdz = { Tak (($script:Tryb -eq 'nowy') -and (-not $script:WlasnyWybor) -and (Test-Path (Join-Path $script:Zrodlo '.git')) -and (@($script:Plan | Where-Object { $_.Id -eq 'programy-claude' }).Count -eq 1)) "tryb $($script:Tryb), zrodlo $($script:Zrodlo), plan $(@($script:Plan | ForEach-Object { $_.Id }) -join ',')" } },
+  @{ N = 'gotowe bez zadnego pytania'; Czekaj = { $script:Ekran -eq 'gotowe' }; Limit = 120; Sprawdz = { Tak ($script:PlanStan -eq 'gotowe') "plan $($script:PlanStan)" } }
+)
+'@
+    } else {
+      $sc2 = Zapisz-Scenariusz "z-klonu-$wariant" @'
 $script:TestKroki = @(
   @{ N = 'okno z klonu'; Czekaj = { ($script:Ekran -eq 'powitanie') -or ($script:Ekran -eq 'wybor') }; Zrzut = '0d-z-klonu'; Sprawdz = { Tak (($script:Tryb -eq 'nowy') -and (Test-Path (Join-Path $script:Zrodlo '.git'))) "tryb $($script:Tryb), zrodlo $($script:Zrodlo)" } }
 )
 '@
+    }
     $zrzutPostepu = "0b-pobieranie-$wariant"
+    if ($wariant -eq 'szybki') {
+      $sc = Zapisz-Scenariusz "pobieranie-$wariant" (@'
+$script:TestKroki = @(
+  @{ N = 'powitanie w pobieraniu'; Czekaj = { $script:Ekran -eq 'powitanie' }; Zrzut = '0a-pobieranie-powitanie'; Sprawdz = { Tak (($script:Tryb -eq 'pobieranie') -and $script:BZainstaluj.Visible -and $script:BWybierzSam.Visible -and ($script:Okno.AcceptButton -eq $script:BZainstaluj)) "tryb $($script:Tryb), Enter = Zainstaluj" } },
+  @{ N = 'zainstaluj'; Zrob = { $script:BZainstaluj.PerformClick() } },
+  @{ N = 'pobieranie bez pytania o folder'; Czekaj = { ($script:Ekran -eq 'postep') -and ($script:Plan[0].Stan -ne 'czeka') }; Zrzut = '__ZRZUT__'; Sprawdz = { Tak (($script:FolderDocelowy -eq (Join-Path $script:Dom 'MegaRuchacz')) -and -not $script:WlasnyWybor) "folder $($script:FolderDocelowy)" } },
+  @{ N = 'koniec pobierania'; Czekaj = { @('gotowe', 'blad') -contains $script:PlanStan }; Limit = 180; Sprawdz = { Tak ($script:PlanStan -eq 'gotowe') "plan: $($script:PlanStan); $(@($script:Plan | ForEach-Object { $_.Id + '=' + $_.Stan + ' ' + $_.Komunikat }) -join ' | ')" } }
+)
+'@).Replace('__ZRZUT__', $zrzutPostepu)
+    } else {
     $sc = Zapisz-Scenariusz "pobieranie-$wariant" (@'
 $script:TestKroki = @(
+  @{ N = 'powitanie w pobieraniu'; Czekaj = { $script:Ekran -eq 'powitanie' }; Zrob = { $script:BWybierzSam.PerformClick() } },
   @{ N = 'folder'; Czekaj = { $script:Ekran -eq 'folder' }; Zrzut = '0-folder'; Sprawdz = { Tak (($script:Tryb -eq 'pobieranie') -and ($script:PoleFolderu.Text -eq (Join-Path $script:Dom 'MegaRuchacz'))) "domyslny folder: $($script:PoleFolderu.Text)" } },
   @{ N = 'proba negatywna: niepusty folder'; Zrob = { $script:PoleFolderu.Text = $script:Dom }; Sprawdz = { Tak ((-not $script:BDalej.Enabled) -and ($script:LFolderInfo.Text -like '*nie jest pusty*')) "$($script:LFolderInfo.Text)" } },
   @{ N = 'folder docelowy'; Zrob = { $script:PoleFolderu.Text = '__CEL__' }; Sprawdz = { Tak $script:BDalej.Enabled "$($script:LFolderInfo.Text)" } },
@@ -780,6 +933,7 @@ $script:TestKroki = @(
   @{ N = 'koniec pobierania'; Czekaj = { @('gotowe', 'blad') -contains $script:PlanStan }; Limit = 180; Zrzut = '__ZRZUT__-koniec'; Sprawdz = { Tak $true "plan: $($script:PlanStan); $(@($script:Plan | ForEach-Object { $_.Id + '=' + $_.Stan + ' ' + $_.Komunikat }) -join ' | ')" } }
 )
 '@).Replace('__CEL__', $cel).Replace('__ZRZUT__', $zrzutPostepu)
+    }
     $a = @('-KatalogDomowy', $dom, '-KatalogSkryptow', $Atrapy, '-PozaEkranem', '-Proba', '-Scenariusz', $sc.Plik, '-ScenariuszDalej', $sc2.Plik, '-ZrodloKlonu', $adres)
     $r = Uruchom-Ps (Join-Path $zip 'instalator\okno.ps1') $a 300
     $t = Ocen-Raport "czysty komputer ($wariant)" $sc $r
@@ -790,10 +944,10 @@ $script:TestKroki = @(
       $spodz = (Test-Path -LiteralPath (Join-Path $cel 'instalator\okno.ps1'))
       if (-not $spodz) { Wynik 'czysty komputer (github) - brak instalatora w klonie zgloszony' (($kon -join ' ') -like '*uruchom=blad W pobranym MegaRuchaczu nie ma instalatora*') ($kon -join ' ') }
     } else {
-      $do = (Get-Date).AddSeconds(90)
+      $do = (Get-Date).AddSeconds(150)
       while (((Get-Date) -lt $do) -and -not ((Test-Path -LiteralPath $sc2.Raport) -and (@(Get-Content -LiteralPath $sc2.Raport -Encoding UTF8) -contains 'KONIEC'))) { Start-Sleep -Milliseconds 500 }
       Start-Sleep -Seconds 2
-      [void](Ocen-Raport "czysty komputer (lokalny) - okno z klonu" $sc2 ([pscustomobject]@{ Kod = 0; Bledy = '' }))
+      [void](Ocen-Raport "czysty komputer ($wariant) - okno z klonu" $sc2 ([pscustomobject]@{ Kod = 0; Bledy = '' }))
     }
   }
   # Sam skrypt pobierania gita z -Proba (git jest na tym komputerze).
@@ -916,27 +1070,27 @@ $script:TestKroki = @(
   [System.IO.Compression.ZipFile]::CreateFromDirectory((Split-Path -Parent $zrodloZip), $zipPlik)
   $sam = Join-Path $Robocze 'sam-bat'
   New-Item -ItemType Directory -Force -Path $sam | Out-Null
-  Copy-Item -LiteralPath (Join-Path $Repo 'instaluj.bat') -Destination $sam -Force
+  Copy-Item -LiteralPath (Join-Path $Repo 'Zainstaluj-MegaRuchacza.bat') -Destination $sam -Force
   $sc = Zapisz-Scenariusz 'bat-zip' @'
 $script:TestKroki = @(
-  @{ N = 'okno z pobranego ZIP-a'; Czekaj = { $script:Ekran -eq 'folder' }; Zrzut = 'bat-zip-folder'; Sprawdz = { Tak (($script:Tryb -eq 'pobieranie') -and ($script:Zrodlo -like '*MegaRuchacz-instalator\rozpakowany\MegaRuchacz-main')) "tryb $($script:Tryb), zrodlo $($script:Zrodlo)" } }
+  @{ N = 'okno z pobranego ZIP-a'; Czekaj = { $script:Ekran -eq 'powitanie' }; Zrzut = 'bat-zip-powitanie'; Sprawdz = { Tak (($script:Tryb -eq 'pobieranie') -and ($script:Zrodlo -like '*MegaRuchacz-instalator\rozpakowany\MegaRuchacz-main')) "tryb $($script:Tryb), zrodlo $($script:Zrodlo)" } }
 )
 '@
   $url = 'file:///' + ($zipPlik -replace '\\', '/')
-  $o = Z-Obserwatorem 'bat-zip' { Uruchom-Bat (Join-Path $sam 'instaluj.bat') (Argumenty-Okna $dom $sc.Plik $Atrapy) @{ MR_ZIP_URL = $url } }
+  $o = Z-Obserwatorem 'bat-zip' { Uruchom-Bat (Join-Path $sam 'Zainstaluj-MegaRuchacza.bat') (Argumenty-Okna $dom $sc.Plik $Atrapy) @{ MR_ZIP_URL = $url } }
   $kon = Czekaj-Na-Koniec $sc.Raport 60
-  Wynik 'instaluj.bat poza repo - pobranie ZIP-a i okno pobierania' (($o.Wynik.Kod -eq 0) -and $kon) "kod $($o.Wynik.Kod), $($o.Wynik.Sekund) s; $($o.Wynik.Wyjscie.Trim())"
-  [void](Ocen-Raport 'instaluj.bat poza repo' $sc ([pscustomobject]@{ Kod = 0; Bledy = '' }))
-  Wynik 'instaluj.bat poza repo - nic nie mignelo' ($o.Obce.Count -eq 0) "widoczne okna nowych procesow: $($o.Okna -join ' || ')"
+  Wynik 'Zainstaluj-MegaRuchacza.bat sam (jeden plik) - pobranie ZIP-a i okno pobierania z powitaniem' (($o.Wynik.Kod -eq 0) -and $kon) "kod $($o.Wynik.Kod), $($o.Wynik.Sekund) s; $($o.Wynik.Wyjscie.Trim())"
+  [void](Ocen-Raport 'Zainstaluj-MegaRuchacza.bat sam' $sc ([pscustomobject]@{ Kod = 0; Bledy = '' }))
+  Wynik 'Zainstaluj-MegaRuchacza.bat sam - nic nie mignelo' ($o.Obce.Count -eq 0) "widoczne okna nowych procesow: $($o.Okna -join ' || ')"
 
   # 3. Prawdziwy ZIP z GitHuba: pobranie i rozpakowanie dzialaja, a brak instalatora w nim
   #    (wersja sprzed wypchniecia P59c) konczy sie glosnym komunikatem, nie cisza.
   # Argumenty testowe tez tutaj: gdyby GitHub mial juz instalator, okno ma stanac poza ekranem i samo sie zamknac.
   $dom = Nowy-Dom 'bat-github'
   $sc = Zapisz-Scenariusz 'bat-github' @'
-$script:TestKroki = @( @{ N = 'okno z ZIP-a z GitHuba'; Czekaj = { $script:Ekran -eq 'folder' } } )
+$script:TestKroki = @( @{ N = 'okno z ZIP-a z GitHuba'; Czekaj = { ($script:Ekran -eq 'folder') -or ($script:Ekran -eq 'powitanie') } } )
 '@
-  $o = Z-Obserwatorem 'bat-github' { Uruchom-Bat (Join-Path $sam 'instaluj.bat') (Argumenty-Okna $dom $sc.Plik $Atrapy) @{} 120 }
+  $o = Z-Obserwatorem 'bat-github' { Uruchom-Bat (Join-Path $sam 'Zainstaluj-MegaRuchacza.bat') (Argumenty-Okna $dom $sc.Plik $Atrapy) @{} 120 }
   $rozp = Join-Path ([System.IO.Path]::GetTempPath()) 'MegaRuchacz-instalator\rozpakowany\MegaRuchacz-main\narzedzia\straznik-zasad.ps1'
   $maInst = Test-Path -LiteralPath (Join-Path ([System.IO.Path]::GetTempPath()) 'MegaRuchacz-instalator\rozpakowany\MegaRuchacz-main\instalator\okno.ps1')
   if ($maInst) { Wynik 'instaluj.bat + ZIP z GitHuba' ($o.Wynik.Kod -eq 0) "GitHub ma juz instalator - okno startowalo (kod $($o.Wynik.Kod))" }
@@ -946,19 +1100,27 @@ $script:TestKroki = @( @{ N = 'okno z ZIP-a z GitHuba'; Czekaj = { $script:Ekran
   # 4. Okno odmawia startu: konsola zostaje z powodem (znacznik ODMOWA).
   $zly = Join-Path $Robocze 'bat-odmowa'
   New-Item -ItemType Directory -Force -Path (Join-Path $zly 'instalator') | Out-Null
-  Copy-Item -LiteralPath (Join-Path $Repo 'instaluj.bat') -Destination $zly -Force
+  Copy-Item -LiteralPath (Join-Path $Repo 'Zainstaluj-MegaRuchacza.bat') -Destination $zly -Force
   Zapisz-Bom (Join-Path $zly 'instalator\okno.ps1') "param([string]`$Znacznik = '')`r`n[System.IO.File]::WriteAllText(`$Znacznik, 'ODMOWA nie ma pliku narzedzia\instalacja\stan.ps1 (próba negatywna)', (New-Object System.Text.UTF8Encoding(`$false)))`r`nexit 3`r`n"
-  $o = Z-Obserwatorem 'bat-odmowa' { Uruchom-Bat (Join-Path $zly 'instaluj.bat') @() @{} 60 }
+  $o = Z-Obserwatorem 'bat-odmowa' { Uruchom-Bat (Join-Path $zly 'Zainstaluj-MegaRuchacza.bat') @() @{} 60 }
   Wynik 'instaluj.bat - odmowa okna zostaje w konsoli' (($o.Wynik.Wyjscie -like '*nie wystartowal*') -and ($o.Wynik.Wyjscie -like '*negatywna)*') -and ($o.Wynik.Sekund -lt 20)) "$($o.Wynik.Sekund) s; $(($o.Wynik.Wyjscie -replace '\s+', ' ').Trim())"
 
   # 5. Okno nie wstaje wcale (bez znacznika): po 30 s konsola uruchamia je jeszcze raz na wierzchu, z bledem.
   $nic = Join-Path $Robocze 'bat-nie-wstaje'
   New-Item -ItemType Directory -Force -Path (Join-Path $nic 'instalator') | Out-Null
-  Copy-Item -LiteralPath (Join-Path $Repo 'instaluj.bat') -Destination $nic -Force
+  Copy-Item -LiteralPath (Join-Path $Repo 'Zainstaluj-MegaRuchacza.bat') -Destination $nic -Force
   Zapisz-Bom (Join-Path $nic 'instalator\okno.ps1') "param([string]`$Znacznik = '')`r`n[Console]::Error.WriteLine('instalator: proba negatywna - okno nie wstaje')`r`nexit 3`r`n"
-  $o = Z-Obserwatorem 'bat-nie-wstaje' { Uruchom-Bat (Join-Path $nic 'instaluj.bat') @() @{} 90 }
+  $o = Z-Obserwatorem 'bat-nie-wstaje' { Uruchom-Bat (Join-Path $nic 'Zainstaluj-MegaRuchacza.bat') @() @{} 90 }
   Wynik 'instaluj.bat - okno, ktore nie wstaje, nie ginie po cichu' (($o.Wynik.Wyjscie -like '*nie pojawilo sie*') -and ($o.Wynik.Wyjscie -like '*okno nie wstaje*')) "$($o.Wynik.Sekund) s; $(($o.Wynik.Wyjscie -replace '\s+', ' ').Trim())"
   Wynik 'instaluj.bat - okno, ktore nie wstaje - nic nie mignelo' ($o.Obce.Count -eq 0) "$($o.Okna -join ' || ')"
+
+  # 6. instaluj.bat (IN1: tylko woła Zainstaluj-MegaRuchacza.bat) sam, bez reszty folderu: nie udaje
+  #    instalacji - mowi, skad wziac jeden plik, i konczy kodem 1 (proba negatywna).
+  $sam2 = Join-Path $Robocze 'sam-instaluj-bat'
+  New-Item -ItemType Directory -Force -Path $sam2 | Out-Null
+  Copy-Item -LiteralPath (Join-Path $Repo 'instaluj.bat') -Destination $sam2 -Force
+  $o = Z-Obserwatorem 'bat-sam-instaluj' { Uruchom-Bat (Join-Path $sam2 'instaluj.bat') @() @{} 30 }
+  Wynik 'instaluj.bat sam - mowi, skad pobrac Zainstaluj-MegaRuchacza.bat, kod 1' (($o.Wynik.Kod -eq 1) -and ($o.Wynik.Wyjscie -like '*releases/download/instalator/Zainstaluj-MegaRuchacza.bat*') -and ($o.Okna.Count -eq 0)) "kod $($o.Wynik.Kod); $(($o.Wynik.Wyjscie -replace '\s+', ' ').Trim())"
 }
 
 # --- podsumowanie --------------------------------------------------------------

@@ -381,7 +381,9 @@ public static class AtrapaGita {
       if (!nazwa.EndsWith("-bez-basha")) { Directory.CreateDirectory(Path.Combine(dir, "bin")); File.Copy(wzor, Path.Combine(dir, "bin\\bash.exe"), true); }
       return 0;
     }
-    if (nazwa == "bash") { Console.WriteLine("GNU bash, version 5.2.37(1)-release (atrapa)"); } else { Console.WriteLine("git version 2.99.0.windows.1 (atrapa)"); }
+    if (nazwa == "bash") { Console.WriteLine("GNU bash, version 5.2.37(1)-release (atrapa)"); }
+    else if (nazwa == "claude") { Console.WriteLine("2.1.99 (Claude Code) (atrapa)"); }
+    else { Console.WriteLine("git version 2.99.0.windows.1 (atrapa)"); }
     return 0;
   }
 }
@@ -486,6 +488,50 @@ function Scenariusz-Zaleznosci {
   $pada = Join-Path $ag "atrapa-instalator-gita-pada.exe"
   $r = Uruchom $z @("-Akcja", "Instaluj", "-Potrzebne", "git", "-BezWinget", "-BezZmianyPath", "-InstalatorGita", $pada, "-KatalogProgramow", (Join-Path $T "programy-pada")) (Bez-Gita $dom "pada")
   Sprawdz "zaleznosci: instalator Git for Windows z kodem bledu = ok:false z kodem w powodzie, bez drugiej proby (proba negatywna)" (($r.Kod -eq 1) -and ($r.W.komunikat -match '^Nie ma Git Bash') -and ($r.W.komunikat -match 'kodem 5') -and ((@($r.W.brakuje) -join ",") -eq "git,bash") -and (@(Wywolania-Instalatora $pada).Count -eq 1)) $r.Tekst
+
+  # Claude Code (IN1): atrapa oficjalnego instalatora (skrypt .ps1 jak claude.ai/install.ps1) kladzie
+  # claude.exe do ~\.local\bin katalogu domowego testu - prawdziwego Claude Code test nie instaluje.
+  # Srodowisko bez claude: PATH systemowy (bez atrap claude.cmd z $Bin), APPDATA testu bez npm.
+  $przedClaude = (Odcisk-Prawdziwy)["path.uzytkownika"]
+  $ac = Join-Path $T "atrapy-claude"
+  New-Item -ItemType Directory -Force -Path $ac | Out-Null
+  Copy-Item -LiteralPath (Join-Path $ag "atrapa-git.exe") -Destination (Join-Path $ac "claude.exe") -Force
+  $instC = Join-Path $ac "atrapa-install.ps1"
+  [System.IO.File]::WriteAllText($instC, @"
+param()
+Add-Content -LiteralPath "`$PSCommandPath.log" -Value ("uruchomiony USERPROFILE=" + `$env:USERPROFILE)
+`$bin = Join-Path `$env:USERPROFILE ".local\bin"
+New-Item -ItemType Directory -Force -Path `$bin | Out-Null
+Copy-Item -LiteralPath "$(Join-Path $ac 'claude.exe')" -Destination (Join-Path `$bin "claude.exe") -Force
+Write-Output "Setting up Claude Code..."
+exit 0
+"@, (New-Object System.Text.UTF8Encoding($false)))
+  $padaC = Join-Path $ac "atrapa-install-pada.ps1"
+  [System.IO.File]::WriteAllText($padaC, @"
+param()
+Add-Content -LiteralPath "`$PSCommandPath.log" -Value "uruchomiony"
+Write-Error "Failed to download binary: The remote name could not be resolved: 'downloads.claude.ai'"
+exit 1
+"@, (New-Object System.Text.UTF8Encoding($false)))
+  $domC = Dom "claude"
+  $r = Uruchom $z @("-Akcja", "Sprawdz", "-Potrzebne", "claude") (Bez-Gita $domC "claude-sprawdz")
+  Sprawdz "zaleznosci: Sprawdz bez Claude Code = ok:false, brakuje claude, bez dokladania basha" (($r.Kod -eq 1) -and ((@($r.W.brakuje) -join ",") -eq "claude") -and (@($r.W.programy).Count -eq 1)) $r.Tekst
+  $r = Uruchom $z @("-Akcja", "Instaluj", "-Potrzebne", "claude", "-Proba") (Bez-Gita $domC "claude-proba")
+  $kr = $r.Kroki -join " "
+  Sprawdz "zaleznosci: -Proba bez Claude Code = plan z oficjalnym instalatorem claude.ai/install.ps1, nic nie zainstalowane" (($r.Kod -eq 0) -and ($kr -match "claude\.ai/install\.ps1") -and ($kr -match "bez administratora") -and -not (Test-Path -LiteralPath (Join-Path $domC ".local\bin\claude.exe"))) $r.Tekst
+  $r = Uruchom $z @("-Akcja", "Instaluj", "-Potrzebne", "claude", "-BezZmianyPath", "-InstalatorClaude", $instC) (Bez-Gita $domC "claude-inst")
+  $kr = $r.Kroki -join " "
+  $cl = @($r.W.programy | Where-Object { $_.nazwa -eq "claude" })
+  $wywC = @(Wywolania-Instalatora $instC)
+  Sprawdz "zaleznosci: brak Claude Code - instalator uruchomiony RAZ, claude.exe w ~\.local\bin, wersja odczytana, ~\.local\bin do PATH (tu tylko procesu)" (($r.Kod -eq 0) -and $r.W.ok -and ($wywC.Count -eq 1) -and ($cl.Count -eq 1) -and $cl[0].zainstalowany_teraz -and ($cl[0].sciezka -eq (Join-Path $domC ".local\bin\claude.exe")) -and ("" + $cl[0].wersja -match "Claude Code") -and ($kr -match "claude: zainstalowany") -and ($kr -match ([regex]::Escape((Join-Path $domC ".local\bin")) + " dopisany tylko dla tego procesu"))) ("wywolania: $($wywC -join ' || ') -- " + $r.Tekst)
+  $r = Uruchom $z @("-Akcja", "Instaluj", "-Potrzebne", "claude", "-BezZmianyPath", "-InstalatorClaude", $instC) (Bez-Gita $domC "claude-drugi")
+  Sprawdz "zaleznosci: Claude Code juz jest = 'wszystko jest', instalator nie rusza drugi raz" (($r.Kod -eq 0) -and ($r.W.komunikat -match "^wszystko jest") -and (@(Wywolania-Instalatora $instC).Count -eq 1)) $r.Tekst
+  $domC2 = Dom "claude-pada"
+  $r = Uruchom $z @("-Akcja", "Instaluj", "-Potrzebne", "claude", "-BezZmianyPath", "-InstalatorClaude", $padaC) (Bez-Gita $domC2 "claude-pada")
+  Sprawdz "zaleznosci: instalator Claude Code z bledem = ok:false 'Nie udalo sie zainstalowac Claude Code', powod (brak internetu) w uwagach (proba negatywna)" (($r.Kod -eq 1) -and ($r.W.ok -eq $false) -and ($r.W.komunikat -match "^Nie udalo sie zainstalowac Claude Code") -and ((@($r.W.brakuje) -join ",") -eq "claude") -and (($r.Uwagi -join " ") -match "brak internetu") -and (@(Wywolania-Instalatora $padaC).Count -eq 1)) $r.Tekst
+  $r = Uruchom $z @("-Akcja", "Instaluj", "-Potrzebne", "claude", "-BezZmianyPath", "-Proxy", "http://127.0.0.1:9") (Bez-Gita $domC2 "claude-bez-sieci")
+  Sprawdz "zaleznosci: Claude Code bez internetu (pobranie oficjalnego instalatora) = ok:false z czytelnym powodem, nic nie uruchomione (proba negatywna)" (($r.Kod -eq 1) -and ((($r.Uwagi -join " ") + $r.W.komunikat) -match "brak internetu|nie odpowiada") -and -not (Test-Path -LiteralPath (Join-Path $domC2 ".local\bin\claude.exe"))) $r.Tekst
+  Sprawdz "zaleznosci: Claude Code - PATH uzytkownika nietkniety (-BezZmianyPath)" ((Odcisk-Prawdziwy)["path.uzytkownika"] -eq $przedClaude)
 
   # brak internetu: serwer posredniczacy, ktorego nie ma (port zamkniety) - tak samo jak brak sieci
   $przed = (Odcisk-Prawdziwy)["path.uzytkownika"]
