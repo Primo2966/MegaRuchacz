@@ -105,7 +105,7 @@ Zaraz po instalacji kopii jeszcze nie ma (robi się raz dziennie od 3:00, pierws
 najbliższej okazji po 3:00) — ALARM „kopia nigdy nie przebiegła” jest wtedy prawdziwy.
 Kopię na żądanie: `P2 '& C:\dev\wiedza-firmy\venv\Scripts\python.exe C:\dev\wiedza-firmy\narzedzia\kopia.py --kat C:\dev\wiedza-firmy'`.
 
-Z biurowego PC: `http://192.168.0.105:8766/mcp` (LAN) albo `http://100.112.108.118:8766/mcp`
+Z biurowego PC: `http://<IP-LAN-Pakowanie2>:8766/mcp` (LAN) albo `http://<IP-Tailscale-Pakowanie2>:8766/mcp`
 (Tailscale), nagłówek `Authorization: Bearer <token>`; bez tokenu ma być 401.
 
 ## 6. Zatrzymanie, restart, odinstalowanie
@@ -124,7 +124,7 @@ Z biurowego PC: `http://192.168.0.105:8766/mcp` (LAN) albo `http://100.112.108.1
   `WIEDZA_FIRMY_PORT` i `LORE_HOME`. `uruchom.py` robi to samo dla poleceń przez SSH, więc
   `osoby`, `tematy`, `importuj` i `model` widzą te same dane co serwer.
 - Ochrona przed DNS rebinding w serwerze włącza się zmienną `WIEDZA_FIRMY_HOSTY`
-  (np. `192.168.0.105,100.112.108.118`). Ustaw ją jako zmienną użytkownika (HKCU) — strażnik
+  (np. `<IP-LAN-Pakowanie2>,<IP-Tailscale-Pakowanie2>`). Ustaw ją jako zmienną użytkownika (HKCU) — strażnik
   ją dociągnie; bez niej serwer nie sprawdza nagłówka Host (token i tak jest wymagany).
 - Dysku Google na Pakowanie2 nie ma (sprawdzone 14.10.2026: tylko C: i napęd D: CD,
   brak GoogleDriveFS). Gdyby doszedł: `-DrugiCelKopii <katalog>` przy instalacji — ale dysk
