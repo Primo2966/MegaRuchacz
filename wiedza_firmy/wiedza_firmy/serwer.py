@@ -26,7 +26,7 @@ from typing import Any
 
 from mcp.server.mcpserver import Context, MCPServer
 
-from . import __version__, sciezki
+from . import __version__, jftools, sciezki
 from .baza import Baza
 from .pliki import log, utf8_na_wyjsciu, zapisz_json
 from .uprawnienia import BRAK, Uprawnienia, ZrodloPlikowe, ZrodloUprawnien
@@ -220,12 +220,16 @@ def _zaladuj_model(wektory: WektoryLore, baza: Baza, stan: StanSerwera) -> None:
 def _zyje(baza: Baza, zrodlo: ZrodloPlikowe, stan: StanSerwera, host: str, port: int) -> None:
     while True:
         try:
-            zapisz_json(sciezki.znacznik_serwera(), {
+            znacznik = {
                 "czas": time.strftime("%Y-%m-%dT%H:%M:%S"), "pid": os.getpid(), "start": stan.start,
                 "adres": f"{host}:{port}{SCIEZKA}", "wersja": __version__, "model": stan.model,
                 "wektory_uzupelnione": stan.wektory_uzupelnione, "baza": baza.statystyka(),
                 "problem_osob": zrodlo.blad,
-            })
+                "prog_trafnosci": getattr(baza.wektoryzator, "prog_trafnosci", None),
+            }
+            if isinstance(zrodlo, jftools.ZrodloJFTools):
+                znacznik["uprawnienia"] = zrodlo.stan()
+            zapisz_json(sciezki.znacznik_serwera(), znacznik)
         except Exception as e:
             log(f"BLAD zapisu znacznika zycia {sciezki.znacznik_serwera()}: {e!r}")
         time.sleep(ZYCIE_S)
@@ -240,16 +244,24 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("--port", type=int, default=PORT_DOMYSLNY)
     a = p.parse_args(argv)
 
-    zrodlo = ZrodloPlikowe(sciezki.plik_osob())
+    try:
+        zrodlo, zrodlo_tematow = jftools.zbuduj_zrodla()
+    except jftools.BladUstawien as e:
+        log(f"BLAD ustawien - serwer nie startuje: {e}")
+        return 2
     wektory = WektoryLore()
+    if wektory.prog_trafnosci is None:
+        log(f"UWAGA: model {wektory.model} nie ma progu trafnosci (wektory.PROGI_TRAFNOSCI) - "
+            "szukaj_wiedzy oddaje najblizsze wpisy bez odciecia szumu")
     baza = Baza(sciezki.plik_bazy(), wektory)
-    wiedza = Wiedza(baza)
+    wiedza = Wiedza(baza, zrodlo_tematow=zrodlo_tematow)
     stan = StanSerwera()
     threading.Thread(target=_zaladuj_model, args=(wektory, baza, stan), name="model", daemon=True).start()
     threading.Thread(target=_zyje, args=(baza, zrodlo, stan, a.host, a.port), name="zyje", daemon=True).start()
     if zrodlo.blad:
         log(f"UWAGA osoby: {zrodlo.blad}")
-    log(f"nasluch http://{a.host}:{a.port}{SCIEZKA}, dane: {sciezki.katalog_danych()}, model: {sciezki.katalog_modeli()}")
+    log(f"nasluch http://{a.host}:{a.port}{SCIEZKA}, dane: {sciezki.katalog_danych()}, model: {sciezki.katalog_modeli()}, "
+        f"uprawnienia: {'JFTools ' + zrodlo.url if isinstance(zrodlo, jftools.ZrodloJFTools) else 'osoby.json'}")
     # dziennik dostepu uvicorna ma tylko sciezke i status - naglowkow (tokenow) nie zapisuje
     uvicorn.run(aplikacja(wiedza, zrodlo, host=a.host), host=a.host, port=a.port, log_level="warning")
     return 0

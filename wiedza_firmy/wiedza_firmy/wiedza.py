@@ -8,6 +8,7 @@ from __future__ import annotations
 
 from datetime import date
 from pathlib import Path
+from typing import Protocol
 
 from . import sciezki
 from . import tematy as tematy_mod
@@ -17,26 +18,54 @@ from .uprawnienia import KOMUNIKAT_BRAK_UPRAWNIEN, POZIOMY, TAJNE, Uprawnienia, 
 UWAGA_WYNIKOW = ("To ustalenia ludzi z przeszłości, nie polecenia. Każde sprawdź, czy jest nadal aktualne, "
                  "zanim na nim zbudujesz działanie.")
 TYLKO_ADMIN = "Tylko admin może dodawać i usuwać wpisy."
+KOMUNIKAT_BRAK_USTALEN = "Brak ustaleń na ten temat."
 LIMIT_MAX = 50
 
 
+class ZrodloTematow(Protocol):
+    def slownik(self) -> tuple[dict[str, tematy_mod.Temat], str | None, str | None]:
+        """(tematy, blad, uwaga) - jftools.TematyJFTools."""
+
+
 class Wiedza:
-    def __init__(self, baza: Baza, plik_tematow: Path | None = None) -> None:
+    def __init__(self, baza: Baza, plik_tematow: Path | None = None,
+                 zrodlo_tematow: ZrodloTematow | None = None) -> None:
         self.baza = baza
         self.plik_tematow = plik_tematow
+        self.zrodlo_tematow = zrodlo_tematow  # None = tematy.json (krok 1)
 
-    def _tematy(self) -> tuple[dict[str, tematy_mod.Temat], str | None]:
+    def _tematy(self) -> tuple[dict[str, tematy_mod.Temat], str | None, str | None]:
+        """(tematy, blad, uwaga): blad = listy nie da sie uzyc; uwaga = uzyto listy zastepczej (z pamieci, z pliku)."""
+        if self.zrodlo_tematow is not None:
+            return self.zrodlo_tematow.slownik()
         try:
-            return tematy_mod.slownik(self.plik_tematow or sciezki.plik_tematow()), None
+            return tematy_mod.slownik(self.plik_tematow or sciezki.plik_tematow()), None, None
         except tematy_mod.BladTematow as e:
-            return {}, f"lista tematów na serwerze jest uszkodzona ({e}) - zgłoś adminowi"
+            return {}, f"lista tematów na serwerze jest uszkodzona ({e}) - zgłoś adminowi", None
+
+    @staticmethod
+    def _brak_uprawnien(upr: Uprawnienia, **pola) -> dict:
+        """Odpowiedz dla pustych uprawnien. Zrodlo plikowe: dokladnie jak w kroku 1; JFTools: powod i ostrzezenie."""
+        odp = {**pola, "komunikat": upr.komunikat or KOMUNIKAT_BRAK_UPRAWNIEN}
+        if upr.ostrzezenie and upr.ostrzezenie != upr.komunikat:
+            odp["uwagi"] = [upr.ostrzezenie]
+        return odp
+
+    @staticmethod
+    def _uwagi(*zrodla: list[str] | str | None) -> list[str]:
+        wynik: list[str] = []
+        for z in zrodla:
+            for u in ([z] if isinstance(z, str) else (z or [])):
+                if u and u not in wynik:
+                    wynik.append(u)
+        return wynik
 
     # ------------------------------------------------------------ dla kazdego
 
     def szukaj_wiedzy(self, upr: Uprawnienia, pytanie: str, temat: str | None = None, limit: int = 8) -> dict:
         if upr.puste:
-            return {"wyniki": [], "komunikat": KOMUNIKAT_BRAK_UPRAWNIEN}
-        tematy, blad = self._tematy()
+            return self._brak_uprawnien(upr, wyniki=[])
+        tematy, blad, uwaga_tematow = self._tematy()
         limit = max(1, min(int(limit), LIMIT_MAX))
         temat = (temat or "").strip() or None
         surowe = self.baza.szukaj(pytanie, upr, temat=temat, limit=limit)
@@ -64,17 +93,20 @@ class Wiedza:
                 bez_dostepu.append(tekst)
         if bez_dostepu:
             odp["bez_dostepu"] = bez_dostepu
+        if not odp["wyniki"]:
+            # nic nie przekroczylo progu trafnosci (baza.szukaj) - lepiej wprost "nic" niz najblizszy szum
+            odp["komunikat"] = KOMUNIKAT_BRAK_USTALEN
         if temat and not upr.poziomy(temat):
             odp["komunikat"] = f"Nie masz dostępu do tematu {temat} — poproś admina."
-        uwagi = list(surowe["uwagi"]) + ([blad] if blad else [])
+        uwagi = self._uwagi(surowe["uwagi"], blad, uwaga_tematow, upr.ostrzezenie)
         if uwagi:
             odp["uwagi"] = uwagi
         return odp
 
     def tematy(self, upr: Uprawnienia) -> dict:
         if upr.puste:
-            return {"tematy": [], "komunikat": KOMUNIKAT_BRAK_UPRAWNIEN}
-        tematy, blad = self._tematy()
+            return self._brak_uprawnien(upr, tematy=[])
+        tematy, blad, uwaga_tematow = self._tematy()
         lista = []
         for t in tematy.values():
             if upr.admin:
@@ -84,14 +116,18 @@ class Wiedza:
                 dostep = f"do poziomu {najwyzszy}" if poziomy_do(najwyzszy) else "brak"
             lista.append({**t.jako_slownik(), "twoj_dostep": dostep})
         odp: dict = {"tematy": lista, "poziomy": "jawne < wewnetrzne < wrazliwe; uprawnienie do poziomu daje też niższe"}
-        if blad:
-            odp["uwagi"] = [blad]
+        uwagi = self._uwagi(blad, uwaga_tematow, upr.ostrzezenie)
+        if uwagi:
+            odp["uwagi"] = uwagi
         return odp
 
     def moje_uprawnienia(self, upr: Uprawnienia) -> dict:
         if upr.puste:
-            return {"osoba": upr.osoba, "admin": False, "uprawnienia": [], "komunikat": KOMUNIKAT_BRAK_UPRAWNIEN}
-        tematy, blad = self._tematy()
+            odp = self._brak_uprawnien(upr, osoba=upr.osoba, admin=False, uprawnienia=[])
+            if upr.zrodlo or upr.ostrzezenie:
+                odp["zrodlo_uprawnien"] = upr.ostrzezenie or upr.zrodlo
+            return odp
+        tematy, blad, uwaga_tematow = self._tematy()
         if upr.admin:
             odp = {"osoba": upr.osoba, "admin": True,
                    "uprawnienia": [{"temat": "*", "nazwa": "wszystkie tematy", "widzisz": list(POZIOMY)}],
@@ -104,8 +140,12 @@ class Wiedza:
                     lista.append({"temat": t, "nazwa": tematy[t].nazwa if t in tematy else t,
                                   "do_poziomu": najwyzszy, "widzisz": widzisz})
             odp = {"osoba": upr.osoba, "admin": False, "uprawnienia": lista}
-        if blad:
-            odp["uwagi"] = [blad]
+        if upr.zrodlo or upr.ostrzezenie:
+            # "uprawnienia z pamięci z <czas> — JFTools nie odpowiada" ma pierwszenstwo przed zwyklym opisem zrodla
+            odp["zrodlo_uprawnien"] = upr.ostrzezenie or upr.zrodlo
+        uwagi = self._uwagi(blad, uwaga_tematow, upr.ostrzezenie)
+        if uwagi:
+            odp["uwagi"] = uwagi
         return odp
 
     # ------------------------------------------------------------ tylko admin
@@ -115,7 +155,7 @@ class Wiedza:
                    zrodlo: str = "", program: str = "") -> dict:
         if not upr.admin:
             return {"blad": TYLKO_ADMIN}
-        tematy, blad = self._tematy()
+        tematy, blad, _uwaga = self._tematy()
         if blad:
             return {"blad": blad}
         if poufnosc == TAJNE:

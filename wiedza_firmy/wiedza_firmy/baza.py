@@ -267,21 +267,46 @@ class Baza:
             f"SELECT w.id FROM wpisy_fts JOIN wpisy w ON w.id = wpisy_fts.rowid "
             f"WHERE wpisy_fts MATCH ? AND {sql} ORDER BY bm25(wpisy_fts) LIMIT ?", [q, *args, ile])]
 
-    def _kanal_wektorow(self, conn: sqlite3.Connection, wektor: np.ndarray | None, warunek: tuple[str, list],
-                        ile: int) -> list[int]:
+    def _podobienstwa(self, conn: sqlite3.Connection, wektor: np.ndarray | None,
+                      warunek: tuple[str, list]) -> tuple[list[int], np.ndarray]:
+        """(id, podobienstwo kosinusowe) pytania do kazdego widocznego wpisu z wektorem (wektory sa znormalizowane)."""
+        pusto = ([], np.zeros(0, dtype=np.float32))
         if wektor is None:
-            return []
+            return pusto
         sql, args = warunek
         wiersze = conn.execute(f"SELECT v.wpis_id, v.emb FROM wektory v JOIN wpisy w ON w.id = v.wpis_id WHERE {sql}",
                                args).fetchall()
         if not wiersze:
-            return []
+            return pusto
         macierz = np.vstack([np.frombuffer(e, dtype=np.float32) for _, e in wiersze])
         if macierz.shape[1] != wektor.shape[0]:
-            return []
-        podobienstwo = macierz @ wektor
-        kolejnosc = np.argsort(-podobienstwo)[:ile]
-        return [wiersze[i][0] for i in kolejnosc]
+            return pusto
+        return [w[0] for w in wiersze], macierz @ wektor
+
+    def _prog(self) -> float | None:
+        """Prog trafnosci modelu (wektory.PROGI_TRAFNOSCI); None = model bez progu, wyniki bez odciecia."""
+        return getattr(self.wektoryzator, "prog_trafnosci", None)
+
+    def _ranking(self, conn: sqlite3.Connection, pytanie: str, wektor: np.ndarray | None,
+                 warunek: tuple[str, list], limit: int) -> tuple[list[int], set[int]]:
+        """(kolejnosc RRF obu kanalow po progu trafnosci, id trafione slowami).
+
+        Prog dziala na podobienstwie kosinusowym, w OBU kanalach: wpis ponizej progu odpada takze wtedy,
+        gdy pasuje slowem - zapytanie pelnotekstowe to "slowo1 OR slowo2 ...", wiec samo "jak" albo "do"
+        lapie polowe bazy. Wpis bez wektora (dodany bez modelu) nie ma czym byc oceniony - zostaje, jesli
+        trafil slowami. Bez wektora pytania (model niedostepny) - bez progu, jak w kroku 1.
+        """
+        from lore.search import _rrf
+
+        slowami = self._kanal_fts(conn, pytanie, warunek, NA_KANAL)
+        ids, podobienstwo = self._podobienstwa(conn, wektor, warunek)
+        znaczeniem = [ids[i] for i in np.argsort(-podobienstwo)[:NA_KANAL]]
+        prog = self._prog() if wektor is not None else None
+        if prog is not None:
+            sim = dict(zip(ids, podobienstwo.tolist()))
+            slowami = [i for i in slowami if i not in sim or sim[i] >= prog]
+            znaczeniem = [i for i in znaczeniem if sim[i] >= prog]
+        return _rrf([slowami, znaczeniem])[:limit], set(slowami)
 
     def _wektor_pytania(self, conn: sqlite3.Connection, pytanie: str, uwagi: list[str]) -> np.ndarray | None:
         if self.wektoryzator is None:
@@ -305,17 +330,15 @@ class Baza:
         `ukryte` to tylko temat i poziom (nigdy tresc) wpisow spoza uprawnien, ktore pasuja do pytania
         slowami (kanal pelnotekstowy) i bylyby w pierwszych `limit` przy pelnym dostepie - z nich
         powstaje podpowiedz "poproś admina". Osoba bez zadnych uprawnien nie dostaje nawet tego.
+        Oba kanaly ida przez prog trafnosci (`_ranking`): nic ponad progiem = pusta lista.
         """
-        from lore.search import _rrf
-
         uwagi: list[str] = []
         widoczne = warunek_uprawnien(upr, temat)
         with closing(self.polacz()) as conn:
             wektor = self._wektor_pytania(conn, pytanie, uwagi)
             wyniki: list[dict] = []
             if widoczne is not None:
-                kolejnosc = _rrf([self._kanal_fts(conn, pytanie, widoczne, NA_KANAL),
-                                  self._kanal_wektorow(conn, wektor, widoczne, NA_KANAL)])[:limit]
+                kolejnosc, _ = self._ranking(conn, pytanie, wektor, widoczne, limit)
                 for wid in kolejnosc:
                     r = conn.execute("SELECT id, tresc, temat, poufnosc, autor, data_ustalenia, zrodlo, program "
                                      "FROM wpisy WHERE id = ?", (wid,)).fetchone()
@@ -323,10 +346,9 @@ class Baza:
                                             "zrodlo", "program"), r)))
             ukryte: list[tuple[str, str]] = []
             if not upr.admin and not upr.puste:
-                wszystkie = _wszystkie_zywe(temat)
-                slowami = self._kanal_fts(conn, pytanie, wszystkie, NA_KANAL)
-                pelny = _rrf([slowami, self._kanal_wektorow(conn, wektor, wszystkie, NA_KANAL)])[:limit]
-                trafione = set(slowami)
+                # ten sam ranking i prog co wyzej, tylko przy pelnym dostepie: podpowiedz "poproś admina"
+                # pada tylko dla wpisu, ktory bylby wynikiem - nie dla szumu ponizej progu
+                pelny, trafione = self._ranking(conn, pytanie, wektor, _wszystkie_zywe(temat), limit)
                 for wid in pelny:
                     if wid not in trafione:
                         continue

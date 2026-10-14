@@ -7,7 +7,8 @@ Zasada: domyslnie NIC. Nieznany token, osoba bez wpisu, uszkodzony plik osob, up
 z nieznanym poziomem - kazde z nich konczy sie brakiem dostepu, nigdy dostepem "na wszelki wypadek".
 
 Zrodlo uprawnien to protokol `ZrodloUprawnien`. Krok 1: `ZrodloPlikowe` (osoby.json na serwerze).
-Krok 2 (JFTools) podstawia wlasna klase z tymi dwiema metodami - wyszukiwanie i serwer sie nie zmieniaja.
+Krok 2: `jftools.ZrodloJFTools` - tokeny i admin nadal z osoby.json, tematy i poziomy z panelu JFTools
+(wlaczane zmienna WIEDZA_FIRMY_UPRAWNIENIA=jftools; bez niej dziala tylko plik).
 """
 
 from __future__ import annotations
@@ -48,6 +49,11 @@ class Uprawnienia:
     osoba: str | None
     admin: bool = False
     tematy: Mapping[str, str] = field(default_factory=dict)  # temat_id -> najwyzszy poziom
+    # Tylko zrodlo JFTools (plik zostawia None): dlaczego uprawnien brak (zamiast KOMUNIKAT_BRAK_UPRAWNIEN),
+    # skad pochodza i ostrzezenie, gdy sa z pamieci albo JFTools nie odpowiada - nigdy po cichu.
+    komunikat: str | None = None
+    zrodlo: str | None = None
+    ostrzezenie: str | None = None
 
     @property
     def puste(self) -> bool:
@@ -159,5 +165,11 @@ def _wczytaj_osoby(sciezka: Path, brak: bool) -> tuple[dict[str, dict], str | No
                 uprawnienia[str(temat)] = poziom
             else:
                 problemy.append(f"{osoba}: {temat}={poziom!r} to nie poziom ({', '.join(POZIOMY)}) - pomijam")
-        osoby[str(osoba)] = {"token_sha256": wpis["token_sha256"], "admin": admin, "uprawnienia": uprawnienia}
+        komputer = wpis.get("komputer")
+        if komputer is not None and (isinstance(komputer, bool) or not isinstance(komputer, (str, int))
+                                     or not str(komputer).strip()):
+            problemy.append(f"{osoba}: komputer={komputer!r} to nie id komputera z JFTools - pomijam")
+            komputer = None
+        osoby[str(osoba)] = {"token_sha256": wpis["token_sha256"], "admin": admin, "uprawnienia": uprawnienia,
+                             "komputer": None if komputer is None else str(komputer).strip()}
     return osoby, ("; ".join(problemy) or None)

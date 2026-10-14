@@ -9,12 +9,17 @@ CLI:
     python -m wiedza_firmy.osoby nadaj <osoba> <temat> <poziom>
     python -m wiedza_firmy.osoby odbierz <osoba> <temat>
     python -m wiedza_firmy.osoby usun <osoba>
+    python -m wiedza_firmy.osoby ustaw-komputer <osoba> <id>   komputer z JFTools (krok 2; "-" zdejmuje)
     python -m wiedza_firmy.osoby lista
+
+Krok 2 (WIEDZA_FIRMY_UPRAWNIENIA=jftools): tematy i poziomy osoby bierze serwer z JFTools dla jej
+komputera; `nadaj`/`odbierz` dzialaja wtedy tylko na plik i nie maja wplywu. Admin zostaje w tym pliku.
 """
 
 from __future__ import annotations
 
 import argparse
+import re
 import secrets
 import sys
 from pathlib import Path
@@ -100,6 +105,23 @@ def usun(osoba: str, sciezka: Path | None = None) -> None:
     zapisz_json(sciezka, dane)
 
 
+def ustaw_komputer(osoba: str, komputer: str | None, sciezka: Path | None = None) -> None:
+    """Id komputera z JFTools dla osoby; None zdejmuje przypisanie."""
+    sciezka = sciezka or sciezki.plik_osob()
+    if komputer is not None:
+        komputer = komputer.strip()
+        if not re.match(r"^[1-9][0-9]{0,9}$", komputer):
+            raise BladOsob(f"id komputera {komputer!r} - numer komputera z JFTools (np. 12)")
+    dane = _wczytaj(sciezka)
+    if osoba not in dane:
+        raise BladOsob(f"nie ma osoby {osoba} - najpierw: python -m wiedza_firmy.osoby nowa {osoba}")
+    if komputer is None:
+        dane[osoba].pop("komputer", None)
+    else:
+        dane[osoba]["komputer"] = komputer
+    zapisz_json(sciezka, dane)
+
+
 def main(argv: list[str] | None = None) -> int:
     utf8_na_wyjsciu()
     p = argparse.ArgumentParser(prog="python -m wiedza_firmy.osoby")
@@ -118,6 +140,9 @@ def main(argv: list[str] | None = None) -> int:
     o.add_argument("temat")
     u = sub.add_parser("usun", help="usun osobe (jej token przestaje dzialac)")
     u.add_argument("osoba")
+    k = sub.add_parser("ustaw-komputer", help="komputer z JFTools, z ktorego osoba bierze uprawnienia (krok 2)")
+    k.add_argument("osoba")
+    k.add_argument("komputer", help='id komputera w JFTools; "-" zdejmuje przypisanie')
     sub.add_parser("lista", help="osoby i uprawnienia (bez tokenow)")
     a = p.parse_args(argv)
 
@@ -138,13 +163,18 @@ def main(argv: list[str] | None = None) -> int:
         elif a.polecenie == "usun":
             usun(a.osoba)
             print(f"osoba {a.osoba} usunieta")
+        elif a.polecenie == "ustaw-komputer":
+            komputer = None if a.komputer.strip() == "-" else a.komputer
+            ustaw_komputer(a.osoba, komputer)
+            print(f"{a.osoba}: komputer {komputer}" if komputer else f"{a.osoba}: bez komputera")
         else:
             dane = _wczytaj(sciezki.plik_osob())
             if not dane:
                 print(f"brak osob ({sciezki.plik_osob()})")
             for osoba, wpis in dane.items():
                 upr = ", ".join(f"{k}: {v}" for k, v in (wpis.get("uprawnienia") or {}).items()) or "brak uprawnien"
-                print(f"{osoba}{' [admin]' if wpis.get('admin') is True else ''} - {upr}")
+                komputer = f" [komputer {wpis['komputer']}]" if wpis.get("komputer") else ""
+                print(f"{osoba}{' [admin]' if wpis.get('admin') is True else ''}{komputer} - {upr}")
     except (BladOsob, tematy.BladTematow, OSError, ValueError) as e:
         print(f"ODMOWA: {e}", file=sys.stderr)
         return 1
