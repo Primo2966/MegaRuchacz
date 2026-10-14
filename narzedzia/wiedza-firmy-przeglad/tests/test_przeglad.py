@@ -216,7 +216,7 @@ def test_pelny_przebieg_plik_tematu_w_formacie_importu(srodowisko):
     # 14.10: Primo nie podejmuje decyzji - wpis oznaczony przez model jako niepewny i tak idzie do importu
     assert any("Gosi" in t for t in tresci)
     decyzje = tekst.split("# === Do decyzji Primo ===", 1)[1]
-    assert "Gosi" in decyzje and "powód:" in decyzje
+    assert "Gosi" not in decyzje  # nic nie czeka na decyzje Primo
     assert (srodowisko.wyniki / "temat-b.md").exists()
     zrodla = (srodowisko.wyniki / "zrodla" / "temat-a.tsv").read_text(encoding="utf-8")
     assert "C--dev-alfa #1" in zrodla and "C--dev-beta #10" in zrodla
