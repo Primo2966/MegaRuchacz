@@ -805,7 +805,7 @@ def sprawdz_konsolidacje(dane: dict, wejscie: list[Wpis], istniejace: list[str])
             for z in w.zrodla:
                 if z not in zrodla:
                     zrodla.append(z)
-        niepewne = bool(s.get("niepewne")) or all(w.niepewne for w in zr)
+        niepewne = False  # Primo nie podejmuje decyzji (14.10): scalanie rozstrzyga samo, nic nie idzie do "Do decyzji"
         powod = " ".join(str(s.get("powod") or "").split())
         if niepewne and not powod:
             powod = "; ".join(sorted({w.powod for w in zr if w.powod})) or "oznaczone przez model jako niepewne"

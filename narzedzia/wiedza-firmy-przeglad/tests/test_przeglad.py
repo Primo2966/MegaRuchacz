@@ -213,8 +213,8 @@ def test_pelny_przebieg_plik_tematu_w_formacie_importu(srodowisko):
     assert tresci.count("Etykiety drukujemy w skali 180 procent.") == 1
     etyk = next(w for w in wpisy if w.tresc.startswith("Etykiety"))
     assert etyk.data_ustalenia == "2026-09-03" and etyk.poufnosc == "jawne" and etyk.autor == "Primo"
-    # niepewne: w sekcji "Do decyzji", zakomentowane - import go nie bierze
-    assert not any("Gosi" in t for t in tresci)
+    # 14.10: Primo nie podejmuje decyzji - wpis oznaczony przez model jako niepewny i tak idzie do importu
+    assert any("Gosi" in t for t in tresci)
     decyzje = tekst.split("# === Do decyzji Primo ===", 1)[1]
     assert "Gosi" in decyzje and "powód:" in decyzje
     assert (srodowisko.wyniki / "temat-b.md").exists()
