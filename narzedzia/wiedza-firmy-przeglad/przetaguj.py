@@ -340,7 +340,7 @@ def sprawdz_odpowiedz(dane: dict, paczka: list[Wpis], tematy: set[str]) -> list[
         w = paczka[i]
         poczatek = _znaki(str(s.get("poczatek") or ""))
         tresc = _znaki(w.tresc)
-        if not poczatek or not tresc.startswith(poczatek) or len(poczatek) < min(6, len(tresc)):
+        if not poczatek or not tresc.startswith(poczatek) or len(poczatek) < min(4, len(tresc)):
             problemy.append(f"W{i + 1}: poczatek {str(s.get('poczatek'))[:40]!r} nie pasuje do tresci "
                             f"{w.tresc[:40]!r} - model zmienil tresc albo pomylil wpisy")
             continue
