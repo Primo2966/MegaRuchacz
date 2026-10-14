@@ -104,7 +104,10 @@ function Uloz-Przelacznik {
   $szer = $(if ($skil) { 530 } else { 426 })
   $script:BSkille.Visible = $skil
   $p.Size = New-Object System.Drawing.Size($szer, 38)
-  $p.Location = New-Object System.Drawing.Point(($script:SzerOkna - $script:Margines - $szer), 10)
+  # przy prawej krawedzi naglowka - takze w trakcie ciagniecia okna (Resize naglowka)
+  $szerN = $script:SzerOkna
+  if ($script:Naglowek -and -not $script:Naglowek.IsDisposed -and $script:Naglowek.Parent) { $szerN = [math]::Max($script:SzerOknaDomyslna, $script:Naglowek.ClientSize.Width) }
+  $p.Location = New-Object System.Drawing.Point(($szerN - $script:Margines - $szer), 10)
 }
 
 # Pasek przyciskow: cztery kolumny (aktualizacja, czytanie rozmow, zmiana instalacji,
@@ -113,12 +116,13 @@ function Uloz-Przelacznik {
 # kolumna, inaczej opis wyjechalby poza swoja kolumne albo zawijal sie bez potrzeby.
 # Procenty: przy 1240 px okna kolumny maja 403/403/189/189 px - opisy mieszcza sie
 # w dwoch liniach (zmierzone TextRenderer), czyli pasek nie jest wyzszy niz dotad.
-function Uloz-Pasek([bool]$zCyklem) {
+# $wymus - po zmianie rozmiaru okna: te same procenty, nowe szerokosci opisow.
+function Uloz-Pasek([bool]$zCyklem, [bool]$wymus = $false) {
   $p = $script:Pasek
   if (-not $p -or $p.IsDisposed -or ($p.ColumnStyles.Count -lt 4)) { return }
   $proc = $(if ($zCyklem) { @(34, 34, 16, 16) } else { @(50, 0, 25, 25) })
   # (po procentach, nie po Visible - Visible przycisku w niepokazanym jeszcze oknie to $false)
-  if (($p.ColumnStyles[0].Width -eq $proc[0]) -and ($p.ColumnStyles[1].Width -eq $proc[1])) { return }
+  if ((-not $wymus) -and ($p.ColumnStyles[0].Width -eq $proc[0]) -and ($p.ColumnStyles[1].Width -eq $proc[1])) { return }
   $p.SuspendLayout()
   try {
     $wnetrze = $script:SzerOkna - 2 * $script:Margines
@@ -371,11 +375,156 @@ function Pilnuj-Czytania {
   }
 }
 
+# --- rozmiar okna (2026-10-14) -------------------------------------------------
+# Uzytkownik: okno ma sie dac rozciagac i maksymalizowac, zeby wygodniej sie czytalo.
+# Zakladki, lista warstw, pola podgladu i pasek przyciskow rosna same (Dock), a karty
+# Przegladu, Szczegolow i ekranu ladowania sa skladane na szerokosc SzerKarty - po zmianie
+# rozmiaru Dopasuj-Do-Rozmiaru ustawia nowe szerokosci i uklada widoczna zakladke od nowa
+# (schowane - przy wejsciu do nich). Rozmiar zapamietany per uzytkownik w
+# ~\.claude\mr\okno-nadzorcy.json, obok innych plikow stanu (instalacja.json, aktualizacja.json).
+
+function Plik-Rozmiaru-Okna {
+  if ($script:NadzProba) { return $null }   # tryb probny nic nie zapisuje - i nie czyta rozmiaru prawdziwego okna
+  return (Join-Path $script:NadzDom ".claude\mr\okno-nadzorcy.json")
+}
+
+# Zapamietany rozmiar albo $null (brak pliku, tryb probny, plik nieczytelny, okno poza
+# ekranami). Nieczytelny plik i polozenie poza ekranem ida do dziennika - okno staje wtedy
+# w rozmiarze domyslnym, a nie wywraca sie ani nie laduje tam, gdzie go nie widac.
+function Wczytaj-Rozmiar-Okna($min) {
+  $plik = Plik-Rozmiaru-Okna
+  if (-not $plik -or -not (Test-Path -LiteralPath $plik -PathType Leaf)) { return $null }
+  $l = @{}
+  try {
+    $j = [System.IO.File]::ReadAllText($plik) | ConvertFrom-Json
+    if (-not $j) { throw "plik jest pusty" }
+    foreach ($k in @("x", "y", "szer", "wys")) {
+      $v = 0
+      if (-not [int]::TryParse("$($j.$k)", [ref]$v)) { throw "pole '$k' nie jest liczba calkowita: '$($j.$k)'" }
+      $l[$k] = $v
+    }
+    if ($j.max -isnot [bool]) { throw "pole 'max' nie jest prawda/falszem: '$($j.max)'" }
+    if (($l.szer -le 0) -or ($l.wys -le 0) -or ($l.szer -gt 30000) -or ($l.wys -gt 30000)) { throw "rozmiar bez sensu: $($l.szer) x $($l.wys)" }
+  } catch {
+    Notuj "okno: zapamietany rozmiar okna nieczytelny ($plik): $($_.Exception.Message) - okno w rozmiarze domyslnym"
+    return $null
+  }
+  # mniejszego niz domyslny nie bedzie (MinimumSize) - nie ma czego pilnowac
+  $g = New-Object System.Drawing.Rectangle($l.x, $l.y, [math]::Max($l.szer, $min.Width), [math]::Max($l.wys, $min.Height))
+  # Na ekranie = pasek tytulu (gorne 32 px) widac na ktoryms ekranie na co najmniej 200 px
+  # szerokosci i 24 px wysokosci - za niego okno da sie zlapac. Okno przyklejone do krawedzi
+  # wystaje poza nia o niewidzialna ramke (~7 px), dlatego nie wymagamy calego okna w ekranie.
+  $tytul = New-Object System.Drawing.Rectangle($g.X, $g.Y, $g.Width, 32)
+  $widac = $false
+  foreach ($ekran in [System.Windows.Forms.Screen]::AllScreens) {
+    $cz = [System.Drawing.Rectangle]::Intersect($ekran.WorkingArea, $tytul)
+    if (($cz.Width -ge [math]::Min(200, $g.Width)) -and ($cz.Height -ge 24)) { $widac = $true; break }
+  }
+  if (-not $widac) {
+    Notuj "okno: zapamietane polozenie okna ($($g.X), $($g.Y), $($g.Width) x $($g.Height)) jest poza ekranami (np. odlaczony monitor) - okno w rozmiarze domyslnym na srodku ekranu"
+    return $null
+  }
+  return [pscustomobject]@{ Granice = $g; Max = [bool]$j.max }
+}
+
+# Przy zamykaniu okna. Zmaksymalizowane zapisuje rozmiar sprzed maksymalizacji
+# (RestoreBounds) i znacznik max - po otwarciu jest znow zmaksymalizowane, a przywrocone
+# wraca do swojego rozmiaru. Blad zapisu leci do wolajacego (Zanotuj-Wywrotke).
+function Zapisz-Rozmiar-Okna($f) {
+  $plik = Plik-Rozmiaru-Okna
+  if (-not $plik) { Notuj "okno: tryb probny - rozmiaru okna nie zapisuje"; return }
+  $stan = $f.WindowState
+  $g = $(if ($stan -eq [System.Windows.Forms.FormWindowState]::Normal) { $f.Bounds } else { $f.RestoreBounds })
+  $max = $(if ($stan -eq [System.Windows.Forms.FormWindowState]::Minimized) { [bool]$script:OknoMax } else { $stan -eq [System.Windows.Forms.FormWindowState]::Maximized })
+  $kat = Split-Path -Parent $plik
+  if (-not (Test-Path -LiteralPath $kat -PathType Container)) { New-Item -ItemType Directory -Force -Path $kat | Out-Null }
+  $json = '{"x":' + $g.X + ',"y":' + $g.Y + ',"szer":' + $g.Width + ',"wys":' + $g.Height + ',"max":' + $(if ($max) { 'true' } else { 'false' }) +
+          ',"zapisano":"' + (Get-Date).ToString("yyyy-MM-ddTHH:mm:ss") + '"}'
+  [System.IO.File]::WriteAllText($plik, $json, (New-Object System.Text.UTF8Encoding($false)))
+}
+
+# Po zmianie rozmiaru (zegar z Resize) i w tescie. Gdy szerokosc wnetrza sie nie zmienila,
+# nie robi nic - zmiana samej wysokosci zalatwia Dock (zakladki przewijaja sie w miejscu).
+function Dopasuj-Do-Rozmiaru([bool]$wymus = $false) {
+  $f = $script:Okno
+  if (-not $f -or $f.IsDisposed) { return }
+  if ($f.WindowState -eq [System.Windows.Forms.FormWindowState]::Minimized) { return }
+  $stara = $script:SzerOkna
+  Ustaw-Szerokosci $f.ClientSize.Width
+  if ((-not $wymus) -and ($script:SzerOkna -eq $stara)) { return }
+  $f.SuspendLayout()
+  try {
+    if ($script:LPodtytul) { $script:LPodtytul.MaximumSize = New-Object System.Drawing.Size(($script:SzerOkna - 2 * $script:Margines), 0) }
+    Uloz-Przelacznik
+    if ($script:Pasek -and ($script:Pasek.ColumnStyles.Count -ge 4)) { Uloz-Pasek ($script:Pasek.ColumnStyles[1].Width -gt 0) $true }
+    $szerT = New-Object System.Drawing.Size($script:SzerTresc, 0)
+    $szerK = New-Object System.Drawing.Size($script:SzerKarty, 0)
+    foreach ($c in @($script:Root, $script:PanelProblemy, $script:ListaSzczegolow, $script:LadowanieRoot)) { if ($c -and -not $c.IsDisposed) { $c.MinimumSize = $szerT } }
+    foreach ($c in @($script:KartaWerdykt, $script:KartaStart, $script:KartaKoszt, $script:PanelStan, $script:LadowanieKarta)) { if ($c -and -not $c.IsDisposed) { $c.MinimumSize = $szerK } }
+    # ekran ladowania: karta ma wnetrze o 56 px wezsze (Zbuduj-Ladowanie)
+    $szerL = $script:SzerKarty - 56
+    if ($script:LLadowanieOpis) { $script:LLadowanieOpis.MaximumSize = New-Object System.Drawing.Size($szerL, 0) }
+    if ($script:LLadowanieStopka) { $script:LLadowanieStopka.MaximumSize = New-Object System.Drawing.Size($szerL, 0) }
+    if ($script:PasekLadowania) { $script:PasekLadowania.Width = $szerL }
+    if ($script:ListaKrokow) { $script:ListaKrokow.MinimumSize = New-Object System.Drawing.Size($szerL, 0) }
+    # Warstwy i Skille: lewa karta w tych samych procentach tresci co przy budowie
+    if ($script:KartaListaWarstw) {
+      $script:KartaListaWarstw.Width = [int]($script:SzerTresc * 0.48)
+      if ($script:ListaWarstw -and ($script:ListaWarstw.Columns.Count -ge 3)) { $script:ListaWarstw.Columns[0].Width = $script:KartaListaWarstw.Width - 100 - 116 - 26 }
+    }
+    if ($script:KartaListaSkilli) { $script:KartaListaSkilli.Width = [int]($script:SzerTresc * 0.56) }
+    $szerZdania = New-Object System.Drawing.Size(($script:SzerTresc - 164 - 4), 0)
+    if ($script:LBezpSkilli) { $script:LBezpSkilli.MaximumSize = $szerZdania }
+    if ($script:LSkille) { $script:LSkille.MaximumSize = $szerZdania }
+  } finally { $f.ResumeLayout($true) }
+
+  # Schowane zakladki nie biora udzialu w ukladzie okna (Visible = $false) i zostalyby
+  # w starym rozmiarze - a Warstwy i Skille mierza swoje wnetrze przy budowie. Dostaja
+  # granice widocznej zakladki, jak po pokazaniu.
+  $wzor = $null
+  foreach ($p in @($script:WidokLadowania, (Panel-Widoku $script:Widok))) { if ($p -and -not $p.IsDisposed -and $p.Visible) { $wzor = $p; break } }
+  if ($wzor) {
+    foreach ($p in @($script:WidokPrzeglad, $script:WidokSzczegoly, $script:WidokWarstwy, $script:WidokSkille, $script:WidokLadowania)) {
+      if ($p -and -not $p.IsDisposed -and -not $p.Visible -and ($p.Bounds -ne $wzor.Bounds)) { $p.Bounds = $wzor.Bounds }
+    }
+  }
+  if ($script:LSkille -and $script:LSkille.Parent -and $script:LSkille.Parent.Parent) {
+    $script:LSkille.Parent.Parent.Height = [math]::Max(48, $script:LSkille.Bottom + 12)
+  }
+
+  if ($script:Ladowanie) { Uloz-Wiersze-Krokow; Odmaluj-Kroki }
+  if ($script:LWarstwy -and -not $script:LWarstwy.IsDisposed) { Dopasuj-Etykiete $script:LWarstwy }
+  if ($script:ListaWarstw -and ($script:ListaWarstw.SelectedItems.Count -gt 0)) { Pokaz-Info-Warstwy $script:ListaWarstw.SelectedItems[0].Tag }
+  # lista skilli (wiersze na szerokosc listy) - sama lista, wybrany skill i wynik operacji zostaja
+  $narysowana = $script:ListaSkilli -and ($script:ListaSkilli.Controls.Count -gt 0) -and ($script:ListaSkilli.Controls[0].Controls.Count -gt 0)
+  if ($narysowana -and -not $script:SkilleOperacjaOd) {
+    Napelnij-Skille $true
+    if ($script:SkillWybrany) { $para = Znajdz-Skill $script:SkillWybrany; if ($para) { Pokaz-Info-Skilla $para } }
+  }
+  # Przeglad i Szczegoly - karty od nowa: widoczna zakladka teraz, schowana przy wejsciu.
+  $script:DoOdmalowania["przeglad"] = $true
+  $script:DoOdmalowania["szczegoly"] = $true
+  if ($script:Ladowanie) { return }   # karty zlozy Sprawdz-Ladowanie, gdy liczenie sie skonczy
+  if ($script:Widok -eq "przeglad") { Wyrenderuj-Widok "przeglad" }
+  elseif (($script:Widok -eq "szczegoly") -and -not $script:SzczegolyZajete) {
+    $przew = 0
+    try { $przew = -$script:WidokSzczegoly.AutoScrollPosition.Y } catch { Zanotuj-Wywrotke "odczyt przewiniecia szczegolow (rozmiar)" $_ }
+    Wyrenderuj-Widok "szczegoly"
+    if ($przew -gt 0) {
+      try { $script:WidokSzczegoly.AutoScrollPosition = New-Object System.Drawing.Point(0, $przew) }
+      catch { Zanotuj-Wywrotke "przywrocenie przewiniecia szczegolow (rozmiar)" $_ }
+    }
+  }
+}
+
 # --- budowa okna -------------------------------------------------------------
 
 function Pokaz-Okno {
   if ($script:Okno -and -not $script:Okno.IsDisposed) {
-    $script:Okno.WindowState = [System.Windows.Forms.FormWindowState]::Normal
+    # zminimalizowane wraca do tego, jakie bylo (zmaksymalizowane zostaje zmaksymalizowane)
+    if ($script:Okno.WindowState -eq [System.Windows.Forms.FormWindowState]::Minimized) {
+      $script:Okno.WindowState = $(if ($script:OknoMax) { [System.Windows.Forms.FormWindowState]::Maximized } else { [System.Windows.Forms.FormWindowState]::Normal })
+    }
     $script:Okno.Show()
     Wymus-Pokazanie $script:Okno
     Wejdz-Do-Widoku $script:Widok
@@ -388,24 +537,37 @@ function Pokaz-Okno {
 
   $f = New-Object System.Windows.Forms.Form
   $f.Text = "MegaRuchacz"
-  $f.FormBorderStyle = [System.Windows.Forms.FormBorderStyle]::FixedSingle
-  $f.MaximizeBox = $false
-  # STALY ROZMIAR OD PIERWSZEJ CHWILI (P21): wysokosc z ekranu, raz - okno nie
-  # rosnie ani nie skacze w miare dochodzenia danych. Polozenie: tam, gdzie
-  # uzytkownik zostawil okno ostatnio (gdy nadal miesci sie na ktoryms ekranie),
-  # inaczej srodek ekranu pod kursorem.
+  # 2026-10-14: okno rozciaga sie myszka i maksymalizuje (uzytkownik: wygodniej sie czyta).
+  $f.FormBorderStyle = [System.Windows.Forms.FormBorderStyle]::Sizable
+  $f.MaximizeBox = $true
+  # ROZMIAR OD PIERWSZEJ CHWILI (P21): wysokosc z ekranu, raz - okno nie rosnie ani
+  # nie skacze w miare dochodzenia danych. Ten domyslny rozmiar jest zarazem
+  # najmniejszym (MinimumSize) - mniej niz tyle i karty musialyby sie sciskac.
+  # Rozmiar, polozenie i maksymalizacja z poprzedniego zamkniecia - gdy plik jest
+  # czytelny, a okno nadal miesci sie na ktoryms ekranie (Wczytaj-Rozmiar-Okna);
+  # inaczej rozmiar domyslny na srodku ekranu pod kursorem.
   $obszar = Obszar-Okna
+  Ustaw-Szerokosci $script:SzerOknaDomyslna
   $f.ClientSize = New-Object System.Drawing.Size($script:SzerOkna, 720)
   $f.Height = [int][math]::Min($WYS_OKNA_MAX, $obszar.Height - 40)
+  $f.MinimumSize = $f.Size
   $f.StartPosition = [System.Windows.Forms.FormStartPosition]::Manual
-  $poz = New-Object System.Drawing.Point(($obszar.Left + [int](($obszar.Width - $f.Width) / 2)), ($obszar.Top + [int](($obszar.Height - $f.Height) / 2)))
-  if ($script:PolozenieOkna) {
-    $prost = New-Object System.Drawing.Rectangle($script:PolozenieOkna, $f.Size)
-    foreach ($ekran in [System.Windows.Forms.Screen]::AllScreens) {
-      if ($ekran.WorkingArea.Contains($prost)) { $poz = $script:PolozenieOkna; break }
+  $f.Location = New-Object System.Drawing.Point(($obszar.Left + [int](($obszar.Width - $f.Width) / 2)), ($obszar.Top + [int](($obszar.Height - $f.Height) / 2)))
+  $zap = $null
+  try { $zap = Wczytaj-Rozmiar-Okna $f.MinimumSize } catch { Zanotuj-Wywrotke "odczyt zapamietanego rozmiaru okna" $_ }
+  $script:OknoMax = $false
+  if ($zap) {
+    $f.Bounds = $zap.Granice
+    if ($zap.Max) {
+      $script:OknoMax = $true
+      $f.WindowState = [System.Windows.Forms.FormWindowState]::Maximized
+      # zmaksymalizowane okno ma wnetrze na cala szerokosc obszaru roboczego - tresc od razu
+      # w tej szerokosci, bez przebudowy zaraz po pokazaniu
+      Ustaw-Szerokosci ([System.Windows.Forms.Screen]::FromRectangle($zap.Granice).WorkingArea.Width)
+    } else {
+      Ustaw-Szerokosci $f.ClientSize.Width
     }
   }
-  $f.Location = $poz
   $f.BackColor = $script:TloOkna
   $f.Font = $script:CzZwykla
   try { $f.Icon = Ikona-Nadzorcy } catch { Zanotuj-Wywrotke "ikona okna" $_ }
@@ -560,6 +722,7 @@ function Pokaz-Okno {
   $kartaLista = New-Object System.Windows.Forms.Panel
   $kartaLista.Dock = [System.Windows.Forms.DockStyle]::Left
   $kartaLista.Width = [int]($script:SzerTresc * 0.48)
+  $script:KartaListaWarstw = $kartaLista
   $kartaLista.BackColor = $script:TloKarty
   $kartaLista.Padding = New-Object System.Windows.Forms.Padding(1)
   $kartaLista.Add_Paint({ param($nadawca, $e) Obrysuj $nadawca $e })
@@ -659,6 +822,7 @@ function Pokaz-Okno {
   $szerZdania = $script:SzerTresc - 164 - 4
   $lBezp = Etykieta-Zawijana $ZDANIE_BEZPIECZENSTWA $script:CzMala $script:KolSzary $szerZdania
   $lBezp.Margin = New-Object System.Windows.Forms.Padding(0, 0, 0, 4)
+  $script:LBezpSkilli = $lBezp
   $script:LSkille = Etykieta-Zawijana "Zbieram listę skilli..." $script:CzZwyklaGruba $script:KolTekst $szerZdania
   $script:LSkille.UseMnemonic = $false
   $lewaS.Controls.Add($lBezp)
@@ -675,6 +839,7 @@ function Pokaz-Okno {
   $kartaListaS = New-Object System.Windows.Forms.Panel
   $kartaListaS.Dock = [System.Windows.Forms.DockStyle]::Left
   $kartaListaS.Width = [int]($script:SzerTresc * 0.56)
+  $script:KartaListaSkilli = $kartaListaS
   $kartaListaS.BackColor = $script:TloKarty
   $kartaListaS.Padding = New-Object System.Windows.Forms.Padding(1)
   $kartaListaS.Add_Paint({ param($nadawca, $e) Obrysuj $nadawca $e })
@@ -755,15 +920,39 @@ function Pokaz-Okno {
   $f.Controls.Add($script:WidokPrzeglad)
   $f.Controls.Add($script:Naglowek)
   $f.Controls.Add($script:Pasek)
-  # Polozenie zapamietane do nastepnego otwarcia - okno staje tam, gdzie je zostawiono.
+  # Rozmiar, polozenie i maksymalizacja zapamietane do nastepnego otwarcia (takze po
+  # restarcie nadzorcy) - okno staje tak, jak je zostawiono.
   $f.Add_FormClosing({
-    try { if ($script:Okno.WindowState -eq [System.Windows.Forms.FormWindowState]::Normal) { $script:PolozenieOkna = $script:Okno.Location } }
-    catch { Zanotuj-Wywrotke "zapamietanie polozenia okna" $_ }
+    try { Zapisz-Rozmiar-Okna $script:Okno } catch { Zanotuj-Wywrotke "zapamietanie rozmiaru okna" $_ }
   })
+  # Zmiana rozmiaru: zakladki, listy i pola rosna same (Dock), a karty skladane na
+  # szerokosc (SzerKarty) ukladaja sie od nowa - raz, gdy mysz stanie (zegar), a nie
+  # przy kazdym pikselu ciagniecia. Maksymalizacja i przywrocenie ida ta sama droga.
+  $f.Add_Resize({
+    try {
+      if (-not $script:Okno -or $script:Okno.IsDisposed) { return }
+      if ($script:Okno.WindowState -eq [System.Windows.Forms.FormWindowState]::Minimized) { return }
+      $script:OknoMax = ($script:Okno.WindowState -eq [System.Windows.Forms.FormWindowState]::Maximized)
+      if (-not $script:ZegarRozmiaru) {
+        $script:ZegarRozmiaru = New-Object System.Windows.Forms.Timer
+        $script:ZegarRozmiaru.Interval = 200
+        $script:ZegarRozmiaru.Add_Tick({
+          $script:ZegarRozmiaru.Stop()
+          try { Dopasuj-Do-Rozmiaru } catch { Zanotuj-Wywrotke "dopasowanie okna do rozmiaru" $_ }
+        })
+      }
+      $script:ZegarRozmiaru.Stop()
+      $script:ZegarRozmiaru.Start()
+    } catch { Zanotuj-Wywrotke "zmiana rozmiaru okna" $_ }
+  })
+  $script:Naglowek.Add_Resize({ try { Uloz-Przelacznik } catch { Zanotuj-Wywrotke "przelacznik zakladek po zmianie rozmiaru" $_ } })
   $f.Add_FormClosed({
     # Dane (DaneWarstw, DaneSkilli, Rozbicie...) zostaja - to nie kontrolki. Drugie
     # otwarcie tego samego dnia pokazuje je od razu (P21); swiezosc pilnuja kawalki.
     $script:Ladowanie = $null; $script:WidokLadowania = $null; $script:ListaKrokow = $null; $script:WierszeKrokow = @{}
+    if ($script:ZegarRozmiaru) { $script:ZegarRozmiaru.Stop() }
+    $script:LadowanieRoot = $null; $script:LadowanieKarta = $null
+    $script:KartaListaWarstw = $null; $script:KartaListaSkilli = $null; $script:LBezpSkilli = $null
     $script:PasekLadowania = $null; $script:LLadowanieTytul = $null; $script:LLadowanieOpis = $null
     $script:LLadowanieStopka = $null; $script:BPokazTeraz = $null
     foreach ($w in @($script:DoOdmalowania.Keys)) { $script:DoOdmalowania[$w] = $true }

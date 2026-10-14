@@ -159,7 +159,17 @@ $script:BPokazTeraz    = $null
 $script:TykKrokow      = 0
 $script:DoOdmalowania  = @{ przeglad = $true; szczegoly = $true; warstwy = $true; skille = $true }
 $script:SkillePoOperacji = $null
-$script:PolozenieOkna  = $null   # gdzie uzytkownik zostawil okno - nastepne otwarcie stanie tam samo
+# Rozmiar okna (2026-10-14): okno rozciaga sie i maksymalizuje, a rozmiar, polozenie
+# i maksymalizacja przezywaja zamkniecie w ~\.claude\mr\okno-nadzorcy.json (okno.ps1,
+# Wczytaj-Rozmiar-Okna / Zapisz-Rozmiar-Okna). Szerokosc tresci idzie za oknem: po zmianie
+# rozmiaru (zegar - przy ciagnieciu raz, po zatrzymaniu myszy) Dopasuj-Do-Rozmiaru.
+$script:ZegarRozmiaru  = $null
+$script:OknoMax        = $false  # ostatni stan inny niz zminimalizowane - przywrocenie z paska wraca do niego
+$script:KartaListaWarstw = $null # lewa karta Warstw i Skilli - szerokosc w procentach tresci
+$script:KartaListaSkilli = $null
+$script:LBezpSkilli    = $null   # zdanie o bezpieczenstwie nad lista skilli
+$script:LadowanieRoot  = $null   # kolumna i karta ekranu ladowania
+$script:LadowanieKarta = $null
 $script:PrzydzialPoPokazaniu = $false   # w trakcie budowy okna kroki tylko staja w kolejce (P21)
 
 # --- wyglad ------------------------------------------------------------------
@@ -219,8 +229,19 @@ $script:SzerOkna    = [int][math]::Max(900, [math]::Min(1240, $script:ObszarEkra
 $script:Margines    = 28
 $script:SzerTresc   = $script:SzerOkna - 2 * $script:Margines - 20
 $script:SzerKarty   = $script:SzerTresc
+# Od 2026-10-14 to szerokosc DOMYSLNA i zarazem najmniejsza: okno da sie rozciagnac
+# i zmaksymalizowac, a SzerOkna/SzerTresc/SzerKarty ida wtedy za wnetrzem okna
+# (Ustaw-Szerokosci). Wezej niz domyslnie nie da sie zejsc (MinimumSize w okno.ps1).
+$script:SzerOknaDomyslna = $script:SzerOkna
 $script:Odstep      = 16
 $script:SzerEtykiety = 220   # lewa kolumna w karcie stanu i w szczegolach
+
+# Szerokosci tresci z szerokosci wnetrza okna - nigdy ponizej domyslnej.
+function Ustaw-Szerokosci([int]$wnetrzeOkna) {
+  $script:SzerOkna  = [int][math]::Max($script:SzerOknaDomyslna, $wnetrzeOkna)
+  $script:SzerTresc = $script:SzerOkna - 2 * $script:Margines - 20
+  $script:SzerKarty = $script:SzerTresc
+}
 
 # ZLAPANE 24.09.2026 NA PROBIE Z PRAWDZIWYM OKNEM, i to jest dokladnie ten rodzaj
 # usterki, dla ktorego istnieje zasada "cisza jest zakazana": proces startowany

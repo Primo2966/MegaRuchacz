@@ -54,6 +54,9 @@ function Zbuduj-Ladowanie {
   })
   foreach ($c in @($script:LLadowanieTytul, $script:LLadowanieOpis, $script:PasekLadowania, $script:ListaKrokow, $script:LLadowanieStopka, $script:BPokazTeraz)) { $karta.Controls.Add($c) }
   $root.Controls.Add($karta)
+  # szerokosc idzie za oknem (Dopasuj-Do-Rozmiaru w okno.ps1)
+  $script:LadowanieRoot = $root
+  $script:LadowanieKarta = $karta
   $p.Controls.Add($root)
   return $p
 }
@@ -96,12 +99,9 @@ function Wiersz-Kroku([string]$id, [int]$szer) {
 function Pokaz-Ladowanie([string]$widok, $ids, $kroki) {
   if (-not $script:WidokLadowania -or $script:WidokLadowania.IsDisposed) { return }
   $script:Ladowanie = [pscustomobject]@{ Widok = $widok; Kawalki = @($ids); Kroki = $kroki; Od = [datetime]::Now; BladOd = $null; Od_Razu = $false }
-  $szer = $script:SzerKarty - 56
   $script:WidokLadowania.SuspendLayout()
   try {
-    Wyczysc-Panel $script:ListaKrokow
-    $script:WierszeKrokow = @{}
-    foreach ($id in $ids) { $script:ListaKrokow.Controls.Add((Wiersz-Kroku $id $szer)) }
+    Uloz-Wiersze-Krokow
     if ($widok -eq "przeglad") {
       if ((-not $script:DaneCzas) -or ($script:DaneCzas.Date -ne [datetime]::Today) -or (-not $script:Start)) { $o = "Pierwsze otwarcie dziś - liczę wszystko od nowa. Zwykle trwa to kilka sekund." }
       else { $o = "Części liczb nie ma jeszcze z dzisiaj - liczę je teraz. Zwykle trwa to kilka sekund." }
@@ -114,6 +114,17 @@ function Pokaz-Ladowanie([string]$widok, $ids, $kroki) {
     $script:WidokLadowania.Visible = $true
   } finally { $script:WidokLadowania.ResumeLayout($true) }
   Odmaluj-Podtytul
+}
+
+# Wiersze krokow od nowa w biezacej szerokosci karty - przy pokazaniu ekranu i po
+# zmianie rozmiaru okna (Dopasuj-Do-Rozmiaru); stan krokow pokazuje Odmaluj-Kroki.
+function Uloz-Wiersze-Krokow {
+  $l = $script:Ladowanie
+  if (-not $l -or -not $script:ListaKrokow -or $script:ListaKrokow.IsDisposed) { return }
+  $szer = $script:SzerKarty - 56
+  Wyczysc-Panel $script:ListaKrokow
+  $script:WierszeKrokow = @{}
+  foreach ($id in $l.Kawalki) { $script:ListaKrokow.Controls.Add((Wiersz-Kroku $id $szer)) }
 }
 
 function Ukryj-Ladowanie {
