@@ -3,7 +3,8 @@
 Czyta stdin jak prawdziwy claude, oddaje koperte `--output-format json` z structured_output.
 Paczka: kazda wypowiedz z "USTALENIE: <tresc>" daje jedno ustalenie (temat z "TEMAT=<id>",
 poufnosc z "POZIOM=<poziom>"); "SEKRET" daje ustalenie z haslem (do proby negatywnej).
-Konsolidacja: wpisy E o tej samej tresci sklejone w jeden.
+Konsolidacja: wpisy E o tej samej tresci sklejone w jeden. Tematy dodatkowe (schemat z "dodatkowe",
+przebieg --format json): odpowiada atrapa_przetaguj.py ("TAG=a,b" w tresci).
 Sterowanie srodowiskiem: ATRAPA_LOG (katalog - jeden pusty plik na kazde wywolanie),
 ATRAPA_PADA_NA (tekst - gdy jest w materiale, atrapa konczy sie bledem), ATRAPA_POZIOM_KONS
 (wymuszony poziom w odpowiedzi konsolidacji), ATRAPA_SMIECI=1 (odpowiedz, ktora nie jest JSON-em).
@@ -18,8 +19,13 @@ import uuid
 sys.stdout.reconfigure(encoding="utf-8")
 sys.stdin.reconfigure(encoding="utf-8")
 argv = sys.argv[1:]
-wejscie = sys.stdin.read()
 schemat = argv[argv.index("--json-schema") + 1]
+if '"dodatkowe"' in schemat:  # tematy dodatkowe w przebiegu --format json - odpowiada atrapa przetaguj
+    import runpy
+
+    runpy.run_path(os.path.join(os.path.dirname(os.path.abspath(__file__)), "atrapa_przetaguj.py"), run_name="__main__")
+    sys.exit(0)
+wejscie = sys.stdin.read()
 assert "-p" in argv and argv[argv.index("--model") + 1] == "sonnet", argv
 assert "--no-session-persistence" in argv and "--safe-mode" in argv, argv
 material = wejscie.split("## Materiał\n", 1)[-1]
@@ -40,7 +46,7 @@ if os.environ.get("ATRAPA_SMIECI"):
 
 if not konsolidacja:
     ustalenia = []
-    for m in re.finditer(r"^\[#(\d+) (\d{4}-\d{2}-\d{2}) [\d:]+ (?:Primo|AI)\] (.*)$", material, re.M):
+    for m in re.finditer(r"^\[#(\d+) (\d{4}-\d{2}-\d{2}) [\d:]+ (?:Primo|Osoba|AI)\] (.*)$", material, re.M):
         cid, data, tekst = int(m.group(1)), m.group(2), m.group(3)
         temat = (re.search(r"TEMAT=(\S+)", tekst) or [None, "temat-a"])[1]
         poziom = (re.search(r"POZIOM=(\S+)", tekst) or [None, "wewnetrzne"])[1]

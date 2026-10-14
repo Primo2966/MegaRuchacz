@@ -22,6 +22,16 @@ Uruchomienie (z katalogu dowolnego):
         [--na-sucho] [--proba PROJ1,PROJ2] [--rownolegle 4] [--limit-paczek N] [--mimo-dziur]
 
 Niczego nie wysyla na serwer wiedzy. Nie zmienia niczego w lore\\ - tylko importuje.
+
+Profil klient (--profil klient): ten sam przeglad na komputerze dowolnego pracownika przy pierwszym
+podlaczeniu do jfwiedza. Wszystko pod <home> = %WIEDZA_FIRMY_KLIENT_HOME% (domyslnie
+~\\.claude\\mr\\wiedza-firmy): tematy i zasady poufnosci z <home>\\tematy-cache.json (odpowiedz
+GET /klient/tematy), stan i dziennik kosztow w <home>\\przeglad, baza = domyslna baza Lore tej osoby.
+Po konsolidacji w tym samym przebiegu tematy dodatkowe (logika przetaguj.py), a wynik (--format json)
+idzie atomowo do <home>\\kolejka\\przeglad-<czas>.json w formacie wpisow POST /klient/wpisy, bez
+autora (autora ustawia serwer). Znacznik <home>\\znaczniki\\przeglad.txt (czas|ok albo blad|opis) na
+starcie, po kazdej paczce i na koncu; <home>\\przeglad\\stan.json z liczbami paczek. Domyslnie
+--rownolegle 2 (koszt na komputerze pracownika).
 """
 
 from __future__ import annotations
@@ -80,6 +90,13 @@ MAX_WIADOMOSC, GLOWA, OGON = 6000, 4000, 1500
 MAX_KONSOLIDACJA = 40_000
 MAX_RUND = 5
 ROWNOLEGLE = 4
+# Profil klient: przeglad na komputerze pracownika, za jego tokeny - polowa rownoleglosci Primo.
+KLIENT_HOME_ZMIENNA = "WIEDZA_FIRMY_KLIENT_HOME"
+ROWNOLEGLE_KLIENT = 2
+OSOBA_KLIENT = "Osoba"  # naglowek tur czlowieka w materiale klienta (u Primo: "Primo")
+PROGRAM = "claude-code"
+FORMAT_KOLEJKI = "wiedza-firmy-kolejka/1"
+POLA_KOLEJKI = ("klucz", "tresc", "temat", "tematy_dodatkowe", "poufnosc", "data", "zrodlo", "program")
 LIMIT_CZASU_PACZKA_S = 900
 LIMIT_CZASU_KONSOLIDACJA_S = 1200
 POZIOMY = ("jawne", "wewnetrzne", "wrazliwe")
@@ -168,6 +185,33 @@ Zrób z tego czystą listę do zatwierdzenia przez Primo:
 To jest automat: odpowiedź leci prosto do pliku. Nie zadawaj pytań i nie sięgaj po narzędzia. Jeśli nie zostaje nic, zwróć pustą listę."""
 
 ISTNIEJACE_NOTA = """ Na końcu materiału są też wpisy S<numer>, które JUŻ SĄ na serwerze wiedzy firmy w tym temacie — ich nie powtarzaj."""
+
+
+def zamien(tekst: str, zamiany: list[tuple[str, str]]) -> str:
+    """Zamiany doslowne; fraza, ktorej nie ma (prompt Primo zmieniony), to blad, nie cicha pomylka."""
+    for stare, nowe in zamiany:
+        if stare not in tekst:
+            raise AssertionError(f"prompt klienta: nie ma frazy {stare[:60]!r} - popraw zamiany razem z promptem")
+        tekst = tekst.replace(stare, nowe)
+    return tekst
+
+
+# Profil klient: ta sama tresc, tylko bez Primo - historia nalezy do dowolnego pracownika.
+PROMPT_PACZKI_KLIENT = zamien(PROMPT_PACZKI, [
+    ("historii rozmów Primo — właściciela firmy handlu internetowego — z asystentem AI",
+     "historii rozmów pracownika firmy handlu internetowego (dalej: ta osoba) z asystentem AI"),
+    ('gdzie kto to "Primo" albo "AI"', f'gdzie kto to "{OSOBA_KLIENT}" (ta osoba) albo "AI"'),
+    ("gdy Primo ją przyjął", "gdy ta osoba ją przyjęła"),
+    ("słowa Primo mają pierwszeństwo", "słowa tej osoby mają pierwszeństwo"),
+    ("- Primo NIE podejmuje żadnych decyzji o wpisach - rozstrzygasz sam.",
+     "- Nikt nie zatwierdza wpisów ręcznie - rozstrzygasz sam."),
+    ("uprzejmości.", "uprzejmości, prywatne sprawy tej osoby niezwiązane z pracą."),
+])
+PROMPT_KONSOLIDACJI_KLIENT = zamien(PROMPT_KONSOLIDACJI, [
+    ("z wielu rozmów Primo (właściciela firmy) z AI", "z wielu rozmów pracownika firmy (dalej: ta osoba) z AI"),
+    ("czystą listę do zatwierdzenia przez Primo", "czystą listę do bazy wiedzy firmy"),
+    ("7. Primo NIE podejmuje żadnych decyzji - rozstrzygasz sam", "7. Nikt nie zatwierdza wpisów ręcznie - rozstrzygasz sam"),
+])
 
 _DATA = re.compile(r"^\d{4}-\d{2}-\d{2}$")
 # Wartosc po "haslo:" / "haslo do panelu: ..." / "token=" itd. Lore.masking lapie klucze z nazwa
@@ -315,14 +359,14 @@ class Paczka:
         return f"{self.projekt} #{self.chunk_ids[0]}..#{self.chunk_ids[-1]}"
 
 
-def _linia(w: Wiadomosc) -> str:
-    return f"[#{w.chunk_id} {ts_to_local(w.ts)} {TURY[w.kto]}] {w.tekst}"
+def _linia(w: Wiadomosc, osoba: str = TURY["user"]) -> str:
+    return f"[#{w.chunk_id} {ts_to_local(w.ts)} {osoba if w.kto == 'user' else TURY[w.kto]}] {w.tekst}"
 
 
-def paczki(wiadomosci: list[Wiadomosc], limit: int = MAX_PACZKA) -> list[Paczka]:
+def paczki(wiadomosci: list[Wiadomosc], limit: int = MAX_PACZKA, osoba: str = TURY["user"]) -> list[Paczka]:
     """Paczki w obrebie projektu; rozmowy po kolei wedlug ich pierwszej wypowiedzi, w rozmowie po
     kolei. Rozmowa nie jest rwana na sile - paczka konczy sie dopiero, gdy nastepna wypowiedz
-    by sie nie zmiescila."""
+    by sie nie zmiescila. `osoba` - naglowek tur czlowieka (u klienta nie "Primo")."""
     po_projekcie: dict[str, dict[str, list[Wiadomosc]]] = {}
     for w in wiadomosci:
         po_projekcie.setdefault(w.projekt, {}).setdefault(w.sesja, []).append(w)
@@ -351,11 +395,11 @@ def paczki(wiadomosci: list[Wiadomosc], limit: int = MAX_PACZKA) -> list[Paczka]
             naglowek = f"=== rozmowa {sesja[:8]} ==="
             pierwsza = True
             for w in sesje[sesja]:
-                kawalki = ([naglowek] if pierwsza else []) + [_linia(w)]
+                kawalki = ([naglowek] if pierwsza else []) + [_linia(w, osoba)]
                 dlugosc = sum(len(k) + 2 for k in kawalki)
                 if biezace and sum(len(b) + 2 for b in biezace) + dlugosc > limit:
                     zamknij()
-                    kawalki = [naglowek + " (ciąg dalszy)" if not pierwsza else naglowek, _linia(w)]
+                    kawalki = [naglowek + " (ciąg dalszy)" if not pierwsza else naglowek, _linia(w, osoba)]
                 biezace.extend(kawalki)
                 if w.chunk_id not in ids:
                     ids.append(w.chunk_id)
@@ -383,6 +427,23 @@ def wyciag_zasad(sciezka: Path) -> str:
     return tekst[:m.start()].strip()
 
 
+def wczytaj_cache_tematow(sciezka: Path) -> tuple[list[dict], str, str]:
+    """(tematy, zasady, wersja) z tematy-cache.json - zapisanej odpowiedzi GET /klient/tematy
+    `{tematy:[...], zasady:"<tekst>", wersja}`. Temat to obiekt z 'id' (jak w tematy.json serwera)
+    albo samo id. Bez zasad poufnosci przegladu nie ma - model nie wiedzialby, co jest wrazliwe."""
+    dane = json.loads(sciezka.read_text(encoding="utf-8-sig"))
+    if not isinstance(dane, dict):
+        raise ValueError(f"{sciezka}: oczekiwany obiekt {{tematy, zasady, wersja}}")
+    surowe = dane.get("tematy")
+    tematy = [{"id": t} if isinstance(t, str) else t for t in surowe] if isinstance(surowe, list) else surowe
+    if not isinstance(tematy, list) or not tematy or not all(isinstance(t, dict) and t.get("id") for t in tematy):
+        raise ValueError(f"{sciezka}: 'tematy' to nie niepusta lista tematow z polem 'id'")
+    zasady = dane.get("zasady")
+    if not isinstance(zasady, str) or not zasady.strip():
+        raise ValueError(f"{sciezka}: brak 'zasady' (reguly poufnosci z serwera) - bez nich przeglad nie rusza")
+    return tematy, zasady.strip(), str(dane.get("wersja") or "")
+
+
 def opis_tematow(tematy: list[dict]) -> str:
     linie = []
     for t in tematy:
@@ -393,8 +454,8 @@ def opis_tematow(tematy: list[dict]) -> str:
     return "\n".join(linie)
 
 
-def instrukcja_paczki(tematy: list[dict], zasady: str) -> str:
-    return (f"{PROMPT_PACZKI}\n\n## Tematy (obowiązuje ta lista id, nie numeracja z reguł niżej)\n"
+def instrukcja_paczki(tematy: list[dict], zasady: str, klient: bool = False) -> str:
+    return (f"{PROMPT_PACZKI_KLIENT if klient else PROMPT_PACZKI}\n\n## Tematy (obowiązuje ta lista id, nie numeracja z reguł niżej)\n"
             f"{opis_tematow(tematy)}\n\n## Reguły poufności ustalone z właścicielem\n{zasady}\n\n"
             f"## Materiał\n")
 
@@ -826,10 +887,10 @@ class WynikTematu:
 
 
 def konsoliduj_temat(temat: dict, wpisy: list[Wpis], istniejace: list[str], stan: Stan, koszt: Koszt,
-                     zasady: str, limit_s: int, wykonawca: cf.Executor) -> WynikTematu:
+                     zasady: str, limit_s: int, wykonawca: cf.Executor, klient: bool = False) -> WynikTematu:
     wynik = WynikTematu(temat["id"], wejscie=len(wpisy))
     nota = ISTNIEJACE_NOTA if istniejace else ""
-    instrukcja = (PROMPT_KONSOLIDACJI.format(nazwa=temat.get("nazwa", temat["id"]), opis=temat.get("opis", ""),
+    instrukcja = ((PROMPT_KONSOLIDACJI_KLIENT if klient else PROMPT_KONSOLIDACJI).format(nazwa=temat.get("nazwa", temat["id"]), opis=temat.get("opis", ""),
                                              istniejace=nota)
                   + f"\n\n## Reguły poufności ustalone z właścicielem\n{zasady}\n\n## Materiał\n")
     budzet = max(10_000, MAX_KONSOLIDACJA - sum(len(t) + 8 for t in istniejace))
@@ -967,6 +1028,159 @@ def sprawdz_format(pliki: list[Path], tematy_json: Path) -> list[str]:
     return problemy
 
 
+# ---------------------------------------------------------------- tematy dodatkowe i kolejka (--format json)
+
+@dataclass
+class WynikTagow:
+    wpisy: list = field(default_factory=list)  # [(temat, [dodatkowe], Wpis)] - tylko gdy komplet
+    wszystkie: int = 0
+    do_zrobienia: int = 0
+    paczki: int = 0
+    nieudane: list = field(default_factory=list)  # [(opis, blad)]
+    bez_decyzji: int = 0
+    przeniesione: int = 0
+    zle_stany: list = field(default_factory=list)
+    przerwano: bool = False
+
+    def komplet(self) -> bool:
+        return not (self.nieudane or self.bez_decyzji or self.przerwano)
+
+
+def otaguj(wyniki_tematow: list[WynikTematu], tematy: list[dict], stan: Stan, koszt: Koszt, rownolegle: int,
+           limit_s: int, klient: bool) -> WynikTagow:
+    """Tematy dodatkowe od razu w tym samym przebiegu - ta sama logika, prompt, kontrola odpowiedzi
+    i stan (wznawialny) co przetaguj.py, tylko na wpisach z konsolidacji zamiast na plikach .md."""
+    import przetaguj as T
+
+    instr, schem = T.instrukcja(tematy, klient=klient), T.schemat(tematy)
+    sol = hashlib.sha1(f"{T.WERSJA}\n{instr}\n{schem}".encode("utf-8")).hexdigest()[:12]
+    ids = {t["id"] for t in tematy}
+    pary: list[tuple] = []  # (wpis przetaguj, wpis konsolidacji)
+    for wt in sorted(wyniki_tematow, key=lambda w: w.temat):
+        for x in wt.wpisy:
+            tw = T.Wpis("przeglad", len(pary) + 1, wt.temat, x.data, x.poufnosc, x.poufnosc, x.tresc, [], ("", "", ""))
+            tw.klucz = T.klucz_wpisu(sol, tw)
+            pary.append((tw, x))
+    wynik = WynikTagow(wszystkie=len(pary))
+    gotowe, _ = T.wczytaj_decyzje(stan)
+    do_zrobienia, widziane = [], set()
+    for tw, _x in pary:
+        if tw.klucz not in gotowe and tw.klucz not in widziane:
+            widziane.add(tw.klucz)
+            do_zrobienia.append(tw)
+    paczki_tagow = [do_zrobienia[i:i + T.PACZKA] for i in range(0, len(do_zrobienia), T.PACZKA)]
+    wynik.do_zrobienia, wynik.paczki = len(do_zrobienia), len(paczki_tagow)
+    for f in (stan.katalog / "bledy").glob("*.json") if (stan.katalog / "bledy").exists() else []:
+        f.unlink()  # bledy liczone od nowa w kazdym przebiegu - stare nie udaja biezacych
+    wykonawca = cf.ThreadPoolExecutor(max_workers=rownolegle)
+    try:
+        przyszle = {}
+        for n, pz in enumerate(paczki_tagow, 1):
+            klucz = hashlib.sha1(f"{sol}\n{T.material(pz)}".encode("utf-8")).hexdigest()[:16]
+            opis = f"tematy dodatkowe, paczka {n}/{len(paczki_tagow)} ({len(pz)} wpisow)"
+            przyszle[wykonawca.submit(T.przerob_paczke, pz, klucz, instr, schem, ids, stan, koszt, limit_s,
+                                      opis)] = (klucz, opis)
+        for n, f in enumerate(cf.as_completed(przyszle), 1):
+            klucz, opis = przyszle[f]
+            try:
+                ok, info = f.result()
+            except Exception as e:  # nieprzewidziany blad - tez widoczny
+                ok, info = False, f"{type(e).__name__}: {e}"
+                stan.zapisz_blad(klucz, {"opis": opis, "blad": info, "kiedy": datetime.now().isoformat(timespec="seconds")})
+            if not ok:
+                wynik.nieudane.append((opis, info))
+            print(f"[{n}/{len(paczki_tagow)}] {'ok  ' if ok else 'BLAD'} {opis}: {info}", file=sys.stderr)
+    except KeyboardInterrupt:
+        wynik.przerwano = True
+        wykonawca.shutdown(wait=False, cancel_futures=True)
+    else:
+        wykonawca.shutdown(wait=True)
+    gotowe, wynik.zle_stany = T.wczytaj_decyzje(stan)
+    wynik.bez_decyzji = sum(1 for tw, _x in pary if tw.klucz not in gotowe)
+    if wynik.komplet():
+        for tw, x in pary:
+            d = gotowe[tw.klucz]
+            wynik.przeniesione += d.temat != tw.temat
+            wynik.wpisy.append((d.temat, list(d.dodatkowe), x))
+    return wynik
+
+
+def klucz_kolejki(tresc: str, temat: str) -> str:
+    """Klucz wpisu w kolejce i na serwerze: hash tresci (bez roznic w bialych znakach) i tematu."""
+    return hashlib.sha256(f"{temat}\n{' '.join(tresc.split())}".encode("utf-8")).hexdigest()
+
+
+def wpisy_kolejki(otagowane: list[tuple], zrodlo: str) -> list[dict]:
+    """Wpisy w formacie POST /klient/wpisy - BEZ autora (autora ustawia serwer z wlasciciela komputera)."""
+    out = []
+    for temat, dodatkowe, w in otagowane:
+        tresc = " ".join(w.tresc.split())
+        out.append({"klucz": klucz_kolejki(tresc, temat), "tresc": tresc, "temat": temat,
+                    "tematy_dodatkowe": [t for t in dodatkowe if t != temat], "poufnosc": w.poufnosc,
+                    "data": w.data, "zrodlo": zrodlo, "program": PROGRAM})
+    return out
+
+
+def sprawdz_kolejke(wpisy: list[dict], tematy: set[str]) -> list[str]:
+    """Kazdy wpis jeszcze raz przed zapisem: dokladnie pola z umowy (zadnego autora), klucz zgodny z trescia
+    i tematem, tematy z listy, poziom, data, brak sekretu. Pusta lista = mozna zapisac."""
+    problemy = []
+    for i, w in enumerate(wpisy, 1):
+        if not isinstance(w, dict) or tuple(sorted(w)) != tuple(sorted(POLA_KOLEJKI)):
+            problemy.append(f"wpis {i}: pola {sorted(w) if isinstance(w, dict) else type(w).__name__} zamiast {list(POLA_KOLEJKI)}")
+            continue
+        tresc = w["tresc"] if isinstance(w["tresc"], str) else ""
+        if len(tresc) < facts.MIN_FACT_CHARS:
+            problemy.append(f"wpis {i}: pusta albo za krotka tresc")
+        if w["klucz"] != klucz_kolejki(tresc, str(w["temat"])):
+            problemy.append(f"wpis {i}: klucz nie zgadza sie z trescia i tematem")
+        dod = w["tematy_dodatkowe"]
+        if w["temat"] not in tematy or not isinstance(dod, list) or any(t not in tematy or t == w["temat"] for t in dod) \
+                or len(set(dod)) != len(dod):
+            problemy.append(f"wpis {i}: tematy {w['temat']!r} +{dod!r} spoza listy albo zdublowane")
+        if w["poufnosc"] not in POZIOMY:
+            problemy.append(f"wpis {i}: poziom {w['poufnosc']!r}")
+        if not _poprawna_data(str(w["data"])):
+            problemy.append(f"wpis {i}: data {w['data']!r}")
+        if sekret(tresc):
+            problemy.append(f"wpis {i}: {sekret(tresc)}")
+    return problemy
+
+
+def zapisz_kolejke(katalog: Path, wpisy: list[dict], wersja_tematow: str) -> Path:
+    """Atomowo (plik .tmp + os.replace) - wysylka nigdy nie zobaczy polowy pliku. Po zapisie plik
+    jest czytany z powrotem i porownany; roznica to wyjatek, nie cichy kadlubek."""
+    katalog.mkdir(parents=True, exist_ok=True)
+    czas = datetime.now()
+    sciezka = katalog / f"przeglad-{czas:%Y%m%d-%H%M%S}.json"
+    n = 1
+    while sciezka.exists():
+        n += 1
+        sciezka = katalog / f"przeglad-{czas:%Y%m%d-%H%M%S}-{n}.json"
+    dane = {"format": FORMAT_KOLEJKI, "rodzaj": "przeglad", "utworzono": czas.isoformat(timespec="seconds"),
+            "wersja_tematow": wersja_tematow, "wpisy": wpisy}
+    _zapisz_json(sciezka, dane)
+    if _czytaj_json(sciezka) != dane:
+        raise OSError(f"{sciezka}: zapisany plik kolejki rozni sie od zapisywanego")
+    return sciezka
+
+
+def zapisz_znacznik(sciezka: Path | None, ok: bool, opis: str) -> None:
+    """Znacznik 'bylem tu' (jedna linia `czas|ok|opis` albo `czas|blad|opis`), nadpisywany atomowo."""
+    if sciezka is None:
+        return
+    sciezka.parent.mkdir(parents=True, exist_ok=True)
+    opis = " ".join(opis.replace("|", "/").split())[:500]
+    tymczasowy = sciezka.with_name(sciezka.name + ".tmp")
+    tymczasowy.write_text(f"{datetime.now().isoformat(timespec='seconds')}|{'ok' if ok else 'blad'}|{opis}\n",
+                          encoding="utf-8")
+    os.replace(tymczasowy, sciezka)
+
+
+def klient_home() -> Path:
+    return Path(os.environ.get(KLIENT_HOME_ZMIENNA) or Path.home() / ".claude" / "mr" / "wiedza-firmy")
+
+
 # ---------------------------------------------------------------- przebieg
 
 def _tys(n: float) -> str:
@@ -1082,30 +1296,68 @@ def main(argv: list[str] | None = None) -> int:
         except (AttributeError, ValueError):
             pass
     a = argparse.ArgumentParser(prog="przeglad.py", description=__doc__.splitlines()[0])
+    a.add_argument("--profil", choices=("primo", "klient"), default="primo",
+                   help=f"klient: komputer pracownika - sciezki pod %%{KLIENT_HOME_ZMIENNA}%%, tematy z cache, kolejka json")
+    a.add_argument("--format", choices=("md", "json"), default=None,
+                   help="md: pliki tematow do importu (domyslnie primo); json: kolejka wysylki z tematami dodatkowymi"
+                        " (domyslnie i jedynie klient)")
     a.add_argument("--na-sucho", action="store_true", help="tylko policz paczki, znaki i tokeny")
     a.add_argument("--proba", default="", help="tylko te projekty (nazwy z Lore, po przecinku)")
-    a.add_argument("--rownolegle", type=int, default=ROWNOLEGLE)
+    a.add_argument("--rownolegle", type=int, default=None,
+                   help=f"domyslnie {ROWNOLEGLE}, w profilu klient {ROWNOLEGLE_KLIENT}")
     a.add_argument("--limit-paczek", type=int, default=0, help="przerob najwyzej N brakujacych paczek")
     a.add_argument("--mimo-dziur", action="store_true", help="konsoliduj mimo nieudanych paczek (pliki z ostrzezeniem)")
     a.add_argument("--bez-sprawdzenia-formatu", action="store_true")
     a.add_argument("--baza", type=Path, default=DB_PATH)
-    a.add_argument("--wyniki", type=Path, default=WYNIKI)
-    a.add_argument("--tematy", type=Path, default=TEMATY)
-    a.add_argument("--zasady", type=Path, default=ZASADY)
-    a.add_argument("--istniejace", type=Path, nargs="*", default=list(ISTNIEJACE))
+    a.add_argument("--wyniki", type=Path, default=None)
+    a.add_argument("--tematy", type=Path, default=None)
+    a.add_argument("--zasady", type=Path, default=None)
+    a.add_argument("--istniejace", type=Path, nargs="*", default=None)
     a.add_argument("--limit-czasu", type=int, default=LIMIT_CZASU_PACZKA_S)
     o = a.parse_args(argv)
+    klient = o.profil == "klient"
+    home = klient_home() if klient else None
+    znacznik = home / "znaczniki" / "przeglad.txt" if klient else None
+    o.format = o.format or ("json" if klient else "md")
+    if o.rownolegle is None:
+        o.rownolegle = ROWNOLEGLE_KLIENT if klient else ROWNOLEGLE
+    if o.wyniki is None:
+        o.wyniki = home / "przeglad" if klient else WYNIKI
+    if o.istniejace is None:
+        o.istniejace = [] if klient else list(ISTNIEJACE)
+    odmowa = ""
     if o.rownolegle < 1:
-        print("ODMOWA: --rownolegle musi byc >= 1", file=sys.stderr)
+        odmowa = "--rownolegle musi byc >= 1"
+    elif klient and o.format != "json":
+        odmowa = "profil klient pisze tylko --format json (kolejka wysylki)"
+    elif klient and (o.tematy or o.zasady):
+        odmowa = "w profilu klient tematy i zasady sa z tematy-cache.json, nie z --tematy/--zasady"
+    elif o.format == "json" and o.mimo_dziur:
+        odmowa = "--mimo-dziur nie idzie z --format json - do kolejki trafia tylko komplet"
+    if odmowa:
+        zapisz_znacznik(znacznik, False, f"ODMOWA: {odmowa}")
+        print(f"ODMOWA: {odmowa}", file=sys.stderr)
         return 2
-
-    start = time.monotonic()
     try:
-        tematy = wczytaj_tematy(o.tematy)
-        zasady = wyciag_zasad(o.zasady)
+        return _przebieg(o, klient, home, znacznik)
+    except BaseException as e:  # nic nie konczy sie bez sladu: znacznik mowi, ze przebieg padl
+        zapisz_znacznik(znacznik, False, f"przebieg przerwany: {type(e).__name__}: {e}")
+        raise
+
+
+def _przebieg(o, klient: bool, home: Path | None, znacznik: Path | None) -> int:
+    start = time.monotonic()
+    wersja_tematow = ""
+    try:
+        if klient:
+            tematy, zasady, wersja_tematow = wczytaj_cache_tematow(home / "tematy-cache.json")
+        else:
+            tematy = wczytaj_tematy(o.tematy or TEMATY)
+            zasady = wyciag_zasad(o.zasady or ZASADY)
         istniejace = wczytaj_istniejace(o.istniejace)
         conn = polacz_baze(o.baza)
     except (OSError, ValueError) as e:
+        zapisz_znacznik(znacznik, False, f"ODMOWA: {e}")
         print(f"ODMOWA: {e}", file=sys.stderr)
         return 2
     projekty = [p.strip() for p in o.proba.split(",") if p.strip()] or None
@@ -1116,15 +1368,29 @@ def main(argv: list[str] | None = None) -> int:
         znalezione = {w.projekt.casefold() for w in wiadomosci}
         brak = [p for p in projekty if p.casefold() not in znalezione]
         if brak:
+            zapisz_znacznik(znacznik, False, f"ODMOWA: w Lore nie ma wypowiedzi z projektow: {', '.join(brak)}")
             print(f"ODMOWA: w Lore nie ma wypowiedzi z projektow: {', '.join(brak)}", file=sys.stderr)
             return 2
-    pacz = paczki(wiadomosci)
-    instrukcja = instrukcja_paczki(tematy, zasady)
+    pacz = paczki(wiadomosci, osoba=OSOBA_KLIENT if klient else TURY["user"])
+    instrukcja = instrukcja_paczki(tematy, zasady, klient)
     schemat = schemat_paczki(tematy)
     stan = Stan(o.wyniki)
     if o.na_sucho:
         print(raport_na_sucho(pacz, st, instrukcja, stan))
         return 0
+
+    postep = {"profil": o.profil, "pid": os.getpid(), "start": datetime.now().isoformat(timespec="seconds"),
+              "status": "w_toku", "baza": str(o.baza), "wersja_tematow": wersja_tematow}
+
+    def zapisz_postep(**kw) -> None:
+        if not klient:
+            return
+        postep.update(kw, czas=datetime.now().isoformat(timespec="seconds"))
+        _zapisz_json(o.wyniki / "stan.json", postep)
+
+    def liczby_paczek(nieudane_teraz: int) -> dict:
+        ok = sum(1 for p in pacz if stan.gotowa(p.klucz))
+        return {"wszystkie": len(pacz), "ok": ok, "bledy": nieudane_teraz, "do_zrobienia": len(pacz) - ok}
 
     ids_tematow = {t["id"] for t in tematy}
     koszt = Koszt()
@@ -1133,6 +1399,8 @@ def main(argv: list[str] | None = None) -> int:
         brakujace = brakujace[:o.limit_paczek]
     print(f"paczek: {len(pacz)}, gotowych z poprzednich przebiegow: {len(pacz) - len([p for p in pacz if not stan.gotowa(p.klucz)])}, "
           f"teraz do zrobienia: {len(brakujace)} ({o.rownolegle} naraz)", file=sys.stderr)
+    zapisz_postep(paczki=liczby_paczek(0))
+    zapisz_znacznik(znacznik, True, f"start: paczek {len(pacz)}, do zrobienia {len(brakujace)} ({o.rownolegle} naraz)")
     nieudane: list[tuple[Paczka, str]] = []
     przerwano = False
     wykonawca = cf.ThreadPoolExecutor(max_workers=o.rownolegle)
@@ -1150,6 +1418,10 @@ def main(argv: list[str] | None = None) -> int:
             if not ok:
                 nieudane.append((p, opis))
             print(f"[{n}/{len(brakujace)}] {'ok  ' if ok else 'BLAD'} {p.nazwa()}: {opis}", file=sys.stderr)
+            if klient:  # blad trzyma sie znacznika do konca przebiegu - kolejna udana paczka go nie zasloni
+                zapisz_postep(paczki=liczby_paczek(len(nieudane)))
+                zapisz_znacznik(znacznik, not nieudane, f"paczka {n}/{len(brakujace)} {'ok' if ok else 'BLAD: ' + opis}"
+                                f"; nieudane w tym przebiegu: {len(nieudane)}")
     except KeyboardInterrupt:
         przerwano = True
         print("PRZERWANO - zrobione paczki sa zapisane, kolejny przebieg ich nie powtorzy", file=sys.stderr)
@@ -1162,6 +1434,11 @@ def main(argv: list[str] | None = None) -> int:
     wyniki_tematow: list[WynikTematu] = []
     problemy_formatu: list[str] = []
     zapisane: list[Path] = []
+    dziury_json: list[str] = []
+    linie_json: list[str] = []
+    w_kolejce_teraz = 0
+    plik_kolejki: Path | None = None
+    tagi: WynikTagow | None = None
     dzis = date.today().isoformat()
     zakres = f"projekty {', '.join(projekty)}" if projekty else "cała historia"
     konsoliduj = not przerwano and (not niegotowe or o.mimo_dziur)
@@ -1171,48 +1448,112 @@ def main(argv: list[str] | None = None) -> int:
         with cf.ThreadPoolExecutor(max_workers=o.rownolegle) as wewn, \
                 cf.ThreadPoolExecutor(max_workers=max(1, len(po_temacie))) as zewn:
             zadania = {zewn.submit(konsoliduj_temat, tematy_po_id[t], w, istniejace.get(t, []), stan, koszt,
-                                   zasady, LIMIT_CZASU_KONSOLIDACJA_S, wewn): t
+                                   zasady, LIMIT_CZASU_KONSOLIDACJA_S, wewn, klient): t
                        for t, w in sorted(po_temacie.items())}
             for f in cf.as_completed(zadania):
                 wyniki_tematow.append(f.result())
-        napisane = set()
-        for w in sorted(wyniki_tematow, key=lambda w: w.temat):
-            plik = o.wyniki / f"{w.temat}.md"
-            if w.blad:
-                print(f"BLAD konsolidacji tematu {w.temat}: {w.blad}", file=sys.stderr)
-                continue
-            if not w.wpisy:  # pusty plik tematu do zatwierdzania to szum - temat jest w podsumowaniu
-                continue
-            plik.write_text(plik_tematu(tematy_po_id[w.temat], w, zakres, len(niegotowe), dzis), encoding="utf-8")
-            (o.wyniki / "zrodla").mkdir(exist_ok=True)
-            (o.wyniki / "zrodla" / f"{w.temat}.tsv").write_text(plik_zrodel(w), encoding="utf-8")
-            napisane.add(w.temat)
-            if any(not x.niepewne for x in w.wpisy):
-                zapisane.append(plik)
-        # pliki tematow z poprzedniego przebiegu (inna proba, nieudana konsolidacja, temat juz pusty)
-        # nie moga udawac aktualnych - w katalogu zostaje dokladnie wynik tego przebiegu
-        for tid in tematy_po_id:
-            if tid not in napisane:
-                (o.wyniki / f"{tid}.md").unlink(missing_ok=True)
-                (o.wyniki / "zrodla" / f"{tid}.tsv").unlink(missing_ok=True)
-        if not o.bez_sprawdzenia_formatu:
-            problemy_formatu = sprawdz_format(zapisane, o.tematy)
+        if o.format == "md":
+            napisane = set()
+            for w in sorted(wyniki_tematow, key=lambda w: w.temat):
+                plik = o.wyniki / f"{w.temat}.md"
+                if w.blad:
+                    print(f"BLAD konsolidacji tematu {w.temat}: {w.blad}", file=sys.stderr)
+                    continue
+                if not w.wpisy:  # pusty plik tematu do zatwierdzania to szum - temat jest w podsumowaniu
+                    continue
+                plik.write_text(plik_tematu(tematy_po_id[w.temat], w, zakres, len(niegotowe), dzis), encoding="utf-8")
+                (o.wyniki / "zrodla").mkdir(exist_ok=True)
+                (o.wyniki / "zrodla" / f"{w.temat}.tsv").write_text(plik_zrodel(w), encoding="utf-8")
+                napisane.add(w.temat)
+                if any(not x.niepewne for x in w.wpisy):
+                    zapisane.append(plik)
+            # pliki tematow z poprzedniego przebiegu (inna proba, nieudana konsolidacja, temat juz pusty)
+            # nie moga udawac aktualnych - w katalogu zostaje dokladnie wynik tego przebiegu
+            for tid in tematy_po_id:
+                if tid not in napisane:
+                    (o.wyniki / f"{tid}.md").unlink(missing_ok=True)
+                    (o.wyniki / "zrodla" / f"{tid}.tsv").unlink(missing_ok=True)
+            if not o.bez_sprawdzenia_formatu:
+                problemy_formatu = sprawdz_format(zapisane, o.tematy or TEMATY)
+        elif any(w.blad for w in wyniki_tematow):
+            dziury_json.append("kolejka NIE zapisana - konsolidacja nie przeszla dla wszystkich tematow")
+        else:
+            # --format json: tematy dodatkowe w tym samym przebiegu, potem kolejka - tylko z kompletu
+            zapisz_znacznik(znacznik, True, "konsolidacja gotowa, tematy dodatkowe")
+            stan_tagow = Stan(o.wyniki / "tagi")
+            tagi = otaguj(wyniki_tematow, tematy, stan_tagow, koszt, o.rownolegle, o.limit_czasu, klient)
+            przerwano = przerwano or tagi.przerwano
+            for opis, blad in tagi.nieudane:
+                dziury_json.append(f"nieudana {opis}: {blad[:400]}")
+            if tagi.bez_decyzji:
+                dziury_json.append(f"{tagi.bez_decyzji} z {tagi.wszystkie} wpisow bez tematow dodatkowych - kolejka"
+                                   f" NIE zapisana (ponow przebieg; bledy w {stan_tagow.katalog / 'bledy'})")
+            if tagi.komplet():
+                zrodlo = f"przeglad historii rozmow {'' if klient else 'Primo '}(Lore) {dzis}"
+                wpisy = wpisy_kolejki(tagi.wpisy, zrodlo)
+                problemy = sprawdz_kolejke(wpisy, ids_tematow)
+                if problemy:
+                    dziury_json.append("ODMOWA zapisu kolejki - " + "; ".join(problemy[:5]))
+                else:
+                    plik_w_kolejce = stan.katalog / "w-kolejce.json"
+                    juz = set((_czytaj_json(plik_w_kolejce) or {}).get("klucze") or [])
+                    nowe, widziane, powtorzone = [], set(), 0
+                    for w in wpisy:
+                        if w["klucz"] in juz or w["klucz"] in widziane:
+                            powtorzone += 1
+                            continue
+                        widziane.add(w["klucz"])
+                        nowe.append(w)
+                    if nowe:
+                        plik_kolejki = zapisz_kolejke(home / "kolejka" if klient else o.wyniki / "kolejka", nowe,
+                                                      wersja_tematow)
+                        _zapisz_json(plik_w_kolejce, {"klucze": sorted(juz | widziane)})
+                    w_kolejce_teraz = len(nowe)
+                    gdzie = f"zapisano {len(nowe)} wpisow do {plik_kolejki}" if nowe else "nic nowego - nie powstal nowy plik"
+                    linie_json.append(f"Kolejka: {gdzie}; pominiete, bo juz byly w kolejce z wczesniejszych przebiegow"
+                                      f" albo zdublowane: {powtorzone}.")
+            linie_json.append(
+                f"Tematy dodatkowe: wpisow {tagi.wszystkie}, do modelu teraz {tagi.do_zrobienia} w {tagi.paczki} paczkach,"
+                f" nieudane paczki {len(tagi.nieudane)}, przeniesione do innego tematu glownego {tagi.przeniesione},"
+                f" z dodatkowymi {sum(1 for _t, d, _w in tagi.wpisy if d)}.")
+            if tagi.zle_stany:
+                linie_json.append(f"UWAGA: pliki stanu tematow dodatkowych nie do odczytania (tagowane od nowa): "
+                                  f"{', '.join(tagi.zle_stany)}")
+            import przetaguj as T
+
+            n, tok, usd, _sek = T.sumy_dziennika(stan_tagow)
+            linie_json.append(f"Lacznie w dzienniku tematow dodatkowych (wszystkie przebiegi): wywolan {n}, tokenow"
+                              f" {_tys(tok)}, ${usd:.2f} wg claude. Kazde wywolanie: {stan_tagow.katalog / 'koszt.tsv'}")
 
     sekundy = time.monotonic() - start
     podsumowanie = podsumuj(pacz, nieudane, niegotowe, sumy, wyniki_tematow, problemy_formatu, koszt, sekundy,
-                            zakres, konsoliduj, przerwano, stan, o.bez_sprawdzenia_formatu)
+                            zakres, konsoliduj, przerwano, stan, o.bez_sprawdzenia_formatu or o.format == "json",
+                            dziury_dodatkowe=dziury_json, linie_dodatkowe=linie_json)
     o.wyniki.mkdir(parents=True, exist_ok=True)
     (o.wyniki / "PODSUMOWANIE.txt").write_text(podsumowanie, encoding="utf-8")
     print(podsumowanie)
-    dziury = bool(niegotowe) or przerwano or any(w.blad for w in wyniki_tematow) or bool(problemy_formatu)
+    dziury = (bool(niegotowe) or przerwano or any(w.blad for w in wyniki_tematow) or bool(problemy_formatu)
+              or bool(dziury_json))
+    if klient:
+        zapisz_postep(status="dziury" if dziury else "komplet", paczki=liczby_paczek(len(nieudane)),
+                      tagi=None if tagi is None else {"paczki": tagi.paczki, "bledy": len(tagi.nieudane),
+                                                      "bez_decyzji": tagi.bez_decyzji},
+                      kolejka=str(plik_kolejki) if plik_kolejki else None, wpisow_w_kolejce=w_kolejce_teraz,
+                      podsumowanie=str(o.wyniki / "PODSUMOWANIE.txt"))
+        if dziury:
+            linie_pods = [x.strip() for x in podsumowanie.splitlines()[1:4] if x.strip()]
+            zapisz_znacznik(znacznik, False, f"{podsumowanie.splitlines()[0]} {'; '.join(linie_pods)}")
+        else:
+            zapisz_znacznik(znacznik, True, f"komplet: paczek {len(pacz)}, do kolejki teraz {w_kolejce_teraz}"
+                            + (f" ({plik_kolejki.name})" if plik_kolejki else " (nic nowego)"))
     return 1 if dziury else 0
 
 
 def podsumuj(pacz, nieudane, niegotowe, sumy, wyniki_tematow, problemy_formatu, koszt: Koszt, sekundy,
-             zakres, konsoliduj, przerwano, stan: Stan, bez_formatu) -> str:
+             zakres, konsoliduj, przerwano, stan: Stan, bez_formatu, dziury_dodatkowe=(), linie_dodatkowe=()) -> str:
     linie = []
     bledy_tematow = [w for w in wyniki_tematow if w.blad]
-    if niegotowe or przerwano or bledy_tematow or problemy_formatu:
+    if niegotowe or przerwano or bledy_tematow or problemy_formatu or dziury_dodatkowe:
         linie.append("NIEPELNE - przebieg ma dziury, NIE zglaszac jako gotowe:")
         if przerwano:
             linie.append("  - przebieg przerwany")
@@ -1228,6 +1569,8 @@ def podsumuj(pacz, nieudane, niegotowe, sumy, wyniki_tematow, problemy_formatu, 
             linie.append(f"  - konsolidacja tematu {w.temat} nieudana: {w.blad}")
         for pr in problemy_formatu:
             linie.append(f"  - format: {pr}")
+        for d in dziury_dodatkowe:
+            linie.append(f"  - {d}")
         linie.append("")
     else:
         linie.append("KOMPLET - wszystkie paczki przerobione, wszystkie tematy skonsolidowane")
@@ -1263,6 +1606,7 @@ def podsumuj(pacz, nieudane, niegotowe, sumy, wyniki_tematow, problemy_formatu, 
         f"wyjscie {_tys(t['output_tokens'])}; razem {_tys(koszt.razem())}. Koszt wg claude: ${koszt.usd:.2f}.",
         f"Kazde wywolanie: {stan.katalog / 'koszt.tsv'}",
     ]
+    linie += list(linie_dodatkowe)
     for etap, (n, tok, usd, sek) in sorted(sumy_dziennika(stan).items()):
         linie.append(f"Lacznie w dzienniku (wszystkie przebiegi), {etap}: udanych wywolan {n}, tokenow {_tys(tok)},"
                      f" ${usd:.2f} wg claude, suma czasow wywolan {sek:.0f} s.")
@@ -1270,4 +1614,6 @@ def podsumuj(pacz, nieudane, niegotowe, sumy, wyniki_tematow, problemy_formatu, 
 
 
 if __name__ == "__main__":
+    # przetaguj.py robi `import przeglad` - ma dostac ten sam modul, nie druga kopie (inne klasy bledow)
+    sys.modules.setdefault("przeglad", sys.modules[__name__])
     sys.exit(main())

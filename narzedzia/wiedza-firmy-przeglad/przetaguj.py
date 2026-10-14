@@ -93,6 +93,9 @@ Dodatkowy temat dajesz tylko wtedy, gdy wpis naprawdę przydałby się osobie pr
 
 Treści ani poufności nie zmieniasz. Primo nie podejmuje żadnych decyzji — rozstrzygasz sam. To jest automat: odpowiedź leci prosto do pliku. Nie zadawaj pytań i nie sięgaj po narzędzia."""
 
+PROMPT_KLIENT = P.zamien(PROMPT, [("Primo nie podejmuje żadnych decyzji — rozstrzygasz sam.",
+                                   "Nikt nie zatwierdza wpisów ręcznie — rozstrzygasz sam.")])
+
 
 # Jakie dane uzasadniaja temat specjalny (osobne_uprawnienie w tematach). Temat specjalny spoza tej
 # listy dostaje w prompcie opis z pliku tematow.
@@ -294,11 +297,12 @@ def specjalne(tematy: list[dict]) -> list[str]:
     return [t["id"] for t in tematy if t.get("osobne_uprawnienie")]
 
 
-def instrukcja(tematy: list[dict]) -> str:
+def instrukcja(tematy: list[dict], klient: bool = False) -> str:
+    """`klient` - przeglad na komputerze pracownika (przeglad.py --profil klient): prompt bez Primo."""
     po_id = {t["id"]: t for t in tematy}
     spec = "\n".join(f"- {i}: {DANE_SPECJALNE.get(i) or po_id[i].get('opis', '')}" for i in specjalne(tematy)) or "- (brak)"
     reguly = REGULA_KADRY if {"kadry", "firma"} <= set(po_id) else ""
-    return (f"{PROMPT.format(specjalne=spec, reguly=reguly)}\n\n## Tematy (obowiązuje ta lista id)\n{P.opis_tematow(tematy)}\n\n"
+    return (f"{(PROMPT_KLIENT if klient else PROMPT).format(specjalne=spec, reguly=reguly)}\n\n## Tematy (obowiązuje ta lista id)\n{P.opis_tematow(tematy)}\n\n"
             f"## Materiał\n")
 
 
