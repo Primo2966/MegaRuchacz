@@ -1,6 +1,6 @@
 [project]
 name = "wiedza-firmy"
-version = "0.3.1"
+version = "0.4.0"
 description = "Serwer MCP (HTTP) ze wspolna baza ustalen pracownikow firmy: FTS5 + wektory, uprawnienia temat x poufnosc"
 requires-python = ">=3.12"
 dependencies = [
@@ -9,6 +9,7 @@ dependencies = [
     "fastembed>=0.4",
     "huggingface-hub>=0.20",
     "numpy>=1.26",
+    "cryptography>=42",
 ]
 
 [tool.uv]

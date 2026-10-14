@@ -26,11 +26,13 @@ SEKRET = "sekret-atrapy-123"
 
 
 class AtrapaJFTools:
-    """Wtyczka JFTools na niby: knowledge-permissions i knowledge-topics, sprawdza x-webhook-secret."""
+    """Wtyczka JFTools na niby: knowledge-permissions, knowledge-topics i keys, sprawdza x-webhook-secret.
+    Ksztalty jak we wtyczce 84b58e6 (raport K3-Z2): keys = {computers: [{id, name, status, publicKey}]}."""
 
     def __init__(self) -> None:
         self.komputery: dict[str, object] = {}   # id -> odpowiedz JSON albo kod HTTP (int)
         self.tematy: object = []
+        self.klucze: object = {"computers": []}  # odpowiedz keys albo kod HTTP (int)
         self.sekret = SEKRET
         self.zwloka_s = 0.0
         self.zapytania: list[tuple[str, dict, str | None]] = []
@@ -54,6 +56,8 @@ class AtrapaJFTools:
                     dane = atrapa.komputery.get(komputer, 404) if jftools.ID_KOMPUTERA.match(komputer) else 400
                 elif u.path.endswith("/knowledge-topics"):
                     dane = atrapa.tematy
+                elif u.path.endswith("/keys"):
+                    dane = atrapa.klucze
                 else:
                     dane = 404
                 if isinstance(dane, int):
@@ -83,8 +87,11 @@ class AtrapaJFTools:
         return sum(1 for p, _, _ in self.zapytania if p.endswith(sciezka))
 
 
-def odpowiedz(id_: str, status: str = "active", grants: dict | None = None, admin: bool = False, nazwa="PC Eli"):
-    return {"computer": {"id": id_, "name": nazwa, "status": status}, "admin": admin, "grants": grants or {}}
+def odpowiedz(id_: str, status: str = "active", grants: dict | None = None, admin: bool = False, nazwa="PC Eli",
+              owner: object = None):
+    """knowledge-permissions jak we wtyczce 84b58e6: owner = {email, name} (pola moga byc null) albo null."""
+    return {"computer": {"id": id_, "name": nazwa, "status": status}, "owner": owner, "admin": admin,
+            "grants": grants or {}}
 
 
 class Zegar:

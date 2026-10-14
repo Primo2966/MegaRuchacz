@@ -102,6 +102,8 @@ class WynikDodania:
     usuniete_wczesniej: int = 0  # byla i zostala usunieta - nie wraca
     zamaskowane: int = 0         # w tresci byl sekret, zamieniony na [MASKED]
     uwagi: list[str] = field(default_factory=list)
+    # wynik kazdego wpisu partii, w kolejnosci wejscia: "dodano" | "duplikat" | "usuniety_wczesniej"
+    stany: list[str] = field(default_factory=list)
 
 
 def sprawdz_tematy_dodatkowe(glowny: str, dodatkowe: tuple[str, ...] | list[str], znane_tematy: set[str],
@@ -116,6 +118,35 @@ def sprawdz_tematy_dodatkowe(glowny: str, dodatkowe: tuple[str, ...] | list[str]
         if t not in znane_tematy:
             raise BladWpisu(f"{opis}: nieznany temat dodatkowy {t!r} (znane: {', '.join(sorted(znane_tematy)) or 'brak'})")
         widziane.add(t)
+
+
+def sprawdz_wpis(w: NowyWpis, nr: int, znane_tematy: set[str]) -> tuple[NowyWpis, bool]:
+    """Wpis gotowy do zapisu (przyciete pola, sekrety zamaskowane) + czy cos zamaskowano; zly = BladWpisu.
+    Osobno od Baza.dodaj, zeby paczka z klienta (POST /klient/wpisy) odrzucala tylko zle wpisy, nie cala."""
+    from lore.masking import mask
+
+    opis = f"wpis {nr} ({w.tresc[:40]!r})"
+    if not w.tresc or not w.tresc.strip():
+        raise BladWpisu(f"{opis}: pusta tresc")
+    if w.poufnosc == TAJNE:
+        raise BladWpisu(f"{opis}: poufnosc tajne - takie rzeczy nie trafiaja do bazy (wytnij je z wpisu)")
+    if w.poufnosc not in POZIOMY:
+        raise BladWpisu(f"{opis}: poufnosc {w.poufnosc!r} - dozwolone: {', '.join(POZIOMY)}")
+    if w.temat not in znane_tematy:
+        raise BladWpisu(f"{opis}: nieznany temat {w.temat!r} (znane: {', '.join(sorted(znane_tematy)) or 'brak - wczytaj tematy'})")
+    sprawdz_tematy_dodatkowe(w.temat, w.tematy_dodatkowe, znane_tematy, opis)
+    if not w.autor or not w.autor.strip():
+        raise BladWpisu(f"{opis}: brak autora")
+    if not _DATA.match(w.data_ustalenia or ""):
+        raise BladWpisu(f"{opis}: data ustalenia {w.data_ustalenia!r} - format RRRR-MM-DD")
+    try:
+        date.fromisoformat(w.data_ustalenia)
+    except ValueError as e:
+        raise BladWpisu(f"{opis}: data ustalenia {w.data_ustalenia!r} nie istnieje") from e
+    tresc = mask(w.tresc.strip())
+    return (NowyWpis(tresc, w.temat, w.poufnosc, w.autor.strip(), w.data_ustalenia,
+                     w.zrodlo.strip(), w.program.strip(), tuple(w.tematy_dodatkowe)),
+            tresc != w.tresc.strip())
 
 
 def teraz() -> str:
@@ -292,34 +323,12 @@ class Baza:
 
     def dodaj(self, wpisy: list[NowyWpis], dodal: str, znane_tematy: set[str]) -> WynikDodania:
         """Dodaje partie wpisow. Najpierw kontrola CALEJ partii - jeden zly wpis = odmowa wszystkich."""
-        from lore.masking import mask
-
         wynik = WynikDodania()
         gotowe: list[NowyWpis] = []
         for nr, w in enumerate(wpisy, 1):
-            opis = f"wpis {nr} ({w.tresc[:40]!r})"
-            if not w.tresc or not w.tresc.strip():
-                raise BladWpisu(f"{opis}: pusta tresc")
-            if w.poufnosc == TAJNE:
-                raise BladWpisu(f"{opis}: poufnosc tajne - takie rzeczy nie trafiaja do bazy (wytnij je z wpisu)")
-            if w.poufnosc not in POZIOMY:
-                raise BladWpisu(f"{opis}: poufnosc {w.poufnosc!r} - dozwolone: {', '.join(POZIOMY)}")
-            if w.temat not in znane_tematy:
-                raise BladWpisu(f"{opis}: nieznany temat {w.temat!r} (znane: {', '.join(sorted(znane_tematy)) or 'brak - wczytaj tematy'})")
-            sprawdz_tematy_dodatkowe(w.temat, w.tematy_dodatkowe, znane_tematy, opis)
-            if not w.autor or not w.autor.strip():
-                raise BladWpisu(f"{opis}: brak autora")
-            if not _DATA.match(w.data_ustalenia or ""):
-                raise BladWpisu(f"{opis}: data ustalenia {w.data_ustalenia!r} - format RRRR-MM-DD")
-            try:
-                date.fromisoformat(w.data_ustalenia)
-            except ValueError as e:
-                raise BladWpisu(f"{opis}: data ustalenia {w.data_ustalenia!r} nie istnieje") from e
-            tresc = mask(w.tresc.strip())
-            if tresc != w.tresc.strip():
-                wynik.zamaskowane += 1
-            gotowe.append(NowyWpis(tresc, w.temat, w.poufnosc, w.autor.strip(), w.data_ustalenia,
-                                   w.zrodlo.strip(), w.program.strip(), tuple(w.tematy_dodatkowe)))
+            gotowy, zamaskowany = sprawdz_wpis(w, nr, znane_tematy)
+            wynik.zamaskowane += zamaskowany
+            gotowe.append(gotowy)
 
         with self._zamek_zapisu, closing(self.polacz()) as conn:
             nowe: list[NowyWpis] = []
@@ -328,10 +337,13 @@ class Baza:
                                    "ORDER BY usuniety IS NULL DESC LIMIT 1", (w.tresc, w.temat)).fetchone()
                 if byl is None and not any(n.tresc == w.tresc and n.temat == w.temat for n in nowe):
                     nowe.append(w)
+                    wynik.stany.append("dodano")
                 elif byl is not None and byl[0] is not None:
                     wynik.usuniete_wczesniej += 1
+                    wynik.stany.append("usuniety_wczesniej")
                 else:
                     wynik.duplikaty += 1
+                    wynik.stany.append("duplikat")
             wektory = None
             if nowe and self.wektoryzator is not None:
                 try:

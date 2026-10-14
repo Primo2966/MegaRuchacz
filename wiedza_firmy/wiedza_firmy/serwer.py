@@ -10,6 +10,9 @@ zrodlo uprawnien od nowa. Narzedzie bez osoby w scope (cokolwiek poza zadaniem H
 Tryb bezstanowy (stateless_http + odpowiedzi JSON): kazde zadanie niesie swoj token i sprawdza sie
 samodzielnie - nie ma sesji, ktora mozna by przejac cudzym tokenem.
 
+Trasy /klient/* (krok 3, 0.4.0) obsluguje klienci.Klienci, przed tym middlewarem (Rozdzielacz): /klient/token
+jest bez tokenu (podpis kluczem komputera), reszta sprawdza Bearer sama.
+
 Model mmlw laduje sie raz na proces, w tle zaraz po starcie (pierwsze pytanie przed koncem ladowania
 po prostu na nie poczeka). Znacznik "bylem tu" (sciezki.znacznik_serwera) odswiezany co ZYCIE_S.
 """
@@ -29,6 +32,7 @@ from mcp.server.mcpserver import Context, MCPServer
 
 from . import __version__, jftools, sciezki
 from .baza import Baza
+from .klienci import Klienci
 from .pliki import log, utf8_na_wyjsciu, zapisz_json
 from .uprawnienia import BRAK, Uprawnienia, ZrodloPlikowe, ZrodloUprawnien
 from .wektory import ModelNiedostepny, WektoryLore
@@ -221,6 +225,21 @@ class Autoryzacja:
         await self.app({**scope, KLUCZ_OSOBY: osoba}, receive, send)
 
 
+class Rozdzielacz:
+    """/klient/* do tras klienta (wlasna autoryzacja: podpis przy tokenie, Bearer przy reszcie), cala reszta
+    przez Autoryzacja do MCP."""
+
+    def __init__(self, autoryzacja: Any, klienci: Klienci) -> None:
+        self.autoryzacja = autoryzacja
+        self.klienci = klienci
+
+    async def __call__(self, scope: dict[str, Any], receive: Any, send: Any) -> None:
+        if scope.get("type") == "http" and str(scope.get("path") or "").startswith("/klient/"):
+            await self.klienci(scope, receive, send)
+            return
+        await self.autoryzacja(scope, receive, send)
+
+
 def _ochrona_hostow(host: str, environ: dict | None = None) -> Any:
     """Ochrona przed DNS rebinding. Dla 127.0.0.1 wlacza ja sam SDK. Dla 0.0.0.0 - gdy podano
     WIEDZA_FIRMY_HOSTY (nazwy/adresy, przecinkiem): tylko one + localhost. Bez zmiennej - bez
@@ -240,11 +259,11 @@ def _ochrona_hostow(host: str, environ: dict | None = None) -> Any:
 
 
 def aplikacja(wiedza: Wiedza, zrodlo: ZrodloUprawnien, host: str = "127.0.0.1",
-              environ: dict | None = None) -> Any:
+              environ: dict | None = None, klienci: Klienci | None = None) -> Any:
     mcp = zbuduj_mcp(wiedza, zrodlo)
     app = mcp.streamable_http_app(streamable_http_path=SCIEZKA, stateless_http=True, json_response=True,
                                   transport_security=_ochrona_hostow(host, environ), host=host)
-    return Autoryzacja(app, zrodlo)
+    return Rozdzielacz(Autoryzacja(app, zrodlo), klienci or Klienci(wiedza, zrodlo))
 
 
 # --------------------------------------------------------------------------- start
@@ -272,7 +291,8 @@ def _zaladuj_model(wektory: WektoryLore, baza: Baza, stan: StanSerwera) -> None:
         log(f"BLAD przy ladowaniu modelu / uzupelnianiu wektorow: {e!r}")
 
 
-def _zyje(baza: Baza, zrodlo: ZrodloPlikowe, stan: StanSerwera, host: str, port: int) -> None:
+def _zyje(baza: Baza, zrodlo: ZrodloPlikowe, stan: StanSerwera, host: str, port: int,
+          klienci: Klienci | None = None) -> None:
     while True:
         try:
             znacznik = {
@@ -284,6 +304,8 @@ def _zyje(baza: Baza, zrodlo: ZrodloPlikowe, stan: StanSerwera, host: str, port:
             }
             if isinstance(zrodlo, jftools.ZrodloJFTools):
                 znacznik["uprawnienia"] = zrodlo.stan()
+            if klienci is not None:
+                znacznik["klienci"] = klienci.stan()
             zapisz_json(sciezki.znacznik_serwera(), znacznik)
         except Exception as e:
             log(f"BLAD zapisu znacznika zycia {sciezki.znacznik_serwera()}: {e!r}")
@@ -311,14 +333,15 @@ def main(argv: list[str] | None = None) -> int:
     baza = Baza(sciezki.plik_bazy(), wektory)
     wiedza = Wiedza(baza, zrodlo_tematow=zrodlo_tematow)
     stan = StanSerwera()
+    klienci = Klienci(wiedza, zrodlo)
     threading.Thread(target=_zaladuj_model, args=(wektory, baza, stan), name="model", daemon=True).start()
-    threading.Thread(target=_zyje, args=(baza, zrodlo, stan, a.host, a.port), name="zyje", daemon=True).start()
+    threading.Thread(target=_zyje, args=(baza, zrodlo, stan, a.host, a.port, klienci), name="zyje", daemon=True).start()
     if zrodlo.blad:
         log(f"UWAGA osoby: {zrodlo.blad}")
     log(f"nasluch http://{a.host}:{a.port}{SCIEZKA}, dane: {sciezki.katalog_danych()}, model: {sciezki.katalog_modeli()}, "
         f"uprawnienia: {'JFTools ' + zrodlo.url if isinstance(zrodlo, jftools.ZrodloJFTools) else 'osoby.json'}")
     # dziennik dostepu uvicorna ma tylko sciezke i status - naglowkow (tokenow) nie zapisuje
-    uvicorn.run(aplikacja(wiedza, zrodlo, host=a.host), host=a.host, port=a.port, log_level="warning")
+    uvicorn.run(aplikacja(wiedza, zrodlo, host=a.host, klienci=klienci), host=a.host, port=a.port, log_level="warning")
     return 0
 
 

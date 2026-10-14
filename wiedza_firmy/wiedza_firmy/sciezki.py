@@ -39,3 +39,13 @@ def katalog_modeli() -> Path:
 def znacznik_serwera() -> Path:
     """'Bylem tu' serwera: czas ostatniego zycia, pid, stan modelu. Nieswiezy = alarm dla straznika."""
     return katalog_danych() / "serwer-zyje.json"
+
+
+def plik_zasad_klienta() -> Path:
+    """Zasady przegladu dla klienta (GET /klient/tematy): co wolno wysylac do wiedzy firmy. Brak = pusty tekst."""
+    return katalog_danych() / "zasady-klienta.md"
+
+
+def dziennik_zgloszen_klientow() -> Path:
+    """Kazda proba wydania tokenu komputerowi (POST /klient/token): czas | id | wynik | adres | opis."""
+    return katalog_danych() / "zgloszenia-klientow.log"

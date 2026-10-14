@@ -54,6 +54,9 @@ class Uprawnienia:
     komunikat: str | None = None
     zrodlo: str | None = None
     ostrzezenie: str | None = None
+    # Tylko JFTools: status komputera (active | pending | blocked | nieznany | zle_id); None = plik albo brak komputera.
+    # Inny niz active = komputer nie moze tez dodawac wpisow (Wiedza.dodaj_wpis), nie tylko czytac.
+    status: str | None = None
 
     @property
     def puste(self) -> bool:

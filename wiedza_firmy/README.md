@@ -16,8 +16,10 @@ wpisy, osoby i tokeny żyją wyłącznie w katalogu danych serwera.
 | `wiedza.db` | SQLite: `wpisy` (miękkie usuwanie: `usuniety`, `usunal`, `powod_usuniecia`), `wpisy_tematy` (od 0.3.0: `wpis_id`, `temat_id`, `glowny`), `wpisy_fts`, `wektory` (float32), `meta` (m.in. `wersja_schematu`) |
 | `wiedza.db.kopia-*` | kopie bazy: przed migracją schematu (`kopia-przed-schematem-2-…`) i przed `ustaw_tematy` (`kopia-przed-ustaw-tematy-…`) |
 | `tematy.json` | lista tematów: `id`, `nazwa`, `opis`, `przyklady[]`, `osobne_uprawnienie` |
-| `osoby.json` | `osoba -> {token_sha256, admin, uprawnienia: {temat_id: najwyzszy_poziom}, komputer?}` — sam token nigdy nie jest zapisywany; `komputer` = id komputera z JFTools (tylko w trybie JFTools) |
-| `serwer-zyje.json` | znacznik „byłem tu” serwera, odświeżany co 60 s (czas, pid, stan modelu, liczby wpisów, problem z plikiem osób, próg trafności, a w trybie JFTools: adres i ostatni błąd JFTools) |
+| `osoby.json` | `osoba -> {token_sha256, admin, uprawnienia: {temat_id: najwyzszy_poziom}, komputer?}` — sam token nigdy nie jest zapisywany; `komputer` = id komputera z JFTools (tylko w trybie JFTools). Od 0.4.0 wpisy `komputer-<id>` zakłada sam serwer (`wystawil: "auto"`, `wystawiony`, `wymieniony?`, `wygasl?`) |
+| `serwer-zyje.json` | znacznik „byłem tu” serwera, odświeżany co 60 s (czas, pid, stan modelu, liczby wpisów, problem z plikiem osób, próg trafności, a w trybie JFTools: adres, ostatni błąd JFTools i ostatni błąd `keys`; od 0.4.0 `klienci.liczniki_od_startu`: próby tokenu wg wyniku, odmowy tras klienta, wpisy z paczek, ostatnia próba tokenu, stan pliku zasad) |
+| `zgloszenia-klientow.log` | od 0.4.0: każda próba wydania tokenu komputerowi, linia `czas \| komputer <id> \| wynik \| adres \| opis` (bez podpisu, nonce i tokenu) |
+| `zasady-klienta.md` | od 0.4.0, opcjonalnie: zasady przeglądu dla klientów (`GET /klient/tematy` → `zasady`); brak = pusty tekst i wpis w dzienniku serwera |
 | `modele\` | model wektorów (`WIEDZA_FIRMY_MODELE` zmienia miejsce) |
 
 Kod Lore: katalog `lore` obok `wiedza_firmy` albo `WIEDZA_FIRMY_LORE`. Potrzebne pliki:
@@ -31,7 +33,8 @@ Kod Lore: katalog `lore` obok `wiedza_firmy` albo `WIEDZA_FIRMY_LORE`. Potrzebne
 - Znany token bez uprawnień: narzędzia działają, ale nic nie zwracają („Nie masz jeszcze uprawnień — poproś admina.”).
 - Admin widzi wszystko i jako jedyny może usuwać wpisy. Dodawać może każdy ze znanym tokenem (od 0.3.1), do
   dowolnego tematu, także niewidocznego dla siebie; autorem jest wtedy zawsze on sam (parametr `autor` działa
-  tylko u admina).
+  tylko u admina). Wyjątek (od 0.4.0): w trybie JFTools osoba, której komputer nie jest active (pending, blocked,
+  usunięty), nie dodaje nic.
 - Narzędzia tylko dla admina (`serwer.NARZEDZIA_ADMINA`, dziś `usun_wpis`) są niewidoczne na liście narzędzi
   (`tools/list`) dla innych — filtruje je middleware SDK `FiltrNarzedziAdmina` przy każdym żądaniu, a wynik ma
   `cacheScope: private`. Gdy źródło uprawnień nie odpowiada, lista jest ukrywana (z wpisem w logu). Odmowa przy
@@ -130,6 +133,47 @@ Włączenie na Pakowanie2:
 
 Wyłączenie: usunąć `WIEDZA_FIRMY_UPRAWNIENIA` i zrestartować — serwer wraca do `osoby.json`.
 
+## Klient: komputer sam bierze token i wysyła wpisy (od 0.4.0)
+
+Trasy `/klient/*` (moduł `klienci.py`, podpis w `podpis.py`) działają tylko w trybie JFTools; bez niego odpowiadają
+503 `wylaczone`. Umowa z klientem (`narzedzia/wiedza-firmy-klient`) i wtyczką JFTools: raport
+`.megaruchacz/raporty/wiedza-firmy-krok3-projekt.md`, sekcja 2. Rejestracja jest bez kodu zaproszenia: komputer
+zgłasza się sam w JFTools (`register-self`, status pending), a dostęp daje dopiero admin, zatwierdzając go w panelu.
+
+Przepływ:
+
+1. Klient ma parę kluczy ed25519, a JFTools ma jego klucz publiczny (`register-self` albo `register` z ecommerce-helper).
+   Jeden komputer to jeden wpis w JFTools: `computerId`.
+2. `POST /klient/token` (bez tokenu) `{computerId, ts, nonce, podpis[, wymien]}`. Podpisywany tekst (UTF-8, bez końca
+   linii): `jfwiedza-token|{computerId}|{ts}|{nonce}`; `ts` to sekundy Unix (liczba całkowita), a `nonce` ma 16–128
+   znaków `[A-Za-z0-9_-]`. `podpis` przyjmuje dwie postacie:
+   - surowy podpis ed25519 (64 bajty) w base64, np. `cryptography`: `Ed25519PrivateKey.sign(tekst)`;
+   - blok SSHSIG z `ssh-keygen -Y sign -n jfwiedza -f <klucz> <plik z tekstem>`.
+
+   Serwer bierze klucz komputera z `GET <baza>/keys` JFTools (pending + active; lista ważna 30 s, ponowne pytanie
+   najwyżej co 5 s), sprawdza `ts` (±300 s) i nonce (pamiętany 10 min, w pamięci procesu), zakłada w `osoby.json`
+   wpis `komputer-<id>` i zwraca `{token, osoba, wynik: wydano}` jeden raz. Drugi token dostaje się tylko
+   z `"wymien": true` + podpisem (`wynik: wymieniono`, a stary token przestaje działać). Bez tego serwer odpowiada 409 `juz_wydany`.
+   Wpisu założonego ręcznie o tej nazwie automat nie nadpisuje.
+   Odmowy `{kod, opis}`: 400 `zle_dane`; 401 `zly_podpis` (także `ts` poza oknem, wtedy z `czas_serwera`, i powtórzony
+   nonce); 403 `nieznany_komputer` / `zablokowany`; 409 `juz_wydany`; 429 `za_czesto` (30 prób na 10 min z jednego
+   adresu); 503 `jftools_niedostepny`. Każda próba trafia do `zgloszenia-klientow.log`.
+3. `GET /klient/status` (Bearer) → `{status: active|pending|blocked|nieznany, osoba, komputer, nazwa_komputera,
+   wlasciciel}`; blocked/nieznany = 403 z tym samym ciałem i `kod`.
+4. `GET /klient/tematy` (Bearer, także pending) → `{tematy, zasady, wersja, status}`; `wersja` = sha256 tematów i zasad.
+5. Admin zatwierdza komputer w JFTools i przypisuje osobę (`owner.name`) → status active.
+6. `POST /klient/wpisy` (Bearer) `{paczka_id, wpisy: [{klucz, tresc, temat, tematy_dodatkowe[], poufnosc, data,
+   zrodlo, program}]}`, najwyżej 100 (więcej = 413 `za_duzo`, nic nie zapisane) → `{paczka_id, autor, wyniki: [{klucz,
+   wynik: dodano|duplikat|usuniety_wczesniej|blad, opis?}], uwagi?}`. Zły wpis odrzuca tylko siebie. Duplikat to ta sama
+   treść w tym samym temacie głównym, także w obrębie jednej paczki. Autor to `owner.name` z JFTools, a gdy go nie ma,
+   nazwa komputera z JFTools. Pole autora z ciała nie jest czytane. Pending dostaje 409 `czeka_na_zatwierdzenie`,
+   a blocked i usunięty 403.
+
+Unieważnianie: blokada w panelu oznacza brak komputera w `keys` (nowy token nie powstanie) i status blocked. Wtedy
+`/klient/*` daje 403, narzędzia MCP z tym tokenem są puste z komunikatem, a `dodaj_wpis` odmawia (od 0.4.0 każdemu,
+czyj komputer w JFTools nie jest active). Komputer usunięty z JFTools (404) dostaje w `osoby.json` znacznik `wygasl`.
+Odblokowanie przywraca dostęp temu samemu tokenowi, najpóźniej po minucie (pamięć statusu komputera bez dostępu).
+
 ## Próg trafności (od 0.2.0)
 
 `szukaj_wiedzy` zwraca tylko wpisy, których podobieństwo do pytania (wektory mmlw) przekracza próg modelu
@@ -173,6 +217,7 @@ uv --directory wiedza_firmy run pytest
 ```
 
 Testy niczego nie pobierają: wektory liczy atrapa, a JFTools udaje lokalny serwer HTTP na 127.0.0.1
-(`tests/test_jftools.py`). Test prawdziwego modelu rusza tylko wtedy, gdy model
+(`tests/test_jftools.py`, trasy klienta: `tests/test_klienci.py`; test zgodności z `ssh-keygen -Y sign` rusza,
+gdy `ssh-keygen` jest w PATH). Test prawdziwego modelu rusza tylko wtedy, gdy model
 już leży na komputerze (`~/.claude/lore_models`, `~/.lore/lore_models` albo `WIEDZA_FIRMY_TEST_MODELE`).
 W innym wypadku zostaje pominięty z podanym powodem.

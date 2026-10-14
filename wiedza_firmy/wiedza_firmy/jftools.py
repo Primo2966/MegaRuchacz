@@ -12,6 +12,9 @@ Po wlaczeniu:
   nie robi nikogo adminem. Pole `uprawnienia` z osoby.json jest wtedy pomijane.
 - Status komputera inny niz active (pending, blocked, 404) = zero uprawnien z komunikatem dlaczego.
 - Tematy: GET <baza>/knowledge-topics; gdy JFTools nie odpowiada - ostatnia znana lista, potem tematy.json.
+- Krok 3 (0.4.0): wlasciciel komputera z pola `owner: {email, name}` odpowiedzi knowledge-permissions (autor
+  wpisow z klienta), klucze publiczne komputerow z GET <baza>/keys (KluczeJFTools, podpis przy /klient/token),
+  komputer usuniety z JFTools (404) = znacznik `wygasl` na jego wpisie `komputer-<id>` w osoby.json.
 
 Pamiec jak w ecommerce-helper (src/ecommerce_helper/uprawnienia.py): odpowiedz wazna 10 min (komputer bez
 dostepu - 1 min, zeby nadane uprawnienia zadzialaly szybko), zapytanie ma limit 3 s, po bledzie 30 s bez
@@ -34,6 +37,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Callable, Mapping
 
+from . import osoby as osoby_mod
 from . import sciezki
 from . import tematy as tematy_mod
 from .pliki import log
@@ -48,6 +52,12 @@ TRYB_JFTOOLS = "jftools"
 URL_DOMYSLNY = "https://tools.jfinvesting.pl/api/public/mcp-ecommerce-sterowanie"
 SCIEZKA_UPRAWNIEN = "/knowledge-permissions"
 SCIEZKA_TEMATOW = "/knowledge-topics"
+SCIEZKA_KLUCZY = "/keys"
+# Klucze komputerow: lista wazna 30 s (zablokowany komputer znika z niej w JFTools - najwyzej tyle moze jeszcze
+# dostac token). Komputera nie ma na liscie = pytamy od nowa (swiezo zgloszony), ale nie czesciej niz co 5 s -
+# /klient/token jest bez tokenu i nie moze byc pompka zapytan do JFTools.
+WAZNOSC_KLUCZY_S = 30.0
+ODSTEP_KLUCZY_S = 5.0
 
 LIMIT_ZAPYTANIA_S = 3.0
 WAZNOSC_S = 600.0
@@ -129,6 +139,7 @@ class Dostep:
     status: str  # active | pending | blocked | nieznany (404) | zle_id (400)
     nazwa: str = ""
     granty: dict[str, str] = field(default_factory=dict)  # temat_id -> najwyzszy poziom
+    wlasciciel: str = ""  # owner.name z JFTools (0.4.0); pusty = panel nie przypisal osoby albo stara wtyczka
 
     @classmethod
     def z_odpowiedzi(cls, dane: Any, komputer: str) -> tuple["Dostep", list[str]]:
@@ -155,7 +166,18 @@ class Dostep:
                 granty[str(temat)] = poziom
             else:
                 pominiete.append(f"{temat}={str(poziom)[:30]!r}")
-        return cls(status=status, nazwa=str(kmp.get("name") or "").strip(), granty=granty), pominiete
+        # owner: {"email": str|null, "name": str|null} albo null (wtyczka 84b58e6); name null = admin nie wpisal osoby
+        wlasciciel = ""
+        owner = dane.get("owner")
+        if isinstance(owner, dict):
+            if isinstance(owner.get("name"), str):
+                wlasciciel = owner["name"].strip()
+            elif owner.get("name") is not None:
+                pominiete.append(f"owner.name={str(owner.get('name'))[:60]!r} (oczekiwany tekst albo null)")
+        elif owner is not None:
+            pominiete.append(f"owner={str(owner)[:60]!r} (oczekiwany obiekt {{email, name}} albo null)")
+        return cls(status=status, nazwa=str(kmp.get("name") or "").strip(), granty=granty,
+                   wlasciciel=wlasciciel), pominiete
 
 
 @dataclass
@@ -181,6 +203,7 @@ class ZrodloJFTools(ZrodloPlikowe):
                  zegar: Callable[[], float] = time.time) -> None:
         super().__init__(sciezka)
         self.url = baza_url(url) + SCIEZKA_UPRAWNIEN
+        self.klucze = KluczeJFTools(url, sekret, limit_s=limit_s, zegar=zegar)
         self.waznosc_s = waznosc_s
         self.waznosc_bez_dostepu_s = waznosc_bez_dostepu_s
         self.przerwa_po_bledzie_s = przerwa_po_bledzie_s
@@ -226,12 +249,27 @@ class ZrodloJFTools(ZrodloPlikowe):
                     f"{'ostatnio znane z ' + _godzina(p.czas) if dostep else 'zero uprawnien'}")
                 return dostep, ostrzezenie
             if pominiete:
-                log(f"UWAGA JFTools komputer {komputer}: granty z nieznanym poziomem pominiete: {', '.join(pominiete)}")
+                log(f"UWAGA JFTools komputer {komputer}: pominiete z odpowiedzi (granty z nieznanym poziomem, zly owner): {', '.join(pominiete)}")
             poprzedni = p.znany.status if p.znany else None
             if nowy.status != poprzedni or p.blad_czas is not None:
                 log(f"JFTools komputer {komputer}: status {nowy.status}, tematow {len(nowy.granty)}")
+            if nowy.status != poprzedni:
+                self._oznacz_wygasly(komputer, nowy.status == NIEZNANY)
             p.znany, p.czas, p.blad_czas, p.blad = nowy, self.zegar(), None, None
             return nowy, None
+
+    def _oznacz_wygasly(self, komputer: str, wygasl: bool) -> None:
+        """Komputer usuniety z JFTools (404) -> `wygasl` na jego wpisie automatycznym; wrocil -> znacznik znika."""
+        try:
+            if osoby_mod.oznacz_wygasly(komputer, wygasl, self.sciezka):
+                log(f"osoby: {osoby_mod.osoba_komputera(komputer)} "
+                    f"{'oznaczony jako wygasl (komputer usuniety z JFTools)' if wygasl else 'juz nie wygasl'}")
+        except Exception as e:  # nie przerywa odpowiedzi - dostep i tak liczy sie z JFTools, ale glosno
+            log(f"BLAD zapisu znacznika wygasl dla komputera {komputer} w {self.sciezka}: {e!r}")
+
+    def wpis_osoby(self, osoba: str) -> dict | None:
+        """Sprawdzony wpis osoby z osoby.json (token_sha256, admin, uprawnienia, komputer) albo None."""
+        return self._odswiez().get(osoba)
 
     def uprawnienia(self, osoba: str) -> Uprawnienia:
         wpis = self._odswiez().get(osoba)
@@ -250,12 +288,72 @@ class ZrodloJFTools(ZrodloPlikowe):
         zrodlo = f"JFTools ({GDZIE_NADAC}), komputer {kto}"
         if dostep.status != "active":
             return Uprawnienia(osoba=osoba, komunikat=KOMUNIKATY_STATUSU.get(dostep.status, KOMUNIKAT_NIEZNANY),
-                               zrodlo=zrodlo, ostrzezenie=ostrzezenie)
-        return Uprawnienia(osoba=osoba, tematy=dict(dostep.granty), zrodlo=zrodlo, ostrzezenie=ostrzezenie)
+                               zrodlo=zrodlo, ostrzezenie=ostrzezenie, status=dostep.status)
+        return Uprawnienia(osoba=osoba, tematy=dict(dostep.granty), zrodlo=zrodlo, ostrzezenie=ostrzezenie,
+                           status=dostep.status)
 
     def stan(self) -> dict:
         """Do znacznika zycia serwera."""
-        return {"tryb": TRYB_JFTOOLS, "url": self.url, "ostatni_blad": self.ostatni_blad}
+        return {"tryb": TRYB_JFTOOLS, "url": self.url, "ostatni_blad": self.ostatni_blad,
+                "ostatni_blad_kluczy": self.klucze.ostatni_blad}
+
+
+# --------------------------------------------------------------------------- klucze komputerow (krok 3)
+
+
+class KluczeJFTools:
+    """GET <baza>/keys: {computers: [{id, name, status, publicKey: "ssh-ed25519 <b64>"}]} - tylko pending i active
+    (zablokowanych i usunietych wtyczka nie podaje). Sluzy wylacznie do sprawdzenia podpisu przy /klient/token."""
+
+    def __init__(self, url: str = URL_DOMYSLNY, sekret: str = "", *, pobierz: Callable[[], Any] | None = None,
+                 limit_s: float = LIMIT_ZAPYTANIA_S, waznosc_s: float = WAZNOSC_KLUCZY_S,
+                 odstep_s: float = ODSTEP_KLUCZY_S, zegar: Callable[[], float] = time.time) -> None:
+        self.url = baza_url(url) + SCIEZKA_KLUCZY
+        self.waznosc_s = waznosc_s
+        self.odstep_s = odstep_s
+        self.zegar = zegar
+        self._pobierz = pobierz or (lambda: pobierz_json(self.url, sekret, limit_s))
+        self._znane: dict[str, dict] = {}
+        self._czas: float | None = None
+        self._zamek = threading.Lock()
+        self.ostatni_blad: str | None = None
+
+    @staticmethod
+    def _z_odpowiedzi(dane: Any) -> dict[str, dict]:
+        if not isinstance(dane, dict) or not isinstance(dane.get("computers"), list):
+            raise BladJFTools("keys: odpowiedz bez listy computers")
+        wynik: dict[str, dict] = {}
+        for k in dane["computers"]:
+            if not isinstance(k, dict):
+                continue
+            kid = k.get("id")
+            kid = str(kid).strip() if isinstance(kid, (str, int)) and not isinstance(kid, bool) else ""
+            if ID_KOMPUTERA.match(kid) and isinstance(k.get("publicKey"), str):
+                wynik[kid] = {"publicKey": k["publicKey"], "name": str(k.get("name") or "").strip(),
+                              "status": str(k.get("status") or "").strip().lower()}
+        return wynik
+
+    def klucz(self, komputer: str) -> dict | None:
+        """{publicKey, name, status} komputera albo None (nie ma go w keys: zablokowany, usuniety, nieznany).
+        JFTools nie odpowiada = BladJFTools (bez klucza nie ma czym sprawdzic podpisu - nic z pamieci)."""
+        with self._zamek:
+            teraz = self.zegar()
+            if self._czas is not None and teraz - self._czas < self.waznosc_s and komputer in self._znane:
+                return self._znane[komputer]
+            if self._czas is not None and teraz - self._czas < self.odstep_s:
+                return self._znane.get(komputer)
+            try:
+                dane = self._pobierz()
+                if dane in (NIEZNANY, ZLE_ID):
+                    raise BladJFTools(f"HTTP {404 if dane == NIEZNANY else 400} na keys")
+                self._znane = self._z_odpowiedzi(dane)
+            except Exception as e:
+                opis = str(e)[:200] if isinstance(e, BladJFTools) else f"{type(e).__name__}: {str(e)[:200]}"
+                self.ostatni_blad = f"{_godzina(self.zegar())}: {opis}"
+                log(f"BLAD JFTools (keys): {opis}")
+                raise BladJFTools(opis) from None
+            self._czas = self.zegar()
+            return self._znane.get(komputer)
 
 
 # --------------------------------------------------------------------------- tematy

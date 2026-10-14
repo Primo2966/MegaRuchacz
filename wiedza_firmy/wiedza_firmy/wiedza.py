@@ -174,9 +174,13 @@ class Wiedza:
                    data_ustalenia: str | None = None, autor: str | None = None,
                    zrodlo: str = "", program: str = "", tematy_dodatkowe: list[str] | None = None) -> dict:
         """Kazda osoba z tokenem, do dowolnego tematu (takze niewidocznego dla niej). Autor: u nie-admina
-        zawsze osoba z tokenu (parametr `autor` ignorowany); admin moze wpisac cudze ustalenie."""
+        zawsze osoba z tokenu (parametr `autor` ignorowany); admin moze wpisac cudze ustalenie.
+        Wyjatek (0.4.0): osoba, ktorej komputer w JFTools nie jest active, nie zapisuje nic."""
         if not upr.osoba:
             return {"blad": BRAK_OSOBY}
+        if upr.status is not None and upr.status != "active":
+            # komputer z JFTools oczekujacy, zablokowany albo usuniety: ani czytania, ani zapisu (0.4.0)
+            return {"blad": upr.komunikat or KOMUNIKAT_BRAK_UPRAWNIEN}
         tematy, blad, _uwaga = self._tematy()
         if blad:
             return {"blad": blad}

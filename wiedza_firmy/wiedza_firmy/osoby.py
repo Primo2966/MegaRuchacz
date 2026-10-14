@@ -14,6 +14,10 @@ CLI:
 
 Krok 2 (WIEDZA_FIRMY_UPRAWNIENIA=jftools): tematy i poziomy osoby bierze serwer z JFTools dla jej
 komputera; `nadaj`/`odbierz` dzialaja wtedy tylko na plik i nie maja wplywu. Admin zostaje w tym pliku.
+
+Krok 3 (0.4.0): komputer sam bierze token (POST /klient/token, wydaj_token_komputera). Wpis nazywa sie
+`komputer-<id>`: {token_sha256, admin: false, uprawnienia: {}, komputer, wystawiony, wystawil: "auto"};
+komputer usuniety z JFTools (404) dostaje `wygasl: <czas>` (oznacz_wygasly).
 """
 
 from __future__ import annotations
@@ -22,6 +26,8 @@ import argparse
 import re
 import secrets
 import sys
+import threading
+import time
 from pathlib import Path
 
 from . import sciezki, tematy
@@ -31,6 +37,20 @@ from .uprawnienia import POZIOMY, TAJNE, skrot_tokenu
 
 class BladOsob(ValueError):
     pass
+
+
+PREFIKS_KOMPUTERA = "komputer-"
+WYSTAWIL_AUTO = "auto"
+# Zapis osoby.json z serwera (tokeny komputerow, znacznik wygasl) idzie z wielu watkow naraz - jeden na raz.
+_ZAMEK_ZAPISU = threading.Lock()
+
+
+def osoba_komputera(komputer: str) -> str:
+    return f"{PREFIKS_KOMPUTERA}{komputer}"
+
+
+def _czas() -> str:
+    return time.strftime("%Y-%m-%dT%H:%M:%S")
 
 
 def _wczytaj(sciezka: Path) -> dict:
@@ -122,6 +142,54 @@ def ustaw_komputer(osoba: str, komputer: str | None, sciezka: Path | None = None
     zapisz_json(sciezka, dane)
 
 
+def wydaj_token_komputera(komputer: str, wymien: bool = False, sciezka: Path | None = None) -> tuple[str | None, str]:
+    """(token, wynik) dla komputera, ktory podpisal prosbe swoim kluczem (sprawdza klienci.py, nie ta funkcja).
+    wynik: "wydano" | "wymieniono" | "juz_wydany" (jest token, a nie ma wymien) | "reczny" (wpis o tej nazwie
+    zalozono recznie - automat go nie nadpisze). Token tylko przy wydano/wymieniono, raz."""
+    sciezka = sciezka or sciezki.plik_osob()
+    if not re.match(r"^[1-9][0-9]{0,9}$", str(komputer)):
+        raise BladOsob(f"id komputera {komputer!r} - numer komputera z JFTools")
+    osoba = osoba_komputera(komputer)
+    with _ZAMEK_ZAPISU:
+        dane = _wczytaj(sciezka)
+        wpis = dane.get(osoba)
+        if wpis is not None and (not isinstance(wpis, dict) or wpis.get("wystawil") != WYSTAWIL_AUTO):
+            return None, "reczny"
+        if wpis is not None and wpis.get("token_sha256") and not wymien:
+            return None, "juz_wydany"
+        token = nowy_token()
+        if wpis is None:
+            dane[osoba] = {"token_sha256": skrot_tokenu(token), "admin": False, "uprawnienia": {},
+                           "komputer": str(komputer), "wystawiony": _czas(), "wystawil": WYSTAWIL_AUTO}
+            wynik = "wydano"
+        else:
+            wpis["token_sha256"] = skrot_tokenu(token)
+            wpis["wymieniony"] = _czas()
+            wynik = "wymieniono"
+        zapisz_json(sciezka, dane)
+    return token, wynik
+
+
+def oznacz_wygasly(komputer: str, wygasl: bool, sciezka: Path | None = None) -> bool:
+    """Znacznik `wygasl` na wpisie `komputer-<id>` (komputer usuniety z JFTools albo wrocil). True = zmiana.
+    Sam znacznik niczego nie odbiera - dostep i tak liczy sie od nowa z JFTools; to slad dla admina."""
+    sciezka = sciezka or sciezki.plik_osob()
+    osoba = osoba_komputera(komputer)
+    with _ZAMEK_ZAPISU:
+        dane = _wczytaj(sciezka)
+        wpis = dane.get(osoba)
+        if not isinstance(wpis, dict) or wpis.get("wystawil") != WYSTAWIL_AUTO:
+            return False
+        if wygasl == bool(wpis.get("wygasl")):
+            return False
+        if wygasl:
+            wpis["wygasl"] = _czas()
+        else:
+            wpis.pop("wygasl", None)
+        zapisz_json(sciezka, dane)
+    return True
+
+
 def main(argv: list[str] | None = None) -> int:
     utf8_na_wyjsciu()
     p = argparse.ArgumentParser(prog="python -m wiedza_firmy.osoby")
@@ -174,7 +242,9 @@ def main(argv: list[str] | None = None) -> int:
             for osoba, wpis in dane.items():
                 upr = ", ".join(f"{k}: {v}" for k, v in (wpis.get("uprawnienia") or {}).items()) or "brak uprawnien"
                 komputer = f" [komputer {wpis['komputer']}]" if wpis.get("komputer") else ""
-                print(f"{osoba}{' [admin]' if wpis.get('admin') is True else ''}{komputer} - {upr}")
+                auto = " [token automatyczny]" if wpis.get("wystawil") == WYSTAWIL_AUTO else ""
+                wygasl = f" [WYGASL {wpis['wygasl']}: komputer usuniety z JFTools]" if wpis.get("wygasl") else ""
+                print(f"{osoba}{' [admin]' if wpis.get('admin') is True else ''}{komputer}{auto}{wygasl} - {upr}")
     except (BladOsob, tematy.BladTematow, OSError, ValueError) as e:
         print(f"ODMOWA: {e}", file=sys.stderr)
         return 1
