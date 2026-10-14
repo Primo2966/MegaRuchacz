@@ -157,7 +157,10 @@ function Kandydaci-Programu([string]$n) {
   $k = switch ($n) {
     "git"      { @("$mr\git\cmd\git.exe", "$wg\Links\git.exe", "$wg\Packages\Git.MinGit_*\cmd\git.exe", "$la\Programs\Git\cmd\git.exe", "$pf\Git\cmd\git.exe") }
     "node"     { @("$mr\node\node.exe", "$wg\Links\node.exe", "$wg\Packages\OpenJS.NodeJS.LTS_*\node-v*\node.exe", "$pf\nodejs\node.exe") }
-    "bash"     { @("$la\Programs\Git\bin\bash.exe", "$pf\Git\bin\bash.exe") }
+    # Git for Windows tylko dla uzytkownika (instalator z /CURRENTUSER - tak instaluje go zaleznosci.ps1,
+    # tak samo winget Git.Git --scope user), dla wszystkich (takze 64-bitowy widziany z 32-bitowego
+    # PowerShella) i ze scoopa
+    "bash"     { @("$la\Programs\Git\bin\bash.exe", "$pf\Git\bin\bash.exe", "$env:ProgramW6432\Git\bin\bash.exe", "${env:ProgramFiles(x86)}\Git\bin\bash.exe", "$up\scoop\apps\git\current\bin\bash.exe") }
     "claude"   { @("$up\.local\bin\claude.exe", "$ad\npm\claude.cmd") }
     "codex"    { @("$ad\npm\codex.cmd", "$la\Programs\OpenAI\Codex\bin\codex.exe") }
     "opencode" { @("$ad\npm\opencode.cmd", "$up\.opencode\bin\opencode.exe") }
@@ -171,6 +174,7 @@ function Kandydaci-Programu([string]$n) {
 # Pelna sciezka programu albo $null. Znaleziony poza PATH trafia na PATH TEGO procesu, zeby
 # skrypty potomne (straznik, skille.ps1) znalazly go golym "git".
 function Znajdz-Program([string]$nazwa) {
+  if ($nazwa -eq "bash") { return (Znajdz-Basha) }
   if ($nazwa -eq "uv") {
     $u = Znajdz-Uv
     if ($u) { Dodaj-Do-Path (Split-Path -Parent $u) }
@@ -181,6 +185,42 @@ function Znajdz-Program([string]$nazwa) {
   foreach ($kand in (Kandydaci-Programu $nazwa)) {
     $traf = Get-ChildItem -Path $kand -ErrorAction SilentlyContinue | Select-Object -First 1
     if ($traf) { Dodaj-Do-Path (Split-Path -Parent $traf.FullName); return $traf.FullName }
+  }
+  return $null
+}
+
+# Git Bash = <korzen Git for Windows>\bin\bash.exe. Claude Code na Windows szuka go tak (odczytane
+# z claude.exe 2.1.x, 2026-10-14): zmienna CLAUDE_CODE_GIT_BASH_PATH (plik bash.exe/sh.exe, ktory
+# istnieje), potem na sztywno C:\Program Files\Git i C:\Program Files (x86)\Git, potem pierwszy git
+# z PATH -> ..\..\bin\bash.exe. Ten sam porzadek tutaj, plus znane miejsca i kazdy git z PATH.
+# MinGit (przenosny git sprzed 0.33) basha nie ma - sam git to jeszcze nie Git Bash. bash.exe
+# z System32 albo WindowsApps to WSL - liczy sie tylko bash lezacy w drzewie Git for Windows.
+$script:ZmiennaBasha = "CLAUDE_CODE_GIT_BASH_PATH"
+
+function Bash-W-Drzewie-Gita([string]$plik) {
+  # cmd\git.exe, bin\bash.exe -> korzen dwa poziomy wyzej; mingw64\bin\git.exe, usr\bin\bash.exe -> trzy
+  $d = Split-Path -Parent $plik
+  foreach ($i in 1..2) {
+    if (-not $d) { return $null }
+    $d = Split-Path -Parent $d
+    if (-not $d) { return $null }
+    $b = Join-Path $d "bin\bash.exe"
+    if (Test-Path -LiteralPath $b -PathType Leaf) { return $b }
+  }
+  return $null
+}
+
+function Znajdz-Basha {
+  $zm = [Environment]::GetEnvironmentVariable($script:ZmiennaBasha)
+  if ($zm -and ((Split-Path -Leaf $zm) -match '^(bash|sh)(\.exe)?$') -and (Test-Path -LiteralPath $zm -PathType Leaf)) { return $zm }
+  foreach ($kand in (Kandydaci-Programu "bash")) { if (Test-Path -LiteralPath $kand -PathType Leaf) { return $kand } }
+  $gity = @(Get-Command git -CommandType Application -All -ErrorAction SilentlyContinue | ForEach-Object { $_.Source })
+  $gity += @(Kandydaci-Programu "git" | ForEach-Object { Get-ChildItem -Path $_ -ErrorAction SilentlyContinue } | ForEach-Object { $_.FullName })
+  # bash z PATH tez tylko przez drzewo gita - WSL (C:\Windows\System32\bash.exe) odpada sam
+  $bashe = @(Get-Command bash -CommandType Application -All -ErrorAction SilentlyContinue | ForEach-Object { $_.Source })
+  foreach ($p in @($gity + $bashe)) {
+    $b = Bash-W-Drzewie-Gita $p
+    if ($b) { return $b }
   }
   return $null
 }
@@ -199,7 +239,7 @@ $script:OpisyProgramow = @{
   python   = "Python 3.12 (Lore i cykl wiedzy)"
   git      = "git (aktualizacje MegaRuchacza, skille)"
   node     = "Node.js (hooki: przypomnienie i rejestr workerow)"
-  bash     = "Git Bash (powloka hookow Claude Code)"
+  bash     = "Git Bash z Git for Windows (Claude Code na Windows i hooki MegaRuchacza)"
   claude   = "Claude Code CLI (wylawianie faktow z rozmow)"
   codex    = "Codex CLI (wylawianie faktow z rozmow)"
   opencode = "opencode"
@@ -229,7 +269,9 @@ function Odmowa-Brak-Programow {
   $lista = @($script:MR.brakuje)
   if ($lista.Count -eq 0) { return }
   $opis = ($lista | ForEach-Object { "$_ - $($script:OpisyProgramow[$_])" }) -join "; "
-  Zakoncz $false ("brakuje programow: $opis. Zainstaluj je: narzedzia\instalacja\zaleznosci.ps1 -Akcja Instaluj -Potrzebne " + ($lista -join ","))
+  $wstep = "brakuje"
+  if ($lista -contains "bash") { $wstep = "Nie ma Git Bash (czesc Git for Windows) - bez niego Claude Code na Windows i hooki MegaRuchacza nie dzialaja, wiec nie instaluje dalej. Brakuje" }
+  Zakoncz $false ("$wstep programow: $opis. Zainstaluj je: narzedzia\instalacja\zaleznosci.ps1 -Akcja Instaluj -Potrzebne " + ($lista -join ","))
 }
 
 # ---------------------------------------------------------------- rejestr modulow

@@ -1,10 +1,13 @@
 ﻿# instalator\pobierz.ps1 - tryb pobieranie instalatora (czysty komputer), osobny proces
 # uruchamiany przez okno (instalator\ekrany.ps1, Plan-Pobierania).
 #   -Co git   zdobywa program git: jest w systemie -> nic nie robi; nie ma -> narzedzia\instalacja\
-#             zaleznosci.ps1 z pobranego ZIP-a (-Akcja Instaluj -Potrzebne git); nadal nie ma ->
-#             przenosny MinGit z git-for-windows (GitHub) do %LOCALAPPDATA%\MegaRuchacz\git (tam,
-#             gdzie kladzie go zaleznosci.ps1 - skrypty modulow szukaja go tez tam) i jego cmd\ do
-#             PATH uzytkownika (bez administratora).
+#             zaleznosci.ps1 z pobranego ZIP-a (-Akcja Instaluj -Potrzebne git) - pelny Git for
+#             Windows z Git Bash, po cichu i tylko dla uzytkownika; nadal nie ma -> ostatnia deska:
+#             przenosny MinGit z git-for-windows (GitHub) do %LOCALAPPDATA%\MegaRuchacz\git (skrypty
+#             modulow szukaja go tez tam) i jego cmd\ do PATH uzytkownika (bez administratora).
+#             MinGit to SAM git, bez Git Bash - wystarczy do klonu; basha doinstalowuje potem
+#             instalator z pobranego folderu (krok programow, zaleznosci.ps1) i tam, gdy sie nie
+#             uda, staje blad.
 #   -Co klon  git clone repozytorium MegaRuchacza do -Folder (pusty albo nowy; folder z gotowym
 #             klonem MegaRuchacza = uzyj go). Klon, nie ZIP: aktualizacje to git fetch + merge.
 # Wyjscie jak modul-*.ps1 (umowa z P59b): linie KROK: / UWAGA: i ostatnia
@@ -151,7 +154,7 @@ if ($Co -eq 'git') {
     Uwaga "Narzędzie zależności nie dało gita (kod $kod$(if ($kom) { ': ' + $kom })) - pobieram wersję przenośną."
   }
 
-  Krok 'Szukam najnowszej przenośnej wersji gita (MinGit z git-for-windows na GitHubie)'
+  Krok 'Szukam najnowszej przenośnej wersji gita (MinGit z git-for-windows na GitHubie - sam git do pobrania MegaRuchacza, Git Bash doinstaluje potem instalator)'
   try {
     [Net.ServicePointManager]::SecurityProtocol = [Net.ServicePointManager]::SecurityProtocol -bor [Net.SecurityProtocolType]::Tls12
     $rel = Invoke-RestMethod -Uri 'https://api.github.com/repos/git-for-windows/git/releases/latest' -UseBasicParsing -TimeoutSec 30 -Headers @{ 'User-Agent' = 'MegaRuchacz-instalator' }

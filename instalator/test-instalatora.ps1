@@ -8,6 +8,8 @@
 #    zaleznosci.ps1 i wpisz-zasady.ps1 (wypisuja KROK/UWAGA/WYNIK jak w umowie z P59b; lore za
 #    pierwszym razem celowo konczy sie bledem, skille milknie na 5 s, kopia pisze w stronie
 #    kodowej OEM) oraz atrapy zlamanej umowy (brak WYNIK, ok:true z kodem 1, smieci zamiast JSON);
+#    scenariusz 'bezbasha' bierze PRAWDZIWY zaleznosci.ps1 w srodowisku bez gita i basha, z atrapa
+#    instalatora Git for Windows bez basha - okno ma stanac z bledem "Nie ma Git Bash";
 #  - kazdy scenariusz to osobny katalog domowy w katalogu roboczym (nigdy prawdziwy ~) i okno
 #    z -PozaEkranem (-5000, 0, bez paska zadan, bez aktywacji) i -Scenariusz: scenariusz klika,
 #    robi zrzuty (DrawToBitmap) i sprawdza, czy nic nie wystaje poza karte ani nie jest uciete;
@@ -663,6 +665,72 @@ $script:TestKroki = @(
   [void](Ocen-Raport 'przerwanie' $sc $r)
   $sieroty = @(Get-CimInstance Win32_Process -Filter "Name='powershell.exe'" | Where-Object { $_.CommandLine -like "*$Atrapy*modul-wiedza*" })
   Wynik 'przerwanie - zaden proces atrapy nie zostal' ($sieroty.Count -eq 0) "zostalo $($sieroty.Count)"
+}
+
+# --- I. brak Git Bash: PRAWDZIWY zaleznosci.ps1 w oknie (proba negatywna) -----------------
+# Komputer bez gita i basha, a instalator Git for Windows (atrapa) daje sam git - jak MinGit. Okno ma
+# stanac na kroku programow z bledem "Nie ma Git Bash", a nie isc dalej ani skonczyc sukcesem.
+# zaleznosci.ps1 w atrapach to nakladka: prawdziwy skrypt z repo w srodowisku bez gita (PATH
+# systemowy, puste Program Files, wlasne LOCALAPPDATA), z -BezWinget i -BezZmianyPath (nic do PATH
+# ani zmiennych uzytkownika). -Proba okna nakladka celowo pomija - proba pokazuje tylko plan.
+if (Chce 'bezbasha') {
+  $ab = Join-Path $Robocze 'atrapy-bez-basha'
+  New-Item -ItemType Directory -Force -Path $ab | Out-Null
+  foreach ($id in $nazwyAtrap.Keys) { Zapisz-Bom (Join-Path $ab "modul-$id.ps1") ($wzorModulu.Replace('__ID__', $id).Replace('__NAZWA__', $nazwyAtrap[$id])) }
+  Zapisz-Bom (Join-Path $ab 'wpisz-zasady.ps1') $wpisz
+  # atrapa instalatora Git for Windows: kladzie jak Inno z /CURRENTUSER %LOCALAPPDATA%\Programs\Git\cmd\git.exe - bez bin\bash.exe
+  $inst = Join-Path $ab 'atrapa-instalator-gita-bez-basha.exe'
+  Add-Type -OutputType ConsoleApplication -OutputAssembly $inst -TypeDefinition @'
+using System; using System.IO;
+public static class AtrapaInstalatoraGita {
+  public static int Main(string[] a) {
+    string ja = System.Reflection.Assembly.GetEntryAssembly().Location;
+    if (Path.GetFileName(ja).ToLowerInvariant() == "git.exe") { Console.WriteLine("git version 2.99.0.windows.1 (atrapa)"); return 0; }
+    File.AppendAllText(ja + ".log", string.Join(" ", a) + Environment.NewLine);
+    string cmd = Path.Combine(Environment.GetEnvironmentVariable("LOCALAPPDATA"), "Programs\\Git\\cmd");
+    Directory.CreateDirectory(cmd);
+    File.Copy(ja, Path.Combine(cmd, "git.exe"), true);
+    return 0;
+  }
+}
+'@
+  $la = Join-Path $Robocze 'bez-basha-localappdata'; $pf = Join-Path $Robocze 'bez-basha-programfiles'
+  New-Item -ItemType Directory -Force -Path $la, $pf | Out-Null
+  $nakladka = @'
+# ATRAPA zaleznosci.ps1 BEZ BASHA (test instalatora): prawdziwy zaleznosci.ps1 w srodowisku bez gita i basha.
+param([string]$Akcja = '', [string[]]$Potrzebne = @(), [switch]$Proba)
+[System.IO.File]::AppendAllText((Join-Path $PSScriptRoot 'wywolania.log'), ("{0}|zaleznosci|{1}|Potrzebne={2}|Proba={3}`r`n" -f (Get-Date -Format 'HH:mm:ss.fff'), $Akcja, ($Potrzebne -join '#'), [bool]$Proba), (New-Object System.Text.UTF8Encoding($false)))
+$env:PATH = "$env:SystemRoot\System32;$env:SystemRoot;$env:SystemRoot\System32\WindowsPowerShell\v1.0"
+$env:LOCALAPPDATA = '__LA__'; $env:ProgramFiles = '__PF__'; ${env:ProgramFiles(x86)} = '__PF__'; $env:ProgramW6432 = '__PF__'
+Remove-Item -LiteralPath Env:CLAUDE_CODE_GIT_BASH_PATH -ErrorAction SilentlyContinue
+$a = @('-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-File', '__ZAL__', '-Akcja', $Akcja, '-Potrzebne', ($Potrzebne -join ','), '-BezWinget', '-BezZmianyPath', '-KatalogProgramow', '__KP__', '-InstalatorGita', '__INST__')
+& (Join-Path $PSHOME 'powershell.exe') @a
+exit $LASTEXITCODE
+'@
+  Zapisz-Bom (Join-Path $ab 'zaleznosci.ps1') $nakladka.Replace('__LA__', $la).Replace('__PF__', $pf).Replace('__ZAL__', (Join-Path $Repo 'narzedzia\instalacja\zaleznosci.ps1')).Replace('__KP__', (Join-Path $Robocze 'bez-basha-programy')).Replace('__INST__', $inst)
+  $dom = Nowy-Dom 'bezbasha'
+  $sc = Zapisz-Scenariusz 'bezbasha' @'
+$script:TestKroki = @(
+  @{ N = 'dalej'; Czekaj = { $script:Ekran -eq 'powitanie' }; Zrob = { $script:BDalej.PerformClick() } },
+  @{ N = 'tylko skille (git)'; Czekaj = { $script:Ekran -eq 'wybor' }; Zrob = { foreach ($m in @('wiedza', 'lore', 'kierownik')) { $script:CheckboxyModulow.$m.Checked = $false }; $script:CheckboxyModulow.skille.Checked = $true } },
+  @{ N = 'do podsumowania'; Zrob = { $script:BDalej.PerformClick() } },
+  @{ N = 'podsumowanie - brakuje Git i Git Bash'; Czekaj = { ($script:Ekran -eq 'podsumowanie') -and $script:Sprawdzenie -and ($script:Sprawdzenie.Zadanie.Stan -ne 'trwa') }; Limit = 120; Zrzut = '27-bez-basha-podsumowanie'; Sprawdz = { $ids = @($script:PlanDoWykonania | ForEach-Object { $_.Id }) -join ','; Tak (($ids -eq 'zapamietaj,zaleznosci-Instaluj,baza-Instaluj,skille-Instaluj,zasady') -and ($script:LProgramy.Text -like 'Brakuje: Git, Git Bash *')) "plan: $ids; programy: $($script:LProgramy.Text)" } },
+  @{ N = 'zainstaluj'; Zrob = { $script:BDalej.PerformClick() } },
+  @{ N = 'blad w oknie, nie sukces'; Czekaj = { @('blad', 'gotowe') -contains $script:PlanStan }; Limit = 180; Zrzut = '28-bez-basha-blad'; Sprawdz = { $z = $script:Plan[$script:PlanIndeks]; $b = @($script:Plan | Where-Object { $_.Id -eq 'baza-Instaluj' })[0]; Tak (($script:PlanStan -eq 'blad') -and ($z.Id -eq 'zaleznosci-Instaluj') -and ($z.Napis -eq 'Programy potrzebne do działania: Git, Git Bash') -and $script:KartaBledu.Visible -and ($script:LBleduTresc.Text -like 'Nie ma Git Bash*') -and ($b.Stan -eq 'czeka') -and ($script:Ekran -ne 'gotowe')) "plan $($script:PlanStan), krok $($z.Id) ($($z.Napis)), baza: $($b.Stan); $($script:LBleduTresc.Text)" } }
+)
+'@
+  $k = [Microsoft.Win32.Registry]::CurrentUser.OpenSubKey('Environment')
+  $przed = [string]$k.GetValue('Path', '', [Microsoft.Win32.RegistryValueOptions]::DoNotExpandEnvironmentNames) + '|' + [string]$k.GetValue('CLAUDE_CODE_GIT_BASH_PATH', '-')
+  $k.Close()
+  $r = Uruchom-Ps $Okno (Argumenty-Okna $dom $sc.Plik $ab) 300
+  [void](Ocen-Raport 'brak Git Bash (proba negatywna)' $sc $r)
+  $wyw = @()
+  if (Test-Path -LiteralPath "$inst.log") { $wyw = @(Get-Content -LiteralPath "$inst.log" | Where-Object { $_.Trim() }) }
+  Wynik 'brak Git Bash - prawdziwa droga: instalator Git for Windows uruchomiony raz, po cichu i dla uzytkownika' (($wyw.Count -eq 1) -and ($wyw[0] -like '*/VERYSILENT*') -and ($wyw[0] -like '*/CURRENTUSER*') -and (Test-Path -LiteralPath (Join-Path $la 'Programs\Git\cmd\git.exe'))) "wywolania: $($wyw -join ' || ')"
+  $k = [Microsoft.Win32.Registry]::CurrentUser.OpenSubKey('Environment')
+  $po = [string]$k.GetValue('Path', '', [Microsoft.Win32.RegistryValueOptions]::DoNotExpandEnvironmentNames) + '|' + [string]$k.GetValue('CLAUDE_CODE_GIT_BASH_PATH', '-')
+  $k.Close()
+  Wynik 'brak Git Bash - PATH i CLAUDE_CODE_GIT_BASH_PATH uzytkownika nietkniete' ($po -eq $przed) ''
 }
 
 # --- P. czysty komputer: okno z folderu bez .git -------------------------------------

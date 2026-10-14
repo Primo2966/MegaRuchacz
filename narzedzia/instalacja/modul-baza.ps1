@@ -8,6 +8,8 @@
 #   - zadanie LoreKoszt - dzienny raport kosztu pamieci, punkt odniesienia alarmu "koszt urosl"
 #     (narzedzia\koszt-pamieci.ps1 -ZalozZadanie)
 #   - sprawdza, ze repo jest klonem git z galezia sledzaca - inaczej aktualizacje nie przyjda
+# Potrzebuje gita (aktualizacje) i Git Bash (Claude Code na Windows bez niego nie dziala, a hook
+# straznika chodzi przez bash) - bez ktoregokolwiek odmowa z bledem; doinstalowuje je zaleznosci.ps1.
 #   - rejestr modulow ~\.claude\mr\instalacja.json: na SWIEZEJ maszynie zaklada go ze wszystkimi
 #     modulami wylaczonymi (okno wlacza potem wybrane); na maszynie sprzed rejestru go nie rusza
 #     (brak pliku znaczy tam "wszystko wlaczone" - tak jak bylo)
@@ -85,8 +87,10 @@ function Zbierz-Stan([hashtable]$prog) {
   elseif ($proc.Count -eq 0) { Problem "nadzorca nie chodzi - ikony przy zegarze nie ma (wstanie przy zalogowaniu albo po Start-ScheduledTask $($script:ZadanieNadzorcy))" }
   if (-not $koszt.Ok) { Problem "raport kosztu: $($koszt.Opis)" }
   if (-not $klon.Ok) { Problem $klon.Opis }
+  $bash = [bool]$prog["bash"]
+  if (-not $bash) { Problem "nie ma Git Bash (Git for Windows) - Claude Code na Windows i hook straznika bez niego nie dzialaja" }
   $zainst = $hook.Ok -and [bool]$zad.Jest
-  $dziala = $zainst -and $zad.Ok -and ($proc -and $proc.Count -gt 0) -and $koszt.Ok -and $klon.Ok
+  $dziala = $zainst -and $zad.Ok -and ($proc -and $proc.Count -gt 0) -and $koszt.Ok -and $klon.Ok -and $bash
   return [pscustomobject]@{ Zainstalowany = $zainst; Dziala = $dziala
     Szczegoly = [ordered]@{ hook = $hook.Opis; nadzorca_zadanie = $zad.Opis; nadzorca_chodzi = $(if ($null -eq $proc) { $null } else { $proc.Count -gt 0 })
                             koszt_zadanie = $koszt.Opis; aktualizacje = $klon.Opis } }
@@ -103,9 +107,8 @@ try {
   }
 
   if ($Akcja -eq "Instaluj") {
-    $prog = Sprawdz-Programy @("git") @("bash")
+    $prog = Sprawdz-Programy @("git", "bash")
     Odmowa-Brak-Programow
-    if (-not $prog["bash"]) { Ostrzezenie "nie widze Git Bash - hooki Claude Code chodza przez bash; Claude Code na Windows i tak go wymaga, zainstaluj Git for Windows" }
     $rej = Rejestr-Do-Zmian $KatalogDomowy
 
     # 1. rejestr modulow na swiezej maszynie

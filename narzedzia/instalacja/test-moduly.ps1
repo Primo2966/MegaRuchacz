@@ -16,6 +16,8 @@
 #   - claude i codex to atrapy w PATH (zapisuja wywolania, pamietaja wpisy MCP); prawdziwych
 #     narzedzi w PATH testu nie ma
 #   - model wektorow: kopia prawdziwego katalogu modelu (bez pobierania 496 MB)
+#   - Git for Windows: atrapa instalatora (maly program konsolowy budowany przez test) - prawdziwego
+#     gita test nie instaluje; srodowisko "bez gita" ma puste Program Files i wlasne LOCALAPPDATA
 # Przed i po: odcisk prawdziwych zadan MegaRuchacza, PATH uzytkownika, rejestru modulow, trybu
 # prawdziwej bazy Lore i procesu nadzorcy - musza sie zgadzac, a zadna prawdziwa konfiguracja nie
 # moze wskazywac katalogu testu. Na koniec znikaja wszystkie zadania MRTEST-* i procesy z kopii.
@@ -115,6 +117,7 @@ function Odcisk-Prawdziwy {
   }
   $k = [Microsoft.Win32.Registry]::CurrentUser.OpenSubKey("Environment")
   $o["path.uzytkownika"] = [string]$k.GetValue("Path", "", [Microsoft.Win32.RegistryValueOptions]::DoNotExpandEnvironmentNames)
+  $o["zmienna.CLAUDE_CODE_GIT_BASH_PATH"] = [string]$k.GetValue("CLAUDE_CODE_GIT_BASH_PATH", "-")
   $k.Close()
   $rej = Join-Path $HOME ".claude\mr\instalacja.json"
   $o["rejestr"] = if (Test-Path $rej) { (Get-FileHash $rej).Hash } else { "-" }
@@ -352,20 +355,138 @@ function Stub-Mcp([string]$dom, [string]$narz) {
 
 # ---------------------------------------------------------------- scenariusze
 
+# Atrapy Git for Windows (bez prawdziwej instalacji gita na tej maszynie): jeden maly program konsolowy.
+#   git.exe / bash.exe          wypisuje wersje (kopie w drzewie "Git for Windows" testu)
+#   atrapa-instalator-gita*.exe udaje instalator: zapisuje przelaczniki do <exe>.log i jak Inno z /CURRENTUSER
+#                               kladzie cmd\git.exe i bin\bash.exe do %LOCALAPPDATA%\Programs\Git;
+#                               "-bez-basha" - tylko git (proba negatywna), "-pada" - kod 5 bez niczego
+function Atrapy-Gita {
+  $kat = Join-Path $T "atrapy-gita"
+  $wzor = Join-Path $kat "atrapa-git.exe"
+  if (Test-Path -LiteralPath $wzor) { return $kat }
+  New-Item -ItemType Directory -Force -Path $kat | Out-Null
+  Add-Type -OutputType ConsoleApplication -OutputAssembly $wzor -TypeDefinition @'
+using System; using System.IO;
+public static class AtrapaGita {
+  public static int Main(string[] a) {
+    string ja = System.Reflection.Assembly.GetEntryAssembly().Location;
+    string nazwa = Path.GetFileNameWithoutExtension(ja).ToLowerInvariant();
+    if (nazwa.StartsWith("atrapa-instalator-gita")) {
+      File.AppendAllText(ja + ".log", string.Join(" ", a) + Environment.NewLine);
+      if (nazwa.EndsWith("-pada")) { Console.Error.WriteLine("atrapa: instalacja przerwana"); return 5; }
+      string dir = Path.Combine(Environment.GetEnvironmentVariable("LOCALAPPDATA"), "Programs\\Git");
+      string wzor = Path.Combine(Path.GetDirectoryName(ja), "atrapa-git.exe");
+      Directory.CreateDirectory(Path.Combine(dir, "cmd"));
+      File.Copy(wzor, Path.Combine(dir, "cmd\\git.exe"), true);
+      if (!nazwa.EndsWith("-bez-basha")) { Directory.CreateDirectory(Path.Combine(dir, "bin")); File.Copy(wzor, Path.Combine(dir, "bin\\bash.exe"), true); }
+      return 0;
+    }
+    if (nazwa == "bash") { Console.WriteLine("GNU bash, version 5.2.37(1)-release (atrapa)"); } else { Console.WriteLine("git version 2.99.0.windows.1 (atrapa)"); }
+    return 0;
+  }
+}
+'@
+  foreach ($n in @("atrapa-instalator-gita", "atrapa-instalator-gita-bez-basha", "atrapa-instalator-gita-pada")) { Copy-Item -LiteralPath $wzor -Destination (Join-Path $kat "$n.exe") }
+  # bash spoza drzewa gita (jak WSL w System32) i bash pod zmienna CLAUDE_CODE_GIT_BASH_PATH
+  foreach ($d in @("obcy-bash", "bash-pod-zmienna")) { New-Item -ItemType Directory -Force -Path (Join-Path $kat $d) | Out-Null; Copy-Item -LiteralPath $wzor -Destination (Join-Path $kat "$d\bash.exe") }
+  return $kat
+}
+
+# Srodowisko bez zadnego gita i basha: PATH systemowy, puste Program Files, LOCALAPPDATA osobne na
+# kazde wywolanie (atrapa instalatora kladzie tam Programs\Git), bez CLAUDE_CODE_GIT_BASH_PATH.
+function Bez-Gita([string]$dom, [string]$nazwa, [hashtable]$dalej = @{}) {
+  $pf = Join-Path $T "pf-pusty"
+  New-Item -ItemType Directory -Force -Path $pf, (Join-Path $T "la-$nazwa") | Out-Null
+  $z = @{ PATH = $Systemowe; LOCALAPPDATA = (Join-Path $T "la-$nazwa"); ProgramFiles = $pf; "ProgramFiles(x86)" = $pf; ProgramW6432 = $pf; CLAUDE_CODE_GIT_BASH_PATH = $null }
+  foreach ($k in $dalej.Keys) { $z[$k] = $dalej[$k] }
+  return (Srodowisko $dom $z)
+}
+
+# Zmiany srodowiska dla Modul: podany PATH, Program Files bez gita, bez CLAUDE_CODE_GIT_BASH_PATH
+# (LOCALAPPDATA testu nie ma Programs\Git - atrapy instalatora kladzie on gdzie indziej).
+function Bez-Basha-Zmiany([string]$path) {
+  $pf = Join-Path $T "pf-pusty"
+  New-Item -ItemType Directory -Force -Path $pf | Out-Null
+  return @{ PATH = $path; ProgramFiles = $pf; "ProgramFiles(x86)" = $pf; ProgramW6432 = $pf; CLAUDE_CODE_GIT_BASH_PATH = $null }
+}
+
+# Katalog z gitem bez basha obok (jak MinGit) - do PATH testu.
+function Git-Bez-Basha {
+  $k = Join-Path $T "git-bez-basha\cmd"
+  if (-not (Test-Path -LiteralPath (Join-Path $k "git.exe"))) {
+    New-Item -ItemType Directory -Force -Path $k | Out-Null
+    Copy-Item -LiteralPath (Join-Path (Atrapy-Gita) "atrapa-git.exe") -Destination (Join-Path $k "git.exe")
+  }
+  return $k
+}
+
+function Wywolania-Instalatora([string]$exe) {
+  $p = "$exe.log"
+  if (-not (Test-Path -LiteralPath $p)) { return @() }
+  return @(Get-Content -LiteralPath $p | Where-Object { $_.Trim() })
+}
+
 function Scenariusz-Zaleznosci {
   $z = Join-Path $Repo "narzedzia\instalacja\zaleznosci.ps1"
   $dom = Dom "zaleznosci"
   $r = Uruchom $z @("-Akcja", "Sprawdz", "-Potrzebne", "uv,python,git,node") (Srodowisko $dom)
-  Sprawdz "zaleznosci: Sprawdz widzi uv, python (przez uv), git, node" (($r.Kod -eq 0) -and $r.W.ok -and (@($r.W.brakuje).Count -eq 0) -and (@($r.W.programy).Count -eq 4)) $r.Tekst
+  $bash = @($r.W.programy | Where-Object { $_.nazwa -eq "bash" })
+  Sprawdz "zaleznosci: Sprawdz widzi uv, python (przez uv), git, node i doklada Git Bash (z drzewa gita z PATH)" (($r.Kod -eq 0) -and $r.W.ok -and (@($r.W.brakuje).Count -eq 0) -and (@($r.W.programy).Count -eq 5) -and ($bash.Count -eq 1) -and (("" + $bash[0].sciezka) -match '\\bin\\bash\.exe$')) $r.Tekst
   $r = Uruchom $z @("-Akcja", "Sprawdz", "-Potrzebne", "uv,cobol") (Srodowisko $dom)
   Sprawdz "zaleznosci: nieznany program = odmowa z lista znanych" (($r.Kod -eq 1) -and ($r.W.komunikat -match "cobol") -and ($r.W.komunikat -match "znam")) $r.Tekst
   # PATH bez katalogu atrap (tam lezy node.exe dla scenariusza kierownik) - nie kasujemy go, bo
-  # kolejne scenariusze go potrzebuja (pelny przebieg padal na tym 02.10)
-  $golo = Srodowisko $dom @{ PATH = $Systemowe }
+  # kolejne scenariusze go potrzebuja (pelny przebieg padal na tym 02.10). Do tego Program Files bez
+  # gita - Git for Windows na maszynie testu (np. domowej) dawalby basha.
+  $golo = Bez-Gita $dom "golo"
   $r = Uruchom $z @("-Akcja", "Sprawdz", "-Potrzebne", "uv,git,node") $golo
-  Sprawdz "zaleznosci: bez programow Sprawdz = ok:false i brakuje uv, git, node" (($r.Kod -eq 1) -and ((@($r.W.brakuje) -join ",") -eq "uv,git,node")) $r.Tekst
+  Sprawdz "zaleznosci: bez programow Sprawdz = ok:false i brakuje uv, git, bash, node" (($r.Kod -eq 1) -and ((@($r.W.brakuje) -join ",") -eq "uv,git,bash,node")) $r.Tekst
+  $r = Uruchom $z @("-Akcja", "Sprawdz", "-Potrzebne", "uv") $golo
+  Sprawdz "zaleznosci: sam uv (kopia zapasowa) nie doklada basha" (($r.Kod -eq 1) -and ((@($r.W.brakuje) -join ",") -eq "uv") -and (@($r.W.programy).Count -eq 1)) $r.Tekst
   $r = Uruchom $z @("-Akcja", "Instaluj", "-Potrzebne", "uv,python,git,node", "-Proba", "-KatalogProgramow", (Join-Path $T "programy-proba")) $golo
-  Sprawdz "zaleznosci: -Proba pokazuje plan (winget albo zip) i niczego nie instaluje" (($r.Kod -eq 0) -and (($r.Kroki -join " ") -match "zip") -and -not (Test-Path (Join-Path $T "programy-proba"))) $r.Tekst
+  $kr = $r.Kroki -join " "
+  Sprawdz "zaleznosci: -Proba pokazuje plan (winget albo zip) i niczego nie instaluje" (($r.Kod -eq 0) -and ($kr -match "zip") -and -not (Test-Path (Join-Path $T "programy-proba"))) $r.Tekst
+  Sprawdz "zaleznosci: -Proba bez gita = pelny Git for Windows po cichu, tylko dla uzytkownika; bash razem z nim" (($kr -match "git: Git for Windows \(pelny, z Git Bash\)") -and ($kr -match "/VERYSILENT") -and ($kr -match "/CURRENTUSER") -and ($kr -notmatch "MinGit") -and ($kr -match "bash: przyjdzie razem z Git for Windows") -and ($kr -match "CLAUDE_CODE_GIT_BASH_PATH")) $r.Tekst
+
+  # Wykrywanie basha: tylko z drzewa Git for Windows albo spod CLAUDE_CODE_GIT_BASH_PATH
+  $ag = Atrapy-Gita
+  $r = Uruchom $z @("-Akcja", "Sprawdz", "-Potrzebne", "bash") (Bez-Gita $dom "obcy" @{ PATH = "$(Join-Path $ag 'obcy-bash');$Systemowe" })
+  Sprawdz "zaleznosci: bash.exe spoza drzewa gita (jak WSL) nie liczy sie za Git Bash (proba negatywna)" (($r.Kod -eq 1) -and ((@($r.W.brakuje) -join ",") -eq "bash")) $r.Tekst
+  $pod = Join-Path $ag "bash-pod-zmienna\bash.exe"
+  $r = Uruchom $z @("-Akcja", "Sprawdz", "-Potrzebne", "bash") (Bez-Gita $dom "zmienna" @{ CLAUDE_CODE_GIT_BASH_PATH = $pod })
+  Sprawdz "zaleznosci: bash spod CLAUDE_CODE_GIT_BASH_PATH sie liczy" (($r.Kod -eq 0) -and (@($r.W.programy)[0].sciezka -eq $pod)) $r.Tekst
+  $r = Uruchom $z @("-Akcja", "Sprawdz", "-Potrzebne", "bash") (Bez-Gita $dom "zmienna-zla" @{ CLAUDE_CODE_GIT_BASH_PATH = (Join-Path $ag "nie-ma\bash.exe") })
+  Sprawdz "zaleznosci: CLAUDE_CODE_GIT_BASH_PATH na plik, ktorego nie ma = brak basha (proba negatywna)" (($r.Kod -eq 1) -and ((@($r.W.brakuje) -join ",") -eq "bash")) $r.Tekst
+
+  # Instalacja Git for Windows na atrapie instalatora (prawdziwego gita ten test nie instaluje)
+  $inst = Join-Path $ag "atrapa-instalator-gita.exe"
+  $r = Uruchom $z @("-Akcja", "Instaluj", "-Potrzebne", "git", "-BezWinget", "-BezZmianyPath", "-InstalatorGita", $inst, "-KatalogProgramow", (Join-Path $T "programy-gfw")) (Bez-Gita $dom "gfw")
+  $gfwBash = Join-Path $T "la-gfw\Programs\Git\bin\bash.exe"
+  $wyw = @(Wywolania-Instalatora $inst)
+  $kr = $r.Kroki -join " "
+  $bash = @($r.W.programy | Where-Object { $_.nazwa -eq "bash" })
+  Sprawdz "zaleznosci: bez gita - instalator Git for Windows RAZ, po cichu i dla uzytkownika (/VERYSILENT /CURRENTUSER), git i bash z niego" (($r.Kod -eq 0) -and ($wyw.Count -eq 1) -and ($wyw[0] -match "/VERYSILENT") -and ($wyw[0] -match "/CURRENTUSER") -and ($wyw[0] -match "/SUPPRESSMSGBOXES") -and ($bash.Count -eq 1) -and ($bash[0].sciezka -eq $gfwBash) -and ($kr -match "bash: zainstalowany")) ("wywolania instalatora: $($wyw -join ' || ') -- " + $r.Tekst)
+  Sprawdz "zaleznosci: jedyny git w PATH to Git for Windows - Claude Code znajdzie basha sam, zmiennej CLAUDE_CODE_GIT_BASH_PATH nie ma" (($kr -match ("Claude Code znajdzie Git Bash sam \(" + [regex]::Escape($gfwBash) + "\)")) -and ($kr -notmatch "CLAUDE_CODE_GIT_BASH_PATH = ")) $r.Tekst
+
+  # Jak u Eli: git jest (MinGit z wersji sprzed 0.33, pierwszy w PATH), basha nie ma - Git for Windows
+  # staje obok, a ze Claude Code wezmie MinGita z PATH i basha obok niego nie znajdzie - zmienna
+  $mingit = Join-Path $T "programy-mingit\git\cmd"
+  New-Item -ItemType Directory -Force -Path $mingit | Out-Null
+  Copy-Item -LiteralPath (Join-Path $ag "atrapa-git.exe") -Destination (Join-Path $mingit "git.exe") -Force
+  Remove-Item -LiteralPath "$inst.log" -Force -ErrorAction SilentlyContinue
+  $r = Uruchom $z @("-Akcja", "Instaluj", "-Potrzebne", "git", "-BezWinget", "-BezZmianyPath", "-InstalatorGita", $inst, "-KatalogProgramow", (Join-Path $T "programy-mingit")) (Bez-Gita $dom "mingit" @{ PATH = "$mingit;$Systemowe" })
+  $kr = $r.Kroki -join " "
+  $minBash = Join-Path $T "la-mingit\Programs\Git\bin\bash.exe"
+  Sprawdz "zaleznosci: git bez basha (MinGit) - doinstalowany Git for Windows, bash jest" (($r.Kod -eq 0) -and ($kr -match "git: jest") -and ($kr -match "bash: brak") -and (@(Wywolania-Instalatora $inst).Count -eq 1) -and (Test-Path -LiteralPath $minBash)) $r.Tekst
+  Sprawdz "zaleznosci: MinGit pierwszy w PATH - bash dostaje zmienna CLAUDE_CODE_GIT_BASH_PATH (z -BezZmianyPath tylko dla procesu)" ($kr -match ("CLAUDE_CODE_GIT_BASH_PATH = " + [regex]::Escape($minBash) + " tylko dla tego procesu")) $r.Tekst
+
+  # Proby negatywne: instalator bez basha i instalator, ktory pada - BLAD z jasnym powodem, nie sukces
+  $bez = Join-Path $ag "atrapa-instalator-gita-bez-basha.exe"
+  $r = Uruchom $z @("-Akcja", "Instaluj", "-Potrzebne", "git,node", "-BezWinget", "-BezZmianyPath", "-InstalatorGita", $bez, "-KatalogProgramow", (Join-Path $T "programy-bez-basha")) (Bez-Gita $dom "bez-basha" @{ PATH = "$Bin;$Systemowe" })
+  Sprawdz "zaleznosci: Git for Windows bez basha = ok:false, 'Nie ma Git Bash' na poczatku komunikatu, instalator tylko RAZ (proba negatywna)" (($r.Kod -eq 1) -and ($r.W.ok -eq $false) -and ($r.W.komunikat -match '^Nie ma Git Bash') -and ($r.W.komunikat -match 'Powod: Git for Windows zainstalowal sie, ale nie ma w nim bash') -and ((@($r.W.brakuje) -join ",") -eq "bash") -and (@(Wywolania-Instalatora $bez).Count -eq 1)) $r.Tekst
+  $pada = Join-Path $ag "atrapa-instalator-gita-pada.exe"
+  $r = Uruchom $z @("-Akcja", "Instaluj", "-Potrzebne", "git", "-BezWinget", "-BezZmianyPath", "-InstalatorGita", $pada, "-KatalogProgramow", (Join-Path $T "programy-pada")) (Bez-Gita $dom "pada")
+  Sprawdz "zaleznosci: instalator Git for Windows z kodem bledu = ok:false z kodem w powodzie, bez drugiej proby (proba negatywna)" (($r.Kod -eq 1) -and ($r.W.komunikat -match '^Nie ma Git Bash') -and ($r.W.komunikat -match 'kodem 5') -and ((@($r.W.brakuje) -join ",") -eq "git,bash") -and (@(Wywolania-Instalatora $pada).Count -eq 1)) $r.Tekst
+
   # brak internetu: serwer posredniczacy, ktorego nie ma (port zamkniety) - tak samo jak brak sieci
   $przed = (Odcisk-Prawdziwy)["path.uzytkownika"]
   $r = Uruchom $z @("-Akcja", "Instaluj", "-Potrzebne", "uv", "-BezWinget", "-Proxy", "http://127.0.0.1:9", "-BezZmianyPath", "-KatalogProgramow", (Join-Path $T "programy-bez-sieci")) $golo
@@ -373,17 +494,16 @@ function Scenariusz-Zaleznosci {
   $r = Uruchom $z @("-Akcja", "Instaluj", "-Potrzebne", "git", "-Proxy", "http://127.0.0.1:9", "-BezZmianyPath", "-KatalogProgramow", (Join-Path $T "programy-bez-sieci")) $golo
   Sprawdz "zaleznosci: brak winget i brak internetu = winget pominiety z powodem, potem odmowa" (($r.Kod -eq 1) -and (($r.Kroki -join " ") -match "winget") -and ((($r.Uwagi -join " ") + $r.W.komunikat) -match "brak internetu|nie odpowiada")) $r.Tekst
   if ($BezSieci) { Info "zaleznosci: prawdziwe pobranie wersji przenosnych pominiete (-BezSieci)"; return }
+  # Prawdziwe pobranie uv i Node. Git for Windows tu NIE idzie (instalowalby sie naprawde na tym
+  # komputerze) - bash jest z drzewa gita w PATH, wiec dolozony przez node bash nic nie instaluje.
+  $zGitem = Bez-Gita $dom "pobrane" @{ PATH = "$KatGit;$Systemowe" }
   $prog = Join-Path $T "programy"
-  $r = Uruchom $z @("-Akcja", "Instaluj", "-Potrzebne", "uv,git,node", "-BezWinget", "-BezZmianyPath", "-KatalogProgramow", $prog) $golo 1800
-  $uvOk = Test-Path (Join-Path $prog "uv\uv.exe"); $gitOk = Test-Path (Join-Path $prog "git\cmd\git.exe"); $nodeOk = Test-Path (Join-Path $prog "node\node.exe")
-  Sprawdz "zaleznosci: instalacja przenosna uv + MinGit + Node do katalogu testu (zip, suma SHA-256)" (($r.Kod -eq 0) -and $uvOk -and $gitOk -and $nodeOk -and (($r.Kroki -join " ") -match "SHA-256")) $r.Tekst
-  if ($gitOk) {
-    $wy = & (Join-Path $prog "git\cmd\git.exe") --version 2>&1
-    Sprawdz "zaleznosci: przenosny git dziala" ($LASTEXITCODE -eq 0) "$wy"
-  }
+  $r = Uruchom $z @("-Akcja", "Instaluj", "-Potrzebne", "uv,node", "-BezWinget", "-BezZmianyPath", "-KatalogProgramow", $prog) $zGitem 1800
+  $uvOk = Test-Path (Join-Path $prog "uv\uv.exe"); $nodeOk = Test-Path (Join-Path $prog "node\node.exe")
+  Sprawdz "zaleznosci: instalacja przenosna uv + Node do katalogu testu (zip, suma SHA-256); bash jest, Git for Windows nieruszany" (($r.Kod -eq 0) -and $uvOk -and $nodeOk -and (($r.Kroki -join " ") -match "SHA-256") -and (($r.Kroki -join " ") -notmatch "Git for Windows")) $r.Tekst
   $r2 = Uruchom $z @("-Akcja", "Instaluj", "-Potrzebne", "python", "-BezWinget", "-BezZmianyPath", "-KatalogProgramow", $prog) (Srodowisko $dom @{ PATH = $Systemowe; UV_PYTHON_INSTALL_DIR = (Join-Path $T "python-test"); UV_PYTHON_PREFERENCE = "only-managed" }) 1800
   Sprawdz "zaleznosci: Python 3.12 przez uv do katalogu testu" (($r2.Kod -eq 0) -and (@(Get-ChildItem (Join-Path $T "python-test") -Directory -Filter "cpython-3.12*" -ErrorAction SilentlyContinue).Count -gt 0)) $r2.Tekst
-  $r3 = Uruchom $z @("-Akcja", "Instaluj", "-Potrzebne", "uv,git,node", "-BezWinget", "-BezZmianyPath", "-KatalogProgramow", $prog) $golo
+  $r3 = Uruchom $z @("-Akcja", "Instaluj", "-Potrzebne", "uv,node", "-BezWinget", "-BezZmianyPath", "-KatalogProgramow", $prog) $zGitem
   Sprawdz "zaleznosci: drugi raz Instaluj = 'wszystko jest', nic nie pobiera" (($r3.Kod -eq 0) -and ($r3.W.komunikat -match "wszystko jest")) $r3.Tekst
   Sprawdz "zaleznosci: PATH uzytkownika nietkniety (-BezZmianyPath)" ((Odcisk-Prawdziwy)["path.uzytkownika"] -eq $przed)
 }
@@ -421,6 +541,11 @@ function Scenariusz-Baza {
   $przed = Odcisk-Domu $dom2
   $r = Modul "baza" "Instaluj" $dom2 @("-BezStartu") @{ PATH = "$Bin;$KatUv;$Systemowe" }
   Sprawdz "baza: brak gita = odmowa, brakuje git, nic nie zmienione" (($r.Kod -eq 1) -and (@($r.W.brakuje) -contains "git") -and ((Odcisk-Domu $dom2) -eq $przed) -and -not (Zadanie "MegaRuchaczNadzorca")) $r.Tekst
+  # git jest (MinGit sprzed 0.33), Git Bash nie ma - BLAD z jasnym komunikatem, nie ostrzezenie
+  $dom4 = Dom "baza-bez-basha"
+  $przed = Odcisk-Domu $dom4
+  $r = Modul "baza" "Instaluj" $dom4 @("-BezStartu") (Bez-Basha-Zmiany "$Bin;$KatUv;$(Git-Bez-Basha);$Systemowe")
+  Sprawdz "baza: git bez Git Bash = odmowa z bledem 'Nie ma Git Bash', nic nie zmienione (proba negatywna)" (($r.Kod -eq 1) -and ($r.W.komunikat -match "^Nie ma Git Bash") -and ((@($r.W.brakuje) -join ",") -eq "bash") -and ((Odcisk-Domu $dom4) -eq $przed) -and -not (Zadanie "MegaRuchaczNadzorca")) $r.Tekst
   # bezpiecznik testu: bez -BezStartu kopia zainstaluj-zasobnik.ps1 probuje wystartowac nadzorce,
   # a w kopii start jest zablokowany - okno nadzorcy z kopii nie moze sie pokazac
   $dom3 = Dom "baza-start"
@@ -588,6 +713,9 @@ function Scenariusz-Kierownik {
   [void](Modul "baza" "Instaluj" $dom @("-BezStartu"))
   . (Join-Path $Repo "narzedzia\instalacja\stan.ps1")
   $s = Czytaj-Instalacje $dom; $s | Add-Member -NotePropertyName narzedzia -NotePropertyValue ([pscustomobject]@{ claude = $true; codex = $true; opencode = $false }) -Force; Zapisz-Instalacje $s $dom
+  $przed = Odcisk-Domu $dom
+  $r = Modul "kierownik" "Instaluj" $dom @() (Bez-Basha-Zmiany "$Bin;$Systemowe")
+  Sprawdz "kierownik: bez Git Bash = odmowa z bledem 'Nie ma Git Bash', kierownik nie wlaczony, nic nie zmienione (proba negatywna)" (($r.Kod -eq 1) -and ($r.W.komunikat -match "^Nie ma Git Bash") -and ((@($r.W.brakuje) -join ",") -eq "bash") -and ((Odcisk-Domu $dom) -eq $przed) -and -not ((Rejestr $dom).moduly.kierownik)) $r.Tekst
   $r = Modul "kierownik" "Instaluj" $dom
   Sprawdz "kierownik: Instaluj ok" ($r.Kod -eq 0) $r.Tekst
   $role = @(Get-ChildItem (Join-Path $dom ".claude\agents") -Filter "*.md" -ErrorAction SilentlyContinue | Where-Object { (Get-Content $_.FullName -Raw) -match "kierownik-template" })

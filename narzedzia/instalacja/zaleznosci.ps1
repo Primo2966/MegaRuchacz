@@ -3,14 +3,24 @@
 #   uv      menedzer srodowisk Pythona (Lore, cykl wiedzy)    winget astral-sh.uv (wersja przenosna)
 #                                                              albo zip z github.com/astral-sh/uv
 #   python  Python 3.12 (Lore, cykl wiedzy)                   uv python install 3.12 (wymaga uv - dokladany sam)
-#   git     aktualizacje MegaRuchacza, skille                 MinGit (zip z github.com/git-for-windows) do
-#                                                              <katalog programow>\git albo winget Git.Git --scope user
+#   git     aktualizacje MegaRuchacza, skille                 PELNY Git for Windows (z Git Bash): instalator
+#   bash    Git Bash - Claude Code na Windows go wymaga,       z github.com/git-for-windows (suma SHA-256), po cichu
+#           hooki MegaRuchacza chodza przez niego             i tylko dla uzytkownika (/VERYSILENT /CURRENTUSER ->
+#                                                              %LOCALAPPDATA%\Programs\Git); gdy sie nie uda -
+#                                                              winget Git.Git --scope user. git i bash = jedna paczka.
 #   node    hooki przypomnienia i rejestru workerow           winget OpenJS.NodeJS.LTS --scope user (zip, bez MSI)
 #                                                              albo zip z nodejs.org
 # WSZYSTKO BEZ UPRAWNIEN ADMINISTRATORA: wersje przenosne w katalogu uzytkownika, katalog dopisany
 # do PATH UZYTKOWNIKA (HKCU\Environment, z zachowaniem %ZMIENNYCH% w istniejacych wpisach).
-# Paczki zip sa sprawdzane suma SHA-256 z tego samego wydania (uv: plik .sha256, MinGit: pole
+# Paczki sa sprawdzane suma SHA-256 z tego samego wydania (uv: plik .sha256, Git for Windows: pole
 # digest albo tabela w opisie wydania, Node: SHASUMS256.txt); zla suma = odmowa, plik usuniety.
+# Git Bash jest dokladany sam, gdy potrzebny jest git albo node (baza i moduly z hookami): bez niego
+# Claude Code na Windows nie dziala, a hooki chodza przez bash. Do 0.33 git byl przenosnym MinGit,
+# ktory basha nie ma - na komputerze z takim gitem Git for Windows staje obok. Przenosnego PortableGit
+# NIE uzywamy: jego samorozpakowujace sie archiwum pokazuje okno postepu nawet z -y (sprawdzone
+# 2026-10-14), a instalator z /VERYSILENT nie pokazuje nic. Bash, ktorego Claude Code sam nie
+# znajdzie (szuka w Program Files i obok pierwszego gita z PATH - Wskaz-Basha-Claude), dostaje
+# zmienna uzytkownika CLAUDE_CODE_GIT_BASH_PATH (nazwa z komunikatu i kodu claude.exe 2.1.x).
 # Juz otwarte okna (Claude Code, nadzorca) nowego PATH nie widza do ponownego uruchomienia -
 # skrypty modulow szukaja programow takze w tych katalogach (wspolne.ps1, Kandydaci-Programu).
 #
@@ -19,7 +29,10 @@
 #     -Akcja Sprawdz|Instaluj -Potrzebne uv,python,git,node [-Proba]
 #     [-KatalogProgramow <kat>]  gdzie klasc wersje przenosne (domyslnie %LOCALAPPDATA%\MegaRuchacz)
 #     [-BezWinget]               od razu paczka zip (winget bywa zepsuty albo go nie ma)
-#     [-BezZmianyPath]           nie dopisuje katalogow do PATH uzytkownika (testy)
+#     [-BezZmianyPath]           nie dopisuje katalogow do PATH uzytkownika ani nie ustawia zmiennej
+#                                uzytkownika CLAUDE_CODE_GIT_BASH_PATH (testy)
+#     [-InstalatorGita <plik>]   (TESTY) gotowy instalator Git for Windows zamiast pobierania z GitHuba,
+#                                bez sumy SHA-256; dostaje te same przelaczniki co prawdziwy
 #     [-Proxy <adres>]           serwer posredniczacy do pobierania (siec firmowa)
 # Sprawdz: ok = wszystkie wymienione sa. Instaluj: ok = po instalacji wszystkie sa i sie uruchamiaja.
 
@@ -31,7 +44,8 @@ param(
   [string]$KatalogProgramow = "",
   [switch]$BezWinget,
   [switch]$BezZmianyPath,
-  [string]$Proxy = ""
+  [string]$Proxy = "",
+  [string]$InstalatorGita = ""
 )
 
 $ErrorActionPreference = "Stop"
@@ -41,15 +55,21 @@ $Zrodlo = Split-Path -Parent (Split-Path -Parent $PSScriptRoot)
 [void](Start-Modul "zaleznosci" $Akcja ([bool]$Proba) $Zrodlo $HOME @("Sprawdz", "Instaluj"))
 if (-not $KatalogProgramow) { $KatalogProgramow = Join-Path $env:LOCALAPPDATA "MegaRuchacz" }
 if ($Proxy) { $env:HTTPS_PROXY = $Proxy; $env:HTTP_PROXY = $Proxy }   # dla uv (python install)
+# Z -BezZmianyPath to zastepuje PATH z rejestru przy pytaniu "ktory git zobaczy Claude Code"
+# (Wskaz-Basha-Claude): PATH ze startu + katalogi, ktore dopisalibysmy NA KONIEC PATH uzytkownika.
+$script:PathStartowy = $env:PATH
+$script:DopisaneDoPath = @()
 
-$Znane = @("uv", "python", "git", "node")
+$Znane = @("uv", "python", "git", "bash", "node")
 # -File podaje "uv,python" jako JEDEN napis do [string[]] - dzielimy sami
 $lista = @($Potrzebne | ForEach-Object { $_ -split '[,;\s]+' } | Where-Object { $_ } | ForEach-Object { $_.ToLower() })
 $nieznane = @($lista | Where-Object { $Znane -notcontains $_ })
 if ($nieznane.Count -gt 0) { Zakoncz $false "nie znam programu: $($nieznane -join ', ') (znam: $($Znane -join ', '))" }
 if ($lista.Count -eq 0) { Zakoncz $false "podaj -Potrzebne, np. -Potrzebne uv,python,git,node" }
 if (($lista -contains "python") -and ($lista -notcontains "uv")) { $lista = @("uv") + $lista }
-$lista = @($Znane | Where-Object { $lista -contains $_ })   # kolejnosc: uv przed pythonem
+# git albo node = baza albo modul z hookami, a Claude Code na Windows bez Git Bash nie dziala wcale
+if ((($lista -contains "git") -or ($lista -contains "node")) -and ($lista -notcontains "bash")) { $lista += "bash" }
+$lista = @($Znane | Where-Object { $lista -contains $_ })   # kolejnosc: uv przed pythonem, git przed bashem
 
 $Arch = if ($env:PROCESSOR_ARCHITEW6432) { $env:PROCESSOR_ARCHITEW6432 } else { $env:PROCESSOR_ARCHITECTURE }
 
@@ -183,6 +203,7 @@ public static class MrSrodowisko {
 # jako REG_EXPAND_SZ - [Environment]::SetEnvironmentVariable zapisalby REG_SZ i rozbil wpisy z %...%.
 function Dopisz-Do-Path-Uzytkownika([string]$katalog) {
   Dodaj-Do-Path $katalog
+  $script:DopisaneDoPath += $katalog
   if ($BezZmianyPath) { Krok "PATH uzytkownika bez zmian (-BezZmianyPath) - $katalog dopisany tylko dla tego procesu"; return }
   if ($Proba) { Plan "dopisalbym $katalog do PATH uzytkownika"; return }
   $klucz = [Microsoft.Win32.Registry]::CurrentUser.OpenSubKey("Environment", $true)
@@ -214,8 +235,9 @@ function Znajdz([string]$n) {
     return [pscustomobject]@{ Sciezka = $py; Wersja = (Wersja $py) }
   }
   $p = Znajdz-Program $n
-  if (-not $p) {
-    # wersja przenosna mogla trafic do innego katalogu programow (-KatalogProgramow)
+  if (-not $p -and ($n -ne "bash")) {
+    # wersja przenosna mogla trafic do innego katalogu programow (-KatalogProgramow); git tam to
+    # MinGit z wersji sprzed 0.33 (bez basha)
     $tu = switch ($n) { "uv" { "uv\uv.exe" } "git" { "git\cmd\git.exe" } "node" { "node\node.exe" } }
     $k = Join-Path $KatalogProgramow $tu
     if (Test-Path -LiteralPath $k) { $p = $k; Dodaj-Do-Path (Split-Path -Parent $k) }
@@ -228,22 +250,22 @@ function Znajdz([string]$n) {
 
 function Winget { if ($BezWinget) { return $null }; return (Znajdz-Program "winget") }
 
-# Zwraca $true, gdy po winget program jest. Kazda porazka winget to UWAGA i droga zapasowa (zip).
-function Przez-Winget([string]$n, [string]$id, [string[]]$dodatkowe) {
+# Zwraca $true, gdy po winget program jest. Kazda porazka winget to UWAGA i droga zapasowa ($potem).
+function Przez-Winget([string]$n, [string]$id, [string[]]$dodatkowe, [string]$potem = "biore paczke zip") {
   $wg = Winget
   if (-not $wg) {
     $czemu = if ($BezWinget) { "pominiety (-BezWinget)" } else { "nie ma go na tym komputerze" }
-    Krok "${n}: winget $czemu - biore paczke zip"
+    Krok "${n}: winget $czemu - $potem"
     return $false
   }
-  if ($Proba) { Plan "${n}: winget install --id $id $($dodatkowe -join ' ') (bez administratora), a gdy sie nie uda - paczka zip"; return $true }
+  if ($Proba) { Plan "${n}: winget install --id $id $($dodatkowe -join ' ') (bez administratora), a gdy sie nie uda - $potem"; return $true }
   Krok "${n}: instaluje przez winget ($id) - to moze potrwac kilka minut"
   $w = Uruchom-Program $wg (@("install", "--id", $id, "-e", "--source", "winget", "--silent", "--disable-interactivity",
         "--accept-package-agreements", "--accept-source-agreements") + $dodatkowe) 900
   if (Znajdz $n) { Krok "${n}: winget zainstalowal"; return $true }
   $powod = (($w.Tekst -split "`r?`n") | Where-Object { $_.Trim() } | Select-Object -Last 1)
   if ($w.Tekst -match '(?i)(0x8a15000f|internet|network|connect|siec|sieci)') { $powod = "brak internetu albo zrodlo winget niedostepne ($powod)" }
-  Ostrzezenie "${n}: winget nie zainstalowal (kod $($w.Kod): $powod) - biore paczke zip"
+  Ostrzezenie "${n}: winget nie zainstalowal (kod $($w.Kod): $powod) - $potem"
   return $false
 }
 
@@ -285,36 +307,114 @@ function Instaluj-Pythona {
   }
 }
 
-function Instaluj-Gita {
-  $wzor = switch ($Arch) { "ARM64" { '^MinGit-[\d.]+-arm64\.zip$' } "x86" { '^MinGit-[\d.]+-32-bit\.zip$' } default { '^MinGit-[\d.]+-64-bit\.zip$' } }
-  $cel = Join-Path $KatalogProgramow "git"
+# Pelny Git for Windows - daje i gita, i Git Bash (MinGit, ktory byl tu do 0.33, basha nie ma).
+# Najpierw instalator z najnowszego wydania na GitHubie (suma SHA-256 z pola digest albo z tabeli
+# w opisie wydania), uruchomiony po cichu i tylko dla uzytkownika: /VERYSILENT nie pokazuje zadnego
+# okna, /CURRENTUSER nie prosi o administratora i kladzie Gita do %LOCALAPPDATA%\Programs\Git (tam
+# szukaja go wspolne.ps1 i Claude Code). Gdy sie nie uda - winget Git.Git --scope user (ten sam
+# instalator). git i bash to ta sama paczka, wiec instalator idzie najwyzej RAZ na przebieg: po
+# porazce albo po instalacji bez basha drugi program dostaje od razu ten sam powod, bez drugiego
+# pobierania 60 MB.
+$script:GitForWindows = $null   # $null = jeszcze nie bylo; "ok" = instalator przeszedl; inaczej powod porazki
+$script:PowodBasha = ""
+
+function Instaluj-Git-For-Windows([string]$n) {
+  $docelowy = Join-Path $env:LOCALAPPDATA "Programs\Git"
+  if ($script:GitForWindows -eq "ok") { throw "Git for Windows zainstalowal sie, ale nie ma w nim $n ($docelowy) - instalacja jest niepelna" }
+  if ($script:GitForWindows) { throw "Git for Windows nie zainstalowal sie juz wyzej ($($script:GitForWindows))" }
+  $wzor = switch ($Arch) { "ARM64" { '^Git-[\d.]+-arm64\.exe$' } "x86" { "" } default { '^Git-[\d.]+-64-bit\.exe$' } }
   $api = "https://api.github.com/repos/git-for-windows/git/releases/latest"
+  $przelaczniki = @("/SP-", "/VERYSILENT", "/SUPPRESSMSGBOXES", "/NORESTART", "/NOCANCEL", "/CURRENTUSER")
   if ($Proba) {
-    Plan "git: MinGit (przenosny, bez Git Bash) z najnowszego wydania github.com/git-for-windows do $cel; gdy sie nie uda - winget Git.Git --scope user"
+    Plan "${n}: Git for Windows (pelny, z Git Bash) - instalator z najnowszego wydania github.com/git-for-windows (suma SHA-256), po cichu i tylko dla Ciebie ($($przelaczniki -join ' '), bez administratora) do $docelowy; gdy sie nie uda - winget Git.Git --scope user"
     return
   }
-  $bladZip = $null
+  $blad = $null
+  $pobrany = $null
   try {
-    Krok "git: szukam najnowszego MinGit ($api)"
-    $wyd = (Pobierz-Tekst $api) | ConvertFrom-Json
-    $a = @($wyd.assets | Where-Object { $_.name -match $wzor -and $_.name -notmatch 'busybox' }) | Select-Object -First 1
-    if (-not $a) { throw "w wydaniu $($wyd.tag_name) nie ma paczki MinGit dla $Arch" }
-    $suma = ""
-    if ($a.digest -and "$($a.digest)" -match 'sha256:([0-9a-fA-F]{64})') { $suma = $Matches[1] }
-    elseif ($wyd.body) { $m = [regex]::Match([string]$wyd.body, [regex]::Escape($a.name) + '\s*\|\s*([0-9a-fA-F]{64})'); if ($m.Success) { $suma = $m.Groups[1].Value } }
-    $zip = Plik-Tymczasowy $a.name
-    try {
-      Krok "git: pobieram $($a.name) ($([math]::Round($a.size / 1MB)) MB)"
-      Pobierz-Plik $a.browser_download_url $zip
-      Sprawdz-Sume $zip $suma "wydaniu $($wyd.tag_name)"
-      Rozpakuj-Do $zip $cel
-    } finally { Remove-Item -LiteralPath $zip -Force -ErrorAction SilentlyContinue }
-    Dopisz-Do-Path-Uzytkownika (Join-Path $cel "cmd")
+    if ($InstalatorGita) {
+      if (-not (Test-Path -LiteralPath $InstalatorGita -PathType Leaf)) { throw "nie ma pliku instalatora $InstalatorGita (-InstalatorGita)" }
+      $plik = $InstalatorGita
+      Krok "${n}: instalator Git for Windows z pliku $plik (-InstalatorGita, test) - bez pobierania i bez sumy"
+    } else {
+      if (-not $wzor) { throw "Git for Windows z Git Bash nie wychodzi juz dla 32-bitowego Windows" }
+      Krok "${n}: szukam najnowszego Git for Windows ($api)"
+      $wyd = (Pobierz-Tekst $api) | ConvertFrom-Json
+      $a = @($wyd.assets | Where-Object { $_.name -match $wzor }) | Select-Object -First 1
+      if (-not $a) { throw "w wydaniu $($wyd.tag_name) nie ma instalatora Git for Windows dla $Arch" }
+      $suma = ""
+      if ($a.digest -and "$($a.digest)" -match 'sha256:([0-9a-fA-F]{64})') { $suma = $Matches[1] }
+      elseif ($wyd.body) { $m = [regex]::Match([string]$wyd.body, [regex]::Escape($a.name) + '\s*\|\s*([0-9a-fA-F]{64})'); if ($m.Success) { $suma = $m.Groups[1].Value } }
+      $pobrany = Plik-Tymczasowy $a.name
+      Krok "${n}: pobieram $($a.name) ($([math]::Round($a.size / 1MB)) MB)"
+      Pobierz-Plik $a.browser_download_url $pobrany
+      Sprawdz-Sume $pobrany $suma "wydaniu $($wyd.tag_name)"
+      $plik = $pobrany
+    }
+    $log = Plik-Tymczasowy "git-instalator.log"
+    Krok "${n}: instaluje Git for Windows po cichu, tylko dla Ciebie (bez administratora) do $docelowy - to moze potrwac kilka minut"
+    $w = Uruchom-Program $plik ($przelaczniki + @("/LOG=$log")) 900
+    if ($w.Kod -ne 0) {
+      $ogon = ""
+      if (Test-Path -LiteralPath $log) { $ogon = (@(Get-Content -LiteralPath $log -Tail 3 -ErrorAction SilentlyContinue) -join " | ") }
+      throw ("instalator Git for Windows skonczyl sie kodem $($w.Kod)" + $(if ($w.Tekst) { ": " + $w.Tekst } else { "" }) + $(if ($ogon) { " (koniec dziennika instalatora: $ogon)" } else { "" }))
+    }
+    Remove-Item -LiteralPath $log -Force -ErrorAction SilentlyContinue
+    $script:GitForWindows = "ok"
+    Krok "${n}: instalator Git for Windows skonczyl bez bledu"
+    $cmd = Join-Path $docelowy "cmd"
+    if (Test-Path -LiteralPath (Join-Path $cmd "git.exe")) { Dopisz-Do-Path-Uzytkownika $cmd }
     return
-  } catch { $bladZip = $_.Exception.Message }
-  Ostrzezenie "git: MinGit sie nie zainstalowal ($bladZip)"
-  if (Przez-Winget "git" "Git.Git" @("--scope", "user")) { return }
-  throw "nie udalo sie zainstalowac gita: $bladZip"
+  } catch { $blad = $_.Exception.Message }
+  finally { if ($pobrany) { Remove-Item -LiteralPath $pobrany -Force -ErrorAction SilentlyContinue } }
+  Ostrzezenie "${n}: Git for Windows z GitHuba sie nie zainstalowal ($blad)"
+  if (Przez-Winget $n "Git.Git" @("--scope", "user") "nie mam juz innej drogi") { $script:GitForWindows = "ok"; return }
+  $script:GitForWindows = $blad
+  throw "nie udalo sie zainstalowac Git for Windows: $blad"
+}
+
+# Claude Code szuka Git Bash sam tylko w C:\Program Files\Git i C:\Program Files (x86)\Git oraz obok
+# PIERWSZEGO gita z PATH (..\..\bin\bash.exe) - a ten bywa MinGitem bez basha (u Eli MinGit stal
+# w PATH przed Git for Windows). Gdy sam go nie znajdzie, bash dostaje zmienna uzytkownika
+# CLAUDE_CODE_GIT_BASH_PATH. Gdy znajdzie - zmiennej nie zakladamy (nic, co juz dziala, nie jest
+# ruszane). Zmienna wskazujaca istniejacy bash zostaje (mogles ja ustawic sam); wskazujaca plik,
+# ktorego nie ma, jest poprawiana.
+
+# Bash, ktory znajdzie NOWO uruchomiony Claude Code bez zmiennej, albo $null. PATH jak u nowego
+# procesu: maszyny + uzytkownika z rejestru (-BezZmianyPath: PATH ze startu + dopisane na koncu).
+function Bash-Ktorego-Claude-Uzyje {
+  foreach ($b in @("C:\Program Files\Git\bin\bash.exe", "C:\Program Files (x86)\Git\bin\bash.exe")) { if (Test-Path -LiteralPath $b -PathType Leaf) { return $b } }
+  $katalogi = if ($BezZmianyPath) { @($script:PathStartowy -split ';') + @($script:DopisaneDoPath) }
+              else { @([Environment]::GetEnvironmentVariable("Path", "Machine") -split ';') + @([Environment]::GetEnvironmentVariable("Path", "User") -split ';') }
+  foreach ($k in $katalogi) {
+    $k = [Environment]::ExpandEnvironmentVariables("$k".Trim())
+    if (-not $k) { continue }
+    foreach ($e in @("git.com", "git.exe", "git.bat", "git.cmd")) {
+      $g = Join-Path $k $e
+      if (-not (Test-Path -LiteralPath $g -PathType Leaf)) { continue }
+      # tylko PIERWSZY git sie liczy - tak robi Claude Code
+      $b = Join-Path (Split-Path -Parent (Split-Path -Parent $g)) "bin\bash.exe"
+      if (Test-Path -LiteralPath $b -PathType Leaf) { return $b }
+      return $null
+    }
+  }
+  return $null
+}
+
+function Wskaz-Basha-Claude([string]$bash) {
+  $nazwa = $script:ZmiennaBasha
+  $obecna = if ($BezZmianyPath) { [Environment]::GetEnvironmentVariable($nazwa) } else { [Environment]::GetEnvironmentVariable($nazwa, "User") }
+  if ($obecna -and ($obecna.TrimEnd('\') -ieq $bash)) { Krok "bash: zmienna $nazwa juz wskazuje $bash"; return }
+  if ($obecna -and ((Split-Path -Leaf $obecna) -match '^(bash|sh)(\.exe)?$') -and (Test-Path -LiteralPath $obecna -PathType Leaf)) { Krok "bash: zmienna $nazwa wskazuje inny istniejacy bash ($obecna) - zostawiam"; return }
+  $sam = Bash-Ktorego-Claude-Uzyje
+  if ($sam -and -not $obecna) { Krok "bash: Claude Code znajdzie Git Bash sam ($sam) - zmienna $nazwa niepotrzebna"; return }
+  $czemu = if ($obecna) { "wskazywala $obecna, a tam basha nie ma" } else { "Claude Code sam szuka go tylko w Program Files i obok pierwszego gita z PATH, a tam go nie ma" }
+  if ($Proba) { Plan "bash: ustawilbym zmienna uzytkownika $nazwa = $bash ($czemu)"; return }
+  [Environment]::SetEnvironmentVariable($nazwa, $bash)   # ten proces i jego dzieci
+  if ($BezZmianyPath) { Krok "bash: $nazwa = $bash tylko dla tego procesu (-BezZmianyPath) - $czemu"; return }
+  try { [Environment]::SetEnvironmentVariable($nazwa, $bash, "User") }
+  catch { Ostrzezenie "bash jest ($bash), ale nie ustawilem zmiennej uzytkownika $nazwa ($($_.Exception.Message)) - Claude Code moze go nie znalezc; ustaw ja recznie"; return }
+  Krok "bash: ustawiona zmienna uzytkownika $nazwa = $bash ($czemu; otwarte okna Claude Code widza ja po ponownym uruchomieniu)"
 }
 
 function Instaluj-Node {
@@ -358,11 +458,20 @@ try {
 
   if ($Akcja -eq "Instaluj") {
     foreach ($n in $brak) {
-      try {
-        switch ($n) { "uv" { Instaluj-Uv } "python" { Instaluj-Pythona } "git" { Instaluj-Gita } "node" { Instaluj-Node } }
-      } catch {
-        Ostrzezenie "${n}: $($_.Exception.Message)"
-        continue
+      $przyszedl = $false
+      if (($n -eq "bash") -and ($brak -contains "git")) {
+        # Git for Windows z kroku git wyzej przynosi tez basha
+        if ($Proba) { Plan "bash: przyjdzie razem z Git for Windows (krok git wyzej)"; continue }
+        $przyszedl = [bool](Znajdz "bash")
+      }
+      if (-not $przyszedl) {
+        try {
+          switch ($n) { "uv" { Instaluj-Uv } "python" { Instaluj-Pythona } "git" { Instaluj-Git-For-Windows "git" } "bash" { Instaluj-Git-For-Windows "bash" } "node" { Instaluj-Node } }
+        } catch {
+          if (@("git", "bash") -contains $n) { $script:PowodBasha = $_.Exception.Message }
+          Ostrzezenie "${n}: $($_.Exception.Message)"
+          continue
+        }
       }
       if ($Proba) { continue }
       $z = Znajdz $n
@@ -371,9 +480,15 @@ try {
         $wynikProgramow[$n].jest = $true; $wynikProgramow[$n].sciezka = $z.Sciezka; $wynikProgramow[$n].wersja = $z.Wersja; $wynikProgramow[$n].zainstalowany_teraz = $true
       } elseif ($z) {
         Ostrzezenie "${n}: plik jest ($($z.Sciezka)), ale sie nie uruchamia"
+        if ($n -eq "bash") { $script:PowodBasha = "$($z.Sciezka) jest, ale sie nie uruchamia" }
       } else {
         Ostrzezenie "${n}: po instalacji dalej go nie widze"
+        if ($n -eq "bash") { $script:PowodBasha = "po instalacji Git for Windows nie widze bash.exe (szukalem m.in. w $(Join-Path $env:LOCALAPPDATA 'Programs\Git\bin'))" }
       }
+    }
+    if ($lista -contains "bash") {
+      if ($wynikProgramow["bash"].jest) { Wskaz-Basha-Claude $wynikProgramow["bash"].sciezka }
+      elseif ($Proba) { Plan "bash: po instalacji Git for Windows ustawilbym zmienna uzytkownika $($script:ZmiennaBasha), gdyby bash wyladowal poza miejscami, ktore Claude Code zna sam" }
     }
   }
 
@@ -391,6 +506,14 @@ try {
     Zakoncz $true $kom
   }
   $kom = if ($Akcja -eq "Sprawdz") { "brakuje: $($nadal -join ', ') - zainstaluj: zaleznosci.ps1 -Akcja Instaluj -Potrzebne $($nadal -join ',')" } else { "nie udalo sie zainstalowac: $($nadal -join ', ') - powody w uwagach" }
+  if (($Akcja -eq "Instaluj") -and ($nadal -contains "bash")) {
+    # Glosno i na poczatku (okno pokazuje komunikat w karcie bledu): bez Git Bash nie ma po co isc dalej
+    $kom = "Nie ma Git Bash (czesc Git for Windows), mimo proby instalacji - bez niego Claude Code na Windows i hooki MegaRuchacza nie dzialaja."
+    if ($script:PowodBasha) { $kom += " Powod: $($script:PowodBasha)." }
+    $kom += " Jesli blad wraca, zainstaluj Git for Windows ze strony https://git-scm.com/downloads/win (wystarczy 'Only for me', bez administratora) i uruchom instalator jeszcze raz."
+    $inne = @($nadal | Where-Object { $_ -ne "bash" })
+    if ($inne.Count -gt 0) { $kom += " Nie udalo sie tez zainstalowac: $($inne -join ', ') - powody w uwagach." }
+  }
   Zakoncz $false $kom
 } catch {
   Zakoncz $false ("nieoczekiwany blad: " + $_.Exception.Message + " (" + $_.InvocationInfo.PositionMessage.Split("`n")[0].Trim() + ")")

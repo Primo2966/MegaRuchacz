@@ -12,7 +12,8 @@
 #   - rejestr pracy: ~\.claude\megaruchacz-mr-log.js + hooki SubagentStart/Stop, ladunek
 #     przypomnienia ~\.claude\mr\orchestrator-reminder.json, znacznik ~\.claude\.megaruchacz-global
 # Potrzebuje Node.js - hooki przypomnienia i rejestru to skrypty node; bez niego rejestr po cichu
-# nie dziala, dlatego tu jest wymagany.
+# nie dziala, dlatego tu jest wymagany. Tak samo Git Bash: Claude Code na Windows uruchamia hooki
+# przez bash (bez niego nie dziala wcale) - brak = odmowa z bledem; doinstalowuje go zaleznosci.ps1.
 # Usun: instaluj-globalnie.ps1 -Usun (blok, role Claude/opencode, rejestr, znacznik, hooki), a do
 #   tego to, czego on nie zdejmuje: role i hooki rejestru Codeksa, ladunek przypomnienia. Potem
 #   straznik uklada hooki od nowa wedlug rejestru (hook straznika modulu baza zostaje).
@@ -74,6 +75,7 @@ function Zbierz-Stan($rej, [hashtable]$prog) {
     if ($start -ne 1 -or $stop -ne 1) { Problem "hooki rejestru START/KONIEC w settings.json: SubagentStart $start, SubagentStop $stop (ma byc po jednym)" }
     if ($przyp -ne 1) { Problem "hook przypomnienia (UserPromptSubmit) w settings.json: $przyp (ma byc jeden)" }
     if (-not $prog["node"]) { Problem "nie ma Node.js - hooki przypomnienia i rejestru nie zadzialaja" }
+    if (-not $prog["bash"]) { Problem "nie ma Git Bash (Git for Windows) - Claude Code na Windows uruchamia hooki przez bash" }
   }
   $dziala = $zainst -and ($script:MR.problemy.Count -eq 0)
   return [pscustomobject]@{ Zainstalowany = $zainst; Dziala = $dziala; Szczegoly = [ordered]@{
@@ -130,9 +132,8 @@ try {
   $rej = Rejestr-Do-Zmian $KatalogDomowy
 
   if ($Akcja -eq "Instaluj") {
-    $prog = Sprawdz-Programy @("node") @("bash")
+    $prog = Sprawdz-Programy @("node", "bash")
     Odmowa-Brak-Programow
-    if (-not $prog["bash"]) { Ostrzezenie "nie widze Git Bash - hooki Claude Code chodza przez bash" }
     $a = @("-Zrodlo", $Zrodlo, "-KatalogDomowy", $KatalogDomowy, "-BezPytania")
     if ($rej.narzedzia -and $rej.narzedzia.codex) { $a += "-Codex"; Krok "rejestr mowi, ze uzywasz Codeksa - role i rejestr dostanie tez Codex" }
     if ($Proba) { $a += "-Proba" }

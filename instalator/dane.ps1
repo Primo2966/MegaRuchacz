@@ -56,8 +56,11 @@ $script:ZAWSZE = 'aplikacja przy zegarze + automatyczne aktualizacje'
 # wybrane, rdzen powstaje raz, z Lore. Usuwanie w odwrotnej kolejnosci.
 $script:KOLEJNOSC_INSTALACJI = @('lore', 'wiedza', 'kierownik', 'skille', 'kopia')
 $script:KOLEJNOSC_USUWANIA   = @('kopia', 'skille', 'kierownik', 'wiedza', 'lore')
+# bash: nikt go tu nie zamawia - zaleznosci.ps1 doklada go sam do gita i Node.js (Claude Code na
+# Windows bez Git Bash nie dziala); wpis daje mu ludzka nazwe w "Brakuje: ..." na podsumowaniu.
 $script:PROGRAMY = [ordered]@{
   git    = 'Git'
+  bash   = 'Git Bash'
   node   = 'Node.js'
   uv     = 'uv'
   python = 'Python 3.12'
@@ -421,7 +424,10 @@ function Zadanie-Zaleznosci([string]$akcja, $programy) {
   # tablicy po przecinkach - zaleznosci.ps1 musi to zrobic sam.
   $a = @('-Akcja', $akcja, '-Potrzebne', (@($programy) -join ','))
   if ($script:Proba) { $a += '-Proba' }
-  return (Nowe-Zadanie -Id "zaleznosci-$akcja" -Napis "Programy potrzebne do działania: $(Nazwy-Programow $programy)" -Plik (Sciezka-Skryptu 'zaleznosci.ps1') -Argumenty $a -Umowa $true)
+  # Git Bash dokłada sam zaleznosci.ps1 (do gita i Node.js) - nazwa kroku ma go pokazać, bo jego brak jest tu błędem
+  $widoczne = @($programy)
+  if ((($widoczne -contains 'git') -or ($widoczne -contains 'node')) -and ($widoczne -notcontains 'bash')) { $widoczne = @($script:PROGRAMY.Keys | Where-Object { ($widoczne -contains $_) -or ($_ -eq 'bash') }) }
+  return (Nowe-Zadanie -Id "zaleznosci-$akcja" -Napis "Programy potrzebne do działania: $(Nazwy-Programow $widoczne)" -Plik (Sciezka-Skryptu 'zaleznosci.ps1') -Argumenty $a -Umowa $true)
 }
 
 # KOLEJNOSC (umowa P59b, raport P59b sekcja 1): zaleznosci PRZED baza - baza wymaga gita, a do P64
