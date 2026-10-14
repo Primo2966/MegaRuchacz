@@ -91,7 +91,12 @@ def _osierocone(nowe_id: set[str]) -> dict[str, int]:
         return {}
     conn = sqlite3.connect(baza)
     try:
-        wiersze = conn.execute("SELECT temat, COUNT(*) FROM wpisy WHERE usuniety IS NULL GROUP BY temat").fetchall()
+        if conn.execute("SELECT 1 FROM sqlite_master WHERE name = 'wpisy_tematy'").fetchone():
+            # od 0.3.0 wpis ma kilka tematow - liczy sie kazdy, nie tylko glowny
+            wiersze = conn.execute("SELECT wt.temat_id, COUNT(*) FROM wpisy_tematy wt JOIN wpisy w ON w.id = wt.wpis_id "
+                                   "WHERE w.usuniety IS NULL GROUP BY wt.temat_id").fetchall()
+        else:
+            wiersze = conn.execute("SELECT temat, COUNT(*) FROM wpisy WHERE usuniety IS NULL GROUP BY temat").fetchall()
     except sqlite3.Error as e:
         print(f"UWAGA: nie sprawdzilem wpisow w bazie {baza} pod katem usunietych tematow: {e!r}", file=sys.stderr)
         return {}
@@ -121,7 +126,8 @@ def main(argv: list[str] | None = None) -> int:
         if sieroty:
             opis = ", ".join(f"{t} ({n})" for t, n in sorted(sieroty.items()))
             print(f"UWAGA: w bazie sa wpisy w tematach spoza nowej listy: {opis}. Nie znikaja; "
-                  "widza je admin i osoby z uprawnieniem do tych tematow", file=sys.stderr)
+                  "widza je admin i osoby z uprawnieniem do tych tematow (temat spoza listy liczy sie jak "
+                  "temat z osobnym uprawnieniem: trzeba go miec, zeby widziec wpis)", file=sys.stderr)
         return 0
 
     try:

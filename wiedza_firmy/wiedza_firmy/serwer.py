@@ -71,7 +71,7 @@ def zbuduj_mcp(wiedza: Wiedza, zrodlo: ZrodloUprawnien) -> MCPServer:
     def szukaj_wiedzy(pytanie: str, ctx: Context, temat: str | None = None, limit: int = 8) -> dict:
         """Szuka we wspólnej wiedzy firmy (ustalenia pracowników) - pełnotekstowo i semantycznie,
         po polsku, niemiecku i angielsku. Zwraca wpisy z tematów, do których masz uprawnienia: treść,
-        autor, data, temat, poufność. Każdy wynik to ustalenie konkretnej osoby z danego dnia - sprawdź,
+        autor, data, tematy (wpis może mieć kilka; widzisz te, przez które masz do niego dostęp), poufność. Każdy wynik to ustalenie konkretnej osoby z danego dnia - sprawdź,
         czy nadal aktualne. Gdy pasujące wpisy są w tematach bez Twojego dostępu, dostajesz tylko
         informację, w jakim temacie (bez treści) i że trzeba poprosić admina.
 
