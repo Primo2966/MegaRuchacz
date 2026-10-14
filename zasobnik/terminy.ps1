@@ -38,6 +38,8 @@
 #      = wroci za 2 godziny (odlozone_do w przypomnienia-okno.txt). Tekst w oknie da sie
 #      zaznaczyc mysza, a przycisk "Kopiuj" daje do schowka naglowek i tresc przypomnienia.
 #      "Zrob teraz" startuje Claude dopiero, gdy kolejka jest wolna (okno pisze, ze czeka).
+#      Kazde okno (to, niepowodzenia i decyzji) da sie rozciagac i maksymalizowac (2026-10-14); tresc
+#      rosnie z oknem, rozmiar i polozenie wracaja z przypomnienia-okno-rozmiar.txt.
 #
 # Slad "bylem tu", kazde uruchomienie i kazda wywrotka: ~\.claude\mr\przypomnienia.log.
 #
@@ -79,6 +81,9 @@ if ($Plik) { $env:MR_PRZYPOMNIENIA = $Plik } else { $Plik = Join-Path $KatalogDo
 if ($Dzis) { $env:MR_DZIS = $Dzis }
 $KatStanu = Split-Path -Parent $Plik
 $PlikOkna = Join-Path $KatStanu "przypomnienia-okno.txt"
+# Rozmiar i polozenie okien przypomnien miedzy otwarciami - osobny plik, zeby zepsuty zapis
+# rozmiaru nie ruszyl odlozenia krzyzykiem (odlozone_do w przypomnienia-okno.txt).
+$PlikRozmiaru = Join-Path $KatStanu "przypomnienia-okno-rozmiar.txt"
 $Dziennik = Join-Path $KatStanu "przypomnienia.log"
 $KatUruchomien = Join-Path $KatStanu "terminy"
 
@@ -164,6 +169,10 @@ $PUNKTOW_ZDANIA_DECYZJI = 14
 $PUNKTOW_ODPOWIEDZI = 11
 # Szczegoly w oknie decyzji: wyzszy raport dostaje pasek przewijania zamiast rozpychac okno.
 $MAX_WYS_SZCZEGOLOW = 280
+# Zapamietane polozenie okna przyjmujemy, gdy tyle pikseli belki tytulowej (cala jej wysokosc)
+# lezy na ktoryms ekranie - tyle wystarczy, zeby okno zlapac mysza i przeciagnac. Mniej =
+# monitor odlaczony albo zapis z innego ukladu ekranow: rozmiar i polozenie domyslne.
+$MIN_WIDOCZNEJ_BELKI = 100
 
 function Bez-Bom { return (New-Object System.Text.UTF8Encoding($false)) }
 
@@ -843,7 +852,9 @@ function Wykonaj-W-Tle([int]$id) {
 # Napisy w oknie to pola tylko do odczytu, nie Label - Label nie daje sie zaznaczyc ani
 # skopiowac (zgloszenie uzytkownika 2026-10-08). Bez ramki i w kolorze tla wyglada jak napis.
 # TextBox nie ma AutoSize, wiec wysokosc z TextRenderer.MeasureText (zapas wyzej).
-function Pole-Tekstowe([string]$tekst, [int]$szerokosc, $czcionka, $kolor, $tlo) {
+# $maks > 0: wyzszy tekst dostaje pasek przewijania zamiast rozpychac okno. Pole rosnie z oknem
+# (Rozciagaj, Rozloz-Okno) od szerokosci $szerokosc w gore.
+function Pole-Tekstowe([string]$tekst, [int]$szerokosc, $czcionka, $kolor, $tlo, [int]$maks = 0) {
   $t = New-Object System.Windows.Forms.TextBox
   $t.ReadOnly = $true
   $t.Multiline = $true
@@ -855,12 +866,31 @@ function Pole-Tekstowe([string]$tekst, [int]$szerokosc, $czcionka, $kolor, $tlo)
   $t.ForeColor = $kolor
   $t.Font = $czcionka
   $t.Margin = New-Object System.Windows.Forms.Padding(3, 0, 3, 0)   # jak domyslny Label
-  $t.Width = $szerokosc
   $t.Text = $tekst
+  Ustaw-Szerokosc-Pola $t $szerokosc $maks
+  Rozciagaj $t "pole" $szerokosc $maks
+  return $t
+}
+
+# Szerokosc pola i wysokosc na tekst zawiniety przy tej szerokosci (przy tworzeniu i przy zmianie
+# rozmiaru okna).
+function Ustaw-Szerokosc-Pola($t, [int]$szerokosc, [int]$maks = 0) {
+  $tekst = $t.Text
+  $czcionka = $t.Font
+  $t.Width = $szerokosc
   $flagi = [System.Windows.Forms.TextFormatFlags]"WordBreak, TextBoxControl, NoPrefix"
   $ile = New-Object System.Drawing.Size(($szerokosc - $ZAPAS_SZEROKOSCI_POLA), [int]::MaxValue)
   $t.Height = [System.Windows.Forms.TextRenderer]::MeasureText($tekst, $czcionka, $ile, $flagi).Height
-  return $t
+  if ($maks -gt 0) {
+    if ($t.Height -gt $maks) { $t.Height = $maks; $t.ScrollBars = "Vertical" } else { $t.ScrollBars = "None" }
+  }
+}
+
+# Rejestr kontrolek, ktore rosna z oknem: $jak "pole" (Ustaw-Szerokosc-Pola), "przycisk"
+# (Ustaw-Szerokosc-Przycisku), "min" / "max" (MinimumSize / MaximumSize szerokosci panelu).
+# $baza = szerokosc przy rozmiarze, ktory ulozyl kod; Rozloz-Okno dodaje do niej przyrost okna.
+function Rozciagaj($k, [string]$jak, [int]$baza, [int]$maks = 0) {
+  $script:Rozciagane += [pscustomobject]@{ K = $k; Jak = $jak; Baza = $baza; Maks = $maks }
 }
 
 # Schowek z ponawianiem i obsluga komunikatow miedzy probami. Clipboard.SetText ponawia sam
@@ -920,16 +950,29 @@ function Przycisk-Decyzji([string]$tekst, $tag, $czcionka, [int]$maxSzer) {
   $b.Padding = New-Object System.Windows.Forms.Padding(8, 2, 8, 2)
   $b.Tag = $tag
   $b.Add_Click({ Klik $this.Tag })
+  $tag.Nat = $b.PreferredSize   # naturalny rozmiar (jeden wiersz) - bez AutoSize PreferredSize oddaje biezacy
+  Ustaw-Szerokosc-Przycisku $b $maxSzer
+  Rozciagaj $b "przycisk" $maxSzer
+  return $b
+}
+
+# Przycisk decyzji przy danej szerokosci rzedu: miesci sie w jednym wierszu - AutoSize, nie -
+# pelna szerokosc i wysokosc na zawiniety tekst (przy tworzeniu i przy zmianie rozmiaru okna).
+function Ustaw-Szerokosc-Przycisku($b, [int]$maxSzer) {
+  $tekst = $b.Text
+  $czcionka = $b.Font
   $szer = $maxSzer - $b.Margin.Horizontal
-  $nat = $b.PreferredSize
+  $nat = $b.Tag.Nat
   if ($nat.Width -gt $szer) {
     $jeden = [System.Windows.Forms.TextRenderer]::MeasureText($tekst, $czcionka, [System.Drawing.Size]::Empty, [System.Windows.Forms.TextFormatFlags]"NoPrefix")
     $flagi = [System.Windows.Forms.TextFormatFlags]"WordBreak, NoPrefix"
     $ile = New-Object System.Drawing.Size(($szer - ($nat.Width - $jeden.Width)), [int]::MaxValue)
     $b.AutoSize = $false
     $b.Size = New-Object System.Drawing.Size($szer, ([System.Windows.Forms.TextRenderer]::MeasureText($tekst, $czcionka, $ile, $flagi).Height + $nat.Height - $jeden.Height))
+  } elseif (-not $b.AutoSize) {
+    $b.AutoSize = $true
+    $b.Size = $nat   # AutoSize przycisku tylko rosnie (GrowOnly) - z pelnej szerokosci sam nie wroci
   }
-  return $b
 }
 
 function Rzad-Przyciskow([int]$szer) {
@@ -939,19 +982,27 @@ function Rzad-Przyciskow([int]$szer) {
   $r.AutoSize = $true
   $r.MaximumSize = New-Object System.Drawing.Size($szer, 0)
   $r.Margin = New-Object System.Windows.Forms.Padding(0)
+  Rozciagaj $r "max" $szer
   return $r
 }
 
 # Wysokosc okna decyzji = tresc (zdanie, przyciski, ewentualnie szczegoly), najwyzej ekran - wtedy
 # przewijanie zamiast uciecia. Rozwiniete szczegoly nie moga wypchnac okna pod dolna krawedz ekranu.
+# Okno rozciagniete przez czlowieka: szerokosc zostaje (tylko z paskiem przewijania albo bez), a
+# wysokosc nie spada ponizej tej, ktora wybral ($script:WysWybrana); zmaksymalizowane - bez zmian,
+# nadmiar przewija lista.
 function Dopasuj-Okno-Decyzji($f, $lista) {
   $lista.PerformLayout()
+  if ($f.WindowState -ne "Normal") { return }
   $pref = $lista.GetPreferredSize((New-Object System.Drawing.Size($lista.ClientSize.Width, 0)))
   $ekran = [System.Windows.Forms.Screen]::FromControl($f).WorkingArea
   $max = $ekran.Height - ($f.Height - $f.ClientSize.Height) - 20
-  $szer = $pref.Width
-  if ($pref.Height -gt $max) { $szer += [System.Windows.Forms.SystemInformation]::VerticalScrollBarWidth }
-  $f.ClientSize = New-Object System.Drawing.Size($szer, [Math]::Min($pref.Height, $max))
+  $pasek = 0
+  if ($pref.Height -gt $max) { $pasek = [System.Windows.Forms.SystemInformation]::VerticalScrollBarWidth }
+  $szer = $pref.Width + $pasek
+  if ($script:BazaKlienta -gt 0) { $szer = $f.ClientSize.Width - $script:DodatekPaska + $pasek }
+  $script:DodatekPaska = $pasek
+  $f.ClientSize = New-Object System.Drawing.Size($szer, [Math]::Max([Math]::Min($pref.Height, $max), $script:WysWybrana))
   if ($f.Visible -and $f.Bottom -gt $ekran.Bottom) { $f.Top = [Math]::Max($ekran.Top, $ekran.Bottom - $f.Height) }
 }
 
@@ -1013,8 +1064,7 @@ function Uloz-Decyzje($f, $lista, $p) {
   $panel.Visible = $false
   $tekstSzcz = ("Przypomnienie #$($p.id): $($p.tresc)`r`n" + $(if ($p.md) { "Pełny raport: $($p.md)`r`n" } else { "" }) +
                 "`r`n" + ("$($p.raport)".Trim() -replace "\r?\n", "`r`n"))
-  $raport = Pole-Tekstowe $tekstSzcz $szer $f.Font $f.ForeColor ([System.Drawing.Color]::FromArgb(246, 246, 246))
-  if ($raport.Height -gt $MAX_WYS_SZCZEGOLOW) { $raport.Height = $MAX_WYS_SZCZEGOLOW; $raport.ScrollBars = "Vertical" }
+  $raport = Pole-Tekstowe $tekstSzcz $szer $f.Font $f.ForeColor ([System.Drawing.Color]::FromArgb(246, 246, 246)) $MAX_WYS_SZCZEGOLOW
   $panel.Controls.Add($raport)
   $kop = New-Object System.Windows.Forms.Button
   $kop.AutoSize = $true
@@ -1033,6 +1083,113 @@ function Uloz-Decyzje($f, $lista, $p) {
   $szcz.Add_Click({ Przelacz-Szczegoly $this })
   $lista.Controls.Add($karta)
   Dopasuj-Okno-Decyzji $f $lista
+}
+
+# Okno da sie rozciagac i maksymalizowac (zgloszenie uzytkownika 2026-10-14: wygodniej sie czyta).
+# Najmniejsze = to, ktore ulozyl kod (przy nim wyglad jak dotad); tresc rosnie z szerokoscia okna
+# (Rozloz-Okno), a rozmiar i polozenie wracaja z poprzedniego otwarcia tego rodzaju okna.
+function Przygotuj-Rozmiar($f, $lista) {
+  $script:BazaKlienta = $f.ClientSize.Width - $script:DodatekPaska
+  $f.MinimumSize = $f.Size
+  $z = Czytaj-Rozmiar-Okna $script:RodzajOkna
+  if ($z) { Przywroc-Rozmiar-Okna $f $z }
+  $script:WysWybrana = $f.ClientSize.Height
+  Rozloz-Okno $f $lista
+  # Obszar listy zmienia sie z oknem i z pojawieniem sie paska przewijania - jedno zdarzenie na oba.
+  $lista.Add_ClientSizeChanged({ param($s, $e) Rozloz-Okno $s.Parent $s })
+  $f.Add_ResizeEnd({ param($s, $e) if ($s.WindowState -eq "Normal") { $script:WysWybrana = $s.ClientSize.Height } })
+  $f.Add_FormClosing({ param($s, $e) Zapisz-Rozmiar-Okna $s })
+}
+
+# Kazda kontrolka z rejestru (Rozciagaj) dostaje szerokosc bazowa + przyrost szerokosci obszaru
+# listy ponad ten przy rozmiarze z kodu (pasek przewijania sie nie liczy - inaczej tresc wjezdza
+# pod niego). Wysokosc pol i przyciskow liczona od nowa: tekst sie zawija zamiast uciec, a nadmiar
+# wysokosci przewija lista. Zmiana tresci zmienia pasek przewijania - stad do 3 przebiegow.
+# Blad nie przerywa okna (zostaje poprzedni uklad), ale idzie do dziennika - raz na okno.
+function Rozloz-Okno($f, $lista) {
+  if ($script:WRozkladzie -or ($f.WindowState -eq "Minimized")) { return }
+  $script:WRozkladzie = $true
+  try {
+    for ($i = 0; $i -lt 3; $i++) {
+      $pasek = 0
+      if ($lista.VerticalScroll.Visible) { $pasek = [System.Windows.Forms.SystemInformation]::VerticalScrollBarWidth }
+      $d = [Math]::Max(0, $f.ClientSize.Width - $pasek - $script:BazaKlienta)
+      if ($d -eq $script:Przyrost) { break }
+      $script:Przyrost = $d
+      $lista.SuspendLayout()
+      try {
+        foreach ($r in $script:Rozciagane) {
+          $szer = $r.Baza + $d
+          switch ($r.Jak) {
+            "pole"     { Ustaw-Szerokosc-Pola $r.K $szer $r.Maks }
+            "przycisk" { Ustaw-Szerokosc-Przycisku $r.K $szer }
+            "min"      { $r.K.MinimumSize = New-Object System.Drawing.Size($szer, 0) }
+            "max"      { $r.K.MaximumSize = New-Object System.Drawing.Size($szer, 0) }
+          }
+        }
+      } finally { $lista.ResumeLayout($true) }
+    }
+  } catch {
+    if (-not $script:BladRozkladu) { Dopisz-Dziennik "okno przypomnien ($($script:RodzajOkna)): tresc nie dopasowala sie do rozmiaru okna: $($_.Exception.Message)" }
+    $script:BladRozkladu = $true
+  } finally { $script:WRozkladzie = $false }
+}
+
+# Plik $PlikRozmiaru: linia na rodzaj okna (zwykle / niepowodzenie / decyzja),
+# "rodzaj: x,y,szerokosc,wysokosc,normalne|maks" - polozenie i rozmiar okna niezmaksymalizowanego.
+$WZOR_ROZMIARU = '^\s*(\w+)\s*:\s*(-?\d+),(-?\d+),(\d+),(\d+),(normalne|maks)\s*$'
+
+# Rozmiar z poprzedniego otwarcia albo $null = domyslny. Nieczytelny zapis i polozenie poza
+# ekranami (monitor odlaczony) tez daja domyslny - zawsze z wpisem w dzienniku, nigdy wyjatek.
+function Czytaj-Rozmiar-Okna([string]$rodzaj) {
+  if (-not (Test-Path -LiteralPath $PlikRozmiaru)) { return $null }
+  try {
+    $linie = @([System.IO.File]::ReadAllLines($PlikRozmiaru, [System.Text.Encoding]::UTF8) | Where-Object { $_ -match "^\s*$([regex]::Escape($rodzaj))\s*:" })
+    if ($linie.Count -eq 0) { return $null }
+    $m = [regex]::Match($linie[-1], $WZOR_ROZMIARU)
+    if (-not $m.Success) { throw "nieczytelny zapis '$($linie[-1])'" }
+    $p = New-Object System.Drawing.Rectangle([int]$m.Groups[2].Value, [int]$m.Groups[3].Value, [int]$m.Groups[4].Value, [int]$m.Groups[5].Value)
+    $maks = ($m.Groups[6].Value -eq "maks")
+  } catch {
+    Dopisz-Dziennik "rozmiar okna przypomnien ($rodzaj) z ${PlikRozmiaru}: $($_.Exception.Message) - rozmiar i polozenie domyslne"
+    return $null
+  }
+  # Belka tytulowa (cala wysokosc, co najmniej $MIN_WIDOCZNEJ_BELKI px szerokosci) na ktoryms ekranie.
+  $belka = New-Object System.Drawing.Rectangle($p.X, $p.Y, $p.Width, [System.Windows.Forms.SystemInformation]::CaptionHeight)
+  $widac = @([System.Windows.Forms.Screen]::AllScreens | Where-Object {
+    $w = [System.Drawing.Rectangle]::Intersect($_.WorkingArea, $belka)
+    ($w.Height -ge $belka.Height) -and ($w.Width -ge [Math]::Min($MIN_WIDOCZNEJ_BELKI, $p.Width)) -and ($w.Width -gt 0) })
+  if ($widac.Count -eq 0) {
+    Dopisz-Dziennik "rozmiar okna przypomnien ($rodzaj): zapamietane polozenie $($p.X),$($p.Y) $($p.Width)x$($p.Height) jest poza ekranem - rozmiar i polozenie domyslne"
+    return $null
+  }
+  return [pscustomobject]@{ Prostokat = $p; Maks = $maks }
+}
+
+# Zapamietany rozmiar na oknie; ponizej MinimumSize WinForms sam nie zejdzie.
+function Przywroc-Rozmiar-Okna($f, $z) {
+  $f.StartPosition = "Manual"
+  $f.Bounds = $z.Prostokat
+  if ($z.Maks) { $f.WindowState = "Maximized" }
+}
+
+# Przy zamknieciu: polozenie i rozmiar (zmaksymalizowane / zminimalizowane - ten sprzed tego).
+# Linie innych rodzajow zostaja, nieczytelne wypadaja. Porazka zapisu - dziennik, okno sie zamyka.
+function Zapisz-Rozmiar-Okna($f) {
+  try {
+    $p = $f.Bounds
+    if ($f.WindowState -ne "Normal") { $p = $f.RestoreBounds }
+    $stan = "normalne"
+    if ($f.WindowState -eq "Maximized") { $stan = "maks" }
+    $wpis = "$($script:RodzajOkna): $($p.X),$($p.Y),$($p.Width),$($p.Height),$stan"
+    if ($Proba) { Write-Host "[proba] przypomnienia-okno-rozmiar.txt: $wpis"; return }
+    $linie = @()
+    if (Test-Path -LiteralPath $PlikRozmiaru) {
+      $linie = @([System.IO.File]::ReadAllLines($PlikRozmiaru, [System.Text.Encoding]::UTF8) |
+                 Where-Object { ($_ -match $WZOR_ROZMIARU) -and ($Matches[1] -ne $script:RodzajOkna) })
+    }
+    [System.IO.File]::WriteAllLines($PlikRozmiaru, [string[]](@($linie) + $wpis), (Bez-Bom))
+  } catch { Dopisz-Dziennik "rozmiar okna przypomnien ($($script:RodzajOkna)): nie zapisalem do ${PlikRozmiaru}: $($_.Exception.Message)" }
 }
 
 # Ostrzezenie dla czlowieka, gdy przycisk nie zadzialal (jedno miejsce - testy podmieniaja je na zapis).
@@ -1064,6 +1221,15 @@ function Okno-Przypomnien($pozycje, [string]$rodzaj = "") {
   $script:Decyzja = ($rodzaj -eq "decyzja")
   $decyzja = $script:Decyzja
   $script:PozycjaDecyzji = @($pozycje)[0]
+  $script:Rozciagane = @()
+  $script:BazaKlienta = 0
+  $script:DodatekPaska = 0
+  $script:WysWybrana = 0
+  $script:Przyrost = 0
+  $script:BladRozkladu = $false
+  $script:WRozkladzie = $false
+  $script:RodzajOkna = "zwykle"
+  if ($rodzaj) { $script:RodzajOkna = $rodzaj }
 
   $f = New-Object System.Windows.Forms.Form
   $f.Text = "MegaRuchacz - przypomnienia ($(@($pozycje).Count))"
@@ -1076,8 +1242,10 @@ function Okno-Przypomnien($pozycje, [string]$rodzaj = "") {
   $f.BackColor = [System.Drawing.Color]::White
   $f.Width = 780
   $f.Height = [Math]::Min(760, 170 + 150 * @($pozycje).Count)
+  # Ramka do rozciagania mysza i maksymalizacja (zgloszenie uzytkownika 2026-10-14: wygodniej sie czyta).
+  $f.FormBorderStyle = "Sizable"
   $f.MinimizeBox = $true
-  $f.MaximizeBox = $false
+  $f.MaximizeBox = $true
   $ikona = Join-Path $Zrodlo "logo.png"
   if (Test-Path -LiteralPath $ikona) {
     try {
@@ -1116,6 +1284,7 @@ function Okno-Przypomnien($pozycje, [string]$rodzaj = "") {
     $karta.Padding = New-Object System.Windows.Forms.Padding(10, 8, 10, 8)
     $karta.Margin = New-Object System.Windows.Forms.Padding(0, 0, 0, 10)
     $karta.MinimumSize = New-Object System.Drawing.Size(720, 0)
+    Rozciagaj $karta "min" 720
 
     $gruba = New-Object System.Drawing.Font("Segoe UI", 10, [System.Drawing.FontStyle]::Bold)
     $glowa = Pole-Tekstowe "#$($p.id)   $($p.termin) ($($p.opis))   $($p.projekt)" 690 $gruba $f.ForeColor $f.BackColor
@@ -1160,6 +1329,7 @@ function Okno-Przypomnien($pozycje, [string]$rodzaj = "") {
     $lista.Controls.Add($karta)
   }
   if ($decyzja) { Uloz-Decyzje $f $lista @($pozycje)[0] }
+  Przygotuj-Rozmiar $f $lista
 
   $f.Add_FormClosing({
     param($s, $e)

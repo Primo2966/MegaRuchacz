@@ -20,6 +20,14 @@
 # Pokaz-Blad w KAZDEJ kopii to atrapy, ktore tylko zapisuja - zaden terminal, proces w tle ani
 # MessageBox nie powstaje. Sabotaze: szczegoly rozwiniete od razu, stala wysokosc przycisku
 # odpowiedzi, krzyzyk bez przeniesienia na jutro, odpowiedz otwierajaca terminal.
+# Rozciaganie (2026-10-14): zwykle okno, okno niepowodzenia i okna decyzji (-Rozciagnij) - ramka Sizable,
+# maksymalizacja, MinimumSize = rozmiar z kodu, pola i przyciski po +300 px szersze i bez uciecia, proba
+# zejscia ponizej minimum, powrot do dawnych szerokosci, zapis rozmiaru przy zamknieciu. Zapamietany
+# rozmiar (przypomnienia-okno-rozmiar.txt przed startem): przywracany, ponizej minimum, zepsuty plik,
+# polozenie poza ekranem, katalog zamiast pliku - zawsze okno i wpis w dzienniku, nigdy wyjatek. Atrapa
+# Przywroc-Rozmiar-Okna bierze tylko rozmiar (polozenie z pliku i maksymalizacja = okno na ekranie).
+# Sabotaze: bez maksymalizacji, bez rozkladu, bez minimum, zla baza, bez zapisu, przycisk GrowOnly,
+# odczyt z wyjatkiem, bez przywracania, polozenie poza ekranem przyjete, cichy blad zapisu.
 # Schowek czytaja po kazdej zmianie inne programy (zmierzone 2026-10-08: Remotly, historia schowka,
 # Eksplorator - kazdy trzyma go do 70 ms), dlatego test przed kopiowaniem czeka, az ucichna, a odczyt
 # ponawia do $MS_ODCZYTU_SCHOWKA (GetText przy zajetym schowku po cichu zwraca ""). Zajety schowek
@@ -48,6 +56,7 @@ New-Item -ItemType Directory -Force -Path $katMr | Out-Null
 $plikP = Join-Path $katMr "przypomnienia.md"
 $dziennik = Join-Path $katMr "przypomnienia.log"
 $plikOkna = Join-Path $katMr "przypomnienia-okno.txt"
+$plikRozmiaru = Join-Path $katMr "przypomnienia-okno-rozmiar.txt"
 $logTerminala = Join-Path $tmp "atrapa-terminal.jsonl"
 $logOdpal = Join-Path $tmp "atrapa-odpal.jsonl"
 $logBledow = Join-Path $tmp "atrapa-pokaz-blad.txt"
@@ -186,8 +195,9 @@ $f.KeyPreview = $true
     while ((-not $p.HasExited) -and ([datetime]::Now -lt $do)) { T-Pompuj 50 }
     if (-not $p.HasExited) { $script:TestRaport.Uwagi += "trzymacz nie skonczyl sam"; try { $p.Kill() } catch { $script:TestRaport.Uwagi += "trzymacz: $($_.Exception.Message)" } }
   }
-  function T-Sprawdz {
-    $r = $script:TestRaport
+  # Migawka kontrolek (typ, tekst, rozmiar, polozenie, uciecie) - przy rozmiarze z kodu i po rozciagnieciu.
+  function T-Kontrolki {
+    $lst = $script:Okno.Controls[0]
     foreach ($c in @(T-Wszystkie $script:Okno)) {
       $k = [ordered]@{ Typ = $c.GetType().Name; Tekst = "$($c.Text)"; Widoczny = $c.Visible; Wys = $c.Height; Szer = $c.Width; Prawa = $c.Right
                        SzerRodzica = $c.Parent.ClientSize.Width; Kolor = $c.ForeColor.ToArgb(); Tlo = $c.BackColor.ToArgb(); TloRodzica = $c.Parent.BackColor.ToArgb() }
@@ -214,8 +224,14 @@ $f.KeyPreview = $true
         $ost = [Math]::Max(0, $c.TextLength - 1)
         $k.PierwszaY = $c.GetPositionFromCharIndex(0).Y; $k.OstatniaY = $c.GetPositionFromCharIndex($ost).Y; $k.Linii = $c.GetLineFromCharIndex($ost) + 1
       }
-      $r.Kontrolki += [pscustomobject]$k
+      # Prawa krawedz w obszarze listy (bez paska przewijania) - po rozciagnieciu nic nie moze za nia wyjsc.
+      if ($c.Visible -and ($c -ne $lst)) { $k.WLisciePrawa = $lst.PointToClient($c.PointToScreen([System.Drawing.Point]::Empty)).X + $c.Width; $k.ListaSzer = $lst.ClientSize.Width }
+      [pscustomobject]$k
     }
+  }
+  function T-Sprawdz {
+    $r = $script:TestRaport
+    $r.Kontrolki = @(T-Kontrolki)
     # Wszystko do zamykajacej klamry "koniec prob schowka" dotyka schowka - tylko z -Schowek.
     if (__SCHOWEK__) {
     # zaznaczenie calego pola i Kopiuj (to samo, co zaznaczenie mysza + Ctrl+C / menu Kopiuj)
@@ -268,7 +284,25 @@ $f.KeyPreview = $true
   }
   $script:TestRaport = [pscustomobject]@{ Kontrolki = @(); Zaznaczenia = @(); Fragment = $null; Kopiuj = @(); KopiujZajety = $null; KopiujBlad = $null
                                           Wywrotka = ""; Uwagi = @(); Watek = [System.Threading.Thread]::CurrentThread.ApartmentState.ToString()
-                                          Okno = ""; Ekran = ""; Tytul = ""; KlientSzer = 0; KlientWys = 0; Klik = $null }
+                                          Okno = ""; Ekran = ""; Tytul = ""; KlientSzer = 0; KlientWys = 0; Klik = $null
+                                          Ramka = ""; MaksBox = $null; Szer = 0; Wys = 0; MinSzer = 0; MinWys = 0; Przywrocone = "$($script:TestPrzywrocone)"
+                                          Rozciagniete = $null; Sciesnione = $null; Wrocone = @(); Koniec = "" }
+  # Rozciagniecie (z -Rozciagnij): +300 x +200 px - pola rosna, tekst sie zawija od nowa; proba
+  # zejscia do 200 x 120 (ma zostac MinimumSize) i powrot do rozmiaru z kodu. Okno caly czas poza ekranem.
+  function T-Rozciagnij {
+    $r = $script:TestRaport
+    $przed = $script:Okno.Size
+    $script:Okno.Size = New-Object System.Drawing.Size(($przed.Width + 300), ($przed.Height + 200)); T-Pompuj 300
+    $lst = $script:Okno.Controls[0]
+    $r.Rozciagniete = [pscustomobject]@{ Szer = $script:Okno.Width; Wys = $script:Okno.Height; ListaSzer = $lst.ClientSize.Width; Kontrolki = @(T-Kontrolki) }
+    $bmp = New-Object System.Drawing.Bitmap($script:Okno.Width, $script:Okno.Height)
+    $script:Okno.DrawToBitmap($bmp, (New-Object System.Drawing.Rectangle(0, 0, $script:Okno.Width, $script:Okno.Height)))
+    $bmp.Save('__ZRZUT_ROZC__'); $bmp.Dispose()
+    $script:Okno.Size = New-Object System.Drawing.Size(200, 120); T-Pompuj 300
+    $r.Sciesnione = [pscustomobject]@{ Szer = $script:Okno.Width; Wys = $script:Okno.Height }
+    $script:Okno.Size = $przed; T-Pompuj 300
+    $r.Wrocone = @(T-Kontrolki)
+  }
   # Przycisk po napisie (okno decyzji: -Przed klika przed pomiarem, -Klik po nim).
   function T-Kliknij([string]$napis) {
     $b = @(T-Wszystkie $script:Okno | Where-Object { ($_ -is [System.Windows.Forms.Button]) -and $_.Visible -and ($_.Text -ceq $napis) })
@@ -282,10 +316,15 @@ $f.KeyPreview = $true
   $script:TestZegar.Add_Tick({
     $script:TestZegar.Stop()
     try {
+      $script:TestRaport.Ramka = "$($script:Okno.FormBorderStyle)"; $script:TestRaport.MaksBox = $script:Okno.MaximizeBox
+      $script:TestRaport.Szer = $script:Okno.Width; $script:TestRaport.Wys = $script:Okno.Height
+      $script:TestRaport.MinSzer = $script:Okno.MinimumSize.Width; $script:TestRaport.MinWys = $script:Okno.MinimumSize.Height
       if ('__PRZED__') { [void](T-Kliknij '__PRZED__'); T-Pompuj 300 }
       $script:TestRaport.Okno = "$($script:Okno.Bounds)"; $script:TestRaport.Ekran = "$([System.Windows.Forms.Screen]::PrimaryScreen.WorkingArea)"
       $script:TestRaport.Tytul = $script:Okno.Text; $script:TestRaport.KlientSzer = $script:Okno.ClientSize.Width; $script:TestRaport.KlientWys = $script:Okno.ClientSize.Height
       T-Sprawdz
+      if (__ROZCIAGNIJ__) { T-Rozciagnij }
+      if (-not $script:Okno.IsDisposed) { $script:TestRaport.Koniec = "$($script:Okno.Left),$($script:Okno.Top),$($script:Okno.Width),$($script:Okno.Height)" }
       if ('__KLIK__') { $script:TestRaport.Klik = T-Kliknij '__KLIK__' }
     } catch { $script:TestRaport.Wywrotka = "$($_.Exception.Message) @ $($_.InvocationInfo.PositionMessage)" }
     [System.IO.File]::WriteAllText('__RAPORT__', ($script:TestRaport | ConvertTo-Json -Depth 5), (New-Object System.Text.UTF8Encoding($false)))
@@ -327,22 +366,34 @@ $atrapaBledu = @'
 function Pokaz-Blad([string]$tekst) { [System.IO.File]::AppendAllText('__LOG__', $tekst + "`r`n", (New-Object System.Text.UTF8Encoding($false))) }
 function Pokaz-Blad-Nieuzywana([string]$tekst) {
 '@
+# Zapamietany rozmiar: atrapa bierze tylko rozmiar i zapisuje, co by przywrocila - polozenie z pliku
+# (prawdziwy ekran) i maksymalizacja wyciagnelyby okno testu na ekran uzytkownika.
+$atrapaPrzywroc = @'
+function Przywroc-Rozmiar-Okna($f, $z) {
+  $f.Size = $z.Prostokat.Size
+  $script:TestPrzywrocone = "$($z.Prostokat.X),$($z.Prostokat.Y),$($z.Prostokat.Width),$($z.Prostokat.Height),$($z.Maks)"
+}
+function Przywroc-Rozmiar-Okna-Nieuzywana($f, $z) {
+'@
 # Kopia z podmianami; kazda kotwica musi wystapic dokladnie raz - inaczej porazka przygotowania,
 # a nie test, ktory po cichu sprawdza nie to okno.
 # -Zajety:$false pomija scenariusze z trzymanym schowkiem (ok. 12 s) w sabotazach, ktore ich nie oceniaja.
 # -Przed / -Klik: napis przycisku, ktory hak kliknie przed pomiarem / po nim.
-function Kopia([string]$wariant, [hashtable[]]$podmiany, [bool]$Zajety = $true, [string]$Przed = "", [string]$Klik = "") {
+# -Rozciagnij: po pomiarze rozciagniecie, proba zejscia ponizej minimum i powrot (T-Rozciagnij).
+function Kopia([string]$wariant, [hashtable[]]$podmiany, [bool]$Zajety = $true, [string]$Przed = "", [string]$Klik = "", [bool]$Rozciagnij = $false) {
   $raport = Join-Path $tmp "raport-$wariant.json"
   $zrzut = Join-Path $Zrzuty "terminy-okno-$wariant.png"
+  $zrzutR = Join-Path $Zrzuty "terminy-okno-$wariant-rozciagniete.png"
   $wsp = @(
     @{ K = '$f = New-Object System.Windows.Forms.Form'; Z = $klasaOkna.TrimStart() },
     @{ K = '$f.TopMost = $true'; Z = '$f.TopMost = $false' },
     @{ K = '$f.ShowInTaskbar = $true'; Z = '$f.ShowInTaskbar = $false' },
     @{ K = '$f.StartPosition = "CenterScreen"'; Z = '$f.StartPosition = "Manual"; $f.Location = New-Object System.Drawing.Point(-5000, 0)' },
-    @{ K = '$f.Add_Shown({ $f.Activate() })'; Z = $hak.Replace('__RAPORT__', $raport).Replace('__ZRZUT__', $zrzut).Replace('__TMP__', $tmp).Replace('__TRZYMACZ__', $trzymacz).Replace('__MS_KROTKO__', "$MS_TRZYMANIA_KROTKO").Replace('__MS_DLUGO__', "$MS_TRZYMANIA_DLUGO").Replace('__ZAJETY__', ('$' + "$($Zajety -and $Schowek)")).Replace('__SCHOWEK__', ('$' + "$([bool]$Schowek)")).Replace('__PRZED__', $Przed.Replace("'", "''")).Replace('__KLIK__', $Klik.Replace("'", "''")) },
+    @{ K = '$f.Add_Shown({ $f.Activate() })'; Z = $hak.Replace('__RAPORT__', $raport).Replace('__ZRZUT__', $zrzut).Replace('__TMP__', $tmp).Replace('__TRZYMACZ__', $trzymacz).Replace('__MS_KROTKO__', "$MS_TRZYMANIA_KROTKO").Replace('__MS_DLUGO__', "$MS_TRZYMANIA_DLUGO").Replace('__ZAJETY__', ('$' + "$($Zajety -and $Schowek)")).Replace('__SCHOWEK__', ('$' + "$([bool]$Schowek)")).Replace('__PRZED__', $Przed.Replace("'", "''")).Replace('__KLIK__', $Klik.Replace("'", "''")).Replace('__ROZCIAGNIJ__', ('$' + "$Rozciagnij")).Replace('__ZRZUT_ROZC__', $zrzutR) },
     @{ K = 'function Otworz-Terminal([string]$kat, [string]$id, [string]$start) {'; Z = $atrapaTerminala.Replace('__LOG__', $logTerminala).TrimEnd() },
     @{ K = 'function Odpal-W-Tle($p, [string]$wznow = "") {'; Z = $atrapaOdpal.Replace('__LOG__', $logOdpal).TrimEnd() },
     @{ K = 'function Pokaz-Blad([string]$tekst) {'; Z = $atrapaBledu.Replace('__LOG__', $logBledow).TrimEnd() },
+    @{ K = 'function Przywroc-Rozmiar-Okna($f, $z) {'; Z = $atrapaPrzywroc.TrimEnd() },
     @{ K = '[void]$f.ShowDialog()'; Z = $petla.Replace('__RAPORT__', $raport) },
     @{ K = '"Local\MegaRuchacz-Terminy-Start"'; Z = '"Local\MegaRuchacz-Terminy-Start-TEST-OKNA"' },
     @{ K = '"Local\MegaRuchacz-Terminy-Okno"'; Z = '"Local\MegaRuchacz-Terminy-Okno-TEST-OKNA"' },
@@ -371,9 +422,13 @@ function Linie-Json([string]$f) {
 }
 
 # Kopia jako osobny proces: bez okna konsoli, wyjscie przechwycone, ubijana po 120 s.
-function Uruchom($kopia) {
+# -Rozmiar: tresc pliku z rozmiarem okna przed startem (bez - pliku nie ma); -RozmiarKatalog: w jego
+# miejscu katalog (odczyt i zapis rzucaja wyjatkiem).
+function Uruchom($kopia, [string]$Rozmiar = "", [switch]$RozmiarKatalog) {
   [System.IO.File]::WriteAllLines($plikP, [string[]]$linie, $BezBom)
-  foreach ($x in @($dziennik, $plikOkna, $kopia.Raport, "$($kopia.Raport).zwis", $logTerminala, $logOdpal, $logBledow)) { if (Test-Path -LiteralPath $x) { Remove-Item -LiteralPath $x -Force } }
+  foreach ($x in @($dziennik, $plikOkna, $plikRozmiaru, $kopia.Raport, "$($kopia.Raport).zwis", $logTerminala, $logOdpal, $logBledow)) { if (Test-Path -LiteralPath $x) { Remove-Item -LiteralPath $x -Force -Recurse } }
+  if ($Rozmiar) { [System.IO.File]::WriteAllText($plikRozmiaru, $Rozmiar, $BezBom) }
+  if ($RozmiarKatalog) { New-Item -ItemType Directory -Force -Path $plikRozmiaru | Out-Null }
   $psi = New-Object System.Diagnostics.ProcessStartInfo
   $psi.FileName = "powershell.exe"
   $psi.Arguments = "-NoProfile -NonInteractive -ExecutionPolicy Bypass -File `"$($kopia.Plik)`" -Zrodlo `"$Zrodlo`" -KatalogDomowy `"$dom`" -Plik `"$plikP`" -Dzis $dzis"
@@ -389,7 +444,8 @@ function Uruchom($kopia) {
   if (-not $p.WaitForExit(120000)) { $p.Kill(); $p.WaitForExit(5000) | Out-Null; $zabity = $true }
   $r = [pscustomobject]@{ Kod = $p.ExitCode; Zabity = $zabity; Wyjscie = "$($wy.Result)$($bl.Result)".Trim(); Raport = $null; Dziennik = ""
                           Przypomnienia = [System.IO.File]::ReadAllText($plikP, [System.Text.Encoding]::UTF8)
-                          Terminal = @(Linie-Json $logTerminala); Odpal = @(Linie-Json $logOdpal); Bledy = "" }
+                          Terminal = @(Linie-Json $logTerminala); Odpal = @(Linie-Json $logOdpal); Bledy = ""; Rozmiar = $null }
+  if (Test-Path -LiteralPath $plikRozmiaru -PathType Leaf) { $r.Rozmiar = [System.IO.File]::ReadAllText($plikRozmiaru, [System.Text.Encoding]::UTF8) }
   if (Test-Path -LiteralPath $logBledow) { $r.Bledy = [System.IO.File]::ReadAllText($logBledow, [System.Text.Encoding]::UTF8).Trim() }
   if (Test-Path -LiteralPath $kopia.Raport) { $r.Raport = [System.IO.File]::ReadAllText($kopia.Raport, [System.Text.Encoding]::UTF8) | ConvertFrom-Json }
   if (Test-Path -LiteralPath $dziennik) { $r.Dziennik = [System.IO.File]::ReadAllText($dziennik, [System.Text.Encoding]::UTF8) }
@@ -534,6 +590,8 @@ $PYT = "Grafiki PT02: od czego zacząć poprawę niemieckich tekstów?"
 $OPCJE = @("Jeden zapach na próbę", "Od razu wszystkie")
 $PYT_DL = ("Grafiki PT02 dla wszystkich zapachów: w opisach po niemiecku są literówki i zdania przetłumaczone słowo w słowo, " +
            "a część napisów na zdjęciach nie mieści się w ramkach. Od czego zacząć poprawę, żeby jak najszybciej było widać efekt w sprzedaży?")
+# Ok. 730 px przy 11 pkt (zmierzone): dwa wiersze przy 600 px, jeden po rozciagnieciu o 300 px.
+$OPCJA_SR = "Najpierw zapachy z największą sprzedażą na Amazon DE w ostatnich 14 miesiącach, potem reszta"
 $OPCJE_DL = @("Lawenda na próbę", "Od razu wszystkie zapachy",
               "Najpierw tylko te zapachy, które w ostatnich 14 miesiącach miały najwięcej zakupów z wyszukiwania na Amazon DE, a resztę zostaw na później, gdy zobaczymy wynik",
               "Wstrzymaj & wróć za tydzień")
@@ -617,10 +675,13 @@ $WIADOMOSC_OPCJI = "Użytkownik wybrał: Od razu wszystkie. Kontynuuj zadanie."
 $PRZYPADKI_DEC = [ordered]@{
   "decyzja" = @{ Opis = "okno decyzji (PYTANIE, makieta), krzyzyk"; Wstaw = (Wstaw-Decyzje "pytanie" $PYT $OPCJE $RAPORT_DEC); Zdanie = $PYT
     O = @{ Przyciski = $PRZYC_PYT; Data = $jutro; Terminal = 0; Odpal = 0; Dziennik = @('okno decyzji #1 zamkniete krzyzykiem - na jutro - ok') } }
-  "decyzja-dluga" = @{ Opis = "okno decyzji: dlugie pytanie i 4 odpowiedzi, jedna dluzsza niz okno"; Wstaw = (Wstaw-Decyzje "pytanie" $PYT_DL $OPCJE_DL $RAPORT_DEC); Zdanie = $PYT_DL
+  "decyzja-dluga" = @{ Opis = "okno decyzji: dlugie pytanie i 4 odpowiedzi, jedna dluzsza niz okno"; Wstaw = (Wstaw-Decyzje "pytanie" $PYT_DL $OPCJE_DL $RAPORT_DEC); Zdanie = $PYT_DL; Rozciagnij = $OPCJE_DL[2]; Szerszy = $true
     O = @{ Przyciski = ((@($OPCJE_DL | ForEach-Object { "$_=opcja" }) + @("Odłóż na jutro=odloz", "Otwórz rozmowę=rozmowa", "Szczegóły ▸=szczegoly")) -join ", ")
            Data = $jutro; Terminal = 0; Odpal = 0; Dziennik = @('zamkniete krzyzykiem - na jutro - ok'); Wielowierszowy = $OPCJE_DL[2] } }
-  "decyzja-czynnosc" = @{ Opis = "okno decyzji (ZROB) z rozwinietymi szczegolami (dlugi raport)"; Wstaw = (Wstaw-Decyzje "czynnosc" $ZROB @() $RAPORT_DL); Zdanie = $ZROB; Przed = "Szczegóły ▸"
+  "decyzja-srednia" = @{ Opis = "okno decyzji: odpowiedz zawinieta przy 600 px, w jednym wierszu po rozciagnieciu"; Wstaw = (Wstaw-Decyzje "pytanie" $PYT @($OPCJE[0], $OPCJA_SR) $RAPORT_DEC); Zdanie = $PYT; Rozciagnij = $OPCJA_SR
+    O = @{ Przyciski = "$($OPCJE[0])=opcja, $OPCJA_SR=opcja, Odłóż na jutro=odloz, Otwórz rozmowę=rozmowa, Szczegóły ▸=szczegoly"
+           Data = $jutro; Terminal = 0; Odpal = 0; Dziennik = @('zamkniete krzyzykiem - na jutro - ok'); Wielowierszowy = $OPCJA_SR } }
+  "decyzja-czynnosc" = @{ Opis ="okno decyzji (ZROB) z rozwinietymi szczegolami (dlugi raport)"; Wstaw = (Wstaw-Decyzje "czynnosc" $ZROB @() $RAPORT_DL); Zdanie = $ZROB; Przed = "Szczegóły ▸"; Rozciagnij = $ZROB
     O = @{ Przyciski = "Zrobione=zrobilem, Odłóż na jutro=odloz, Otwórz rozmowę=rozmowa, Szczegóły ▾=szczegoly, Kopiuj="; Szczegoly = $true; Raport = $RAPORT_DL
            Data = $jutro; Terminal = 0; Odpal = 0; Dziennik = @('przycisk Szczegoly #1: rozwiniete', 'zamkniete krzyzykiem - na jutro - ok') } }
   "decyzja-opcja" = @{ Opis = "klik odpowiedzi: wznowienie tej rozmowy w tle, okno od razu zamkniete, bez terminala"; Wstaw = (Wstaw-Decyzje "pytanie" $PYT $OPCJE $RAPORT_DEC); Zdanie = $PYT; Klik = "Od razu wszystkie"
@@ -637,6 +698,117 @@ $PRZYPADKI_DEC = [ordered]@{
   "decyzja-rozmowa" = @{ Opis = "klik 'Otworz rozmowe': terminal z claude --resume tej rozmowy, zostaje na dzis"; Wstaw = (Wstaw-Decyzje "pytanie" $PYT $OPCJE $RAPORT_DEC); Zdanie = $PYT; Klik = "Otwórz rozmowę"
     O = @{ Przyciski = $PRZYC_PYT; Data = $dzis; Terminal = 1; Odpal = 0; Klik = $true; Dziennik = @('przycisk Otworz rozmowe #1: ATRAPA terminala \(zostaje w toku\)')
            Po = { param($u) if (($u.Terminal.Count -eq 1) -and -not "$($u.Terminal[0].skrypt)".Contains("--resume '$SESJA_DEC'")) { "terminal bez --resume '$SESJA_DEC'" } } } }
+}
+
+# ---------------------------------------------------------------- rozciaganie i zapamietany rozmiar
+# Okna da sie rozciagac i maksymalizowac (2026-10-14): ramka Sizable, MaximizeBox, MinimumSize = rozmiar
+# z kodu; pola i przyciski rosna z szerokoscia okna (T-Rozciagnij: +300 px), rozmiar zapisany przy
+# zamknieciu w przypomnienia-okno-rozmiar.txt i przywracany przy otwarciu (atrapa Przywroc-Rozmiar-Okna).
+# Domyslny rozmiar zwyklego okna z 3 sprawami: terminy.ps1, 780 x min(760, 170 + 150 * 3).
+$SZER_DOM = 780; $WYS_DOM = 620
+$ROZC_SZER = 300
+$SZEROKOSC_DECYZJI = 600   # jak w terminy.ps1
+$PASEK = [System.Windows.Forms.SystemInformation]::VerticalScrollBarWidth
+function Skrot([string]$t) { return $t.Substring(0, [Math]::Min(25, $t.Length)) }
+
+# $baza - szerokosc najszerszego pola przy rozmiarze z kodu (wyglad jak dotad); $mniej - napis pola
+# albo przycisku, ktory po rozciagnieciu musi byc nizszy (mniej linii) albo - z -Szerszy - o tyle
+# szerszy, o ile okno, i nie wyzszy (przycisk, ktory i przy +300 px ma dwa wiersze).
+function Ocen-Rozmiar($u, [string]$rodzaj, [int]$baza, [string]$mniej, [switch]$Szerszy) {
+  $o = [ordered]@{}
+  $r = $u.Raport
+  $ok = (-not $u.Zabity) -and ($u.Kod -eq 0) -and $r -and (-not $r.Wywrotka) -and ($u.Dziennik -notmatch 'WYWROTKA') -and (@($r.Uwagi).Count -eq 0) -and
+        ($u.Dziennik -notmatch 'nie dopasowala sie|rozmiar okna przypomnien')
+  $o["przebieg"] = @($ok, "kod $($u.Kod), zabity=$($u.Zabity), wywrotka '$($r.Wywrotka)', uwagi '$(@($r.Uwagi) -join '; ')', wyjscie '$($u.Wyjscie)'")
+  if ((-not $r) -or (-not $r.Rozciagniete)) { foreach ($n in @("ramka", "domyslny", "rosnie", "minimum", "powrot", "zapis")) { $o[$n] = @($false, "brak raportu z rozciagniecia") }; return $o }
+  $o["ramka"] = @((($r.Ramka -eq "Sizable") -and ($r.MaksBox -eq $true) -and ($r.MinSzer -eq $r.Szer) -and ($r.MinWys -eq $r.Wys)),
+                  "ramka $($r.Ramka), maksymalizacja $($r.MaksBox), okno $($r.Szer)x$($r.Wys), MinimumSize $($r.MinSzer)x$($r.MinWys)")
+  $pola0 = @($r.Kontrolki | Where-Object { $_.Widoczny -and ($_.Typ -eq "TextBox") })
+  $szer0 = ($pola0 | Measure-Object Szer -Maximum).Maximum
+  $o["domyslny"] = @(($szer0 -eq $baza), "przy rozmiarze z kodu najszersze pole $szer0 px (ma byc $baza - wyglad jak dotad)")
+  $k1 = @($r.Rozciagniete.Kontrolki | Where-Object { $_.Widoczny })
+  $zle = @()
+  foreach ($p in $pola0) {
+    $po = @($k1 | Where-Object { ($_.Typ -eq "TextBox") -and ($_.Tekst -ceq $p.Tekst) })
+    if ($po.Count -ne 1) { $zle += "'$(Skrot $p.Tekst)': po rozciagnieciu pol $($po.Count)"; continue }
+    $przyr = $po[0].Szer - $p.Szer
+    if (($przyr -lt ($ROZC_SZER - $PASEK)) -or ($przyr -gt $ROZC_SZER)) { $zle += "'$(Skrot $p.Tekst)' uroslo o $przyr px" }
+    if ($po[0].Linii -gt $p.Linii) { $zle += "'$(Skrot $p.Tekst)' linii $($p.Linii) -> $($po[0].Linii)" }
+  }
+  foreach ($c in @($k1 | Where-Object { $_.Typ -ne "FlowLayoutPanel" })) {
+    if ($c.WLisciePrawa -gt $c.ListaSzer) { $zle += "'$(Skrot $c.Tekst)' wystaje w prawo ($($c.WLisciePrawa) > $($c.ListaSzer))" }
+    if (($c.Typ -eq "TextBox") -and ($c.Paski -eq "None") -and (($c.PierwszaY -ne 0) -or (($c.OstatniaY + $c.WysCzcionki) -gt $c.WysWnetrza))) { $zle += "'$(Skrot $c.Tekst)' uciete" }
+    if (($c.Typ -eq "Button") -and ($c.Potrzebna -gt $c.Wys)) { $zle += "'$(Skrot $c.Tekst)' przycisk za niski: $($c.Wys) < $($c.Potrzebna)" }
+  }
+  if ($mniej) {
+    $a = @($r.Kontrolki | Where-Object { $_.Widoczny -and ($_.Tekst -ceq $mniej) }); $b = @($k1 | Where-Object { $_.Tekst -ceq $mniej })
+    $okM = ($a.Count -eq 1) -and ($b.Count -eq 1)
+    if ($okM -and $Szerszy) { $okM = (($b[0].Szer - $a[0].Szer) -ge ($ROZC_SZER - $PASEK)) -and (($b[0].Szer - $a[0].Szer) -le $ROZC_SZER) -and ($b[0].Wys -le $a[0].Wys) }
+    elseif ($okM) { $okM = $b[0].Wys -lt $a[0].Wys }
+    if (-not $okM) { $zle += "'$(Skrot $mniej)' nie $(if ($Szerszy) { 'poszerzony' } else { 'nizszy' }): $(@($a | ForEach-Object { "$($_.Szer)x$($_.Wys)" }) -join '') -> $(@($b | ForEach-Object { "$($_.Szer)x$($_.Wys)" }) -join '')" }
+  }
+  $o["rosnie"] = @((($zle.Count -eq 0) -and ($pola0.Count -gt 0)), "okno $($r.Rozciagniete.Szer)x$($r.Rozciagniete.Wys): $(if ($zle) { $zle -join '; ' } else { "pola szersze o ok. $ROZC_SZER px, tekst zawiniety od nowa, nic nie uciete ani nie wystaje" })")
+  $o["minimum"] = @((($r.Sciesnione.Szer -ge $r.Szer) -and ($r.Sciesnione.Wys -ge $r.Wys) -and ($r.Sciesnione.Szer -eq $r.MinSzer) -and ($r.Sciesnione.Wys -eq $r.MinWys)),
+                    "proba 200x120: okno $($r.Sciesnione.Szer)x$($r.Sciesnione.Wys), rozmiar z kodu $($r.Szer)x$($r.Wys), MinimumSize $($r.MinSzer)x$($r.MinWys)")
+  $szer2 = (@($r.Wrocone | Where-Object { $_.Widoczny -and ($_.Typ -eq "TextBox") }) | Measure-Object Szer -Maximum).Maximum
+  $o["powrot"] = @(($szer2 -eq $baza), "po powrocie do rozmiaru z kodu najszersze pole $szer2 px (ma byc $baza)")
+  $ocz = "${rodzaj}: $($r.Koniec),normalne"
+  $o["zapis"] = @(("$($u.Rozmiar)".Trim() -ceq $ocz), "przypomnienia-okno-rozmiar.txt po zamknieciu: '$("$($u.Rozmiar)".Trim())' (ma byc '$ocz')")
+  return $o
+}
+$OPISY_ROZ = [ordered]@{
+  "przebieg" = "bez wywrotki i bez wpisow o rozmiarze w dzienniku"
+  "ramka" = "ramka do rozciagania, maksymalizacja wlaczona, MinimumSize = rozmiar z kodu"
+  "domyslny" = "przy rozmiarze z kodu pola maja dawna szerokosc"
+  "rosnie" = "po rozciagnieciu pola i przyciski rosna, tekst sie zawija, nic nie uciete"
+  "minimum" = "okno nie schodzi ponizej MinimumSize"
+  "powrot" = "po powrocie do rozmiaru z kodu pola wracaja do dawnej szerokosci"
+  "zapis" = "przy zamknieciu rozmiar i polozenie zapisane w przypomnienia-okno-rozmiar.txt"
+}
+
+# Zapamietany rozmiar zwyklego okna: Plik - zawartosc pliku przed startem; Przywrocone - co atrapa
+# dostala ("" = nic); Szer/Wys - okno przy pomiarze; Baza - najszersze pole (pasek przewijania
+# moze zabrac do $PASEK px); Wpis - wzory, ktore musza byc w dzienniku (bez - zadnego wpisu
+# o rozmiarze); PlikPo - wzory pliku po zamknieciu.
+$WA = [System.Windows.Forms.Screen]::PrimaryScreen.WorkingArea
+$XN = $WA.X + 40; $YN = $WA.Y + 40
+$PRZYPADKI_PAMIECI = [ordered]@{
+  "pamiec" = @{ Opis = "zapamietany rozmiar 1000x700 na ekranie wraca przy otwarciu, tresc szersza"
+    Plik = "zwykle: $XN,$YN,1000,700,normalne`r`n"; Przywrocone = "$XN,$YN,1000,700,False"; Szer = 1000; Wys = 700; Baza = (720 + 1000 - $SZER_DOM)
+    PlikPo = @('^zwykle: -5000,0,1000,700,normalne\r?\n$') }
+  "pamiec-maks" = @{ Opis = "zapamietane okno zmaksymalizowane: rozmiar sprzed maksymalizacji + maks, linia innego okna zostaje w pliku"
+    Plik = "niepowodzenie: 1,2,900,650,normalne`r`nzwykle: $XN,$YN,1000,700,maks`r`n"; Przywrocone = "$XN,$YN,1000,700,True"; Szer = 1000; Wys = 700; Baza = (720 + 1000 - $SZER_DOM)
+    PlikPo = @('(?m)^niepowodzenie: 1,2,900,650,normalne\r?$', '(?m)^zwykle: -5000,0,1000,700,normalne\r?$') }
+  "pamiec-mala" = @{ Opis = "zapamietany rozmiar mniejszy niz minimum: okno ma rozmiar z kodu"
+    Plik = "zwykle: $XN,$YN,300,200,normalne"; Przywrocone = "$XN,$YN,300,200,False"; Szer = $SZER_DOM; Wys = $WYS_DOM; Baza = 720 }
+  "pamiec-zepsuta" = @{ Opis = "negatywna: zepsuty plik rozmiaru - rozmiar domyslny i wpis w dzienniku, nie wyjatek"
+    Plik = "zwykle: 12,abc`r`n`0`0śmieci ►"; Przywrocone = ""; Szer = $SZER_DOM; Wys = $WYS_DOM; Baza = 720
+    Wpis = @('rozmiar okna przypomnien \(zwykle\) z .*nieczytelny zapis .* - rozmiar i polozenie domyslne'); PlikPo = @("^zwykle: -5000,0,$SZER_DOM,$WYS_DOM,normalne\r?\n$") }
+  "pamiec-poza" = @{ Opis = "negatywna: zapamietane polozenie poza ekranem - rozmiar domyslny i wpis w dzienniku"
+    Plik = "zwykle: -5000,0,1000,700,normalne"; Przywrocone = ""; Szer = $SZER_DOM; Wys = $WYS_DOM; Baza = 720
+    Wpis = @('rozmiar okna przypomnien \(zwykle\): zapamietane polozenie -5000,0 1000x700 jest poza ekranem - rozmiar i polozenie domyslne') }
+  "pamiec-katalog" = @{ Opis = "negatywna: plik rozmiaru nie do odczytu ani zapisu (katalog) - rozmiar domyslny, okno dziala, oba bledy w dzienniku"
+    Katalog = $true; Przywrocone = ""; Szer = $SZER_DOM; Wys = $WYS_DOM; Baza = 720
+    Wpis = @('rozmiar okna przypomnien \(zwykle\) z .* - rozmiar i polozenie domyslne', 'rozmiar okna przypomnien \(zwykle\): nie zapisalem do ') }
+}
+function Ocen-Pamieci($u, [hashtable]$c) {
+  $o = [ordered]@{}
+  $r = $u.Raport
+  $ok = (-not $u.Zabity) -and ($u.Kod -eq 0) -and $r -and (-not $r.Wywrotka) -and ($u.Dziennik -notmatch 'WYWROTKA') -and (@($r.Uwagi).Count -eq 0) -and
+        ($u.Dziennik -match 'okno pokazane: ')
+  $o["przebieg"] = @($ok, "kod $($u.Kod), zabity=$($u.Zabity), wywrotka '$($r.Wywrotka)', wyjscie '$($u.Wyjscie)'$(if (-not $ok) { ", dziennik '$($u.Dziennik.Trim() -replace '\r?\n', ' | ')'" })")
+  if (-not $r) { $o["pamiec"] = @($false, "brak raportu z okna"); return $o }
+  $zle = @()
+  if ("$($r.Przywrocone)" -cne $c.Przywrocone) { $zle += "przywrocone '$($r.Przywrocone)' zamiast '$($c.Przywrocone)'" }
+  if (($r.Szer -ne $c.Szer) -or ($r.Wys -ne $c.Wys)) { $zle += "okno $($r.Szer)x$($r.Wys) zamiast $($c.Szer)x$($c.Wys)" }
+  if (($r.MinSzer -ne $SZER_DOM) -or ($r.MinWys -ne $WYS_DOM)) { $zle += "MinimumSize $($r.MinSzer)x$($r.MinWys) zamiast ${SZER_DOM}x$WYS_DOM" }
+  $szer = (@($r.Kontrolki | Where-Object { $_.Widoczny -and ($_.Typ -eq "TextBox") }) | Measure-Object Szer -Maximum).Maximum
+  if (($szer -gt $c.Baza) -or ($szer -lt ($c.Baza - $PASEK))) { $zle += "najszersze pole $szer px zamiast $($c.Baza)" }
+  foreach ($wz in @($c.Wpis | Where-Object { $_ })) { if ($u.Dziennik -notmatch $wz) { $zle += "w dzienniku brak '$wz'" } }
+  if ((-not $c.Wpis) -and ($u.Dziennik -match 'rozmiar okna przypomnien')) { $zle += "niepotrzebny wpis o rozmiarze w dzienniku" }
+  foreach ($wz in @($c.PlikPo | Where-Object { $_ })) { if ("$($u.Rozmiar)" -notmatch $wz) { $zle += "plik po zamknieciu '$("$($u.Rozmiar)" -replace '\r?\n', ' | ')' nie pasuje do '$wz'" } }
+  $o["pamiec"] = @(($zle.Count -eq 0), "okno $($r.Szer)x$($r.Wys), przywrocone '$($r.Przywrocone)', najszersze pole $szer px$(if ($zle) { '; ' + ($zle -join '; ') })")
+  return $o
 }
 
 function Pompuj-Schowek([int]$ms) { $do = [datetime]::Now.AddMilliseconds($ms); while ([datetime]::Now -lt $do) { [System.Windows.Forms.Application]::DoEvents(); Start-Sleep -Milliseconds 20 } }
@@ -677,11 +849,13 @@ if ($stan -or -not $Schowek) {
   }
 
   try {
-    $prawdziwa = Kopia "prawdziwa" @()
+    $prawdziwa = Kopia "prawdziwa" @() -Rozciagnij $true
     $u = Uruchom $prawdziwa
     $oc = Ocen $u
     foreach ($n in $OPISY.Keys) { if ($Schowek -or ($PROBY_SCHOWKA -notcontains $n)) { Wynik $OPISY[$n] $oc[$n][0] $oc[$n][1] } }
     Write-Host "Zrzut okna: $($prawdziwa.Zrzut) (okno $($u.Raport.Okno), ekran $($u.Raport.Ekran))"
+    $or = Ocen-Rozmiar $u "zwykle" 720 $trescPola[2]
+    foreach ($n in $OPISY_ROZ.Keys) { Wynik "okno przypomnien: $($OPISY_ROZ[$n])" $or[$n][0] $or[$n][1] }
 
     $sabotaze = @(
       @{ Nazwa = "Label zamiast pola z trescia"; Sprawdzenie = "pola"
@@ -711,11 +885,13 @@ if ($stan -or -not $Schowek) {
     }
 
     # Okno niepowodzenia (bez prob z trzymanym schowkiem - te sprawdza zwykle okno, kod ten sam).
-    $kn = Kopia "niepowodzenie" @($NIEPOWODZENIE) -Zajety $false
+    $kn = Kopia "niepowodzenie" @($NIEPOWODZENIE) -Zajety $false -Rozciagnij $true
     $un = Uruchom $kn
     $on = Ocen-Niepowodzenia $un
     foreach ($n in $OPISY_NIEP.Keys) { Wynik $OPISY_NIEP[$n] $on[$n][0] $on[$n][1] }
     Write-Host "Zrzut okna niepowodzenia: $($kn.Zrzut)"
+    $or = Ocen-Rozmiar $un "niepowodzenie" 720 "Nie udało się wykonać przypomnienia #1 ($($tresc1.TrimEnd('.'))), bo: $POWOD_NIEP. Przeniesione na jutro.`r`nPełny raport: $MD_NIEP"
+    foreach ($n in $OPISY_ROZ.Keys) { Wynik "okno niepowodzenia: $($OPISY_ROZ[$n])" $or[$n][0] $or[$n][1] }
     $sabotazeN = @(
       @{ Nazwa = "zwykle przyciski w oknie niepowodzenia"; Sprawdzenie = "przyciski"
          K = 'if ($niepowodzenie) { $akcje = @(@("Spróbuj teraz", "sprobuj"), @("Odłóż na jutro", "odloz")) }'; Z = '# sabotaz: zwykle przyciski' },
@@ -732,10 +908,15 @@ if ($stan -or -not $Schowek) {
     # Okno decyzji (bez prob z trzymanym schowkiem).
     foreach ($nazwa in $PRZYPADKI_DEC.Keys) {
       $c = $PRZYPADKI_DEC[$nazwa]
-      $kd = Kopia $nazwa @($c.Wstaw) -Zajety $false -Przed "$($c.Przed)" -Klik "$($c.Klik)"
-      $od = Ocen-Decyzji (Uruchom $kd) $c.Zdanie $c.O
+      $kd = Kopia $nazwa @($c.Wstaw) -Zajety $false -Przed "$($c.Przed)" -Klik "$($c.Klik)" -Rozciagnij ([bool]$c.Rozciagnij)
+      $ud = Uruchom $kd
+      $od = Ocen-Decyzji $ud $c.Zdanie $c.O
       foreach ($n in $OPISY_DEC.Keys) { Wynik "$($c.Opis): $($OPISY_DEC[$n])" $od[$n][0] $od[$n][1] }
       Write-Host "Zrzut okna decyzji ($nazwa): $($kd.Zrzut)"
+      if ($c.Rozciagnij) {
+        $or = Ocen-Rozmiar $ud "decyzja" $SZEROKOSC_DECYZJI $c.Rozciagnij -Szerszy:([bool]$c.Szerszy)
+        foreach ($n in $OPISY_ROZ.Keys) { Wynik "$($c.Opis): $($OPISY_ROZ[$n])" $or[$n][0] $or[$n][1] }
+      }
     }
     $sabotazeD = @(
       @{ Nazwa = "szczegoly rozwiniete od razu"; Przypadek = "decyzja"; Sprawdzenie = "szczegoly"
@@ -753,6 +934,53 @@ if ($stan -or -not $Schowek) {
       catch { Wynik "sabotaz '$($s.Nazwa)' wylapany" $false "przygotowanie: $($_.Exception.Message)"; continue }
       $os = Ocen-Decyzji (Uruchom $kop) $c.Zdanie $c.O
       Wynik "negatywna: sabotaz '$($s.Nazwa)' wylapany przez '$($s.Sprawdzenie)'" ((-not $os[$s.Sprawdzenie][0]) -and $os["teksty"][0]) "z sabotazem: $($os[$s.Sprawdzenie][1])"
+    }
+
+    # Rozciaganie zwyklego okna - sabotaze (bez prob z trzymanym schowkiem).
+    $sabotazeR = @(
+      @{ Nazwa = "maksymalizacja wylaczona"; Sprawdzenie = "ramka"; K = '$f.MaximizeBox = $true'; Z = '$f.MaximizeBox = $false' },
+      @{ Nazwa = "tresc nie rosnie z oknem"; Sprawdzenie = "rosnie"
+         K = '$lista.Add_ClientSizeChanged({ param($s, $e) Rozloz-Okno $s.Parent $s })'; Z = '# sabotaz: bez rozkladu' },
+      @{ Nazwa = "bez MinimumSize"; Sprawdzenie = "minimum"; K = '$f.MinimumSize = $f.Size'; Z = '# sabotaz: bez minimum' },
+      @{ Nazwa = "szerokosc bazowa zle policzona (tresc szersza niz dotad)"; Sprawdzenie = "domyslny"
+         K = '$script:BazaKlienta = $f.ClientSize.Width - $script:DodatekPaska'; Z = '$script:BazaKlienta = $f.ClientSize.Width - $script:DodatekPaska - 40' },
+      @{ Nazwa = "rozmiar nie zapisywany przy zamknieciu"; Sprawdzenie = "zapis"
+         K = '$f.Add_FormClosing({ param($s, $e) Zapisz-Rozmiar-Okna $s })'; Z = '# sabotaz: bez zapisu' },
+      @{ Nazwa = 'przycisk odpowiedzi po rozciagnieciu zostaje na pelnej szerokosci (GrowOnly)'; Sprawdzenie = 'rosnie'; Przypadek = 'decyzja-srednia'
+         K = '$b.Size = $nat   # AutoSize'; Z = '# sabotaz: bez powrotu do naturalnego rozmiaru # AutoSize' })
+    foreach ($s in $sabotazeR) {
+      $nr++
+      $pod = @(@{ K = $s.K; Z = $s.Z }); if ($s.Przypadek) { $pod = @($PRZYPADKI_DEC[$s.Przypadek].Wstaw) + $pod }
+      try { $kop = Kopia "sabotaz$nr" $pod -Zajety $false -Rozciagnij $true }
+      catch { Wynik "sabotaz '$($s.Nazwa)' wylapany" $false "przygotowanie: $($_.Exception.Message)"; continue }
+      if ($s.Przypadek) { $os = Ocen-Rozmiar (Uruchom $kop) "decyzja" $SZEROKOSC_DECYZJI $PRZYPADKI_DEC[$s.Przypadek].Rozciagnij }
+      else { $os = Ocen-Rozmiar (Uruchom $kop) "zwykle" 720 $trescPola[2] }
+      Wynik "negatywna: sabotaz '$($s.Nazwa)' wylapany przez '$($s.Sprawdzenie)'" ((-not $os[$s.Sprawdzenie][0]) -and $os["przebieg"][0]) "z sabotazem: $($os[$s.Sprawdzenie][1])"
+    }
+
+    # Zapamietany rozmiar zwyklego okna (plik przed startem) i sabotaze.
+    foreach ($nazwa in $PRZYPADKI_PAMIECI.Keys) {
+      $c = $PRZYPADKI_PAMIECI[$nazwa]
+      $kp = Kopia $nazwa @() -Zajety $false
+      $op = Ocen-Pamieci (Uruchom $kp -Rozmiar "$($c.Plik)" -RozmiarKatalog:([bool]$c.Katalog)) $c
+      Wynik "$($c.Opis) (przebieg)" $op["przebieg"][0] $op["przebieg"][1]
+      Wynik $c.Opis $op["pamiec"][0] $op["pamiec"][1]
+    }
+    $sabotazeP = @(
+      @{ Nazwa = "odczyt rozmiaru bez obslugi bledu (wyjatek zamiast domyslnego)"; Przypadek = "pamiec-zepsuta"
+         K = 'function Czytaj-Rozmiar-Okna([string]$rodzaj) {'
+         Z = "function Czytaj-Rozmiar-Okna([string]`$rodzaj) {`r`n  if (-not (Test-Path -LiteralPath `$PlikRozmiaru)) { return `$null }`r`n  `$c = ([System.IO.File]::ReadAllText(`$PlikRozmiaru) -split ':')[1] -split ','`r`n  return [pscustomobject]@{ Prostokat = New-Object System.Drawing.Rectangle([int]`$c[0], [int]`$c[1], [int]`$c[2], [int]`$c[3]); Maks = `$false }`r`n}`r`nfunction Czytaj-Rozmiar-Okna-Nieuzywana([string]`$rodzaj) {" },
+      @{ Nazwa = "zapamietany rozmiar nie przywracany"; Przypadek = "pamiec"; K = 'if ($z) { Przywroc-Rozmiar-Okna $f $z }'; Z = '# sabotaz: bez przywracania' },
+      @{ Nazwa = "polozenie poza ekranem przyjete"; Przypadek = "pamiec-poza"; K = 'if ($widac.Count -eq 0) {'; Z = 'if ($false) {' },
+      @{ Nazwa = "nieudany zapis rozmiaru po cichu"; Przypadek = "pamiec-katalog"
+         K = 'catch { Dopisz-Dziennik "rozmiar okna przypomnien ($($script:RodzajOkna)): nie zapisalem'; Z = 'catch { $null = "rozmiar okna przypomnien ($($script:RodzajOkna)): nie zapisalem' })
+    foreach ($s in $sabotazeP) {
+      $nr++
+      $c = $PRZYPADKI_PAMIECI[$s.Przypadek]
+      try { $kop = Kopia "sabotaz$nr" @(@{ K = $s.K; Z = $s.Z }) -Zajety $false }
+      catch { Wynik "sabotaz '$($s.Nazwa)' wylapany" $false "przygotowanie: $($_.Exception.Message)"; continue }
+      $os = Ocen-Pamieci (Uruchom $kop -Rozmiar "$($c.Plik)" -RozmiarKatalog:([bool]$c.Katalog)) $c
+      Wynik "negatywna: sabotaz '$($s.Nazwa)' wylapany" (-not ($os["przebieg"][0] -and $os["pamiec"][0])) "z sabotazem: $($os['pamiec'][1]) | $($os['przebieg'][1])"
     }
   } catch {
     Wynik "WYWROTKA TESTU" $false "$($_.Exception.Message) @ $($_.InvocationInfo.PositionMessage)"
