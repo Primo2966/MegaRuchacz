@@ -139,7 +139,7 @@ PROMPT_PACZKI = """Na wejściu (pod tą instrukcją) dostajesz fragment historii
 
 Wypisz USTALENIA do wspólnej bazy wiedzy firmy, którą czytają pracownicy i ich asystenci AI. Ustalenie to coś trwałego, co warto wiedzieć w przyszłej pracy: zasada, decyzja, konwencja, sposób postępowania, fakt o produktach, procesach, narzędziach, platformach sprzedażowych albo o tym, kto za co odpowiada.
 
-NIE są ustaleniami: stan zadań (co jest w toku, co zrobiono dziś, co czeka), przebieg debugowania, szczegóły kodu (nazwy funkcji i plików źródłowych, struktura repozytorium), jednorazowe polecenia, pomysły odrzucone, uprzejmości. Propozycja AI jest ustaleniem tylko wtedy, gdy Primo ją przyjął albo gdy to sprawdzony wynik (zmierzony, potwierdzony w dokumentacji); słowa Primo mają pierwszeństwo przed słowami AI.
+NIE są ustaleniami: stan zadań (co jest w toku, co zrobiono dziś, co czeka), przebieg debugowania, szczegóły kodu (nazwy funkcji i plików źródłowych, struktura repozytorium), jednorazowe polecenia, pomysły odrzucone, uprzejmości. Nie wpisuj też bieżących list i stanów (które SKU są akurat zablokowane, czego dziś brakuje, co jest w drodze) - zapisz tylko trwałą regułę, która z nich wynika. Propozycja AI jest ustaleniem tylko wtedy, gdy Primo ją przyjął albo gdy to sprawdzony wynik (zmierzony, potwierdzony w dokumentacji); słowa Primo mają pierwszeństwo przed słowami AI.
 
 Każde ustalenie:
 - "tresc": 1–2 pełne zdania po polsku, zrozumiałe bez rozmowy — z konkretnymi nazwami zamiast "to", "ten plik", "tamten robot"; bez markdown i numeracji. Jedna rzecz na wpis; gdy wypowiedź łączy rzeczy o różnej poufności, potnij ją na osobne wpisy.
