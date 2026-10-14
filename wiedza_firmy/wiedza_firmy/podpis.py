@@ -16,6 +16,9 @@ Serwer przyjmuje dwie postacie pola `podpis` (klient wybiera jedna, obie sprawdz
    w przestrzeni nazw PRZESTRZEN_SSHSIG, czyli wynik `ssh-keygen -Y sign -n jfwiedza -f <klucz> <plik>`,
    gdzie plik zawiera dokladnie tekst powyzej (bez konca linii). Klucz publiczny wewnatrz SSHSIG musi byc
    tym samym kluczem, ktory JFTools ma dla tego komputera.
+
+Klient narzedzia/wiedza-firmy-klient/klient.py (Klucz.podpisz) uzywa postaci 1 - pilnuje tego test zgodnosci
+w tests/test_klienci.py. Postac 2 to zapasowa droga bez biblioteki cryptography po stronie klienta.
 """
 
 from __future__ import annotations

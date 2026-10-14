@@ -147,7 +147,8 @@ Przepływ:
 2. `POST /klient/token` (bez tokenu) `{computerId, ts, nonce, podpis[, wymien]}`. Podpisywany tekst (UTF-8, bez końca
    linii): `jfwiedza-token|{computerId}|{ts}|{nonce}`; `ts` to sekundy Unix (liczba całkowita), a `nonce` ma 16–128
    znaków `[A-Za-z0-9_-]`. `podpis` przyjmuje dwie postacie:
-   - surowy podpis ed25519 (64 bajty) w base64, np. `cryptography`: `Ed25519PrivateKey.sign(tekst)`;
+   - surowy podpis ed25519 (64 bajty) w base64, np. `cryptography`: `Ed25519PrivateKey.sign(tekst)`. Tak podpisuje
+     `klient.py` (test zgodności w `tests/test_klienci.py` woła jego `Klucz.podpisz`);
    - blok SSHSIG z `ssh-keygen -Y sign -n jfwiedza -f <klucz> <plik z tekstem>`.
 
    Serwer bierze klucz komputera z `GET <baza>/keys` JFTools (pending + active; lista ważna 30 s, ponowne pytanie

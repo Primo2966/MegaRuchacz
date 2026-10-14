@@ -556,3 +556,36 @@ def test_token_za_duze_cialo_413_i_w_dzienniku(swiat):
     r = swiat.k.post("/klient/token", content=b"x" * (klienci_mod.LIMIT_CIALA + 1))
     assert r.status_code == 413 and r.json()["kod"] == "za_duzo"
     assert "| komputer ? | za_duzo |" in dziennik()
+
+
+# ---------------------------------------------------------------- zgodnosc z klientem (Z6, a5cfa72)
+
+KLIENT_PY = __import__("pathlib").Path(__file__).resolve().parents[2] / "narzedzia" / "wiedza-firmy-klient" / "klient.py"
+
+
+@pytest.mark.skipif(not KLIENT_PY.is_file(), reason=f"brak {KLIENT_PY} (kopia serwera bez narzedzi klienta)")
+def test_zgodnosc_z_podpisem_klient_py(swiat, tmp_path, monkeypatch):
+    """Podpis i cialo dokladnie jak w klient.py (Klucz.podpisz, TEKST_PODPISU, computerId liczba, nonce token_hex(16)),
+    klucz w pliku OpenSSH jak id_ed25519 z ssh-keygen / ecommerce-helper. Rozjazd formatu = ten test pada."""
+    import importlib.util
+    import secrets
+
+    spec = importlib.util.spec_from_file_location("klient_wiedzy_firmy", KLIENT_PY)
+    klient = importlib.util.module_from_spec(spec)
+    monkeypatch.setitem(sys.modules, spec.name, klient)  # dataclass szuka modulu w sys.modules
+    spec.loader.exec_module(klient)
+    plik = tmp_path / "id_ed25519"
+    plik.write_bytes(swiat.klucze["12"].private_bytes(serialization.Encoding.PEM, serialization.PrivateFormat.OpenSSH,
+                                                      serialization.NoEncryption()))
+    klucz = klient.Klucz(prywatny=plik, publiczny=swiat.publiczne["12"], zrodlo="wlasny")
+    cid = 12  # w body w typie z JFTools (liczba), w podpisie jako tekst - jak w Klient.pobierz_token
+    ts, nonce = int(swiat.zegar.t), secrets.token_hex(16)
+    cialo = {"computerId": cid, "ts": ts, "nonce": nonce,
+             "podpis": klucz.podpisz(klient.TEKST_PODPISU.format(computerId=cid, ts=ts, nonce=nonce))}
+    r = swiat.k.post("/klient/token", json=cialo)
+    assert r.status_code == 200, r.text
+    assert klient.TEKST_PODPISU.format(computerId=cid, ts=ts, nonce=nonce) == podpis.tekst_do_podpisu("12", ts, nonce)
+    # ten sam podpis pod innym komputerem nie przechodzi
+    cialo = {"computerId": 15, "ts": ts, "nonce": secrets.token_hex(16)}
+    cialo["podpis"] = klucz.podpisz(klient.TEKST_PODPISU.format(computerId=15, **{k: cialo[k] for k in ("ts", "nonce")}))
+    assert swiat.k.post("/klient/token", json=cialo).json()["kod"] == "zly_podpis"
