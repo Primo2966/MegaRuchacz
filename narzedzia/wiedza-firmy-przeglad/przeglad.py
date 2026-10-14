@@ -52,7 +52,7 @@ import tempfile
 import threading
 import time
 from dataclasses import asdict, dataclass, field
-from datetime import date, datetime
+from datetime import date, datetime, timedelta
 from pathlib import Path
 
 REPO = Path(__file__).resolve().parents[2]
@@ -1151,12 +1151,11 @@ def zapisz_kolejke(katalog: Path, wpisy: list[dict], wersja_tematow: str) -> Pat
     """Atomowo (plik .tmp + os.replace) - wysylka nigdy nie zobaczy polowy pliku. Po zapisie plik
     jest czytany z powrotem i porownany; roznica to wyjatek, nie cichy kadlubek."""
     katalog.mkdir(parents=True, exist_ok=True)
+    # Nazwa z mikrosekundami, stalej dlugosci: kolejnosc nazw = kolejnosc zapisu (wysylka idzie po nazwach).
+    # Przyrostek "-2" psul to w obrebie sekundy ("-" sortuje sie przed "."), wiec przy kolizji przesuwamy czas.
     czas = datetime.now()
-    sciezka = katalog / f"przeglad-{czas:%Y%m%d-%H%M%S}.json"
-    n = 1
-    while sciezka.exists():
-        n += 1
-        sciezka = katalog / f"przeglad-{czas:%Y%m%d-%H%M%S}-{n}.json"
+    while (sciezka := katalog / f"przeglad-{czas:%Y%m%d-%H%M%S-%f}.json").exists():
+        czas += timedelta(microseconds=1)
     dane = {"format": FORMAT_KOLEJKI, "rodzaj": "przeglad", "utworzono": czas.isoformat(timespec="seconds"),
             "wersja_tematow": wersja_tematow, "wpisy": wpisy}
     _zapisz_json(sciezka, dane)

@@ -135,6 +135,20 @@ def test_nowa_historia_dopisuje_tylko_nowe_wpisy(klient):
     assert [w["tresc"] for w in nowe] == ["Zwroty przyjmujemy tylko z numerem zamówienia."]
 
 
+def test_pliki_kolejki_sortuja_sie_w_kolejnosci_zapisu_mimo_tej_samej_chwili(tmp_path, monkeypatch):
+    class StalyCzas(P.datetime):  # zegar zatrzymany - kazdy zapis w tej samej chwili, bez zaleznosci od szybkosci
+        @classmethod
+        def now(cls, tz=None):
+            return cls(2026, 10, 14, 15, 7, 44, 999999)
+
+    monkeypatch.setattr(P, "datetime", StalyCzas)
+    zapisane = [P.zapisz_kolejke(tmp_path, [{"nr": i}], "w") for i in range(4)]
+    assert len(set(zapisane)) == 4
+    assert sorted(zapisane) == zapisane  # nazwa = kolejnosc zapisu
+    assert [json.loads(p.read_text(encoding="utf-8"))["wpisy"][0]["nr"] for p in sorted(tmp_path.glob("przeglad-*.json"))] \
+        == [0, 1, 2, 3]
+
+
 def test_nieudana_paczka_znacznik_blad_bez_kolejki_i_wznowienie(klient, monkeypatch):
     monkeypatch.setenv("ATRAPA_PADA_NA", "Klientom nic")  # pada paczka projektu wysylki
     assert P.main(klient.argi) == 1
