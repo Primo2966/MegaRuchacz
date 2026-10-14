@@ -743,8 +743,8 @@ function Wybierz-Sam {
 }
 
 # "Zainstaluj" na powitaniu (i -Start zainstaluj w oknie z klonu): zalecany zestaw - cztery czesci
-# z makiety P59c (kopia zapasowa nie, bo wymaga wyboru folderu), Wiedza firmy, gdy sa adresy serwera
-# firmy (bez nich dane.ps1 Dopasuj-Moduly-Do-Komputera jej nie pokazuje), i Claude Code - od razu na ekran
+# z makiety P59c (kopia zapasowa nie, bo wymaga wyboru folderu), Wiedza firmy (zawsze - adresow nie
+# trzeba, dane.ps1 Dopasuj-Moduly-Do-Komputera) i Claude Code - od razu na ekran
 # postepu, bez wyboru i podsumowania. W pobieraniu: folder domyslny ~\MegaRuchacz; gdy sie nie
 # nadaje (np. jest tam cos innego), ekran folderu z powodem zamiast zgadywania.
 function Zainstaluj-Od-Razu {

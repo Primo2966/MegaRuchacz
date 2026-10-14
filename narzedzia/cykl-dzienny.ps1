@@ -264,7 +264,8 @@ function Opis-Kolejki($zostalo) {
 # ---------------------------------------------------------------- Wiedza firmy (2026-10-14)
 # Klient Wiedzy firmy (zadanie WiedzaFirmyKlient, narzedzia\wiedza-firmy-klient\klient.py) zostawia
 # znaczniki w ~\.claude\mr\wiedza-firmy\znaczniki\<krok>.txt. Cykl czyta je przy kazdym starcie (to tylko
-# odczyt kilku plikow): blad kroku albo znacznik nieswiezy ponad prog (ocena i progi z uzasadnieniem:
+# odczyt kilku plikow): blad trwaly, krok bez sukcesu ponad prog albo znacznik nieswiezy - pojedynczy
+# chwilowy blad NIE (ocena i progi z uzasadnieniem:
 # narzedzia\instalacja\stan-wiedzy-firmy.ps1, Ocena-Znacznikow-Wiedzy-Firmy) to ALARM - na ekranie
 # przebiegu i w podsumowaniu cykl-ostatni.txt: klucz wiedza_firmy i opis ZACZYNAJACY SIE od
 # "ALARM Wiedza firmy:" (poczatek przezywa kazde uciecie). Tylko z modulem wiedzafirmy w rejestrze.
@@ -281,7 +282,7 @@ function Sprawdz-Wiedze-Firmy {
     if ($rej.blad -or ($rej.moduly.wiedzafirmy -ne $true)) { return }
     $o = Ocena-Znacznikow-Wiedzy-Firmy $KatalogDomowy
     if ($o.Uwaga) { Krok "Wiedza firmy: $($o.Uwaga)" }
-    if ($o.Problemy.Count -eq 0) { $script:AlarmWiedzyFirmy = ""; Krok "Wiedza firmy: klient chodzi, bledow nie zglasza"; return }
+    if ($o.Problemy.Count -eq 0) { $script:AlarmWiedzyFirmy = ""; Krok "Wiedza firmy: klient chodzi, alarmu nie ma"; return }
     $script:AlarmWiedzyFirmy = ($PrzedrostekAlarmuWF + ($o.Problemy -join "; ") +
       ". Szczegoly: powershell -ExecutionPolicy Bypass -File $($script:Zrodlo)\narzedzia\instalacja\modul-wiedzafirmy.ps1 -Akcja Stan") -replace '\|', '/'
   } catch {

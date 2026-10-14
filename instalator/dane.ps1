@@ -65,7 +65,7 @@ $script:MODULY = [ordered]@{
 $script:ZAWSZE = 'aplikacja przy zegarze + automatyczne aktualizacje'
 # Lore przed Wiedza: Wiedza bez Lore dogrywa sobie ukryty rdzen sama, ale gdy Lore tez jest
 # wybrane, rdzen powstaje raz, z Lore. Usuwanie w odwrotnej kolejnosci. Wiedza firmy na koncu
-# instalacji (chodzi w rdzeniu Lore, a jej blad - np. brak adresu - nie zatrzymuje reszty) i na
+# instalacji (chodzi w rdzeniu Lore, a jej ewentualny blad nie zatrzymuje reszty) i na
 # poczatku usuwania.
 $script:KOLEJNOSC_INSTALACJI = @('lore', 'wiedza', 'kierownik', 'skille', 'kopia', 'wiedzafirmy')
 $script:KOLEJNOSC_USUWANIA   = @('wiedzafirmy', 'kopia', 'skille', 'kierownik', 'wiedza', 'lore')
@@ -98,27 +98,23 @@ $script:MB_PYTHON = 270
 $script:MB_MODEL  = 496
 $script:MB_SKILLE = 50
 
-# Wiedza firmy tylko tam, gdzie znane sa adresy serwera firmy (narzedzia\instalacja\stan-wiedzy-firmy.ps1
-# Adresy-Wiedzy-Firmy: zmienne MR_WIEDZA_FIRMY_*, pole wiedza_firmy w lokalne.json, dotychczasowa
-# konfiguracja) albo gdzie juz jest. Bez adresow jej instalacja skonczylaby sie bledem - nie ma czego
-# proponowac, a "Zainstaluj" ma przejsc bez bledu takze poza firma. Ukryta czesc znika z tabeli i obu
-# kolejnosci, a rejestr zostaje bez klucza ("nie zaproponowano" - nadzorca zapyta, gdy adresy beda).
+# Wiedza firmy jest zawsze do wyboru i w zestawie domyslnym - adresow nie trzeba (klient zna domyslny
+# JFTools, a adres serwera wiedzy bierze z JFTools; nadpisania: narzedzia\instalacja\stan-wiedzy-firmy.ps1).
+# Znika tylko z folderu MegaRuchacza bez jej plikow (starsze narzedzia\ przy nowszym instalator\): bez
+# umowy albo skryptu modulu jej instalacja i tak by padla, a "Zainstaluj" ma przejsc. Ukryta czesc znika
+# z tabeli i obu kolejnosci, a rejestr zostaje bez klucza ("nie zaproponowano").
 # Wolane z okno.ps1 (Ustal-Stan-Poczatkowy) po odczycie rejestru.
 function Dopasuj-Moduly-Do-Komputera {
   if (-not $script:MODULY.Contains('wiedzafirmy')) { return }
   if ($script:Instalacja -and ($script:Instalacja.moduly.wiedzafirmy -eq $true)) { return }
-  $a = $null
-  # Bez umowy (okno.ps1 nie wczytal stan-wiedzy-firmy.ps1 - powod w dzienniku) adresow nie ma skad wziac.
-  if (Get-Command Adresy-Wiedzy-Firmy -ErrorAction SilentlyContinue) {
-    try { $a = Adresy-Wiedzy-Firmy $script:Dom } catch { Zanotuj-Wywrotke 'adresy serwera Wiedzy firmy' $_ }
-  }
-  if ($a -and $a.Jest) { Zapisz-Dziennik "Wiedza firmy do wyboru - adresy: $($a.Skad)"; return }
+  $czemu = ''
+  if (-not (Get-Command Ocena-Znacznikow-Wiedzy-Firmy -ErrorAction SilentlyContinue)) { $czemu = 'nie wczytalem narzedzia\instalacja\stan-wiedzy-firmy.ps1 (powod wyzej w dzienniku)' }
+  elseif (-not (Test-Path -LiteralPath (Sciezka-Skryptu 'modul-wiedzafirmy.ps1'))) { $czemu = "nie ma $(Sciezka-Skryptu 'modul-wiedzafirmy.ps1')" }
+  if (-not $czemu) { return }
   $script:MODULY.Remove('wiedzafirmy')
   $script:KOLEJNOSC_INSTALACJI = @($script:KOLEJNOSC_INSTALACJI | Where-Object { $_ -ne 'wiedzafirmy' })
   $script:KOLEJNOSC_USUWANIA = @($script:KOLEJNOSC_USUWANIA | Where-Object { $_ -ne 'wiedzafirmy' })
-  $czemu = 'nie znam adresow serwera firmy'
-  if ($a -and $a.Bledy.Count) { $czemu += ' (' + ($a.Bledy -join '; ') + ')' }
-  Zapisz-Dziennik "Wiedza firmy ukryta: $czemu"
+  Zapisz-Dziennik "Wiedza firmy ukryta: $czemu - ten folder MegaRuchacza jest starszy niz instalator"
 }
 
 function Nazwa-Modulu([string]$id) {

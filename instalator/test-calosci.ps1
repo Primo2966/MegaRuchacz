@@ -88,7 +88,7 @@ function Git-Cicho([string[]]$a) {
 
 # ---------------------------------------------------------------- odcisk prawdziwego stanu
 
-$ZadaniaPrawdziwe = @('MegaRuchaczNadzorca', 'LoreIndex', 'LoreKoszt', 'MegaRuchaczKopia', 'MegaRuchaczOdswiez', 'LoreCykl', 'LoreCyklPonow', 'LoreFacts', 'LoreWiedza')
+$ZadaniaPrawdziwe = @('MegaRuchaczNadzorca', 'LoreIndex', 'LoreKoszt', 'MegaRuchaczKopia', 'MegaRuchaczOdswiez', 'LoreCykl', 'LoreCyklPonow', 'LoreFacts', 'LoreWiedza', 'WiedzaFirmyKlient')
 $PlikiPrawdziwe = @('.claude\CLAUDE.md', '.claude\settings.json', '.codex\AGENTS.md', '.codex\config.toml', '.codex\hooks.json',
                     '.config\opencode\AGENTS.md', '.config\opencode\opencode.json', '.claude\mr\instalacja.json',
                     '.claude\mr\orchestrator-reminder.json', '.claude\megaruchacz-mr-log.js', '.claude\.megaruchacz-global')
@@ -177,7 +177,7 @@ function Przygotuj-Kopie {
   }
   Info "kopia repo: HEAD + $ile niezapisanych plikow"
   # nazwy zadan w CALEJ kopii (*.ps1) - z MRTEST- na poczatku (ten sam wzorzec co test-moduly.ps1)
-  $wzor = '(?<![\w-])(MegaRuchaczNadzorca|LoreIndex|LoreKoszt|MegaRuchaczKopia|MegaRuchaczOdswiez|LoreCyklPonow|LoreCykl|LoreFacts|LoreWiedza)(?!\w)'
+  $wzor = '(?<![\w-])(MegaRuchaczNadzorca|LoreIndex|LoreKoszt|MegaRuchaczKopia|MegaRuchaczOdswiez|LoreCyklPonow|LoreCykl|LoreFacts|LoreWiedza|WiedzaFirmyKlient)(?!\w)'
   $trafione = @{}
   foreach ($f in @(Get-ChildItem -LiteralPath $Repo -Recurse -File -Filter '*.ps1' | Where-Object { $_.FullName -notlike '*\.git\*' })) {
     $b = [System.IO.File]::ReadAllBytes($f.FullName)
@@ -195,6 +195,16 @@ function Przygotuj-Kopie {
   Podmien 'narzedzia\instalacja\lore-czesci.ps1' '$start = (Get-Date).ToString("yyyy-MM-ddTHH:mm:ss")' '$start = "2099-01-01T00:00:00"' 1
   Podmien 'narzedzia\koszt\pomiar-dzienny.ps1' '$start = (Get-Date -Format "yyyy-MM-dd") + "T"' '$start = "2099-01-01" + "T"' 1
   Podmien 'narzedzia\kopia-zapasowa.ps1' '$start = (Get-Date -Format "yyyy-MM-dd") + "T"' '$start = "2099-01-01" + "T"' 1
+  # Wiedza firmy (Z3): zadanie od 2099 i bez wyzwalacza logowania, a klient to atrapa - prawdziwy klient
+  # zglosilby komputer testowy w prawdziwym JFTools (register-self) i podmienial wpisy MCP
+  Podmien 'narzedzia\instalacja\modul-wiedzafirmy.ps1' '$start = (Get-Date).AddMinutes(30).ToString("yyyy-MM-ddTHH:mm:ss")' '$start = "2099-01-01T00:00:00"' 1
+  Podmien 'narzedzia\instalacja\modul-wiedzafirmy.ps1' '$przyLogowaniu = "true"' '$przyLogowaniu = "false"' 1
+  $klientWF = Join-Path $Repo 'narzedzia\wiedza-firmy-klient\klient.py'
+  New-Item -ItemType Directory -Force -Path (Split-Path -Parent $klientWF) | Out-Null
+  [System.IO.File]::WriteAllText($klientWF, ("import datetime, os, pathlib`n" +
+    "home = pathlib.Path(os.environ['USERPROFILE']) / '.claude' / 'mr' / 'wiedza-firmy'`n" +
+    "(home / 'znaczniki').mkdir(parents=True, exist_ok=True)`n" +
+    "(home / 'znaczniki' / 'wysylka.txt').write_text(datetime.datetime.now().isoformat(timespec='seconds') + '|ok|atrapa proby calosci\n', encoding='utf-8')`n"), $Utf8)
   # nadzorca z kopii nie startuje (okno!), a zamykanie widzi tylko procesy z katalogu MRTEST
   Podmien 'zasobnik\zainstaluj-zasobnik.ps1' "Start-ScheduledTask -TaskName `$NazwaZadania -ErrorAction Stop" 'throw "MRTEST: start nadzorcy zablokowany w tescie"' 1
   Podmien 'zasobnik\zainstaluj-zasobnik.ps1' "'nadzorca\.ps1'" "'MRTEST.*nadzorca\.ps1'" 2
@@ -556,7 +566,8 @@ function Przeglad([string]$etap, [hashtable]$o) {
   $mod = @('wiedza', 'lore', 'kierownik', 'skille', 'kopia')
   if ($null -eq $rej) { Sprawdz "${etap}: rejestr istnieje" $false 'brak pliku' }
   else {
-    $zgodne = @($mod | Where-Object { [bool]$rej.moduly.$_ -ne [bool]$o[$_] })
+    if ($o.ContainsKey('wiedzafirmy')) { $mod += 'wiedzafirmy' }
+  $zgodne = @($mod | Where-Object { [bool]$rej.moduly.$_ -ne [bool]$o[$_] })
     Sprawdz "${etap}: rejestr - moduly zgodne z wyborem" ($zgodne.Count -eq 0) ("rozne: " + ($zgodne -join ', ') + " | " + ($rej.moduly | ConvertTo-Json -Compress))
     $baza = -not ($rej.PSObject.Properties.Name -contains 'baza') -or ($rej.baza -ne $false)
     Sprawdz "${etap}: rejestr - baza = $($o.baza)" ($baza -eq $o.baza) ($rej | ConvertTo-Json -Compress -Depth 5)
@@ -600,6 +611,10 @@ function Przeglad([string]$etap, [hashtable]$o) {
   $oczI = if ($o.lore) { 'wektory' } elseif ($o.wiedza) { 'tekst' } else { 'brak' }
   $jestI = if (-not $zi) { 'brak' } elseif ($zi -match 'lore\.index --text-only') { 'tekst' } elseif ($zi -match 'lore\.index') { 'wektory' } else { "obce: $zi" }
   Sprawdz "${etap}: zadania - nadzorca i raport kosztu $($o.baza), indeks rozmow: $oczI, kopia $($o.kopia)" (($zn -eq $o.baza) -and ($zk -eq $o.baza) -and ($jestI -eq $oczI) -and ($zc -eq [bool]$o.kopia)) "nadzorca $zn, koszt $zk, indeks $jestI, kopia $zc"
+  if ($o.ContainsKey('wiedzafirmy')) {
+    $zw = [bool](Zadanie 'WiedzaFirmyKlient')
+    Sprawdz "${etap}: Wiedza firmy $($o.wiedzafirmy) - zadanie klienta (MRTEST-) $(if ($o.wiedzafirmy) { 'jest' } else { 'zdjete' })" ($zw -eq [bool]$o.wiedzafirmy) "zadanie: $zw"
+  }
   $venv = Test-Path -LiteralPath (Join-Path $Repo 'lore\.venv')
   $model = Test-Path -LiteralPath (Join-Path $Dom '.lore\lore_models')
   Sprawdz "${etap}: srodowisko Pythona $(if ($o.wiedza -or $o.lore) { 'jest' } else { 'zniknelo' }), model wektorow $(if ($o.lore) { 'jest' } else { 'nie ma' })" (($venv -eq [bool]($o.wiedza -or $o.lore)) -and ($model -eq [bool]$o.lore)) "venv $venv, model $model"
@@ -632,7 +647,7 @@ function Przeglad([string]$etap, [hashtable]$o) {
 $ScenariuszNowa = @'
 $script:TestKroki = @(
   @{ N = 'powitanie'; Czekaj = { $script:Ekran -eq 'powitanie' }; Zrzut = '__ETAP__-powitanie'; Sprawdz = { $n = @($script:Narzedzia | Where-Object { $_.Jest } | ForEach-Object { $_.Id }) -join ','; Tak (($script:Tryb -eq 'nowy') -and ($n -eq 'claude,codex,opencode')) "tryb $($script:Tryb), narzedzia: $n" } },
-  @{ N = 'dalej'; Zrob = { $script:BDalej.PerformClick() } },
+  @{ N = 'chce wybrac sam (od IN1 powitanie ma Zainstaluj i odnosnik zamiast Dalej)'; Zrob = { $script:BWybierzSam.PerformClick() } },
   @{ N = 'wybor'; Czekaj = { $script:Ekran -eq 'wybor' } },
   @{ N = 'Wszystko'; Zrob = { $script:BWszystko.PerformClick() }; Sprawdz = { $m = $script:Wybor.Moduly; Tak ($m.wiedza -and $m.lore -and $m.kierownik -and $m.skille -and $m.kopia) 'wszystkie piec zaznaczone' } },
   @{ N = 'kopia: folder i zrodla tylko z domu'; Zrob = {
@@ -640,7 +655,7 @@ $script:TestKroki = @(
       foreach ($p in @($script:ListaZrodel.Controls)) { $cb = $p.Controls[0]; if ($cb.Tag.Sciezka -notlike '__DOM__*') { $cb.Checked = $false } else { $cb.Checked = $true } } };
     Sprawdz = { $z = @($script:Wybor.KopiaZrodla | Where-Object { $_.Zaznaczone } | ForEach-Object { $_.Sciezka }); Tak ($script:BDalej.Enabled -and ($z.Count -ge 1) -and (@($z | Where-Object { $_ -notlike '__DOM__*' }).Count -eq 0)) "zrodla: $($z -join '; ')" } },
   @{ N = 'do podsumowania'; Zrob = { $script:BDalej.PerformClick() } },
-  @{ N = 'podsumowanie'; Czekaj = { ($script:Ekran -eq 'podsumowanie') -and $script:Sprawdzenie -and ($script:Sprawdzenie.Zadanie.Stan -ne 'trwa') }; Limit = 180; Zrzut = '__ETAP__-podsumowanie'; Sprawdz = { $ids = @($script:PlanDoWykonania | ForEach-Object { $_.Id }) -join ','; Tak (($ids -eq 'zapamietaj,zaleznosci-Instaluj,baza-Instaluj,lore-Instaluj,wiedza-Instaluj,kierownik-Instaluj,skille-Instaluj,kopia-Instaluj,zasady') -and $script:BDalej.Enabled) "plan: $ids; programy: $($script:LProgramy.Text)" } },
+  @{ N = 'podsumowanie'; Czekaj = { ($script:Ekran -eq 'podsumowanie') -and $script:Sprawdzenie -and ($script:Sprawdzenie.Zadanie.Stan -ne 'trwa') }; Limit = 180; Zrzut = '__ETAP__-podsumowanie'; Sprawdz = { $ids = @($script:PlanDoWykonania | ForEach-Object { $_.Id }) -join ','; Tak (($ids -eq 'zapamietaj,programy-git,programy-node,programy-python,programy-claude,baza-Instaluj,lore-Instaluj,wiedza-Instaluj,kierownik-Instaluj,skille-Instaluj,kopia-Instaluj,wiedzafirmy-Instaluj,zasady') -and $script:BDalej.Enabled) "plan: $ids; programy: $($script:LProgramy.Text)" } },
   @{ N = 'zainstaluj'; Zrob = { $script:BDalej.PerformClick() } },
   __KONIEC__
 )
@@ -690,7 +705,7 @@ $script:TestKroki = @(
   @{ N = 'odpowiedz na pytanie'; Zrob = { $script:PolePytania.Checked = __DANE__; $script:PrzyciskiPytania[0].PerformClick() } },
   @{ N = 'wybor po pytaniu'; Czekaj = { -not $script:Nakladka.Visible }; Zrzut = '__ETAP__-wybor-po'; Sprawdz = { $m = $script:Wybor.Moduly; Tak ($script:Wybor.UsunWszystko -and ($script:Wybor.UsunDaneWszystko -eq __DANE__) -and (-not ($m.wiedza -or $m.lore -or $m.kierownik -or $m.skille -or $m.kopia)) -and ($script:ZnaczekZawsze.Text -like 'usun*') -and $script:BDalej.Enabled) "znaczek bazy: $($script:ZnaczekZawsze.Text)" } },
   @{ N = 'zastosuj'; Zrob = { $script:BDalej.PerformClick() } },
-  @{ N = 'podsumowanie'; Czekaj = { $script:Ekran -eq 'podsumowanie' }; Zrzut = '__ETAP__-podsumowanie'; Sprawdz = { $ids = @($script:PlanDoWykonania | ForEach-Object { $_.Id }) -join ','; Tak ($ids -eq 'zapamietaj,kopia-Usun,skille-Usun,kierownik-Usun,wiedza-Usun,lore-Usun,baza-Usun') "plan: $ids; usun dane: $(@($script:PlanDoWykonania | Where-Object { $_.PSObject.Properties['UsunDane'] -and $_.UsunDane }).Count)" } },
+  @{ N = 'podsumowanie'; Czekaj = { $script:Ekran -eq 'podsumowanie' }; Zrzut = '__ETAP__-podsumowanie'; Sprawdz = { $ids = @($script:PlanDoWykonania | ForEach-Object { $_.Id }) -join ','; Tak ($ids -eq 'zapamietaj,wiedzafirmy-Usun,kopia-Usun,skille-Usun,kierownik-Usun,wiedza-Usun,lore-Usun,baza-Usun') "plan: $ids; usun dane: $(@($script:PlanDoWykonania | Where-Object { $_.PSObject.Properties['UsunDane'] -and $_.UsunDane }).Count)" } },
   @{ N = 'tak, usun'; Zrob = { $script:BDalej.PerformClick() } },
   __KONIEC__
 )
@@ -702,7 +717,7 @@ $script:TestKroki = @(
   @{ N = 'Wszystko'; Zrob = { $script:BWszystko.PerformClick() }; Sprawdz = { Tak (($script:ZnaczekZawsze.Text -eq 'dodam') -and $script:Wybor.Moduly.kopia) "znaczek bazy: $($script:ZnaczekZawsze.Text)" } },
   @{ N = 'kopia: ten sam folder'; Zrob = { $script:PoleCelu.Text = '__KOPIE__'; foreach ($p in @($script:ListaZrodel.Controls)) { $cb = $p.Controls[0]; if ($cb.Tag.Sciezka -notlike '__DOM__*') { $cb.Checked = $false } } } },
   @{ N = 'zastosuj'; Czekaj = { $script:BDalej.Enabled }; Zrob = { $script:BDalej.PerformClick() } },
-  @{ N = 'podsumowanie'; Czekaj = { ($script:Ekran -eq 'podsumowanie') -and $script:Sprawdzenie -and ($script:Sprawdzenie.Zadanie.Stan -ne 'trwa') }; Limit = 180; Zrzut = '__ETAP__-podsumowanie'; Sprawdz = { $ids = @($script:PlanDoWykonania | ForEach-Object { $_.Id }) -join ','; Tak ($ids -eq 'zapamietaj,zaleznosci-Instaluj,baza-Instaluj,lore-Instaluj,wiedza-Instaluj,kierownik-Instaluj,skille-Instaluj,kopia-Instaluj,zasady') "plan: $ids" } },
+  @{ N = 'podsumowanie'; Czekaj = { ($script:Ekran -eq 'podsumowanie') -and $script:Sprawdzenie -and ($script:Sprawdzenie.Zadanie.Stan -ne 'trwa') }; Limit = 180; Zrzut = '__ETAP__-podsumowanie'; Sprawdz = { $ids = @($script:PlanDoWykonania | ForEach-Object { $_.Id }) -join ','; Tak ($ids -eq 'zapamietaj,zaleznosci-Instaluj,baza-Instaluj,lore-Instaluj,wiedza-Instaluj,kierownik-Instaluj,skille-Instaluj,kopia-Instaluj,wiedzafirmy-Instaluj,zasady') "plan: $ids" } },
   @{ N = 'tak, zastosuj'; Zrob = { $script:BDalej.PerformClick() } },
   __KONIEC__
 )
@@ -735,7 +750,7 @@ try {
   # --- a. nowa instalacja "Wszystko"
   [void](Okno 'a-nowa' $ScenariuszNowa)
   [void](Czekaj-Na-Tlo)
-  $a = Przeglad 'a-nowa' @{ wiedza = $true; lore = $true; kierownik = $true; skille = $true; kopia = $true; baza = $true; dane = $true; bezDanych = @('stan kopii') }
+  $a = Przeglad 'a-nowa' @{ wiedza = $true; lore = $true; kierownik = $true; skille = $true; kopia = $true; wiedzafirmy = $true; baza = $true; dane = $true; bezDanych = @('stan kopii') }
   $CoWiem = $a.CoWiem
   $rej = Rejestr
   Sprawdz 'a-nowa: rejestr - ustawienia kopii (folder tymczasowy, zrodla z domu) i narzedzia' (($rej.kopia.cel -eq $Kopie) -and (@($rej.kopia.zrodla) -contains (Join-Path $Dom '.claude')) -and $rej.narzedzia.claude -and $rej.narzedzia.codex -and $rej.narzedzia.opencode) ($rej | ConvertTo-Json -Compress -Depth 5)
@@ -751,18 +766,18 @@ try {
   # --- b. bez Lore, potem Lore z powrotem
   [void](Okno 'b1-bez-lore' $ScenariuszBezLore)
   [void](Czekaj-Na-Tlo)
-  [void](Przeglad 'b1-bez-lore' @{ wiedza = $true; lore = $false; kierownik = $true; skille = $true; kopia = $true; baza = $true; dane = $true; coWiem = $CoWiem })
+  [void](Przeglad 'b1-bez-lore' @{ wiedza = $true; lore = $false; kierownik = $true; skille = $true; kopia = $true; wiedzafirmy = $true; baza = $true; dane = $true; coWiem = $CoWiem })
   [void](Straznik-Jak-Hook 'b1-bez-lore' $true)
   Zasiej-Model   # Lore Usun zdjal model; ponowne pobranie 496 MB zastepuje kopia
   [void](Okno 'b2-z-lore' $ScenariuszZLore)
   [void](Czekaj-Na-Tlo)
-  [void](Przeglad 'b2-z-lore' @{ wiedza = $true; lore = $true; kierownik = $true; skille = $true; kopia = $true; baza = $true; dane = $true; coWiem = $CoWiem })
+  [void](Przeglad 'b2-z-lore' @{ wiedza = $true; lore = $true; kierownik = $true; skille = $true; kopia = $true; wiedzafirmy = $true; baza = $true; dane = $true; coWiem = $CoWiem })
   [void](Straznik-Jak-Hook 'b2-z-lore' $true)
 
   if (-not (Chce 'c')) { throw 'STOP-DOKROKU' }
   # --- c. bez kierownika
   [void](Okno 'c-bez-kierownika' $ScenariuszBezKierownika)
-  [void](Przeglad 'c-bez-kierownika' @{ wiedza = $true; lore = $true; kierownik = $false; skille = $true; kopia = $true; baza = $true; dane = $true; coWiem = $CoWiem })
+  [void](Przeglad 'c-bez-kierownika' @{ wiedza = $true; lore = $true; kierownik = $false; skille = $true; kopia = $true; wiedzafirmy = $true; baza = $true; dane = $true; coWiem = $CoWiem })
   [void](Straznik-Jak-Hook 'c-bez-kierownika' $true)
 
   if (-not (Chce 'd')) { throw 'STOP-DOKROKU' }
@@ -770,17 +785,17 @@ try {
   $tx = @(Okno 'd1-usun-bez-danych' $ScenariuszUsunWszystko.Replace('__DANE__', '$false'))
   Sprawdz 'd1-usun-bez-danych: bez falszywej uwagi "nikt nie pilnuje cyklu wiedzy" (wiedza juz wylaczona)' (@($tx | Where-Object { $_ -match 'nikt nie pilnuje' }).Count -eq 0) (($tx | Where-Object { $_ -like 'UWAGA-KROKU*' }) -join ' | ')
   [void](Czekaj-Na-Tlo)
-  [void](Przeglad 'd1-usun-bez-danych' @{ wiedza = $false; lore = $false; kierownik = $false; skille = $false; kopia = $false; baza = $false; dane = $true; coWiem = $CoWiem })
+  [void](Przeglad 'd1-usun-bez-danych' @{ wiedza = $false; lore = $false; kierownik = $false; skille = $false; kopia = $false; wiedzafirmy = $false; baza = $false; dane = $true; coWiem = $CoWiem })
   [void](Straznik-Jak-Hook 'd1-usun-bez-danych' $false)
   Zasiej-Model   # Lore Usun w d1 zdjal model
   [void](Okno 'd2-ponownie' $ScenariuszPonownie)
   [void](Czekaj-Na-Tlo)
-  [void](Przeglad 'd2-ponownie' @{ wiedza = $true; lore = $true; kierownik = $true; skille = $true; kopia = $true; baza = $true; dane = $true; coWiem = $CoWiem })
+  [void](Przeglad 'd2-ponownie' @{ wiedza = $true; lore = $true; kierownik = $true; skille = $true; kopia = $true; wiedzafirmy = $true; baza = $true; dane = $true; coWiem = $CoWiem })
   [void](Straznik-Jak-Hook 'd2-ponownie' $true)
   $tx = @(Okno 'd3-usun-z-danymi' $ScenariuszUsunWszystko.Replace('__DANE__', '$true'))
   Sprawdz 'd3-usun-z-danymi: bez falszywej uwagi "nikt nie pilnuje cyklu wiedzy"' (@($tx | Where-Object { $_ -match 'nikt nie pilnuje' }).Count -eq 0) (($tx | Where-Object { $_ -like 'UWAGA-KROKU*' }) -join ' | ')
   [void](Czekaj-Na-Tlo)
-  [void](Przeglad 'd3-usun-z-danymi' @{ wiedza = $false; lore = $false; kierownik = $false; skille = $false; kopia = $false; baza = $false; dane = $false })
+  [void](Przeglad 'd3-usun-z-danymi' @{ wiedza = $false; lore = $false; kierownik = $false; skille = $false; kopia = $false; wiedzafirmy = $false; baza = $false; dane = $false })
   [void](Straznik-Jak-Hook 'd3-usun-z-danymi' $false)
   $sl = Rejestr
   Sprawdz 'd3-usun-z-danymi: zostaje tylko slad w rejestrze (baza = false), bez ustawien kopii' (($null -ne $sl) -and ($sl.baza -eq $false) -and ($null -eq $sl.kopia)) ($sl | ConvertTo-Json -Compress -Depth 5)

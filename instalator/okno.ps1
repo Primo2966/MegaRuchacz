@@ -200,7 +200,7 @@ foreach ($modul in @('wyglad', 'dane', 'wykonanie', 'ekrany')) {
 $plikStanu = Join-Path $script:Zrodlo 'narzedzia\instalacja\stan.ps1'
 if (-not (Test-Path -LiteralPath $plikStanu)) { Odmowa-Startu "nie ma pliku $plikStanu - ten folder MegaRuchacza jest za stary albo niekompletny" }
 try { . $plikStanu } catch { Odmowa-Startu "nie da się wczytać $plikStanu ($($_.Exception.Message))" }
-# Wiedza firmy: adresy serwera firmy (czy w ogole ja proponowac) - dane.ps1 Dopasuj-Moduly-Do-Komputera.
+# Wiedza firmy: umowa (adresy-nadpisania, znaczniki) - dane.ps1 Dopasuj-Moduly-Do-Komputera.
 # Bez tego pliku (folder ze starszym narzedzia\ i nowszym instalator\) okno wstaje, tylko bez Wiedzy firmy
 # - reszta instalacji jej nie potrzebuje, a odmowa startu zabieralaby cala instalacje.
 $plikWiedzyFirmy = Join-Path $script:Zrodlo 'narzedzia\instalacja\stan-wiedzy-firmy.ps1'

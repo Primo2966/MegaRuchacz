@@ -403,12 +403,12 @@ $script:TestKroki = @(
   $kol = Kolejnosc $w
   # P64: programy PRZED baza (umowa P59b - baza wymaga gita)
   # IN1: przy pierwszej instalacji kazdy program osobnym krokiem (osobne wywolanie), Claude Code przed baza
-  $ocz = 'zaleznosci:Sprawdz > zaleznosci:Instaluj > zaleznosci:Instaluj > zaleznosci:Instaluj > zaleznosci:Instaluj > modul-baza:Instaluj > modul-lore:Instaluj > modul-lore:Instaluj > modul-wiedza:Instaluj > modul-kierownik:Instaluj > modul-skille:Instaluj > modul-kopia:Instaluj > wpisz-zasady:Proba=False'
+  $ocz = 'zaleznosci:Sprawdz > zaleznosci:Instaluj > zaleznosci:Instaluj > zaleznosci:Instaluj > zaleznosci:Instaluj > modul-baza:Instaluj > modul-lore:Instaluj > modul-lore:Instaluj > modul-wiedza:Instaluj > modul-kierownik:Instaluj > modul-skille:Instaluj > modul-kopia:Instaluj > modul-wiedzafirmy:Instaluj > wpisz-zasady:Proba=False'
   Wynik 'nowa instalacja - kolejnosc skryptow' ($kol -eq $ocz) $kol
   $pot = @($w | Where-Object { $_ -like '*|zaleznosci|Instaluj|*' } | ForEach-Object { ($_ -split '\|')[3] })
   Wynik 'nowa instalacja - programy osobno: git, node, uv+python, claude' (($pot -join ' ; ') -eq 'Potrzebne=git ; Potrzebne=node ; Potrzebne=uv,python ; Potrzebne=claude') "$($pot -join ' ; ')"
   $rej = Czytaj-Rejestr $dom
-  $ok = $rej -and $rej.moduly.wiedza -and $rej.moduly.lore -and $rej.moduly.kierownik -and $rej.moduly.skille -and $rej.moduly.kopia -and ($rej.kopia.cel -eq $kopie) -and (@($rej.kopia.zrodla).Count -ge 1) -and ($null -ne $rej.narzedzia) -and ($rej.narzedzia.claude -eq $true) -and ($null -ne $rej.kopia.PSObject.Properties['wykluczenia']) -and (@($rej.kopia.wykluczenia).Count -eq 0)
+  $ok = $rej -and $rej.moduly.wiedza -and $rej.moduly.lore -and $rej.moduly.kierownik -and $rej.moduly.skille -and $rej.moduly.kopia -and ($rej.moduly.wiedzafirmy -eq $true) -and ($rej.kopia.cel -eq $kopie) -and (@($rej.kopia.zrodla).Count -ge 1) -and ($null -ne $rej.narzedzia) -and ($rej.narzedzia.claude -eq $true) -and ($null -ne $rej.kopia.PSObject.Properties['wykluczenia']) -and (@($rej.kopia.wykluczenia).Count -eq 0)
   Wynik 'nowa instalacja - rejestr' $ok ($(if ($rej) { $rej | ConvertTo-Json -Compress -Depth 5 } else { 'brak pliku' }))
 }
 
@@ -433,7 +433,7 @@ $script:TestKroki = @(
   @{ N = 'powitanie'; Czekaj = { $script:Ekran -eq 'powitanie' }; Zrzut = '30-pierwsza-powitanie'; Sprawdz = { Tak (($script:Tryb -eq 'nowy') -and $script:BZainstaluj.Visible -and ($script:BZainstaluj.Height -ge 48) -and $script:BWybierzSam.Visible -and (-not $script:BDalej.Visible) -and ($script:Okno.AcceptButton -eq $script:BZainstaluj) -and ((@($script:PanelKrokow.Controls | ForEach-Object { $_.Text }) -join '') -like '*Start*Instalacja*Gotowe*')) "duzy Zainstaluj ($($script:BZainstaluj.Height) px), odnosnik, Enter = Zainstaluj, kroki: $((@($script:PanelKrokow.Controls | ForEach-Object { $_.Text })) -join ' ')" } },
   @{ N = 'teksty bez zargonu'; Sprawdz = { $t = (@(Test-Teksty $script:Tresc)) -join ' | '; Tak (($t -like '*Zainstaluję wszystko, czego potrzeba. Nic nie musisz wybierać.*') -and ($t -notmatch '(?i)modu|hook|repo')) "teksty: $t" } },
   @{ N = 'zainstaluj'; Zrob = { $script:BZainstaluj.PerformClick() } },
-  @{ N = 'od razu postep, bez pytan'; Czekaj = { $script:Ekran -eq 'postep' }; Sprawdz = { $ids = @($script:Plan | ForEach-Object { $_.Id }) -join ','; Tak (($ids -eq 'zapamietaj,programy-git,programy-node,programy-python,programy-claude,baza-Instaluj,lore-Instaluj,wiedza-Instaluj,kierownik-Instaluj,skille-Instaluj,zasady') -and (-not $script:Sprawdzenie) -and (-not $script:Nakladka.Visible)) "plan: $ids" } },
+  @{ N = 'od razu postep, bez pytan'; Czekaj = { $script:Ekran -eq 'postep' }; Sprawdz = { $ids = @($script:Plan | ForEach-Object { $_.Id }) -join ','; Tak (($ids -eq 'zapamietaj,programy-git,programy-node,programy-python,programy-claude,baza-Instaluj,lore-Instaluj,wiedza-Instaluj,kierownik-Instaluj,skille-Instaluj,wiedzafirmy-Instaluj,zasady') -and (-not $script:Sprawdzenie) -and (-not $script:Nakladka.Visible)) "plan: $ids" } },
   @{ N = 'claude w trakcie'; Czekaj = { $z = @($script:Plan | Where-Object { $_.Id -eq 'programy-claude' })[0]; ($z.Stan -eq 'trwa') -and ($z.Kroki.Count -gt 0) }; Limit = 60; Zrzut = '31-pierwsza-postep'; Sprawdz = { $r = $script:WierszeZadan['programy-claude']; Tak (($script:LTeraz.Text -eq 'Teraz instaluję: Claude Code...') -and ($r.Znak.Text -eq [string][char]0x23F3) -and (-not $r.Szczegol.Visible) -and ($script:WierszeZadan['programy-git'].Znak.Text -eq [string][char]0x2714)) "zdanie: '$($script:LTeraz.Text)', znak: $($r.Znak.Text), szczegol widoczny: $($r.Szczegol.Visible)" } },
   @{ N = 'wiedza w trakcie (wolna)'; Czekaj = { $z = @($script:Plan | Where-Object { $_.Id -eq 'wiedza-Instaluj' })[0]; ($z.Stan -eq 'trwa') -and ($z.Kroki.Count -gt 0) }; Limit = 60; Zrzut = '32-pierwsza-postep-dalej'; Sprawdz = { $c = @($script:Plan | Where-Object { $_.Id -eq 'programy-claude' })[0]; $g = @($script:Plan | Where-Object { $_.Id -eq 'programy-git' })[0]; Tak (($c.Stan -eq 'ok') -and ($script:WierszeZadan['programy-claude'].Stan.Text -like 'gotowe (*') -and ($script:WierszeZadan['programy-git'].Stan.Text -eq 'już jest') -and ($script:LTeraz.Text -eq 'Teraz instaluję: Wiedza o Tobie...')) "claude: $($script:WierszeZadan['programy-claude'].Stan.Text), git: $($script:WierszeZadan['programy-git'].Stan.Text), zdanie: $($script:LTeraz.Text)" } },
   @{ N = 'gotowe z Otworz'; Czekaj = { $script:Ekran -eq 'gotowe' }; Limit = 120; Zrzut = '33-pierwsza-gotowe'; Sprawdz = { $t = (@(Test-Teksty $script:Tresc)) -join ' | '; Tak ($script:BOtworz -and $script:BOtworz.Visible -and ($script:BOtworz.Text -eq 'Otwórz') -and ($t -like '*Gotowe.*Teraz otwórz Claude Code:*zalogowanie*') -and ($script:Okno.AcceptButton -eq $script:BOtworz)) "karta: $t" } },
@@ -444,9 +444,9 @@ $script:TestKroki = @(
   $r = Uruchom-Ps $Okno (Argumenty-Okna $dom $sc.Plik $Atrapy) 300
   [void](Ocen-Raport 'pierwsza instalacja jednym przyciskiem' $sc $r)
   $w = Wszystkie-Wywolania
-  Wynik 'pierwsza instalacja - zadnego sprawdzania przed startem (zero pytan), Claude Code przed baza' ((Kolejnosc $w) -eq 'zaleznosci:Instaluj > zaleznosci:Instaluj > zaleznosci:Instaluj > zaleznosci:Instaluj > modul-baza:Instaluj > modul-lore:Instaluj > modul-wiedza:Instaluj > modul-kierownik:Instaluj > modul-skille:Instaluj > wpisz-zasady:Proba=False') (Kolejnosc $w)
+  Wynik 'pierwsza instalacja - zadnego sprawdzania przed startem (zero pytan), Claude Code przed baza' ((Kolejnosc $w) -eq 'zaleznosci:Instaluj > zaleznosci:Instaluj > zaleznosci:Instaluj > zaleznosci:Instaluj > modul-baza:Instaluj > modul-lore:Instaluj > modul-wiedza:Instaluj > modul-kierownik:Instaluj > modul-skille:Instaluj > modul-wiedzafirmy:Instaluj > wpisz-zasady:Proba=False') (Kolejnosc $w)
   $rej = Czytaj-Rejestr $dom
-  Wynik 'pierwsza instalacja - rejestr: cztery czesci, bez kopii, Claude Code zapisany' ($rej -and $rej.moduly.wiedza -and $rej.moduly.lore -and $rej.moduly.kierownik -and $rej.moduly.skille -and (-not $rej.moduly.kopia) -and ($rej.narzedzia.claude -eq $true)) ($(if ($rej) { $rej | ConvertTo-Json -Compress -Depth 5 } else { 'brak pliku' }))
+  Wynik 'pierwsza instalacja - rejestr: cztery czesci i Wiedza firmy (bez zadnej konfiguracji), bez kopii, Claude Code zapisany' ($rej -and $rej.moduly.wiedza -and $rej.moduly.lore -and $rej.moduly.kierownik -and $rej.moduly.skille -and ($rej.moduly.wiedzafirmy -eq $true) -and (-not $rej.moduly.kopia) -and ($rej.narzedzia.claude -eq $true)) ($(if ($rej) { $rej | ConvertTo-Json -Compress -Depth 5 } else { 'brak pliku' }))
 }
 
 # --- A3. Claude Code juz jest: krok "już jest" -----------------------------------------
@@ -581,7 +581,7 @@ $script:TestKroki = @(
   @{ N = 'pytanie 4'; Czekaj = { $script:Nakladka.Visible } },
   @{ N = 'usun z danymi 2'; Zrob = { $script:PolePytania.Checked = $true; $script:PrzyciskiPytania[0].PerformClick() } },
   @{ N = 'zastosuj'; Zrob = { $script:BDalej.PerformClick() } },
-  @{ N = 'podsumowanie usuwania'; Czekaj = { $script:Ekran -eq 'podsumowanie' }; Zrzut = '23-usun-podsumowanie'; Sprawdz = { $ids = @($script:PlanDoWykonania | ForEach-Object { $_.Id }) -join ','; $dane = @($script:PlanDoWykonania | Where-Object { $_.PSObject.Properties['UsunDane'] -and $_.UsunDane }).Count; Tak (($ids -eq 'zapamietaj,kopia-Usun,skille-Usun,kierownik-Usun,wiedza-Usun,lore-Usun,baza-Usun') -and ($dane -eq 6) -and ($script:BDalej.Text -eq 'Tak, usuń')) "plan: $ids; z danymi: $dane; przycisk: $($script:BDalej.Text)" } },
+  @{ N = 'podsumowanie usuwania'; Czekaj = { $script:Ekran -eq 'podsumowanie' }; Zrzut = '23-usun-podsumowanie'; Sprawdz = { $ids = @($script:PlanDoWykonania | ForEach-Object { $_.Id }) -join ','; $dane = @($script:PlanDoWykonania | Where-Object { $_.PSObject.Properties['UsunDane'] -and $_.UsunDane }).Count; Tak (($ids -eq 'zapamietaj,wiedzafirmy-Usun,kopia-Usun,skille-Usun,kierownik-Usun,wiedza-Usun,lore-Usun,baza-Usun') -and ($dane -eq 7) -and ($script:BDalej.Text -eq 'Tak, usuń')) "plan: $ids; z danymi: $dane; przycisk: $($script:BDalej.Text)" } },
   @{ N = 'tak, usun'; Zrob = { $script:BDalej.PerformClick() } },
   @{ N = 'gotowe po usunieciu'; Czekaj = { $script:Ekran -eq 'gotowe' }; Limit = 90; Zrzut = '24-usun-gotowe' }
 )
@@ -591,10 +591,10 @@ $script:TestKroki = @(
   [void](Ocen-Raport 'usuniecie calosci' $sc $r)
   $w = Wszystkie-Wywolania
   $kol = Kolejnosc $w
-  $ocz = 'modul-kopia:Usun > modul-skille:Usun > modul-kierownik:Usun > modul-wiedza:Usun > modul-lore:Usun > modul-baza:Usun'
+  $ocz = 'modul-wiedzafirmy:Usun > modul-kopia:Usun > modul-skille:Usun > modul-kierownik:Usun > modul-wiedza:Usun > modul-lore:Usun > modul-baza:Usun'
   Wynik 'usuniecie calosci - kolejnosc skryptow (bez programow i zasad)' ($kol -eq $ocz) $kol
   $bezDanych = @($w | Where-Object { $_ -notlike '*UsunDane=True*' })
-  Wynik 'usuniecie calosci - kazdy skrypt z -UsunDane' (($w.Count -eq 6) -and ($bezDanych.Count -eq 0)) "$($bezDanych -join ' ')"
+  Wynik 'usuniecie calosci - kazdy skrypt z -UsunDane' (($w.Count -eq 7) -and ($bezDanych.Count -eq 0)) "$($bezDanych -join ' ')"
   $rej = Czytaj-Rejestr $dom
   Wynik 'usuniecie calosci - rejestr: wszystkie moduly wylaczone' ($rej -and -not ($rej.moduly.wiedza -or $rej.moduly.lore -or $rej.moduly.kierownik -or $rej.moduly.skille -or $rej.moduly.kopia)) ($(if ($rej) { $rej.moduly | ConvertTo-Json -Compress } else { 'brak pliku' }))
 }
@@ -838,7 +838,7 @@ exit $LASTEXITCODE
   $sc = Zapisz-Scenariusz 'bezbasha' @'
 $script:TestKroki = @(
   @{ N = 'chce wybrac sam'; Czekaj = { $script:Ekran -eq 'powitanie' }; Zrob = { $script:BWybierzSam.PerformClick() } },
-  @{ N = 'tylko skille (git), bez Claude Code'; Czekaj = { $script:Ekran -eq 'wybor' }; Zrob = { foreach ($m in @('wiedza', 'lore', 'kierownik')) { $script:CheckboxyModulow.$m.Checked = $false }; $script:CheckboxyModulow.skille.Checked = $true; if ($script:CbClaude.Enabled) { $script:CbClaude.Checked = $false } } },
+  @{ N = 'tylko skille (git), bez Claude Code'; Czekaj = { $script:Ekran -eq 'wybor' }; Zrob = { foreach ($m in @('wiedza', 'lore', 'kierownik', 'wiedzafirmy')) { $script:CheckboxyModulow.$m.Checked = $false }; $script:CheckboxyModulow.skille.Checked = $true; if ($script:CbClaude.Enabled) { $script:CbClaude.Checked = $false } } },
   @{ N = 'do podsumowania'; Zrob = { $script:BDalej.PerformClick() } },
   @{ N = 'podsumowanie - brakuje Git i Git Bash'; Czekaj = { ($script:Ekran -eq 'podsumowanie') -and $script:Sprawdzenie -and ($script:Sprawdzenie.Zadanie.Stan -ne 'trwa') }; Limit = 120; Zrzut = '27-bez-basha-podsumowanie'; Sprawdz = { $ids = @($script:PlanDoWykonania | ForEach-Object { $_.Id }) -join ','; $ocz = 'zapamietaj,programy-git,baza-Instaluj,skille-Instaluj,zasady'; if ($script:Wybor.Claude) { $ocz = 'zapamietaj,programy-git,programy-claude,baza-Instaluj,skille-Instaluj,zasady' }; Tak (($ids -eq $ocz) -and ($script:LProgramy.Text -like 'Brakuje: Git, Git Bash*')) "plan: $ids; programy: $($script:LProgramy.Text)" } },
   @{ N = 'zainstaluj'; Zrob = { $script:BDalej.PerformClick() } },
@@ -1124,13 +1124,12 @@ $script:TestKroki = @( @{ N = 'okno z ZIP-a z GitHuba'; Czekaj = { ($script:Ekra
 }
 
 # --- W. Wiedza firmy (Z3, 2026-10-14) ----------------------------------------------
-# Adresy serwera firmy (zmienne MR_WIEDZA_FIRMY_*, *.invalid) dostaje okno przez srodowisko procesu testu -
-# bez nich Wiedzy firmy w oknie nie ma (dane.ps1 Dopasuj-Moduly-Do-Komputera), z nimi jest w zestawie
-# domyslnym. Stara instalacja (rejestr bez klucza) NIE dostaje jej po cichu - ani przy zmianie czegos innego.
-function Z-Adresami-WF([scriptblock]$co) {
-  $env:MR_WIEDZA_FIRMY_SERWER = 'https://wiedza.test.invalid'; $env:MR_WIEDZA_FIRMY_JFTOOLS = 'https://jftools.test.invalid'
-  try { return (& $co) } finally { Remove-Item Env:\MR_WIEDZA_FIRMY_SERWER, Env:\MR_WIEDZA_FIRMY_JFTOOLS -ErrorAction SilentlyContinue }
-}
+# Adresow NIE trzeba (klient zna domyslny JFTools i bierze z niego adres serwera wiedzy) - Wiedza firmy jest
+# w oknie i w zestawie domyslnym bez zadnej konfiguracji; proces testu nie ma zmiennych MR_WIEDZA_FIRMY_*
+# (zdejmowane nizej). Stara instalacja (rejestr bez klucza) NIE dostaje jej po cichu - ani przy zmianie czegos
+# innego. Znika tylko z folderu bez jej plikow (starsze narzedzia\ przy nowszym instalator\).
+foreach ($n in @('MR_WIEDZA_FIRMY_SERWER', 'MR_WIEDZA_FIRMY_JFTOOLS')) { [Environment]::SetEnvironmentVariable($n, $null) }
+function Z-Adresami-WF([scriptblock]$co) { return (& $co) }
 
 if (Chce 'wfnowa') {
   $dom = Nowy-Dom 'wfnowa'
@@ -1187,18 +1186,23 @@ $script:TestKroki = @(
   Wynik 'Wiedza firmy - stara instalacja: rejestr dalej bez decyzji (nie zaproponowano), kopia dodana' ($rej -and ($null -eq $rej.moduly.wiedzafirmy) -and $rej.moduly.kopia) ($(if ($rej) { $rej.moduly | ConvertTo-Json -Compress } else { 'brak pliku' }))
 }
 
-# Bez adresow serwera firmy (zwykly komputer, takze spoza firmy): Wiedzy firmy nie ma w oknie ani w planie.
-if (Chce 'wfbezadresu') {
-  $dom = Nowy-Dom 'wfbezadresu'
-  $sc = Zapisz-Scenariusz 'wfbezadresu' @'
+# Folder MegaRuchacza bez modul-wiedzafirmy.ps1 (starsze narzedzia\ przy nowszym instalator\): Wiedzy firmy
+# nie ma w oknie ani w planie, a "Wszystko" jej nie zaznacza - instalacja nie pada na brakujacym pliku.
+if (Chce 'wfbezplikow') {
+  $dom = Nowy-Dom 'wfbezplikow'
+  $bezWf = Join-Path $Robocze 'atrapy-bez-wf'
+  New-Item -ItemType Directory -Force -Path $bezWf | Out-Null
+  Copy-Item -Path (Join-Path $Atrapy '*.ps1') -Destination $bezWf -Force
+  Remove-Item -LiteralPath (Join-Path $bezWf 'modul-wiedzafirmy.ps1') -Force
+  $sc = Zapisz-Scenariusz 'wfbezplikow' @'
 $script:TestKroki = @(
   @{ N = 'powitanie'; Czekaj = { $script:Ekran -eq 'powitanie' }; Zrob = { $script:BWybierzSam.PerformClick() } },
   @{ N = 'wybor bez Wiedzy firmy'; Czekaj = { $script:Ekran -eq 'wybor' }; Sprawdz = { Tak ((-not $script:CheckboxyModulow.ContainsKey('wiedzafirmy')) -and (-not $script:MODULY.Contains('wiedzafirmy')) -and ($script:KOLEJNOSC_INSTALACJI -notcontains 'wiedzafirmy') -and ($script:KOLEJNOSC_USUWANIA -notcontains 'wiedzafirmy') -and $script:BDalej.Enabled) "pola: $((@($script:CheckboxyModulow.Keys) | Sort-Object) -join ',')" } },
   @{ N = 'zestaw Wszystko'; Zrob = { $script:BWszystko.PerformClick() }; Sprawdz = { Tak (-not $script:Wybor.Moduly['wiedzafirmy']) "wiedzafirmy w wyborze: $($script:Wybor.Moduly['wiedzafirmy'])" } }
 )
 '@
-  $r = Uruchom-Ps $Okno (Argumenty-Okna $dom $sc.Plik $Atrapy) 120
-  [void](Ocen-Raport 'Wiedza firmy - bez adresow serwera firmy' $sc $r)
+  $r = Uruchom-Ps $Okno (Argumenty-Okna $dom $sc.Plik $bezWf) 120
+  [void](Ocen-Raport 'Wiedza firmy - folder bez jej plikow' $sc $r)
 }
 
 # --- podsumowanie --------------------------------------------------------------

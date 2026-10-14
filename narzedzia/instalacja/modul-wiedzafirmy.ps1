@@ -5,14 +5,16 @@
 # zatwierdzeniem komputera w panelu JFTools.
 #
 # Pliki, adresy i znaczniki - umowa w narzedzia\instalacja\stan-wiedzy-firmy.ps1 (naglowek). W skrocie:
-# ADRESY serwera i JFTools nie leza w publicznym repo - parametry -AdresSerwera/-AdresJFTools, zmienne
-# MR_WIEDZA_FIRMY_SERWER/MR_WIEDZA_FIRMY_JFTOOLS, pole wiedza_firmy w ~\.claude\mr\lokalne.json albo
-# dotychczasowa konfiguracja.json. Bez nich Instaluj konczy sie bledem z powodem.
+# ADRESY nie sa potrzebne: klient ma domyslny adres JFTools w kodzie, a adres serwera jfwiedza bierze sam
+# z JFTools (GET client-config). Parametry -AdresSerwera/-AdresJFTools, zmienne MR_WIEDZA_FIRMY_SERWER/
+# MR_WIEDZA_FIRMY_JFTOOLS i pole wiedza_firmy w ~\.claude\mr\lokalne.json tylko NADPISUJA domyslne - wtedy
+# (i tylko wtedy) powstaje konfiguracja.json.
 #
 # Co robi Instaluj:
 #   - sprawdza rdzen Lore (srodowisko Pythona lore\.venv - stawia go modul Wiedza albo Lore; klient
 #     chodzi w nim przez uv) i program klienta
-#   - zapisuje ~\.claude\mr\wiedza-firmy\konfiguracja.json (adresy; inne pola zostawia)
+#   - zapisuje czas instalacji (zainstalowano.txt), a konfiguracja.json tylko przy nadpisaniu adresu
+#     (inne pola zostawia)
 #   - zaklada zadanie WiedzaFirmyKlient: przy zalogowaniu (+5 min) i co 30 min "klient.py tick",
 #     przez conhost --headless (bez okna), XML bez uprawnien administratora jak LoreIndex
 #   - wlacza modul w rejestrze i od razu odpala jeden "tick" w tle (zgloszenie komputera)
@@ -20,7 +22,8 @@
 #   dane w ~\.claude\mr\wiedza-firmy zostaja (klucz komputera - po ponownym wlaczeniu ten sam wpis
 #   w panelu), z -UsunDane znikaja. To, co juz poszlo na serwer firmy, zostaje na serwerze.
 # Stan: rejestr (trzy stany: wlaczony / wylaczony / nie zaproponowano), konfiguracja, zadanie,
-#   stan.json klienta i znaczniki (blad kroku albo znacznik nieswiezy = problem).
+#   stan.json klienta i znaczniki (problem = blad trwaly, krok bez sukcesu > 26 h przy 4 bledach z rzedu
+#   albo klient cichy > 26 h; pojedynczy blad sieci to tylko uwaga - progi w stan-wiedzy-firmy.ps1).
 #
 # Uzycie (umowa wyjscia - naglowek wspolne.ps1):
 #   powershell -NoProfile -ExecutionPolicy Bypass -File narzedzia\instalacja\modul-wiedzafirmy.ps1
@@ -119,7 +122,8 @@ function Zarejestruj-Zadanie-Klienta([string]$argumenty) {
   Register-ScheduledTask -TaskName $script:ZadanieWiedzyFirmy -Xml $xml -Force -ErrorAction Stop | Out-Null
 }
 
-# Konfiguracja: nasze pola nadpisane, cudze (dopisane przez klienta albo nowsza wersje) zostaja.
+# Konfiguracja (tylko przy nadpisaniu): nadpisane adresy wpisane, reszta - takze adres z dotychczasowej
+# konfiguracji i pola dopisane przez klienta albo nowsza wersje - zostaje.
 function Zapisz-Konfiguracje($a) {
   $k = [ordered]@{}
   if (Test-Path -LiteralPath $PlikKonfig) {
@@ -127,8 +131,8 @@ function Zapisz-Konfiguracje($a) {
     catch { Ostrzezenie "dotychczasowa konfiguracja $PlikKonfig byla nieczytelna ($($_.Exception.Message)) - zapisuje ja od nowa" }
   }
   $k["wersja"] = 1
-  $k["serwer_url"] = $a.Serwer
-  $k["jftools_url"] = $a.JFTools
+  if ($a.Serwer) { $k["serwer_url"] = $a.Serwer }
+  if ($a.JFTools) { $k["jftools_url"] = $a.JFTools }
   $k["skad"] = $a.Skad
   $k["zrodlo"] = $Zrodlo
   $k["zapisano"] = (Get-Date).ToString("yyyy-MM-dd HH:mm:ss")
@@ -151,14 +155,15 @@ function Tick-W-Tle([string]$uv) {
 
 function Stan-Konfiguracji {
   $w = [pscustomobject]@{ Ok = $false; Opis = ""; Serwer = ""; JFTools = ""; Zapisano = "" }
-  if (-not (Test-Path -LiteralPath $PlikKonfig)) { $w.Opis = "nie ma $PlikKonfig"; return $w }
+  if (-not (Test-Path -LiteralPath $PlikKonfig)) { $w.Ok = $true; $w.Opis = "adresy domyslne klienta (JFTools z kodu klienta, serwer wiedzy z JFTools) - konfiguracja.json niepotrzebna"; return $w }
   try { $k = Wf-Czytaj-Json $PlikKonfig } catch { $w.Opis = "konfiguracja $PlikKonfig nieczytelna: $($_.Exception.Message)"; return $w }
   $w.Serwer = "$($k.serwer_url)"; $w.JFTools = "$($k.jftools_url)"; $w.Zapisano = "$($k.zapisano)"
-  $brak = @()
-  if (-not (Wf-Adres-Dobry $w.Serwer)) { $brak += "serwer_url" }
-  if (-not (Wf-Adres-Dobry $w.JFTools)) { $brak += "jftools_url" }
-  if ($brak.Count) { $w.Opis = "w konfiguracji $PlikKonfig brakuje dobrego adresu: $($brak -join ', ')"; return $w }
-  $w.Ok = $true; $w.Opis = "konfiguracja: $PlikKonfig"
+  # pole puste = adres domyslny klienta; podane musi byc adresem http(s), inaczej klient by na nim padal
+  $zle = @()
+  if ($w.Serwer -and -not (Wf-Adres-Dobry $w.Serwer)) { $zle += "serwer_url" }
+  if ($w.JFTools -and -not (Wf-Adres-Dobry $w.JFTools)) { $zle += "jftools_url" }
+  if ($zle.Count) { $w.Opis = "w konfiguracji $PlikKonfig adres nie jest http(s): $($zle -join ', ')"; return $w }
+  $w.Ok = $true; $w.Opis = "konfiguracja: $PlikKonfig (nadpisuje: $(@(@($(if ($w.Serwer) { 'serwer' }), $(if ($w.JFTools) { 'JFTools' })) | Where-Object { $_ }) -join ', '))"
   return $w
 }
 
@@ -189,7 +194,8 @@ function Zbierz-Stan($rej) {
   $znaczniki = @($oc.Znaczniki | ForEach-Object { [ordered]@{ krok = $_.Krok; czas = $(if ($_.Czas) { $_.Czas.ToString("yyyy-MM-dd HH:mm:ss") } else { "" }); stan = $_.Stan; opis = $_.Opis; blad = $_.Blad } })
   return [pscustomobject]@{ Zainstalowany = $zainst; Dziala = ($zainst -and ($script:MR.problemy.Count -eq 0)); StanModulu = $stanMod; Szczegoly = [ordered]@{
     stan_modulu = $stanMod; konfiguracja = $konf.Opis; serwer = $konf.Serwer; jftools = $konf.JFTools; zadanie = $zad.Opis
-    stan_klienta = $kl.Opis; status_klienta = $kl.Status; znaczniki = [object[]]$znaczniki; nieswiezosc = $(if ($oc.Sprawdzone) { "sprawdzona" } else { $oc.Uwaga }) } }
+    stan_klienta = $kl.Opis; status_klienta = $kl.Status; znaczniki = [object[]]$znaczniki; nieswiezosc = $(if ($oc.Sprawdzone) { "sprawdzona" } else { $oc.Uwaga })
+    uwagi_klienta = $(if ($oc.Sprawdzone) { $oc.Uwaga } else { "" }) } }
 }
 
 try {
@@ -214,12 +220,9 @@ try {
     Odmowa-Brak-Programow
     $a = Adresy-Wiedzy-Firmy $KatalogDomowy $AdresSerwera $AdresJFTools
     foreach ($b in $a.Bledy) { Ostrzezenie $b }
-    if (-not $a.Jest) {
-      $brak = @(@($(if (-not $a.Serwer) { "serwera Wiedzy firmy" }), $(if (-not $a.JFTools) { "JFTools" })) | Where-Object { $_ })
-      Zakoncz $false ("nie znam adresu: $($brak -join ' ani ') - adresy firmy nie leza w publicznym repozytorium. Podaj je parametrami -AdresSerwera i -AdresJFTools, " +
-        "zmiennymi MR_WIEDZA_FIRMY_SERWER i MR_WIEDZA_FIRMY_JFTOOLS albo w polu wiedza_firmy pliku $(Sciezka-Lokalnych $KatalogDomowy)") @{ brak_adresu = $true }
-    }
-    Krok "adresy serwera firmy: $($a.Skad)"
+    if ($a.Nadpisanie) { Krok "adresy nadpisane: $($a.Skad)" }
+    elseif ($a.Skad) { Krok "adresy z dotychczasowej konfiguracji: $($a.Skad)" }
+    else { Krok "adresy domyslne klienta (JFTools z kodu klienta, serwer wiedzy z JFTools) - nic nie trzeba ustawiac" }
     $rdzen = (Modul-Wlaczony "wiedza" $KatalogDomowy) -or (Modul-Wlaczony "lore" $KatalogDomowy)
     if (-not (Test-Path -LiteralPath $PythonLore)) {
       $t = "nie ma srodowiska Pythona Lore ($PythonLore) - Wiedza firmy chodzi w nim, a stawia je Wiedza o Tobie albo Pamiec rozmow (Lore); zainstaluj najpierw jedna z nich"
@@ -234,13 +237,13 @@ try {
     if (-not $prog["claude"]) { Ostrzezenie "nie ma Claude Code - klient zglosi komputer, ale serwera jfwiedza nie bedzie gdzie podlaczyc, dopoki Claude Code nie stanie" }
 
     if ($Proba) {
-      Plan "zapisalbym $PlikKonfig (serwer i JFTools z: $($a.Skad))"
+      if ($a.Nadpisanie) { Plan "zapisalbym $PlikKonfig (nadpisanie: $($a.Skad))" }
       Plan "zadanie $($script:ZadanieWiedzyFirmy): przy zalogowaniu (+5 min) i co 30 min, bez okna - conhost.exe $(Argumenty-Klienta $prog['uv'])"
       Plan "pierwszy przebieg klienta (tick) w tle"
     } else {
       New-Item -ItemType Directory -Force -Path $Katalog | Out-Null
-      Zapisz-Konfiguracje $a
-      Krok "konfiguracja zapisana: $PlikKonfig"
+      Wf-Zapisz-Atomowo (Plik-Instalacji-Wiedzy-Firmy $KatalogDomowy) ((Get-Date).ToString("yyyy-MM-dd HH:mm:ss") + "`r`n")
+      if ($a.Nadpisanie) { Zapisz-Konfiguracje $a; Krok "konfiguracja z nadpisanymi adresami zapisana: $PlikKonfig" }
       try { Zarejestruj-Zadanie-Klienta (Argumenty-Klienta $prog["uv"]) }
       catch { Zakoncz $false "nie udalo sie zalozyc zadania $($script:ZadanieWiedzyFirmy): $($_.Exception.Message) (jesli to 'Odmowa dostepu' - zasady tej maszyny moga wymagac uprawnien administratora)" }
       $zad = Stan-Zadania $script:ZadanieWiedzyFirmy $WzorAkcji

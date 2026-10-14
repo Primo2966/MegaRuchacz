@@ -5,7 +5,8 @@
 #
 # NIEWIDOCZNY: okienko chodzi z -PozaEkranem (w -5000,0, bez paska zadan, bez aktywacji, wlasny zamek),
 # klika je scenariusz wczytany w jego procesie; modul instalacji to atrapa (-SkryptModulu), katalog domowy
-# sztuczny, adresy serwera firmy - zmienne MR_WIEDZA_FIRMY_* z adresami *.invalid. Dozor nadzorcy
+# sztuczny, BEZ zadnej konfiguracji adresow (klient zna domyslne; zmienne MR_WIEDZA_FIRMY_* zdjete z procesow
+# testu - z nimi tylko jedna proba nadpisania). Dozor nadzorcy
 # chodzi w osobnym procesie bez okna na kopii kodu zasobnik\ i atrapie okienka (Odpal-W-Tle: conhost
 # --headless) - jak zasobnik\test-terminy-start.ps1. Zadnego zadania Harmonogramu, zadnej zmiany w ~.
 # Decyzja "czy pytac" czyta prawdziwy start Windows: tuz po wlaczeniu komputera (< 5 min) okienko nie
@@ -17,9 +18,9 @@
 #   W3 "Dodaj" z atrapa udana -> "Gotowe", odpowiedz dodaj, modul wolany z -Akcja Instaluj
 #   W4 "Dodaj" z atrapa pada -> powod bledu na oknie, "zapytam znowu jutro", jutro znowu pyta (negatywna)
 #   W5 krzyzyk bez odpowiedzi = jak "Nie teraz" (zamkniete)
-#   W6 rejestr z decyzja (wiedzafirmy=false) = bez okna (negatywna)
-#   D1-D7 nadzorca: trzeci stan w Stan-Instalacji, dozor odpala okienko, nie odpala drugi raz ani po
-#         decyzji, alarm przy bledzie klienta, nieczytelny rejestr
+#   W6 rejestr z decyzja (wiedzafirmy=false) = bez okna (negatywna); bez zadnej konfiguracji okno JEST
+#   D1-D8 nadzorca: trzeci stan w Stan-Instalacji, dozor odpala okienko, nie odpala drugi raz ani po
+#         decyzji, alarm przy bledzie trwalym klienta, bez alarmu przy jednym bledzie sieci, nieczytelny rejestr
 # Sabotaze (kazdy MUSI zostac zlapany): S1 dozor nie wola Dozor-Wiedza-Firmy, S2 Stan-Instalacji bez trzeciego
 #   stanu, S3 okienko nie zapisuje "pokazane" (pytaloby w kolko), S4 alarm bez ocen znacznikow.
 param(
@@ -80,9 +81,7 @@ function Dziennik-Okienka([string]$dom) {
 # Decyzja "czy pytac" z umowy (narzedzia\instalacja\stan-wiedzy-firmy.ps1), z podanym czasem i startem Windows.
 function Czy-Pytac-Test([string]$dom, [datetime]$teraz) {
   . (Join-Path $Zrodlo "narzedzia\instalacja\stan-wiedzy-firmy.ps1")
-  foreach ($k in $Adresy.Keys) { [Environment]::SetEnvironmentVariable($k, $Adresy[$k]) }
-  try { return (Czy-Pytac-O-Wiedze-Firmy $dom $teraz $teraz.AddHours(-2)) }
-  finally { foreach ($k in $Adresy.Keys) { [Environment]::SetEnvironmentVariable($k, $null) } }
+  return (Czy-Pytac-O-Wiedze-Firmy $dom $teraz $teraz.AddHours(-2))
 }
 
 # --- atrapy modulu instalacji (dla przycisku "Dodaj")
@@ -141,7 +140,7 @@ $script:TZegar.Add_Tick({
 $script:TZegar.Start()
 '@
 
-function Uruchom-Okienko([string]$nazwa, [string]$skrypt, [string]$dom, [string]$kroki, [string]$modul = "", [bool]$zAdresami = $true) {
+function Uruchom-Okienko([string]$nazwa, [string]$skrypt, [string]$dom, [string]$kroki, [string]$modul = "", [bool]$zAdresami = $false) {
   $raport = Join-Path $tmp "raport-$nazwa.txt"
   $sc = Join-Path $tmp "scenariusz-$nazwa.ps1"
   [System.IO.File]::WriteAllText($sc, ($wstep.Replace('__RAPORT__', $raport).Replace('__ZRZUTY__', $Zrzuty) + "`r`n" + $kroki), $UTF8BOM)
@@ -235,10 +234,17 @@ try {
 
   $zn = Join-Path $Dom ".claude\mr\wiedza-firmy\znaczniki"
   New-Item -ItemType Directory -Force -Path $zn | Out-Null
-  [System.IO.File]::WriteAllText((Join-Path $zn "wysylka.txt"), "$((Get-Date).ToString('s'))|blad|serwer odrzucil paczke (atrapa)`n", (New-Object System.Text.UTF8Encoding($false)))
+  # jeden blad sieci po sukcesie godzine temu - bez alarmu (falszywy alarm gorszy niz brak)
+  [System.IO.File]::WriteAllText((Join-Path $zn "wysylka.txt"), "$((Get-Date).ToString('s'))|blad|brak sieci - ponowie (atrapa)`n", (New-Object System.Text.UTF8Encoding($false)))
+  [System.IO.File]::WriteAllText((Join-Path $Dom ".claude\mr\wiedza-firmy\klient.log"), "$((Get-Date).AddHours(-1).ToString('s')) [wysylka] ok: wyslano`n$((Get-Date).ToString('s')) [wysylka] BLAD: brak sieci - ponowie (atrapa)`n", (New-Object System.Text.UTF8Encoding($false)))
+  $a0 = Alarm-Wiedzy-Firmy
+  $wszystkie = Zbierz-Alarmy $null ([pscustomobject]@{ Kod = 0; Linia = "test"; Powod = "" }) $inst
+  P "D5b" ((-not $a0) -and (@($wszystkie | Where-Object { $_.Temat -eq "wiedzafirmy" }).Count -eq 0)) "jeden blad sieci - bez alarmu: $(if ($a0) { $a0.Tresc } else { 'brak' })"
+  # blad trwaly (komputer zablokowany, 403) - alarm od razu
+  [System.IO.File]::WriteAllText((Join-Path $zn "wysylka.txt"), "$((Get-Date).ToString('s'))|blad|serwer odmowil (zablokowany albo nieznany komputer): 403 (atrapa)`n", (New-Object System.Text.UTF8Encoding($false)))
   $a = Alarm-Wiedzy-Firmy
   $wszystkie = Zbierz-Alarmy $null ([pscustomobject]@{ Kod = 0; Linia = "test"; Powod = "" }) $inst
-  P "D5" ($a -and ($a.Temat -eq "wiedzafirmy") -and ($a.Tresc -match "krok 'wysylka' skonczyl sie bledem.*atrapa") -and (@($wszystkie | Where-Object { $_.Temat -eq "wiedzafirmy" }).Count -eq 1)) "alarm: $(if ($a) { $a.Tytul + ' :: ' + $a.Tresc }); w Zbierz-Alarmy: $(@($wszystkie | ForEach-Object { $_.Temat }) -join ',')"
+  P "D5" ($a -and ($a.Temat -eq "wiedzafirmy") -and ($a.Tresc -match "krok 'wysylka' ma blad trwaly.*atrapa") -and (@($wszystkie | Where-Object { $_.Temat -eq "wiedzafirmy" }).Count -eq 1)) "alarm: $(if ($a) { $a.Tytul + ' :: ' + $a.Tresc }); w Zbierz-Alarmy: $(@($wszystkie | ForEach-Object { $_.Temat }) -join ',')"
   Rejestr $stary
   $inst = Stan-Instalacji
   $wszystkie = Zbierz-Alarmy $null ([pscustomobject]@{ Kod = 0; Linia = "test"; Powod = "" }) $inst
@@ -257,7 +263,7 @@ try {
 '@
 $plikPrzebiegu = Join-Path $tmp "przebieg.ps1"
 [System.IO.File]::WriteAllText($plikPrzebiegu, $przebieg, $UTF8BOM)
-$WSZYSTKIE_D = @("D1", "D2", "D3", "D4", "D5", "D6", "D7", "D8")
+$WSZYSTKIE_D = @("D1", "D2", "D3", "D4", "D5b", "D5", "D6", "D7", "D8")
 
 function Kopia-Kodu([string]$nazwa) {
   $k = Join-Path $tmp "kod-$nazwa"
@@ -289,7 +295,7 @@ function Przebieg-Dozoru([string]$nazwa, [string]$kod) {
   $psi.RedirectStandardOutput = $true
   $psi.RedirectStandardError = $true
   $psi.StandardOutputEncoding = [System.Text.Encoding]::UTF8
-  foreach ($k in $Adresy.Keys) { $psi.EnvironmentVariables[$k] = $Adresy[$k] }
+  foreach ($k in $Adresy.Keys) { if ($psi.EnvironmentVariables.ContainsKey($k)) { $psi.EnvironmentVariables.Remove($k) } }   # bez zadnej konfiguracji
   $pr = [System.Diagnostics.Process]::Start($psi)
   $zadWy = $pr.StandardOutput.ReadToEndAsync(); $zadBl = $pr.StandardError.ReadToEndAsync()
   $r = @{}
@@ -371,10 +377,10 @@ $script:TKroki = @(
   $r = Uruchom-Okienko "W6" $Okienko $dom $KrokiZamknij
   $dz = Dziennik-Okienka $dom
   Wynik "W6 rejestr z decyzja (wiedzafirmy=false) - bez okna (proba negatywna)" (($r.Kod -eq 0) -and ($r.Raport.Count -eq 0) -and ($dz -match "juz zdecydowano")) "kod $($r.Kod); dziennik: $($dz.Trim())"
-  $dom = Nowy-Dom "bezadresu" $RejestrStary
-  $r = Uruchom-Okienko "W6b" $Okienko $dom $KrokiZamknij "" $false
+  $dom = Nowy-Dom "znadpisaniem" $RejestrStary
+  $r = Uruchom-Okienko "W6b" $Okienko $dom $KrokiZamknij "" $true
   $dz = Dziennik-Okienka $dom
-  Wynik "W6 bez adresow serwera firmy - bez okna (proba negatywna)" (($r.Kod -eq 0) -and ($r.Raport.Count -eq 0) -and ($dz -match "nie znam adresow")) "kod $($r.Kod); dziennik: $($dz.Trim())"
+  Wynik "W6 z nadpisaniem adresow (MR_WIEDZA_FIRMY_*) okno tez wstaje - adresy nic nie zmieniaja w pytaniu" (($r.Kod -eq 0) -and ($r.Raport -contains 'KONIEC') -and ($dz -match "pytam o Wiedze firmy")) "kod $($r.Kod); dziennik: $($dz.Trim())"
 
   # ------------------------------------------------------------- dozor nadzorcy
   $rd = Przebieg-Dozoru "czysty" (Kopia-Kodu "czysty")

@@ -178,7 +178,7 @@ function Zaplanuj-Terminy-Po-Starcie([datetime]$kiedy) {
 # wstaje od nowa i dozor pokazuje jedno okienko "Dodac Wiedze firmy? [Dodaj] [Nie teraz]"
 # (zasobnik\nadzorca\pytanie-wiedza-firmy.ps1, osobny proces - okno nadzorcy nie czeka). Kiedy pytac,
 # rozstrzyga Czy-Pytac-O-Wiedze-Firmy (narzedzia\instalacja\stan-wiedzy-firmy.ps1): najwyzej raz dziennie
-# (zapis "pokazane" robi samo okienko), tylko z rdzeniem Lore i znanymi adresami serwera firmy, nie
+# (zapis "pokazane" robi samo okienko), tylko z rdzeniem Lore (adresow nie trzeba - zna je klient), nie
 # wczesniej niz 5 min po starcie Windows. "Nie teraz" = jutro znowu; "Dodaj" instaluje modul.
 function Skrypt-Pytania-Wiedzy-Firmy { return (Join-Path $script:NadzZrodlo "zasobnik\nadzorca\pytanie-wiedza-firmy.ps1") }
 

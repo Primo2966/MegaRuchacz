@@ -15,8 +15,8 @@
 #     domowym), start nadzorcy zablokowany, a zamykanie nadzorcy widzi tylko procesy z kopii
 #   - claude i codex to atrapy w PATH (zapisuja wywolania, pamietaja wpisy MCP); prawdziwych
 #     narzedzi w PATH testu nie ma
-#   - Wiedza firmy: klient (narzedzia\wiedza-firmy-klient\klient.py) w kopii to atrapa, adresy serwera
-#     firmy to zmienne MR_WIEDZA_FIRMY_* z adresami *.invalid; zadanie MRTEST-WiedzaFirmyKlient ma
+#   - Wiedza firmy: klient (narzedzia\wiedza-firmy-klient\klient.py) w kopii to atrapa; instalacja idzie
+#     bez zadnej konfiguracji, nadpisania adresow (zmienne MR_WIEDZA_FIRMY_*) tylko *.invalid; zadanie MRTEST-WiedzaFirmyKlient ma
 #     w kopii wyzwalacz logowania WYLACZONY i start 2099 - samo nie ruszy nigdy
 #   - model wektorow: kopia prawdziwego katalogu modelu (bez pobierania 496 MB)
 #   - Git for Windows: atrapa instalatora (maly program konsolowy budowany przez test) - prawdziwego
@@ -1175,7 +1175,7 @@ function Scenariusz-Proba {
   Rozmowa $dom "proba"
   $przed = Odcisk-Domu $dom
   foreach ($m in @("baza", "wiedza", "lore", "kierownik", "skille", "kopia", "wiedzafirmy")) {
-    $r = Modul $m "Instaluj" $dom @("-Proba") $(if ($m -eq "wiedzafirmy") { $script:AdresyWF } else { @{} })
+    $r = Modul $m "Instaluj" $dom @("-Proba")
     $okKopia = ($m -eq "kopia") -and ($r.Kod -eq 1) -and ($r.W.komunikat -match "ustawien kopii")   # bez ustawien w rejestrze odmawia takze na probie
     Sprawdz "proba: $m Instaluj -Proba (kroki z [proba], nic nie zmienione)" ((($r.Kod -eq 0) -and ($r.W.proba -eq $true) -and (($r.Kroki -join " ") -match "\[proba\]")) -or $okKopia) $r.Tekst
     $r = Modul $m "Usun" $dom @("-Proba", "-UsunDane")
@@ -1241,11 +1241,13 @@ function Scenariusz-UsunNaCzystym {
 
 # ---------------------------------------------------------------- Wiedza firmy (Z3, 2026-10-14)
 
-# Adresy serwera firmy - nigdy prawdziwe (repo publiczne; .invalid nie rozwiaze sie nigdzie).
+# Nadpisania adresow - nigdy prawdziwe (repo publiczne; .invalid nie rozwiaze sie nigdzie). Domyslnie modul
+# NICZEGO nie potrzebuje (klient zna adres JFTools i bierze z niego adres serwera wiedzy).
 $script:AdresyWF = @{ MR_WIEDZA_FIRMY_SERWER = "https://wiedza.test.invalid"; MR_WIEDZA_FIRMY_JFTOOLS = "https://jftools.test.invalid" }
 
-# Atrapa klienta w KOPII (narzedzia\wiedza-firmy-klient\klient.py): dopisuje wywolanie do atrapa-klient.log
-# i zostawia znacznik wysylka jak prawdziwy tick; ATRAPA_KLIENT_PADA=1 - znacznik blad i kod 1.
+# Atrapa klienta w KOPII (narzedzia\wiedza-firmy-klient\klient.py): jak prawdziwy tick zostawia znacznik wysylka
+# i linie w klient.log ("<czas ISO> [wysylka] ok: ..." / "BLAD: ..."); ATRAPA_KLIENT_PADA=1 - chwilowy blad sieci
+# (znacznik blad, kod 1). Wywolania dopisuje do atrapa-klient.log.
 function Atrapa-Klienta-WF {
   $p = Join-Path $Repo "narzedzia\wiedza-firmy-klient\klient.py"
   New-Item -ItemType Directory -Force -Path (Split-Path -Parent $p) | Out-Null
@@ -1256,10 +1258,12 @@ home = pathlib.Path(os.environ.get("WIEDZA_FIRMY_KLIENT_HOME") or (pathlib.Path(
 with open(home / "atrapa-klient.log", "a", encoding="utf-8") as f:
     f.write(" ".join(sys.argv[1:]) + "\n")
 teraz = datetime.datetime.now().isoformat(timespec="seconds")
-if os.environ.get("ATRAPA_KLIENT_PADA"):
-    (home / "znaczniki" / "wysylka.txt").write_text(teraz + "|blad|serwer odrzucil paczke (atrapa)\n", encoding="utf-8")
-    sys.exit(1)
-(home / "znaczniki" / "wysylka.txt").write_text(teraz + "|ok|czeka na zatwierdzenie w JFTools (atrapa)\n", encoding="utf-8")
+pada = bool(os.environ.get("ATRAPA_KLIENT_PADA"))
+opis = "brak sieci - ponowie (atrapa)" if pada else "czeka na zatwierdzenie w JFTools (atrapa)"
+(home / "znaczniki" / "wysylka.txt").write_text(teraz + ("|blad|" if pada else "|ok|") + opis + "\n", encoding="utf-8")
+with open(home / "klient.log", "a", encoding="utf-8") as f:
+    f.write(teraz + " [wysylka] " + ("BLAD" if pada else "ok") + ": " + opis + "\n")
+sys.exit(1 if pada else 0)
 '@, (New-Object System.Text.UTF8Encoding($false)))
 }
 
@@ -1281,6 +1285,14 @@ function Znacznik-WF([string]$dom, [string]$krok, [string]$linia) {
   $kat = Join-Path $dom ".claude\mr\wiedza-firmy\znaczniki"
   New-Item -ItemType Directory -Force -Path $kat | Out-Null
   [System.IO.File]::WriteAllText((Join-Path $kat "$krok.txt"), "$linia`n", (New-Object System.Text.UTF8Encoding($false)))
+}
+
+# klient.log z podanych linii (czas, krok, ok|BLAD, opis) - historia, z ktorej liczy sie czas bez sukcesu.
+function Log-Klienta-WF([string]$dom, [object[]]$wpisy) {
+  $kat = Join-Path $dom ".claude\mr\wiedza-firmy"
+  New-Item -ItemType Directory -Force -Path $kat | Out-Null
+  $t = (@($wpisy | ForEach-Object { "$(([datetime]$_[0]).ToString('s')) [$($_[1])] $($_[2]): $($_[3])" }) -join "`n") + "`n"
+  [System.IO.File]::WriteAllText((Join-Path $kat "klient.log"), "linia bez czasu (np. UWAGA klienta)`n" + $t, (New-Object System.Text.UTF8Encoding($false)))
 }
 
 function Xml-Zadania([string]$nazwa) { try { return [string](Export-ScheduledTask -TaskName "MRTEST-$nazwa" -ErrorAction Stop) } catch { return "" } }
@@ -1307,48 +1319,35 @@ function Scenariusz-WiedzaFirmy {
   New-Item -ItemType Directory -Force -Path (Join-Path $dz ".claude\mr") | Out-Null
   [System.IO.File]::WriteAllBytes((Join-Path $dz ".claude\mr\instalacja.json"), [byte[]](0, 0, 0, 0))
   Sprawdz "wiedzafirmy: rejestr nieczytelny - Modul-Wlaczony = true (przy bledzie nic nie wolno zdejmowac), Stan-Modulu = nieczytelny" ((Modul-Wlaczony "wiedzafirmy" $dz) -and ((Stan-Modulu "wiedzafirmy" $dz) -eq "nieczytelny"))
-  $r = Modul "wiedzafirmy" "Stan" $dom @() $script:AdresyWF
+  $r = Modul "wiedzafirmy" "Stan" $dom
   Sprawdz "wiedzafirmy: Stan na starej instalacji = nie zainstalowana, nie zaproponowana, bez problemow" (($r.Kod -eq 0) -and ($r.W.zainstalowany -eq $false) -and ($r.W.zaproponowany -eq $false) -and ($r.W.szczegoly.stan_modulu -eq "nie-zaproponowano") -and (@($r.W.problemy).Count -eq 0)) $r.Tekst
-  $r = Modul "baza" "Instaluj" $dom @("-BezStartu") $script:AdresyWF
+  $r = Modul "baza" "Instaluj" $dom @("-BezStartu")
   $rej = Rejestr $dom
-  Sprawdz "wiedzafirmy: baza Instaluj na starej instalacji (nawet z adresami) nie doklada Wiedzy firmy - klucz dalej brak, zadania brak" (($r.Kod -eq 0) -and ($null -eq $rej.moduly.wiedzafirmy) -and -not (Zadanie "WiedzaFirmyKlient") -and -not (Test-Path (Join-Path $dom ".claude\mr\wiedza-firmy"))) ($r.Tekst + " REJESTR " + ($rej | ConvertTo-Json -Compress))
+  Sprawdz "wiedzafirmy: baza Instaluj na starej instalacji nie doklada Wiedzy firmy - klucz dalej brak, zadania brak" (($r.Kod -eq 0) -and ($null -eq $rej.moduly.wiedzafirmy) -and -not (Zadanie "WiedzaFirmyKlient") -and -not (Test-Path (Join-Path $dom ".claude\mr\wiedza-firmy"))) ($r.Tekst + " REJESTR " + ($rej | ConvertTo-Json -Compress))
   . $wf
   $c = Czy-Pytac-O-Wiedze-Firmy $dom ([datetime]::Now) ([datetime]::Now.AddHours(-2))
-  Sprawdz "wiedzafirmy: stara instalacja bez adresow - nadzorca nie pyta (nie ma czego proponowac)" ((-not $c.Pytac) -and ($c.Powod -match "adres")) $c.Powod
-  $env:MR_WIEDZA_FIRMY_SERWER = $script:AdresyWF.MR_WIEDZA_FIRMY_SERWER; $env:MR_WIEDZA_FIRMY_JFTOOLS = $script:AdresyWF.MR_WIEDZA_FIRMY_JFTOOLS
-  try {
-    $c = Czy-Pytac-O-Wiedze-Firmy $dom ([datetime]::Now) ([datetime]::Now.AddHours(-2))
-    Sprawdz "wiedzafirmy: stara instalacja z adresami - nadzorca PYTA zamiast instalowac" ($c.Pytac) $c.Powod
-    $c = Czy-Pytac-O-Wiedze-Firmy $dom ([datetime]::Now) ([datetime]::Now.AddMinutes(-2))
-    Sprawdz "wiedzafirmy: 2 min po starcie Windows - jeszcze nie pyta" ((-not $c.Pytac) -and ($c.Powod -match "Windows wstal")) $c.Powod
-  } finally { Remove-Item Env:\MR_WIEDZA_FIRMY_SERWER, Env:\MR_WIEDZA_FIRMY_JFTOOLS -ErrorAction SilentlyContinue }
+  Sprawdz "wiedzafirmy: stara instalacja BEZ zadnej konfiguracji - nadzorca PYTA zamiast instalowac" ($c.Pytac) $c.Powod
+  $c = Czy-Pytac-O-Wiedze-Firmy $dom ([datetime]::Now) ([datetime]::Now.AddMinutes(-2))
+  Sprawdz "wiedzafirmy: 2 min po starcie Windows - jeszcze nie pyta" ((-not $c.Pytac) -and ($c.Powod -match "Windows wstal")) $c.Powod
 
   Zdejmij-Zadania-Testu   # zadanie nadzorcy z A byloby dla bazy sladem starej instalacji na swiezym domu
 
-  # --- B. swiezy dom: baza zostawia "nie zaproponowano"; bez adresow Instaluj odmawia i niczego nie zmienia
+  # --- B. swiezy dom: baza zostawia "nie zaproponowano"; bez rdzenia Lore Instaluj odmawia
   $dom2 = Dom "wf"
   Rozmowa $dom2 "wiedza firmy"
   $r = Modul "baza" "Instaluj" $dom2 @("-BezStartu")
   $rej = Rejestr $dom2
   Sprawdz "wiedzafirmy: baza na swiezym domu - inne moduly false, Wiedza firmy bez decyzji (null)" (($r.Kod -eq 0) -and ($null -ne $rej) -and ($rej.moduly.kierownik -eq $false) -and ($null -eq $rej.moduly.wiedzafirmy)) ($rej | ConvertTo-Json -Compress)
-  $przed = Odcisk-Domu $dom2
-  $r = Modul "wiedzafirmy" "Instaluj" $dom2
-  Sprawdz "wiedzafirmy: Instaluj bez adresow = odmowa z powodem (brak_adresu, skad je wziac), dom nietkniety, zadania brak (proba negatywna)" (($r.Kod -eq 1) -and ($r.W.brak_adresu -eq $true) -and ($r.W.komunikat -match "MR_WIEDZA_FIRMY_SERWER") -and ($r.W.komunikat -match "lokalne\.json") -and ((Odcisk-Domu $dom2) -eq $przed) -and -not (Zadanie "WiedzaFirmyKlient")) $r.Tekst
-  $zle = @{ MR_WIEDZA_FIRMY_SERWER = "wiedza.test.invalid"; MR_WIEDZA_FIRMY_JFTOOLS = "https://jftools.test.invalid" }
-  $r = Modul "wiedzafirmy" "Instaluj" $dom2 @() $zle
-  Sprawdz "wiedzafirmy: adres bez http(s) = UWAGA i odmowa, nic nie zapisane (proba negatywna)" (($r.Kod -eq 1) -and (($r.Uwagi -join " ") -match "nie jest adresem http") -and ((Odcisk-Domu $dom2) -eq $przed)) $r.Tekst
 
-  # --- C. instalacja z adresami (rdzen Lore stawia modul wiedza - prawdziwa zaleznosc)
+  # --- C. instalacja BEZ jakiejkolwiek konfiguracji (rdzen Lore stawia modul wiedza - prawdziwa zaleznosc)
   $r = Modul "wiedza" "Instaluj" $dom2
   Sprawdz "wiedzafirmy: rdzen Lore (modul wiedza) gotowy" ($r.Kod -eq 0) $r.Tekst
   [void](Czekaj-Na-Tlo)
-  $od = Get-Date
-  $r = Modul "wiedzafirmy" "Instaluj" $dom2 @() $script:AdresyWF
-  $rej = Rejestr $dom2
-  Sprawdz "wiedzafirmy: Instaluj z adresami ze zmiennych = ok, rejestr wiedzafirmy=true" (($r.Kod -eq 0) -and ($rej.moduly.wiedzafirmy -eq $true) -and (($r.Kroki -join " ") -match "adresy serwera firmy: zmienne")) $r.Tekst
   $kp = Join-Path $dom2 ".claude\mr\wiedza-firmy\konfiguracja.json"
-  $k = $null; if (Test-Path $kp) { $k = [System.IO.File]::ReadAllText($kp) | ConvertFrom-Json }
-  Sprawdz "wiedzafirmy: konfiguracja.json z adresami (serwer_url, jftools_url - nazwy pol klienta) i zrodlem" ($k -and ($k.serwer_url -eq "https://wiedza.test.invalid") -and ($k.jftools_url -eq "https://jftools.test.invalid") -and ($k.zrodlo -eq $Repo) -and $k.zapisano) ("" + $(if ($k) { $k | ConvertTo-Json -Compress }))
+  $od = Get-Date
+  $r = Modul "wiedzafirmy" "Instaluj" $dom2
+  $rej = Rejestr $dom2
+  Sprawdz "wiedzafirmy: Instaluj bez zadnej konfiguracji (adresy domyslne klienta) = ok, rejestr true, konfiguracja.json NIE powstaje, czas instalacji zapisany" (($r.Kod -eq 0) -and ($rej.moduly.wiedzafirmy -eq $true) -and (($r.Kroki -join " ") -match "adresy domyslne klienta") -and -not (Test-Path $kp) -and (Test-Path (Join-Path $dom2 ".claude\mr\wiedza-firmy\zainstalowano.txt"))) $r.Tekst
   $x = Xml-Zadania "WiedzaFirmyKlient"
   Sprawdz "wiedzafirmy: zadanie MRTEST-WiedzaFirmyKlient - conhost --headless, uv w srodowisku Lore kopii, klient.py tick, ukryte" (($x -match "<Command>conhost\.exe</Command>") -and ($x -match "--headless") -and ($x -match [regex]::Escape((Join-Path $Repo "narzedzia\wiedza-firmy-klient\klient.py") + '" tick')) -and ($x -match [regex]::Escape('--directory "' + (Join-Path $Repo "lore"))) -and ($x -match "<Hidden>true</Hidden>")) $x
   Sprawdz "wiedzafirmy: wyzwalacze - przy zalogowaniu +5 min (w kopii WYLACZONY) i co 30 min (w kopii od 2099)" (($x -match "(?s)<LogonTrigger>.*<Enabled>false</Enabled>.*<Delay>PT5M</Delay>.*</LogonTrigger>") -and ($x -match "(?s)<TimeTrigger>.*<StartBoundary>2099-01-01T00:00:00</StartBoundary>.*<Interval>PT30M</Interval>.*</TimeTrigger>") -and ($x -match "<MultipleInstancesPolicy>IgnoreNew")) $x
@@ -1357,16 +1356,25 @@ function Scenariusz-WiedzaFirmy {
   Sprawdz "wiedzafirmy: pierwszy tick od razu w tle (atrapa klienta wywolana z 'tick', znacznik wysylka ok)" ($zn -and (Test-Path $log) -and ((Get-Content $log -Raw) -match "(?m)^tick")) ("znacznik: $zn; log: $(if (Test-Path $log) { Get-Content $log -Raw })")
   [void](Czekaj-Na-Tlo)
   $r = Modul "wiedzafirmy" "Stan" $dom2
-  Sprawdz "wiedzafirmy: Stan po instalacji = dziala (znacznik swiezy, zadanie, konfiguracja)" (($r.Kod -eq 0) -and ($r.W.zainstalowany -eq $true) -and ($r.W.dziala -eq $true) -and ($r.W.zaproponowany -eq $true) -and (@($r.W.szczegoly.znaczniki).Count -eq 1)) ($r.W | ConvertTo-Json -Compress -Depth 6)
+  Sprawdz "wiedzafirmy: Stan po instalacji bez konfiguracji = dziala (znacznik swiezy, zadanie; konfiguracja niepotrzebna)" (($r.Kod -eq 0) -and ($r.W.zainstalowany -eq $true) -and ($r.W.dziala -eq $true) -and ($r.W.zaproponowany -eq $true) -and (@($r.W.szczegoly.znaczniki).Count -eq 1) -and ($r.W.szczegoly.konfiguracja -match "niepotrzebna")) ($r.W | ConvertTo-Json -Compress -Depth 6)
+  # nadpisania opcjonalne: zly adres pomijany z UWAGA (instalacja idzie dalej), dobre trafiaja do konfiguracja.json
+  $zle = @{ MR_WIEDZA_FIRMY_SERWER = "wiedza.test.invalid"; MR_WIEDZA_FIRMY_JFTOOLS = "https://jftools.test.invalid" }
+  $r = Modul "wiedzafirmy" "Instaluj" $dom2 @() $zle
+  $k = $null; if (Test-Path $kp) { $k = [System.IO.File]::ReadAllText($kp) | ConvertFrom-Json }
+  Sprawdz "wiedzafirmy: adres bez http(s) = UWAGA i pominiety, instalacja ok, w konfiguracji tylko dobry jftools_url" (($r.Kod -eq 0) -and (($r.Uwagi -join " ") -match "nie jest adresem http") -and $k -and ($k.jftools_url -eq "https://jftools.test.invalid") -and (-not $k.serwer_url)) ($r.Tekst + " KONF " + $(if ($k) { $k | ConvertTo-Json -Compress }))
+  $r = Modul "wiedzafirmy" "Instaluj" $dom2 @() $script:AdresyWF
+  $k = $null; if (Test-Path $kp) { $k = [System.IO.File]::ReadAllText($kp) | ConvertFrom-Json }
+  Sprawdz "wiedzafirmy: nadpisanie ze zmiennych - konfiguracja.json z serwer_url i jftools_url (nazwy pol klienta) i zrodlem" (($r.Kod -eq 0) -and (($r.Kroki -join " ") -match "adresy nadpisane: zmienne") -and $k -and ($k.serwer_url -eq "https://wiedza.test.invalid") -and ($k.jftools_url -eq "https://jftools.test.invalid") -and ($k.zrodlo -eq $Repo) -and $k.zapisano) ($r.Tekst + " KONF " + $(if ($k) { $k | ConvertTo-Json -Compress }))
+  [void](Czekaj-Na-Tlo)
 
-  # --- D. blad tick: widoczny w Stan i w cyklu dziennym (proba negatywna)
+  # --- D. pojedynczy blad sieci NIE alarmuje (falszywy alarm gorszy niz brak), 27 h bez sukcesu - alarm w Stan i w cyklu
   $od = Get-Date
-  $r = Modul "wiedzafirmy" "Instaluj" $dom2 @() ($script:AdresyWF + @{ ATRAPA_KLIENT_PADA = "1" })
+  $r = Modul "wiedzafirmy" "Instaluj" $dom2 @() @{ ATRAPA_KLIENT_PADA = "1" }
   $zn = Czekaj-Na-Znacznik-WF $dom2 "blad" $od
-  Sprawdz "wiedzafirmy: tick z bledem zostawia znacznik blad (ponowny Instaluj = ok, zadanie podmienione, nie zdublowane)" (($r.Kod -eq 0) -and $zn -and (@(Get-ScheduledTask -ErrorAction SilentlyContinue | Where-Object { $_.TaskName -like "MRTEST-WiedzaFirmy*" }).Count -eq 1)) ("znacznik: $zn -- " + $r.Tekst)
+  Sprawdz "wiedzafirmy: tick z chwilowym bledem zostawia znacznik blad (ponowny Instaluj = ok, zadanie podmienione, nie zdublowane)" (($r.Kod -eq 0) -and $zn -and (@(Get-ScheduledTask -ErrorAction SilentlyContinue | Where-Object { $_.TaskName -like "MRTEST-WiedzaFirmy*" }).Count -eq 1)) ("znacznik: $zn -- " + $r.Tekst)
   [void](Czekaj-Na-Tlo)
   $r = Modul "wiedzafirmy" "Stan" $dom2
-  Sprawdz "wiedzafirmy: blad tick widoczny w Stan - nie dziala, problem z krokiem i opisem" (($r.Kod -eq 0) -and ($r.W.dziala -eq $false) -and ((@($r.W.problemy) -join " ") -match "krok 'wysylka' skonczyl sie bledem .*atrapa")) ($r.W | ConvertTo-Json -Compress -Depth 6)
+  Sprawdz "wiedzafirmy: jeden blad sieci - Stan bez problemu (dziala), tylko uwaga 'chwilowy blad' (proba negatywna falszywego alarmu)" (($r.Kod -eq 0) -and ($r.W.dziala -eq $true) -and (@($r.W.problemy).Count -eq 0) -and ($r.W.szczegoly.uwagi_klienta -match "chwilowy blad")) ($r.W | ConvertTo-Json -Compress -Depth 6)
   $kw = Join-Path $dom2 ".claude\wiedza"
   New-Item -ItemType Directory -Force -Path $kw | Out-Null
   $dzis = Get-Date -Format "yyyy-MM-dd"
@@ -1374,9 +1382,18 @@ function Scenariusz-WiedzaFirmy {
   $ostP = Join-Path $kw "cykl-ostatni.txt"
   [System.IO.File]::WriteAllText($ostP, "data: $dzis 08:00`r`nstatus: ok`r`nopis: cykl przeszedl - test`r`n", $utf8)
   $cykl = Join-Path $Repo "narzedzia\cykl-dzienny.ps1"
+  $r = Uruchom $cykl @("-Zrodlo", $Repo, "-KatalogDomowy", $dom2, "-Proba") (Srodowisko $dom2)
+  Sprawdz "wiedzafirmy: cykl przy jednym bledzie sieci - bez ALARM (proba negatywna)" (($r.Tekst -notmatch "ALARM Wiedza firmy") -and ($r.Tekst -match "Wiedza firmy: klient chodzi")) $r.Tekst
+  $teraz27 = Get-Date   # nie $t: PowerShell nie rozroznia wielkosci liter, a $T to katalog testu
+  $hist = @(, @($teraz27.AddHours(-27), "wysylka", "ok", "wyslano 3 wpisy"))
+  foreach ($i in 5..1) { $hist += , @($teraz27.AddMinutes(-30 * $i), "wysylka", "BLAD", "brak sieci - ponowie") }
+  Log-Klienta-WF $dom2 $hist
+  Znacznik-WF $dom2 "wysylka" "$($teraz27.AddMinutes(-30).ToString('s'))|blad|brak sieci - ponowie"
+  $r = Modul "wiedzafirmy" "Stan" $dom2
+  Sprawdz "wiedzafirmy: 27 h bez sukcesu i 5 bledow z rzedu - Stan: nie dziala, problem z czasem i liczba bledow" (($r.Kod -eq 0) -and ($r.W.dziala -eq $false) -and ((@($r.W.problemy) -join " ") -match "krok 'wysylka' nie ma udanego przebiegu od 27 h .*bledow z rzedu: 5")) ($r.W | ConvertTo-Json -Compress -Depth 6)
   $przedOst = [System.IO.File]::ReadAllText($ostP)
   $r = Uruchom $cykl @("-Zrodlo", $Repo, "-KatalogDomowy", $dom2, "-Proba") (Srodowisko $dom2)
-  Sprawdz "wiedzafirmy: cykl -Proba - ALARM Wiedza firmy na ekranie przebiegu, podsumowanie nietkniete" (($r.Tekst -match "BLAD\s+ALARM Wiedza firmy: krok 'wysylka' skonczyl sie bledem") -and ([System.IO.File]::ReadAllText($ostP) -eq $przedOst)) $r.Tekst
+  Sprawdz "wiedzafirmy: cykl -Proba - ALARM Wiedza firmy na ekranie przebiegu, podsumowanie nietkniete" (($r.Tekst -match "BLAD\s+ALARM Wiedza firmy: krok 'wysylka' nie ma udanego przebiegu od 27 h") -and ([System.IO.File]::ReadAllText($ostP) -eq $przedOst)) $r.Tekst
   $r = Uruchom $cykl @("-Zrodlo", $Repo, "-KatalogDomowy", $dom2) (Srodowisko $dom2)
   $o = Klucze-Pliku $ostP
   Sprawdz "wiedzafirmy: cykl (dzien juz zamkniety) - ALARM na ekranie i na POCZATKU opisu podsumowania, klucz wiedza_firmy" (($r.Tekst -match "BLAD\s+ALARM Wiedza firmy") -and ($o["opis"] -like "ALARM Wiedza firmy: krok 'wysylka'*| cykl przeszedl - test") -and ($o["wiedza_firmy"] -like "ALARM Wiedza firmy:*") -and ($o["status"] -eq "ok")) ($r.Tekst + " PODSUMOWANIE " + [System.IO.File]::ReadAllText($ostP))
@@ -1385,7 +1402,7 @@ function Scenariusz-WiedzaFirmy {
   $o = Klucze-Pliku $ostP
   Sprawdz "wiedzafirmy: cykl po naprawie - bez ALARM, stary alarm zdjety z opisu, wiedza_firmy: ok" (($r.Tekst -notmatch "ALARM Wiedza firmy") -and ($o["opis"] -eq "cykl przeszedl - test") -and ($o["wiedza_firmy"] -like "ok *")) ($r.Tekst + " PODSUMOWANIE " + [System.IO.File]::ReadAllText($ostP))
 
-  # --- E. nieswiezosc znacznikow z wstrzyknietym czasem (Ocena-Znacznikow-Wiedzy-Firmy)
+  # --- E. ocena z wstrzyknietym czasem (Ocena-Znacznikow-Wiedzy-Firmy): nieswiezosc i bledy
   $dn = Dom "wf-nieswieze"
   New-Item -ItemType Directory -Force -Path (Join-Path $dn ".claude\mr\wiedza-firmy") | Out-Null
   $t0 = [datetime]::Today.AddHours(12)
@@ -1404,17 +1421,45 @@ function Scenariusz-WiedzaFirmy {
   Znacznik-WF $dn "dzienny" "to nie jest znacznik"
   $o = Ocena-Znacznikow-Wiedzy-Firmy $dn $t0 $t0.AddHours(-3)
   Sprawdz "wiedzafirmy: nieczytelny znacznik = ALARM, nie cisza" ((@($o.Problemy).Count -eq 1) -and ($o.Problemy[0] -match "'dzienny' jest nieczytelny")) ($o.Problemy -join " | ")
+  Remove-Item -LiteralPath (Join-Path $dn ".claude\mr\wiedza-firmy\znaczniki\dzienny.txt") -Force
+  # bledy: chwilowy / trwaly / czas bez sukcesu
+  Znacznik-WF $dn "wysylka" "$($t0.AddMinutes(-20).ToString('s'))|blad|brak sieci - ponowie"
+  Log-Klienta-WF $dn @(@($t0.AddHours(-1), "wysylka", "ok", "wyslano"), @($t0.AddMinutes(-20), "wysylka", "BLAD", "brak sieci - ponowie"))
+  $o = Ocena-Znacznikow-Wiedzy-Firmy $dn $t0 $t0.AddHours(-3)
+  Sprawdz "wiedzafirmy: jeden blad sieci po sukcesie godzine temu = bez alarmu, uwaga 'chwilowy' (proba negatywna)" ((@($o.Problemy).Count -eq 0) -and ($o.Uwaga -match "chwilowy blad .*bledow z rzedu 1")) (($o.Problemy -join " | ") + " / " + $o.Uwaga)
+  $h = @(, @($t0.AddHours(-27), "wysylka", "ok", "wyslano")); foreach ($i in 6..1) { $h += , @($t0.AddMinutes(-30 * $i), "wysylka", "BLAD", "brak sieci - ponowie") }
+  Log-Klienta-WF $dn $h
+  $o = Ocena-Znacznikow-Wiedzy-Firmy $dn $t0 $t0.AddHours(-3)
+  Sprawdz "wiedzafirmy: 27 h bez sukcesu i 6 bledow z rzedu = ALARM" ((@($o.Problemy).Count -eq 1) -and ($o.Problemy[0] -match "nie ma udanego przebiegu od 27 h \(ostatni sukces .*bledow z rzedu: 6")) ($o.Problemy -join " | ")
+  $h = @(, @($t0.AddHours(-3), "wysylka", "ok", "wyslano")); foreach ($i in 5..1) { $h += , @($t0.AddMinutes(-30 * $i), "wysylka", "BLAD", "brak sieci - ponowie") }
+  Log-Klienta-WF $dn $h
+  $o = Ocena-Znacznikow-Wiedzy-Firmy $dn $t0 $t0.AddHours(-4)
+  Sprawdz "wiedzafirmy: 5 bledow z rzedu, ale sukces 3 h temu = bez alarmu - sama liczba bledow nie wystarcza (proba negatywna)" (@($o.Problemy).Count -eq 0) (($o.Problemy -join " | ") + " / " + $o.Uwaga)
+  Log-Klienta-WF $dn @(@($t0.AddHours(-60), "wysylka", "ok", "piatek"), @($t0.AddMinutes(-20), "wysylka", "BLAD", "brak sieci - ponowie"))
+  $o = Ocena-Znacznikow-Wiedzy-Firmy $dn $t0 $t0.AddHours(-1)
+  Sprawdz "wiedzafirmy: po weekendzie (sukces 60 h temu) jeden blad = bez alarmu - sam czas nie wystarcza (proba negatywna)" (@($o.Problemy).Count -eq 0) (($o.Problemy -join " | ") + " / " + $o.Uwaga)
+  Log-Klienta-WF $dn @(@($t0.AddHours(-30), "wysylka", "BLAD", "brak sieci"), @($t0.AddHours(-20), "wysylka", "BLAD", "brak sieci"), @($t0.AddHours(-10), "wysylka", "BLAD", "brak sieci"), @($t0.AddMinutes(-20), "wysylka", "BLAD", "brak sieci"))
+  $o = Ocena-Znacznikow-Wiedzy-Firmy $dn $t0 $t0.AddHours(-3)
+  Sprawdz "wiedzafirmy: ani jednego sukcesu od 30 h (od najstarszej linii logu), 4 bledy = ALARM" ((@($o.Problemy).Count -eq 1) -and ($o.Problemy[0] -match "ani jednego sukcesu od")) ($o.Problemy -join " | ")
+  Remove-Item -LiteralPath (Join-Path $dn ".claude\mr\wiedza-firmy\klient.log") -Force
+  $o = Ocena-Znacznikow-Wiedzy-Firmy $dn $t0 $t0.AddHours(-3)
+  Sprawdz "wiedzafirmy: blad bez klient.log = bez alarmu, uwaga 'nie ma klient.log' (nie zgaduje)" ((@($o.Problemy).Count -eq 0) -and ($o.Uwaga -match "nie ma klient\.log")) (($o.Problemy -join " | ") + " / " + $o.Uwaga)
+  Znacznik-WF $dn "token" "$($t0.AddMinutes(-20).ToString('s'))|blad|komputer zablokowany w JFTools - token nie zostal wydany"
+  $o = Ocena-Znacznikow-Wiedzy-Firmy $dn $t0 $t0.AddMinutes(-10)
+  Sprawdz "wiedzafirmy: blad trwaly (komputer zablokowany) = ALARM od razu, takze swiezo po starcie" ((@($o.Problemy).Count -eq 1) -and ($o.Problemy[0] -match "krok 'token' ma blad trwaly")) ($o.Problemy -join " | ")
   Remove-Item -LiteralPath (Join-Path $dn ".claude\mr\wiedza-firmy\znaczniki") -Recurse -Force
-  [System.IO.File]::WriteAllText((Join-Path $dn ".claude\mr\wiedza-firmy\konfiguracja.json"), "{`"wersja`":1,`"zapisano`":`"$($t0.AddHours(-30).ToString('yyyy-MM-dd HH:mm:ss'))`"}", $utf8)
+  [System.IO.File]::WriteAllText((Join-Path $dn ".claude\mr\wiedza-firmy\zainstalowano.txt"), "$($t0.AddHours(-30).ToString('yyyy-MM-dd HH:mm:ss'))`r`n", $utf8)
   $o = Ocena-Znacznikow-Wiedzy-Firmy $dn $t0 $t0.AddHours(-3)
   Sprawdz "wiedzafirmy: zaden znacznik 30 h po instalacji = ALARM (zadanie nie chodzi)" ((@($o.Problemy).Count -eq 1) -and ($o.Problemy[0] -match "ani jednego znacznika od instalacji")) ($o.Problemy -join " | ")
 
-  # --- F. adresy z lokalne.json, pierwszenstwo parametru
+  # --- F. adresy: bez niczego = domyslne klienta; lokalne.json i parametr tylko nadpisuja
+  $a = Adresy-Wiedzy-Firmy $dn
+  Sprawdz "wiedzafirmy: bez zadnej konfiguracji - nic do nadpisania (adresy domyslne klienta)" ((-not $a.Serwer) -and (-not $a.JFTools) -and (-not $a.Nadpisanie) -and (@($a.Bledy).Count -eq 0)) ($a | ConvertTo-Json -Compress)
   $dl = Dom "wf-lokalne"
   New-Item -ItemType Directory -Force -Path (Join-Path $dl ".claude\mr") | Out-Null
   [System.IO.File]::WriteAllText((Join-Path $dl ".claude\mr\lokalne.json"), '{"wiedza_firmy":{"serwer":"https://lokalny.test.invalid","jftools":"https://lokalny-jf.test.invalid/"}}', $utf8)
   $a = Adresy-Wiedzy-Firmy $dl
-  Sprawdz "wiedzafirmy: adresy z lokalne.json (pole wiedza_firmy), koncowy / zdjety" ($a.Jest -and ($a.Serwer -eq "https://lokalny.test.invalid") -and ($a.JFTools -eq "https://lokalny-jf.test.invalid") -and ($a.Skad -match "lokalne\.json")) ($a | ConvertTo-Json -Compress)
+  Sprawdz "wiedzafirmy: nadpisanie z lokalne.json (pole wiedza_firmy), koncowy / zdjety" ($a.Nadpisanie -and ($a.Serwer -eq "https://lokalny.test.invalid") -and ($a.JFTools -eq "https://lokalny-jf.test.invalid") -and ($a.Skad -match "lokalne\.json")) ($a | ConvertTo-Json -Compress)
   $a = Adresy-Wiedzy-Firmy $dl "https://parametr.test.invalid"
   Sprawdz "wiedzafirmy: parametr wygrywa z lokalne.json, brakujacy adres dobierany z kolejnego zrodla" (($a.Serwer -eq "https://parametr.test.invalid") -and ($a.JFTools -eq "https://lokalny-jf.test.invalid")) ($a | ConvertTo-Json -Compress)
 
@@ -1423,11 +1468,11 @@ function Scenariusz-WiedzaFirmy {
   [System.IO.File]::WriteAllText($stub, '{"jfwiedza":"--transport http https://wiedza.test.invalid/mcp"}', $utf8)
   $r = Modul "wiedzafirmy" "Usun" $dom2 @() @{ ATRAPA_PSUJ_REMOVE = "1" }
   Sprawdz "wiedzafirmy: Usun, gdy claude mcp remove pada = ok:false z UWAGA i poleceniem do recznego zdjecia (proba negatywna)" (($r.Kod -eq 1) -and (($r.Uwagi -join " ") -match "nie udalo sie zdjac serwera jfwiedza") -and ((Get-Content $stub -Raw) -match "jfwiedza")) $r.Tekst
-  $r = Modul "wiedzafirmy" "Instaluj" $dom2 @() $script:AdresyWF
+  $r = Modul "wiedzafirmy" "Instaluj" $dom2
   [void](Czekaj-Na-Tlo)
   $r = Modul "wiedzafirmy" "Usun" $dom2
   $rej = Rejestr $dom2
-  Sprawdz "wiedzafirmy: Usun - zadanie zdjete, jfwiedza zdjety z Claude Code, rejestr false, dane zostaja" (($r.Kod -eq 0) -and -not (Zadanie "WiedzaFirmyKlient") -and ((Get-Content $stub -Raw) -notmatch "jfwiedza") -and ($rej.moduly.wiedzafirmy -eq $false) -and (Test-Path $kp)) $r.Tekst
+  Sprawdz "wiedzafirmy: Usun - zadanie zdjete, jfwiedza zdjety z Claude Code, rejestr false, dane zostaja" (($r.Kod -eq 0) -and -not (Zadanie "WiedzaFirmyKlient") -and ((Get-Content $stub -Raw) -notmatch "jfwiedza") -and ($rej.moduly.wiedzafirmy -eq $false) -and (Test-Path (Join-Path $dom2 ".claude\mr\wiedza-firmy\zainstalowano.txt"))) $r.Tekst
   $wyw = @(Get-Content (Join-Path $dom2 ".atrapa-claude.log") | Where-Object { $_ -match "^mcp remove jfwiedza" })
   Sprawdz "wiedzafirmy: claude wolany jako 'mcp remove jfwiedza -s user'" (@($wyw | Where-Object { $_ -match "-s user" }).Count -ge 1) ($wyw -join " | ")
   $r = Modul "wiedzafirmy" "Stan" $dom2
