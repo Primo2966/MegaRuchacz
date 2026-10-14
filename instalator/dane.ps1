@@ -50,12 +50,25 @@ $script:MODULY = [ordered]@{
     Przestanie = 'robić codzienną kopię zapasową'
     Dane = 'zapis postępu kopii (same kopie w wybranym folderze zostają nietknięte)'
   }
+  # 2026-10-14 (Wiedza firmy, krok 3, zadanie Z3): nazwa i opis ze zlecenia - jedno proste zdanie
+  # i jedno o tym, ze ustalenia z rozmow ida do wspolnej bazy firmy. Chodzi w srodowisku Lore, wiec
+  # potrzebuje Wiedzy o Tobie albo Pamieci rozmow (Odswiez-Przycisk-Wyboru w ekrany.ps1).
+  wiedzafirmy = [pscustomobject]@{
+    Id = 'wiedzafirmy'; Nazwa = 'Wiedza firmy'
+    # w "..." a nie '...': apostrof ’ PowerShell bierze za koniec napisu w apostrofach
+    Opis = "Claude zna to, co ustaliła cała firma, i korzysta z tego w rozmowach. Ustalenia z Twoich rozmów z Claude’em trafiają do wspólnej bazy firmy."
+    Programy = @('uv', 'python')
+    Przestanie = 'korzystać ze wspólnej wiedzy firmy i wysyłać do niej ustalenia z Twoich rozmów'
+    Dane = 'klucz tego komputera i kolejkę ustaleń do wysłania (to, co już trafiło do bazy firmy, zostaje na serwerze firmy)'
+  }
 }
 $script:ZAWSZE = 'aplikacja przy zegarze + automatyczne aktualizacje'
 # Lore przed Wiedza: Wiedza bez Lore dogrywa sobie ukryty rdzen sama, ale gdy Lore tez jest
-# wybrane, rdzen powstaje raz, z Lore. Usuwanie w odwrotnej kolejnosci.
-$script:KOLEJNOSC_INSTALACJI = @('lore', 'wiedza', 'kierownik', 'skille', 'kopia')
-$script:KOLEJNOSC_USUWANIA   = @('kopia', 'skille', 'kierownik', 'wiedza', 'lore')
+# wybrane, rdzen powstaje raz, z Lore. Usuwanie w odwrotnej kolejnosci. Wiedza firmy na koncu
+# instalacji (chodzi w rdzeniu Lore, a jej blad - np. brak adresu - nie zatrzymuje reszty) i na
+# poczatku usuwania.
+$script:KOLEJNOSC_INSTALACJI = @('lore', 'wiedza', 'kierownik', 'skille', 'kopia', 'wiedzafirmy')
+$script:KOLEJNOSC_USUWANIA   = @('wiedzafirmy', 'kopia', 'skille', 'kierownik', 'wiedza', 'lore')
 # bash: nikt go tu nie zamawia - zaleznosci.ps1 doklada go sam do gita i Node.js (Claude Code na
 # Windows bez Git Bash nie dziala); wpis daje mu ludzka nazwe w "Brakuje: ..." na podsumowaniu.
 $script:PROGRAMY = [ordered]@{
@@ -84,6 +97,29 @@ $script:GRUPY_PROGRAMOW = [ordered]@{
 $script:MB_PYTHON = 270
 $script:MB_MODEL  = 496
 $script:MB_SKILLE = 50
+
+# Wiedza firmy tylko tam, gdzie znane sa adresy serwera firmy (narzedzia\instalacja\stan-wiedzy-firmy.ps1
+# Adresy-Wiedzy-Firmy: zmienne MR_WIEDZA_FIRMY_*, pole wiedza_firmy w lokalne.json, dotychczasowa
+# konfiguracja) albo gdzie juz jest. Bez adresow jej instalacja skonczylaby sie bledem - nie ma czego
+# proponowac, a "Zainstaluj" ma przejsc bez bledu takze poza firma. Ukryta czesc znika z tabeli i obu
+# kolejnosci, a rejestr zostaje bez klucza ("nie zaproponowano" - nadzorca zapyta, gdy adresy beda).
+# Wolane z okno.ps1 (Ustal-Stan-Poczatkowy) po odczycie rejestru.
+function Dopasuj-Moduly-Do-Komputera {
+  if (-not $script:MODULY.Contains('wiedzafirmy')) { return }
+  if ($script:Instalacja -and ($script:Instalacja.moduly.wiedzafirmy -eq $true)) { return }
+  $a = $null
+  # Bez umowy (okno.ps1 nie wczytal stan-wiedzy-firmy.ps1 - powod w dzienniku) adresow nie ma skad wziac.
+  if (Get-Command Adresy-Wiedzy-Firmy -ErrorAction SilentlyContinue) {
+    try { $a = Adresy-Wiedzy-Firmy $script:Dom } catch { Zanotuj-Wywrotke 'adresy serwera Wiedzy firmy' $_ }
+  }
+  if ($a -and $a.Jest) { Zapisz-Dziennik "Wiedza firmy do wyboru - adresy: $($a.Skad)"; return }
+  $script:MODULY.Remove('wiedzafirmy')
+  $script:KOLEJNOSC_INSTALACJI = @($script:KOLEJNOSC_INSTALACJI | Where-Object { $_ -ne 'wiedzafirmy' })
+  $script:KOLEJNOSC_USUWANIA = @($script:KOLEJNOSC_USUWANIA | Where-Object { $_ -ne 'wiedzafirmy' })
+  $czemu = 'nie znam adresow serwera firmy'
+  if ($a -and $a.Bledy.Count) { $czemu += ' (' + ($a.Bledy -join '; ') + ')' }
+  Zapisz-Dziennik "Wiedza firmy ukryta: $czemu"
+}
 
 function Nazwa-Modulu([string]$id) {
   if ($id -eq 'baza') { return 'Aplikacja przy zegarze i automatyczne aktualizacje' }
@@ -542,7 +578,17 @@ function Zapamietaj-Wybor {
   if ($script:Proba) { return @{ Stan = 'pominiety'; Komunikat = 'próba - nic nie zapisuję' } }
   $s = Czytaj-Instalacje $script:Dom
   if ($s.blad) { return @{ Stan = 'blad'; Komunikat = "Nie umiem odczytać zapisu instalacji: $($s.blad)" } }
-  foreach ($id in $script:MODULY.Keys) { $s.moduly | Add-Member -NotePropertyName $id -NotePropertyValue ([bool]$script:Obecne[$id]) -Force }
+  # starsza umowa (stan.ps1 sprzed trzeciego stanu) tej funkcji nie zna - wtedy zadnego modulu z trzecim stanem
+  $trzeci = @()
+  if (Get-Command Moduly-Z-Trzecim-Stanem -ErrorAction SilentlyContinue) { $trzeci = @(Moduly-Z-Trzecim-Stanem) }
+  foreach ($id in $script:MODULY.Keys) {
+    # Trzeci stan (stan.ps1): "nie zaproponowano" zostaje, dopoki ktos naprawde nie zdecydowal - zmiana
+    # czegos innego w trybie zmiany to nie decyzja o Wiedzy firmy (nadzorca o nia zapyta), a wybrana
+    # dostaje true dopiero po udanym kroku. False tylko przy nowej instalacji, gdy pole bylo odznaczone.
+    if (($trzeci -contains $id) -and ($null -eq $s.moduly.$id) -and (-not $script:Obecne[$id]) -and
+        (($script:Tryb -ne 'nowy') -or $script:Wybor.Moduly[$id])) { continue }
+    $s.moduly | Add-Member -NotePropertyName $id -NotePropertyValue ([bool]$script:Obecne[$id]) -Force
+  }
   if ($script:Wybor.Moduly['kopia']) {
     $kopia = New-Object PSObject
     $kopia | Add-Member -NotePropertyName zrodla -NotePropertyValue ([string[]](Zaznaczone-Zrodla))

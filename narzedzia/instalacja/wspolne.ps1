@@ -488,6 +488,7 @@ function Policz-Hooki([string]$plik, [string]$zdarzenie, [string]$wzor) {
 $script:ZadanieNadzorcy = "MegaRuchaczNadzorca"   # zasobnik\zainstaluj-zasobnik.ps1
 $script:ZadanieKosztu   = "LoreKoszt"             # narzedzia\koszt-pamieci.ps1 (koszt\pomiar-dzienny.ps1)
 $script:ZadanieKopii    = "MegaRuchaczKopia"      # narzedzia\kopia-zapasowa.ps1
+$script:ZadanieWiedzyFirmy = "WiedzaFirmyKlient"  # narzedzia\instalacja\modul-wiedzafirmy.ps1 (zaklada je sam)
 
 # Linie "UWAGA ..." i "BLAD ..." z wyjscia skryptu potomnego ida dalej jako UWAGA - nie gina.
 function Przekaz-Uwagi([string]$tekst, [string]$skad) {

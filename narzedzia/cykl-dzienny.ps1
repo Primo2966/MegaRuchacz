@@ -261,6 +261,59 @@ function Opis-Kolejki($zostalo) {
   return "czeka jeszcze $zostalo przebiegow wylawiania$ogon"
 }
 
+# ---------------------------------------------------------------- Wiedza firmy (2026-10-14)
+# Klient Wiedzy firmy (zadanie WiedzaFirmyKlient, narzedzia\wiedza-firmy-klient\klient.py) zostawia
+# znaczniki w ~\.claude\mr\wiedza-firmy\znaczniki\<krok>.txt. Cykl czyta je przy kazdym starcie (to tylko
+# odczyt kilku plikow): blad kroku albo znacznik nieswiezy ponad prog (ocena i progi z uzasadnieniem:
+# narzedzia\instalacja\stan-wiedzy-firmy.ps1, Ocena-Znacznikow-Wiedzy-Firmy) to ALARM - na ekranie
+# przebiegu i w podsumowaniu cykl-ostatni.txt: klucz wiedza_firmy i opis ZACZYNAJACY SIE od
+# "ALARM Wiedza firmy:" (poczatek przezywa kazde uciecie). Tylko z modulem wiedzafirmy w rejestrze.
+$script:AlarmWiedzyFirmy = $null   # $null = nie sprawdzane (modulu nie ma); "" = w porzadku; tekst = alarm
+$PrzedrostekAlarmuWF = "ALARM Wiedza firmy: "
+
+function Sprawdz-Wiedze-Firmy {
+  $plik = Join-Path $PSScriptRoot "instalacja\stan-wiedzy-firmy.ps1"
+  try {
+    if (-not (Test-Path -LiteralPath $plik)) { throw "nie ma $plik" }
+    . $plik
+    $rej = Czytaj-Instalacje $KatalogDomowy
+    # nieczytelny rejestr ma wlasny pilny alarm (straznik, nadzorca) - tu nie zgadujemy
+    if ($rej.blad -or ($rej.moduly.wiedzafirmy -ne $true)) { return }
+    $o = Ocena-Znacznikow-Wiedzy-Firmy $KatalogDomowy
+    if ($o.Uwaga) { Krok "Wiedza firmy: $($o.Uwaga)" }
+    if ($o.Problemy.Count -eq 0) { $script:AlarmWiedzyFirmy = ""; Krok "Wiedza firmy: klient chodzi, bledow nie zglasza"; return }
+    $script:AlarmWiedzyFirmy = ($PrzedrostekAlarmuWF + ($o.Problemy -join "; ") +
+      ". Szczegoly: powershell -ExecutionPolicy Bypass -File $($script:Zrodlo)\narzedzia\instalacja\modul-wiedzafirmy.ps1 -Akcja Stan") -replace '\|', '/'
+  } catch {
+    $script:AlarmWiedzyFirmy = ($PrzedrostekAlarmuWF + "nie umiem sprawdzic klienta Wiedzy firmy: $($_.Exception.Message)") -replace '\|', '/'
+  }
+  Blad $script:AlarmWiedzyFirmy
+}
+
+# Opis podsumowania z alarmem Wiedzy firmy na poczatku (stary alarm zdjety - kazdy przebieg ocenia od nowa).
+function Opis-Z-Wiedza-Firmy($opis) {
+  $opis = "$opis"
+  if ($opis.StartsWith($PrzedrostekAlarmuWF)) {
+    $i = $opis.IndexOf(" | ")
+    $opis = $(if ($i -ge 0) { $opis.Substring($i + 3) } else { "" })
+  }
+  if ($script:AlarmWiedzyFirmy) { return ($script:AlarmWiedzyFirmy + $(if ($opis) { " | $opis" } else { "" })) }
+  return $opis
+}
+
+# Dzien juz zamkniety (albo proby wyczerpane): podsumowanie zostaje, ale alarm Wiedzy firmy ma w nim stanac.
+function Odnotuj-Wiedze-Firmy {
+  if ($null -eq $script:AlarmWiedzyFirmy) { return }
+  if ($Proba) { Plan "podsumowanie $($script:Ostatni): wiedza_firmy = $(if ($script:AlarmWiedzyFirmy) { $script:AlarmWiedzyFirmy } else { 'ok' })"; return }
+  # bez podsumowania nie zakladamy kadluba (bez daty i statusu okno nadzorcy uznaloby cykl za zepsuty) -
+  # alarm i tak stoi na ekranie przebiegu, a w oknie nadzorcy mowi o nim Alarm-Wiedzy-Firmy
+  if (-not (Test-Path -LiteralPath $script:Ostatni)) { return }
+  $k = Czytaj-Klucze $script:Ostatni
+  $k["opis"] = Opis-Z-Wiedza-Firmy $k["opis"]
+  $k["wiedza_firmy"] = $(if ($script:AlarmWiedzyFirmy) { $script:AlarmWiedzyFirmy } else { "ok $(Get-Date -Format 'yyyy-MM-dd HH:mm')" })
+  try { Zapisz-Klucze $script:Ostatni $k } catch { Blad "alarmu Wiedzy firmy nie zapisalem w $($script:Ostatni): $($_.Exception.Message)" }
+}
+
 function Zapisz-Podsumowanie($status, $powod, $nadrobione, $zaleglosc) {
   $kierunek = Kierunek-Zaleglosci $zaleglosc
   $czeka = Opis-Kolejki $zaleglosc
@@ -287,6 +340,10 @@ function Zapisz-Podsumowanie($status, $powod, $nadrobione, $zaleglosc) {
     zaleglosc  = $zaleglosc
     opis       = $opis
     uruchomienie = $(if ($Recznie) { "reczne z okna" } else { "automat" })
+  }
+  if ($null -ne $script:AlarmWiedzyFirmy) {
+    $podsumowanie["opis"] = Opis-Z-Wiedza-Firmy $opis
+    $podsumowanie["wiedza_firmy"] = $(if ($script:AlarmWiedzyFirmy) { $script:AlarmWiedzyFirmy } else { "ok $(Get-Date -Format 'yyyy-MM-dd HH:mm')" })
   }
   if ($Proba) {
     Plan "podsumowanie do $($script:Ostatni): $opis"
@@ -849,6 +906,7 @@ function Uruchom-Cykl {
   # Czytanie reczne (-Recznie) omija oba wyjscia ponizej - patrz "czytanie reczne z okna".
   if (($stan["status"] -eq "ok") -and -not $Recznie) {
     Zdejmij-Stare-Zadanie
+    Odnotuj-Wiedze-Firmy
     Krok "dzisiejszy cykl juz przeszedl ($($stan['czas'])) - nie ma czego powtarzac"
     exit 0
   }
@@ -857,6 +915,7 @@ function Uruchom-Cykl {
   if ($stan["proby"] -match '^\d+$') { $proby = [int]$stan["proby"] }
   if (($proby -ge $MaxProb) -and -not $Recznie) {
     Zdejmij-Stare-Zadanie
+    Odnotuj-Wiedze-Firmy
     Krok "na dzis koniec prob ($proby z $MaxProb) - cykl wroci jutro, material czeka nietkniety"
     exit 0
   }
@@ -1010,6 +1069,9 @@ $script:RecznyStart = (Get-Date -Format "yyyy-MM-dd HH:mm:ss")
 Ustaw-Sciezki
 
 if ($UsunZadanie)  { Usun-Zadanie }
+
+# Przed zamkiem: sam odczyt, wiec ALARM pada takze wtedy, gdy inny przebieg trzyma zamek.
+Sprawdz-Wiedze-Firmy
 
 # Cykl startuje z hooka sesji, a okien potrafi byc kilka naraz (Claude Code i Codex
 # obok siebie) - bez zamka dwa przebiegi weszlyby sobie w droge i policzyly podwojna probe.

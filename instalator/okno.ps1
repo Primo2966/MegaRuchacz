@@ -20,7 +20,7 @@
 #
 # KOLEJNOSC (umowa P59c z P59b, od P64): usuniecia -> zaleznosci.ps1 -> baza (nowa instalacja albo tryb
 #   zmiany bez bazy) -> wybrane moduly -> wpisz-zasady.ps1. "Usuń MegaRuchacza…": Usun kazdego modulu -> baza Usun.
-#   narzedzia\instalacja\modul-<baza|wiedza|lore|kierownik|skille|kopia>.ps1 -Akcja Instaluj|Usun
+#   narzedzia\instalacja\modul-<baza|wiedza|lore|kierownik|skille|kopia|wiedzafirmy>.ps1 -Akcja Instaluj|Usun
 #     -KatalogDomowy <kat> -Zrodlo <repo> [-Proba] [-UsunDane]
 #   narzedzia\instalacja\zaleznosci.ps1 -Akcja Sprawdz|Instaluj -Potrzebne "uv,python,git,node" [-Proba]
 #   Wyjscie: linie KROK: / UWAGA: / WYNIK: {"ok":..,"komunikat":..,"kroki":[..]}, kod 0/1 (wykonanie.ps1).
@@ -200,6 +200,14 @@ foreach ($modul in @('wyglad', 'dane', 'wykonanie', 'ekrany')) {
 $plikStanu = Join-Path $script:Zrodlo 'narzedzia\instalacja\stan.ps1'
 if (-not (Test-Path -LiteralPath $plikStanu)) { Odmowa-Startu "nie ma pliku $plikStanu - ten folder MegaRuchacza jest za stary albo niekompletny" }
 try { . $plikStanu } catch { Odmowa-Startu "nie da się wczytać $plikStanu ($($_.Exception.Message))" }
+# Wiedza firmy: adresy serwera firmy (czy w ogole ja proponowac) - dane.ps1 Dopasuj-Moduly-Do-Komputera.
+# Bez tego pliku (folder ze starszym narzedzia\ i nowszym instalator\) okno wstaje, tylko bez Wiedzy firmy
+# - reszta instalacji jej nie potrzebuje, a odmowa startu zabieralaby cala instalacje.
+$plikWiedzyFirmy = Join-Path $script:Zrodlo 'narzedzia\instalacja\stan-wiedzy-firmy.ps1'
+if (-not (Test-Path -LiteralPath $plikWiedzyFirmy)) { Zapisz-Dziennik "nie ma pliku $plikWiedzyFirmy - Wiedzy firmy nie pokaze" }
+else {
+  try { . $plikWiedzyFirmy } catch { Zapisz-Dziennik "nie wczytalem $plikWiedzyFirmy ($($_.Exception.Message)) - Wiedzy firmy nie pokaze" }
+}
 
 # --- jedna kopia -----------------------------------------------------------------
 # Drugi instalator (dwuklik w trakcie, przycisk w aplikacji przy zegarze) pokazuje pierwszy.
@@ -233,6 +241,7 @@ function Zwolnij-Zamek {
 function Ustal-Stan-Poczatkowy {
   $script:Instalacja = Czytaj-Instalacje $script:Dom
   if ($script:Instalacja.blad) { Zapisz-Dziennik "rejestr nieczytelny: $($script:Instalacja.blad)" }
+  Dopasuj-Moduly-Do-Komputera
   $script:Obecne = @{}
   foreach ($id in $script:MODULY.Keys) {
     $script:Obecne[$id] = $false

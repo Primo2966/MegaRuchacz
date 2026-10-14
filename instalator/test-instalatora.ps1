@@ -4,7 +4,7 @@
 #     [-Zrzuty <kat>] [-Przedrostek P59c] [-Tylko nowa,zmiana,...] [-ZrodloKlonu <adres>]
 #
 # Co robi:
-#  - w katalogu roboczym zaklada atrapy: modul-<baza|wiedza|lore|kierownik|skille|kopia>.ps1,
+#  - w katalogu roboczym zaklada atrapy: modul-<baza|wiedza|lore|kierownik|skille|kopia|wiedzafirmy>.ps1,
 #    zaleznosci.ps1 i wpisz-zasady.ps1 (wypisuja KROK/UWAGA/WYNIK jak w umowie z P59b; lore za
 #    pierwszym razem celowo konczy sie bledem, skille milknie na 5 s, kopia pisze w stronie
 #    kodowej OEM) oraz atrapy zlamanej umowy (brak WYNIK, ok:true z kodem 1, smieci zamiast JSON);
@@ -156,7 +156,7 @@ Write-Output 'WYNIK: {"ok":true,"komunikat":"Zainstalowane.","kroki":["Zakładam
 exit 0
 '@
 
-$nazwyAtrap = @{ baza = 'aplikacja przy zegarze'; wiedza = 'Wiedza o Tobie'; lore = 'Pamięć rozmów'; kierownik = 'Tryb kierownika'; skille = 'Polecane skille'; kopia = 'Kopia zapasowa' }
+$nazwyAtrap = @{ baza = 'aplikacja przy zegarze'; wiedza = 'Wiedza o Tobie'; lore = 'Pamięć rozmów'; kierownik = 'Tryb kierownika'; skille = 'Polecane skille'; kopia = 'Kopia zapasowa'; wiedzafirmy = 'Wiedza firmy' }
 foreach ($kat in @($Atrapy, $AtrapyZle, $AtrapyBrak)) {
   foreach ($id in $nazwyAtrap.Keys) { Zapisz-Bom (Join-Path $kat "modul-$id.ps1") ($wzorModulu.Replace('__ID__', $id).Replace('__NAZWA__', $nazwyAtrap[$id])) }
   Zapisz-Bom (Join-Path $kat 'zaleznosci.ps1') $zaleznosci
@@ -1121,6 +1121,84 @@ $script:TestKroki = @( @{ N = 'okno z ZIP-a z GitHuba'; Czekaj = { ($script:Ekra
   Copy-Item -LiteralPath (Join-Path $Repo 'instaluj.bat') -Destination $sam2 -Force
   $o = Z-Obserwatorem 'bat-sam-instaluj' { Uruchom-Bat (Join-Path $sam2 'instaluj.bat') @() @{} 30 }
   Wynik 'instaluj.bat sam - mowi, skad pobrac Zainstaluj-MegaRuchacza.bat, kod 1' (($o.Wynik.Kod -eq 1) -and ($o.Wynik.Wyjscie -like '*releases/download/instalator/Zainstaluj-MegaRuchacza.bat*') -and ($o.Okna.Count -eq 0)) "kod $($o.Wynik.Kod); $(($o.Wynik.Wyjscie -replace '\s+', ' ').Trim())"
+}
+
+# --- W. Wiedza firmy (Z3, 2026-10-14) ----------------------------------------------
+# Adresy serwera firmy (zmienne MR_WIEDZA_FIRMY_*, *.invalid) dostaje okno przez srodowisko procesu testu -
+# bez nich Wiedzy firmy w oknie nie ma (dane.ps1 Dopasuj-Moduly-Do-Komputera), z nimi jest w zestawie
+# domyslnym. Stara instalacja (rejestr bez klucza) NIE dostaje jej po cichu - ani przy zmianie czegos innego.
+function Z-Adresami-WF([scriptblock]$co) {
+  $env:MR_WIEDZA_FIRMY_SERWER = 'https://wiedza.test.invalid'; $env:MR_WIEDZA_FIRMY_JFTOOLS = 'https://jftools.test.invalid'
+  try { return (& $co) } finally { Remove-Item Env:\MR_WIEDZA_FIRMY_SERWER, Env:\MR_WIEDZA_FIRMY_JFTOOLS -ErrorAction SilentlyContinue }
+}
+
+if (Chce 'wfnowa') {
+  $dom = Nowy-Dom 'wfnowa'
+  [System.IO.File]::WriteAllText((Join-Path $dom 'atrapa-lore-raz.txt'), 'bez bledu lore')
+  [System.IO.File]::WriteAllText((Join-Path $Atrapy 'claude-jest.txt'), '1')
+  $sc = Zapisz-Scenariusz 'wfnowa' ((Zainstaluj-Dla-Testu-Otworz) + @'
+$script:TestKroki = @(
+  @{ N = 'powitanie'; Czekaj = { $script:Ekran -eq 'powitanie' }; Zrob = { $script:BWybierzSam.PerformClick() } },
+  @{ N = 'wybor - Wiedza firmy w zestawie domyslnym'; Czekaj = { $script:Ekran -eq 'wybor' }; Zrzut = '50-wf-wybor'; Sprawdz = { $cb = $script:CheckboxyModulow['wiedzafirmy']; $opis = (@(Test-Teksty $cb.Parent) -join ' | '); Tak ($cb -and $cb.Checked -and ($cb.Text -eq 'Wiedza firmy') -and $script:Wybor.Moduly.wiedzafirmy -and (-not $script:Wybor.Moduly.kopia) -and ($opis -like '*trafiają do wspólnej bazy firmy*') -and $script:BDalej.Enabled) "pole: $($cb.Text) $($cb.Checked); opis: $opis" } },
+  @{ N = 'odznacz Wiedze o Tobie i Lore'; Zrob = { $script:CheckboxyModulow.wiedza.Checked = $false; $script:CheckboxyModulow.lore.Checked = $false } },
+  @{ N = 'proba negatywna: Wiedza firmy bez rdzenia Lore blokuje Dalej'; Czekaj = { -not $script:BDalej.Enabled }; Zrzut = '51-wf-bez-rdzenia'; Sprawdz = { Tak ((-not $script:BDalej.Enabled) -and ($script:LStopka.Text -like 'Wiedza firmy potrzebuje Wiedzy o Tobie albo Pamięci rozmów*')) "stopka: $($script:LStopka.Text)" } },
+  @{ N = 'zaznacz Lore'; Zrob = { $script:CheckboxyModulow.lore.Checked = $true }; Sprawdz = { Tak ($script:BDalej.Enabled -and (-not $script:LStopka.Text)) "Dalej wlaczone, stopka '$($script:LStopka.Text)'" } },
+  @{ N = 'wstecz'; Zrob = { $script:BWstecz.PerformClick() } },
+  @{ N = 'zainstaluj'; Czekaj = { $script:Ekran -eq 'powitanie' }; Zrob = { $script:BZainstaluj.PerformClick() } },
+  @{ N = 'plan z Wiedza firmy na koncu'; Czekaj = { $script:Ekran -eq 'postep' }; Sprawdz = { $ids = @($script:Plan | ForEach-Object { $_.Id }) -join ','; Tak ($ids -eq 'zapamietaj,programy-git,programy-node,programy-python,programy-claude,baza-Instaluj,lore-Instaluj,wiedza-Instaluj,kierownik-Instaluj,skille-Instaluj,wiedzafirmy-Instaluj,zasady') "plan: $ids" } },
+  @{ N = 'gotowe'; Czekaj = { $script:Ekran -eq 'gotowe' }; Limit = 120; Zrzut = '52-wf-gotowe' }
+)
+'@)
+  Wyczysc-Wywolania
+  $r = Z-Adresami-WF { Uruchom-Ps $Okno (Argumenty-Okna $dom $sc.Plik $Atrapy) 240 }
+  Remove-Item -LiteralPath (Join-Path $Atrapy 'claude-jest.txt') -Force -ErrorAction SilentlyContinue
+  [void](Ocen-Raport 'Wiedza firmy - pierwsza instalacja' $sc $r)
+  $w = Wszystkie-Wywolania
+  Wynik 'Wiedza firmy - pierwsza instalacja: modul-wiedzafirmy po skillach, przed zasadami' ((Kolejnosc $w) -like '*modul-skille:Instaluj > modul-wiedzafirmy:Instaluj > wpisz-zasady:*') (Kolejnosc $w)
+  $rej = Czytaj-Rejestr $dom
+  Wynik 'Wiedza firmy - pierwsza instalacja: rejestr wiedzafirmy=true' ($rej -and ($rej.moduly.wiedzafirmy -eq $true) -and $rej.moduly.wiedza) ($(if ($rej) { $rej.moduly | ConvertTo-Json -Compress } else { 'brak pliku' }))
+}
+
+# Proba negatywna: stara instalacja (rejestr bez klucza wiedzafirmy), adresy znane. Uzytkownik zmienia
+# cos innego (dodaje kopie) - Wiedza firmy jest na liscie, ale niezaznaczona, nie trafia do planu, a rejestr
+# zostaje BEZ klucza ("nie zaproponowano" - o nia zapyta nadzorca), nie z false.
+if (Chce 'wfstara') {
+  $dom = Nowy-Dom 'wfstara'
+  Dom-Z-Baza $dom
+  New-Item -ItemType Directory -Force -Path (Join-Path $dom '.claude\mr') | Out-Null
+  [System.IO.File]::WriteAllText((Join-Path $dom '.claude\mr\instalacja.json'), '{"wersja":1,"moduly":{"wiedza":true,"lore":true,"kierownik":true,"skille":true,"kopia":false},"kopia":null,"narzedzia":{"claude":true,"codex":false,"opencode":false},"data":"2026-10-01 10:00:00"}', $Utf8)
+  $kopie = Join-Path $Robocze 'kopie-wfstara'
+  $sc = Zapisz-Scenariusz 'wfstara' (@'
+$script:TestKroki = @(
+  @{ N = 'wybor - Wiedza firmy na liscie, niezaznaczona'; Czekaj = { $script:Ekran -eq 'wybor' }; Zrzut = '53-wf-stara-wybor'; Sprawdz = { $cb = $script:CheckboxyModulow['wiedzafirmy']; Tak ($cb -and (-not $cb.Checked) -and (-not $script:Wybor.Moduly.wiedzafirmy) -and (-not $script:Obecne.wiedzafirmy) -and ($script:TagiModulow.wiedzafirmy.Text -eq '') -and ($script:LStopka.Text -eq 'Nic nie zmieniłeś.')) "pole: $(if ($cb) { $cb.Checked } else { 'brak' }), znaczek '$($script:TagiModulow.wiedzafirmy.Text)', stopka '$($script:LStopka.Text)'" } },
+  @{ N = 'dodaj kopie'; Zrob = { $script:CheckboxyModulow.kopia.Checked = $true; $script:PoleCelu.Text = '__KOPIE__' } },
+  @{ N = 'zastosuj'; Czekaj = { $script:BDalej.Enabled }; Zrob = { $script:BDalej.PerformClick() } },
+  @{ N = 'plan bez Wiedzy firmy'; Czekaj = { ($script:Ekran -eq 'podsumowanie') -and $script:Sprawdzenie -and ($script:Sprawdzenie.Zadanie.Stan -ne 'trwa') }; Sprawdz = { $ids = @($script:PlanDoWykonania | ForEach-Object { $_.Id }) -join ','; Tak ($ids -eq 'zapamietaj,zaleznosci-Instaluj,kopia-Instaluj,zasady') "plan: $ids" } },
+  @{ N = 'tak, zastosuj'; Zrob = { $script:BDalej.PerformClick() } },
+  @{ N = 'gotowe'; Czekaj = { $script:Ekran -eq 'gotowe' }; Limit = 90 }
+)
+'@).Replace('__KOPIE__', $kopie)
+  Wyczysc-Wywolania
+  $r = Z-Adresami-WF { Uruchom-Ps $Okno (Argumenty-Okna $dom $sc.Plik $Atrapy) 180 }
+  [void](Ocen-Raport 'Wiedza firmy - stara instalacja (proba negatywna)' $sc $r)
+  $w = Wszystkie-Wywolania
+  Wynik 'Wiedza firmy - stara instalacja: modul-wiedzafirmy nie wolany' (@($w | Where-Object { $_ -like '*|modul-wiedzafirmy|*' }).Count -eq 0) (Kolejnosc $w)
+  $rej = Czytaj-Rejestr $dom
+  Wynik 'Wiedza firmy - stara instalacja: rejestr dalej bez decyzji (nie zaproponowano), kopia dodana' ($rej -and ($null -eq $rej.moduly.wiedzafirmy) -and $rej.moduly.kopia) ($(if ($rej) { $rej.moduly | ConvertTo-Json -Compress } else { 'brak pliku' }))
+}
+
+# Bez adresow serwera firmy (zwykly komputer, takze spoza firmy): Wiedzy firmy nie ma w oknie ani w planie.
+if (Chce 'wfbezadresu') {
+  $dom = Nowy-Dom 'wfbezadresu'
+  $sc = Zapisz-Scenariusz 'wfbezadresu' @'
+$script:TestKroki = @(
+  @{ N = 'powitanie'; Czekaj = { $script:Ekran -eq 'powitanie' }; Zrob = { $script:BWybierzSam.PerformClick() } },
+  @{ N = 'wybor bez Wiedzy firmy'; Czekaj = { $script:Ekran -eq 'wybor' }; Sprawdz = { Tak ((-not $script:CheckboxyModulow.ContainsKey('wiedzafirmy')) -and (-not $script:MODULY.Contains('wiedzafirmy')) -and ($script:KOLEJNOSC_INSTALACJI -notcontains 'wiedzafirmy') -and ($script:KOLEJNOSC_USUWANIA -notcontains 'wiedzafirmy') -and $script:BDalej.Enabled) "pola: $((@($script:CheckboxyModulow.Keys) | Sort-Object) -join ',')" } },
+  @{ N = 'zestaw Wszystko'; Zrob = { $script:BWszystko.PerformClick() }; Sprawdz = { Tak (-not $script:Wybor.Moduly['wiedzafirmy']) "wiedzafirmy w wyborze: $($script:Wybor.Moduly['wiedzafirmy'])" } }
+)
+'@
+  $r = Uruchom-Ps $Okno (Argumenty-Okna $dom $sc.Plik $Atrapy) 120
+  [void](Ocen-Raport 'Wiedza firmy - bez adresow serwera firmy' $sc $r)
 }
 
 # --- podsumowanie --------------------------------------------------------------

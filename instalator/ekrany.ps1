@@ -743,7 +743,8 @@ function Wybierz-Sam {
 }
 
 # "Zainstaluj" na powitaniu (i -Start zainstaluj w oknie z klonu): zalecany zestaw - cztery czesci
-# z makiety P59c (kopia zapasowa nie, bo wymaga wyboru folderu) i Claude Code - od razu na ekran
+# z makiety P59c (kopia zapasowa nie, bo wymaga wyboru folderu), Wiedza firmy, gdy sa adresy serwera
+# firmy (bez nich dane.ps1 Dopasuj-Moduly-Do-Komputera jej nie pokazuje), i Claude Code - od razu na ekran
 # postepu, bez wyboru i podsumowania. W pobieraniu: folder domyslny ~\MegaRuchacz; gdy sie nie
 # nadaje (np. jest tam cos innego), ekran folderu z powodem zamiast zgadywania.
 function Zainstaluj-Od-Razu {
@@ -1246,6 +1247,8 @@ function Odswiez-Przycisk-Wyboru {
   $pow = ''
   if ($script:Instalacja.blad) { $pow = 'Najpierw odłóż uszkodzony zapis instalacji (czerwona karta wyżej).' }
   elseif ($script:Wybor.Moduly['kopia'] -and (Blad-Kopii)) { $pow = 'Popraw ustawienia kopii zapasowej.' }
+  # Wiedza firmy chodzi w srodowisku Lore, ktore stawia Wiedza o Tobie albo Pamiec rozmow (dane.ps1).
+  elseif ($script:Wybor.Moduly['wiedzafirmy'] -and -not ($script:Wybor.Moduly['wiedza'] -or $script:Wybor.Moduly['lore'])) { $pow = "Wiedza firmy potrzebuje Wiedzy o Tobie albo Pamięci rozmów - zaznacz jedną z nich." }
   elseif (($script:Tryb -eq 'zmiana') -and ($script:Instalacja.zrodlo -eq 'plik') -and -not (Policz-Zmiany).Cokolwiek) { $pow = 'Nic nie zmieniłeś.' }
   Ustaw-Wlaczony $script:BDalej (-not $pow)
   $script:LStopka.Text = $pow

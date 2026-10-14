@@ -15,6 +15,9 @@
 #     domowym), start nadzorcy zablokowany, a zamykanie nadzorcy widzi tylko procesy z kopii
 #   - claude i codex to atrapy w PATH (zapisuja wywolania, pamietaja wpisy MCP); prawdziwych
 #     narzedzi w PATH testu nie ma
+#   - Wiedza firmy: klient (narzedzia\wiedza-firmy-klient\klient.py) w kopii to atrapa, adresy serwera
+#     firmy to zmienne MR_WIEDZA_FIRMY_* z adresami *.invalid; zadanie MRTEST-WiedzaFirmyKlient ma
+#     w kopii wyzwalacz logowania WYLACZONY i start 2099 - samo nie ruszy nigdy
 #   - model wektorow: kopia prawdziwego katalogu modelu (bez pobierania 496 MB)
 #   - Git for Windows: atrapa instalatora (maly program konsolowy budowany przez test) - prawdziwego
 #     gita test nie instaluje; srodowisko "bez gita" ma puste Program Files i wlasne LOCALAPPDATA
@@ -26,7 +29,7 @@
 #   powershell -NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File narzedzia\instalacja\test-moduly.ps1
 #     [-Katalog <kat>]        gdzie zalozyc katalog testu (domyslnie %TEMP%); nazwa i tak dostaje MRTEST
 #     [-Tylko baza,wiedza]    tylko wybrane scenariusze: zaleznosci baza wiedza lore wiedzalore
-#                             kierownik skille kopia rejestr proba stary usunczysty
+#                             kierownik skille kopia rejestr proba stary usunczysty wiedzafirmy
 #     [-BezSieci]             bez prawdziwego pobierania programow (zaleznosci: tylko proby)
 #     [-Zostaw]               nie kasuj katalogu testu (zadania MRTEST-* znikaja zawsze)
 # Kod wyjscia: 0 = wszystko przeszlo, 1 = cos nie.
@@ -50,7 +53,7 @@ $TmpKrotki = Join-Path ([System.IO.Path]::GetTempPath()) ("MRTEST-tmp-" + (Get-D
 $Wynik = @()
 $script:Zle = 0
 $script:Info = @()
-$Scenariusze = @("zaleznosci", "baza", "wiedza", "lore", "wiedzalore", "kierownik", "skille", "kopia", "rejestr", "proba", "stary", "usunczysty")
+$Scenariusze = @("zaleznosci", "baza", "wiedza", "lore", "wiedzalore", "kierownik", "skille", "kopia", "rejestr", "proba", "stary", "usunczysty", "wiedzafirmy")
 $wybrane = @($Tylko | ForEach-Object { $_ -split '[,;\s]+' } | Where-Object { $_ })
 if ($wybrane.Count -eq 0) { $wybrane = $Scenariusze }
 
@@ -85,7 +88,7 @@ function Q([string]$a) {
 # ---------------------------------------------------------------- odcisk prawdziwego stanu
 
 $PythonPrawdziwy = Join-Path $RepoPrawdziwe "lore\.venv\Scripts\python.exe"
-$ZadaniaPrawdziwe = @("MegaRuchaczNadzorca", "LoreIndex", "LoreKoszt", "MegaRuchaczKopia", "MegaRuchaczOdswiez", "LoreCykl", "LoreCyklPonow", "LoreFacts", "LoreWiedza")
+$ZadaniaPrawdziwe = @("MegaRuchaczNadzorca", "LoreIndex", "LoreKoszt", "MegaRuchaczKopia", "MegaRuchaczOdswiez", "LoreCykl", "LoreCyklPonow", "LoreFacts", "LoreWiedza", "WiedzaFirmyKlient")
 
 function Py-Baza([string]$baza) {
   # tryb indeksu, liczba fragmentow i wektorow - tylko odczyt
@@ -129,7 +132,7 @@ function Odcisk-Prawdziwy {
 
 function Prawdziwe-Wskazuja-Test {
   $zle = @()
-  foreach ($p in @(".claude\settings.json", ".claude.json", ".claude\CLAUDE.md", ".codex\config.toml", ".codex\AGENTS.md", ".codex\hooks.json", ".config\opencode\opencode.json", ".claude\mr\instalacja.json")) {
+  foreach ($p in @(".claude\settings.json", ".claude.json", ".claude\CLAUDE.md", ".codex\config.toml", ".codex\AGENTS.md", ".codex\hooks.json", ".config\opencode\opencode.json", ".claude\mr\instalacja.json", ".claude\mr\wiedza-firmy\konfiguracja.json")) {
     $f = Join-Path $HOME $p
     if ((Test-Path $f) -and ([System.IO.File]::ReadAllText($f).IndexOf("MRTEST", [StringComparison]::OrdinalIgnoreCase) -ge 0)) { $zle += $p }
   }
@@ -171,7 +174,7 @@ function Przygotuj-Kopie {
   New-Item -ItemType Directory -Force -Path $T, $Bin, $TmpKrotki, (Join-Path $T "localappdata"), (Join-Path $T "appdata") | Out-Null
   Git-Cicho @("clone", "--quiet", "--no-hardlinks", $RepoPrawdziwe, $Repo)
   # to, co sie testuje: niezapisane w gicie pliki z zakresu instalatora i Lore
-  $zakres = @("narzedzia/instalacja/", "narzedzia/instaluj-lore.ps1", "lore/lore/", "lore/tests/", "narzedzia/skille.ps1", "skille/", "zasobnik/nadzorca/stan-skille.ps1", "narzedzia/kierownik-cele.ps1")
+  $zakres = @("narzedzia/instalacja/", "narzedzia/instaluj-lore.ps1", "lore/lore/", "lore/tests/", "narzedzia/skille.ps1", "skille/", "zasobnik/nadzorca/stan-skille.ps1", "narzedzia/kierownik-cele.ps1", "narzedzia/cykl-dzienny.ps1")
   $zmiany = @(& git -C $RepoPrawdziwe status --porcelain --untracked-files=all 2>$null)
   foreach ($l in $zmiany) {
     $sc = $l.Substring(3).Trim('"')
@@ -184,7 +187,7 @@ function Przygotuj-Kopie {
     }
   }
   # nazwy zadan w CALEJ kopii (*.ps1) - z MRTEST- na poczatku
-  $wzor = '(?<![\w-])(MegaRuchaczNadzorca|LoreIndex|LoreKoszt|MegaRuchaczKopia|MegaRuchaczOdswiez|LoreCyklPonow|LoreCykl|LoreFacts|LoreWiedza)(?!\w)'
+  $wzor = '(?<![\w-])(MegaRuchaczNadzorca|LoreIndex|LoreKoszt|MegaRuchaczKopia|MegaRuchaczOdswiez|LoreCyklPonow|LoreCykl|LoreFacts|LoreWiedza|WiedzaFirmyKlient)(?!\w)'
   $trafione = @{}
   foreach ($f in @(Get-ChildItem -LiteralPath $Repo -Recurse -File -Filter "*.ps1" | Where-Object { $_.FullName -notlike "*\.git\*" })) {
     $b = [System.IO.File]::ReadAllBytes($f.FullName)
@@ -202,6 +205,9 @@ function Przygotuj-Kopie {
   Podmien "narzedzia\instalacja\lore-czesci.ps1" '$start = (Get-Date).ToString("yyyy-MM-ddTHH:mm:ss")' '$start = "2099-01-01T00:00:00"' 1
   Podmien "narzedzia\koszt\pomiar-dzienny.ps1" '$start = (Get-Date -Format "yyyy-MM-dd") + "T"' '$start = "2099-01-01" + "T"' 1
   Podmien "narzedzia\kopia-zapasowa.ps1" '$start = (Get-Date -Format "yyyy-MM-dd") + "T"' '$start = "2099-01-01" + "T"' 1
+  # Wiedza firmy: start 2099 i wyzwalacz logowania wylaczony (przy zalogowaniu ruszylby na prawdziwym domu)
+  Podmien "narzedzia\instalacja\modul-wiedzafirmy.ps1" '$start = (Get-Date).AddMinutes(30).ToString("yyyy-MM-ddTHH:mm:ss")' '$start = "2099-01-01T00:00:00"' 1
+  Podmien "narzedzia\instalacja\modul-wiedzafirmy.ps1" '$przyLogowaniu = "true"' '$przyLogowaniu = "false"' 1
   # nadzorca z kopii nie startuje (okno!), a zamykanie widzi tylko procesy z katalogu MRTEST
   Podmien "zasobnik\zainstaluj-zasobnik.ps1" "Start-ScheduledTask -TaskName `$NazwaZadania -ErrorAction Stop" 'throw "MRTEST: start nadzorcy zablokowany w tescie"' 1
   Podmien "zasobnik\zainstaluj-zasobnik.ps1" "'nadzorca\.ps1'" "'MRTEST.*nadzorca\.ps1'" 2
@@ -1151,7 +1157,7 @@ function Scenariusz-Rejestr {
   New-Item -ItemType Directory -Force -Path (Join-Path $dom ".claude\mr") | Out-Null
   [System.IO.File]::WriteAllBytes((Join-Path $dom ".claude\mr\instalacja.json"), [byte[]](0, 0, 0, 0, 0, 0, 0, 0))   # wyzerowany jak po zaniku pradu
   $przed = Odcisk-Domu $dom
-  foreach ($m in @("baza", "wiedza", "lore", "kierownik", "skille", "kopia")) {
+  foreach ($m in @("baza", "wiedza", "lore", "kierownik", "skille", "kopia", "wiedzafirmy")) {
     foreach ($a in @("Instaluj", "Usun")) {
       $dalej = @(); if ($m -eq "baza") { $dalej = @("-BezStartu") }
       $r = Modul $m $a $dom $dalej
@@ -1168,8 +1174,8 @@ function Scenariusz-Proba {
   $dom = Dom "proba"
   Rozmowa $dom "proba"
   $przed = Odcisk-Domu $dom
-  foreach ($m in @("baza", "wiedza", "lore", "kierownik", "skille", "kopia")) {
-    $r = Modul $m "Instaluj" $dom @("-Proba")
+  foreach ($m in @("baza", "wiedza", "lore", "kierownik", "skille", "kopia", "wiedzafirmy")) {
+    $r = Modul $m "Instaluj" $dom @("-Proba") $(if ($m -eq "wiedzafirmy") { $script:AdresyWF } else { @{} })
     $okKopia = ($m -eq "kopia") -and ($r.Kod -eq 1) -and ($r.W.komunikat -match "ustawien kopii")   # bez ustawien w rejestrze odmawia takze na probie
     Sprawdz "proba: $m Instaluj -Proba (kroki z [proba], nic nie zmienione)" ((($r.Kod -eq 0) -and ($r.W.proba -eq $true) -and (($r.Kroki -join " ") -match "\[proba\]")) -or $okKopia) $r.Tekst
     $r = Modul $m "Usun" $dom @("-Proba", "-UsunDane")
@@ -1221,15 +1227,213 @@ function Scenariusz-UsunNaCzystym {
   $dom = Dom "usun-czysty"
   [void](Modul "baza" "Instaluj" $dom @("-BezStartu"))
   $przedZadania = @(Get-ScheduledTask -ErrorAction SilentlyContinue | Where-Object { $_.TaskName -like "MRTEST-*" } | ForEach-Object { $_.TaskName } | Sort-Object) -join ","
-  foreach ($m in @("wiedza", "lore", "kierownik", "skille", "kopia")) {
+  foreach ($m in @("wiedza", "lore", "kierownik", "skille", "kopia", "wiedzafirmy")) {
     $r = Modul $m "Usun" $dom
     Sprawdz "usun na czystym: $m Usun = ok, nic do zdjecia" ($r.Kod -eq 0) $r.Tekst
   }
   $rej = Rejestr $dom
   Sprawdz "usun na czystym: rejestr dalej - wszystkie moduly wylaczone" (-not ($rej.moduly.wiedza -or $rej.moduly.lore -or $rej.moduly.kierownik -or $rej.moduly.skille -or $rej.moduly.kopia)) ($rej | ConvertTo-Json -Compress)
+  Sprawdz "usun na czystym: Wiedza firmy dalej 'nie zaproponowano' (Usun nie udaje decyzji)" ($null -eq $rej.moduly.wiedzafirmy) ($rej | ConvertTo-Json -Compress)
   $poZadania = @(Get-ScheduledTask -ErrorAction SilentlyContinue | Where-Object { $_.TaskName -like "MRTEST-*" } | ForEach-Object { $_.TaskName } | Sort-Object) -join ","
   Sprawdz "usun na czystym: zadne nowe zadanie nie powstalo" ($przedZadania -eq $poZadania) "przed: $przedZadania / po: $poZadania"
   Sprawdz "usun na czystym: hook straznika (baza) zostal" ((Hooki $dom "SessionStart" 'straznik-zasad\.ps1') -eq 1)
+}
+
+# ---------------------------------------------------------------- Wiedza firmy (Z3, 2026-10-14)
+
+# Adresy serwera firmy - nigdy prawdziwe (repo publiczne; .invalid nie rozwiaze sie nigdzie).
+$script:AdresyWF = @{ MR_WIEDZA_FIRMY_SERWER = "https://wiedza.test.invalid"; MR_WIEDZA_FIRMY_JFTOOLS = "https://jftools.test.invalid" }
+
+# Atrapa klienta w KOPII (narzedzia\wiedza-firmy-klient\klient.py): dopisuje wywolanie do atrapa-klient.log
+# i zostawia znacznik wysylka jak prawdziwy tick; ATRAPA_KLIENT_PADA=1 - znacznik blad i kod 1.
+function Atrapa-Klienta-WF {
+  $p = Join-Path $Repo "narzedzia\wiedza-firmy-klient\klient.py"
+  New-Item -ItemType Directory -Force -Path (Split-Path -Parent $p) | Out-Null
+  [System.IO.File]::WriteAllText($p, @'
+import datetime, os, pathlib, sys
+home = pathlib.Path(os.environ.get("WIEDZA_FIRMY_KLIENT_HOME") or (pathlib.Path(os.environ["USERPROFILE"]) / ".claude" / "mr" / "wiedza-firmy"))
+(home / "znaczniki").mkdir(parents=True, exist_ok=True)
+with open(home / "atrapa-klient.log", "a", encoding="utf-8") as f:
+    f.write(" ".join(sys.argv[1:]) + "\n")
+teraz = datetime.datetime.now().isoformat(timespec="seconds")
+if os.environ.get("ATRAPA_KLIENT_PADA"):
+    (home / "znaczniki" / "wysylka.txt").write_text(teraz + "|blad|serwer odrzucil paczke (atrapa)\n", encoding="utf-8")
+    sys.exit(1)
+(home / "znaczniki" / "wysylka.txt").write_text(teraz + "|ok|czeka na zatwierdzenie w JFTools (atrapa)\n", encoding="utf-8")
+'@, (New-Object System.Text.UTF8Encoding($false)))
+}
+
+# Czeka, az znacznik wysylka (zapisany od $od) bedzie mial stan $stan - pisze go "tick" odpalony w tle.
+function Czekaj-Na-Znacznik-WF([string]$dom, [string]$stan, [datetime]$od, [int]$sekundy = 120) {
+  $p = Join-Path $dom ".claude\mr\wiedza-firmy\znaczniki\wysylka.txt"
+  $koniec = (Get-Date).AddSeconds($sekundy)
+  while ((Get-Date) -lt $koniec) {
+    if ((Test-Path -LiteralPath $p) -and ((Get-Item -LiteralPath $p).LastWriteTime -ge $od.AddSeconds(-1))) {
+      $t = [System.IO.File]::ReadAllText($p)
+      if ($t -match "^[^|]+\|$stan\|") { return $t.Trim() }
+    }
+    Start-Sleep -Milliseconds 500
+  }
+  return $null
+}
+
+function Znacznik-WF([string]$dom, [string]$krok, [string]$linia) {
+  $kat = Join-Path $dom ".claude\mr\wiedza-firmy\znaczniki"
+  New-Item -ItemType Directory -Force -Path $kat | Out-Null
+  [System.IO.File]::WriteAllText((Join-Path $kat "$krok.txt"), "$linia`n", (New-Object System.Text.UTF8Encoding($false)))
+}
+
+function Xml-Zadania([string]$nazwa) { try { return [string](Export-ScheduledTask -TaskName "MRTEST-$nazwa" -ErrorAction Stop) } catch { return "" } }
+
+function Klucze-Pliku([string]$p) {
+  $o = @{}
+  foreach ($l in [System.IO.File]::ReadAllLines($p)) { if ($l -match '^([a-z_]+):\s*(.*)$') { $o[$Matches[1]] = $Matches[2] } }
+  return $o
+}
+
+function Scenariusz-WiedzaFirmy {
+  Atrapa-Klienta-WF
+  $umowa = Join-Path $Repo "narzedzia\instalacja\stan.ps1"
+  $wf = Join-Path $Repo "narzedzia\instalacja\stan-wiedzy-firmy.ps1"
+  $utf8 = New-Object System.Text.UTF8Encoding($false)
+
+  # --- A. stara instalacja: rejestr bez klucza wiedzafirmy - modul NIE przychodzi po cichu (proba negatywna)
+  $dom = Dom "wf-stara"
+  New-Item -ItemType Directory -Force -Path (Join-Path $dom ".claude\mr") | Out-Null
+  [System.IO.File]::WriteAllText((Join-Path $dom ".claude\mr\instalacja.json"), '{"wersja":1,"moduly":{"wiedza":true,"lore":true,"kierownik":true,"skille":true,"kopia":false},"kopia":null,"narzedzia":null,"data":"2026-10-01 10:00:00"}', $utf8)
+  . $umowa
+  Sprawdz "wiedzafirmy: stara instalacja bez klucza - Modul-Wlaczony = false, Stan-Modulu = nie-zaproponowano (inne moduly bez klucza dalej wlaczone)" ((-not (Modul-Wlaczony "wiedzafirmy" $dom)) -and ((Stan-Modulu "wiedzafirmy" $dom) -eq "nie-zaproponowano") -and (Modul-Wlaczony "kierownik" $dom))
+  $dz = Dom "wf-zepsuty"
+  New-Item -ItemType Directory -Force -Path (Join-Path $dz ".claude\mr") | Out-Null
+  [System.IO.File]::WriteAllBytes((Join-Path $dz ".claude\mr\instalacja.json"), [byte[]](0, 0, 0, 0))
+  Sprawdz "wiedzafirmy: rejestr nieczytelny - Modul-Wlaczony = true (przy bledzie nic nie wolno zdejmowac), Stan-Modulu = nieczytelny" ((Modul-Wlaczony "wiedzafirmy" $dz) -and ((Stan-Modulu "wiedzafirmy" $dz) -eq "nieczytelny"))
+  $r = Modul "wiedzafirmy" "Stan" $dom @() $script:AdresyWF
+  Sprawdz "wiedzafirmy: Stan na starej instalacji = nie zainstalowana, nie zaproponowana, bez problemow" (($r.Kod -eq 0) -and ($r.W.zainstalowany -eq $false) -and ($r.W.zaproponowany -eq $false) -and ($r.W.szczegoly.stan_modulu -eq "nie-zaproponowano") -and (@($r.W.problemy).Count -eq 0)) $r.Tekst
+  $r = Modul "baza" "Instaluj" $dom @("-BezStartu") $script:AdresyWF
+  $rej = Rejestr $dom
+  Sprawdz "wiedzafirmy: baza Instaluj na starej instalacji (nawet z adresami) nie doklada Wiedzy firmy - klucz dalej brak, zadania brak" (($r.Kod -eq 0) -and ($null -eq $rej.moduly.wiedzafirmy) -and -not (Zadanie "WiedzaFirmyKlient") -and -not (Test-Path (Join-Path $dom ".claude\mr\wiedza-firmy"))) ($r.Tekst + " REJESTR " + ($rej | ConvertTo-Json -Compress))
+  . $wf
+  $c = Czy-Pytac-O-Wiedze-Firmy $dom ([datetime]::Now) ([datetime]::Now.AddHours(-2))
+  Sprawdz "wiedzafirmy: stara instalacja bez adresow - nadzorca nie pyta (nie ma czego proponowac)" ((-not $c.Pytac) -and ($c.Powod -match "adres")) $c.Powod
+  $env:MR_WIEDZA_FIRMY_SERWER = $script:AdresyWF.MR_WIEDZA_FIRMY_SERWER; $env:MR_WIEDZA_FIRMY_JFTOOLS = $script:AdresyWF.MR_WIEDZA_FIRMY_JFTOOLS
+  try {
+    $c = Czy-Pytac-O-Wiedze-Firmy $dom ([datetime]::Now) ([datetime]::Now.AddHours(-2))
+    Sprawdz "wiedzafirmy: stara instalacja z adresami - nadzorca PYTA zamiast instalowac" ($c.Pytac) $c.Powod
+    $c = Czy-Pytac-O-Wiedze-Firmy $dom ([datetime]::Now) ([datetime]::Now.AddMinutes(-2))
+    Sprawdz "wiedzafirmy: 2 min po starcie Windows - jeszcze nie pyta" ((-not $c.Pytac) -and ($c.Powod -match "Windows wstal")) $c.Powod
+  } finally { Remove-Item Env:\MR_WIEDZA_FIRMY_SERWER, Env:\MR_WIEDZA_FIRMY_JFTOOLS -ErrorAction SilentlyContinue }
+
+  Zdejmij-Zadania-Testu   # zadanie nadzorcy z A byloby dla bazy sladem starej instalacji na swiezym domu
+
+  # --- B. swiezy dom: baza zostawia "nie zaproponowano"; bez adresow Instaluj odmawia i niczego nie zmienia
+  $dom2 = Dom "wf"
+  Rozmowa $dom2 "wiedza firmy"
+  $r = Modul "baza" "Instaluj" $dom2 @("-BezStartu")
+  $rej = Rejestr $dom2
+  Sprawdz "wiedzafirmy: baza na swiezym domu - inne moduly false, Wiedza firmy bez decyzji (null)" (($r.Kod -eq 0) -and ($null -ne $rej) -and ($rej.moduly.kierownik -eq $false) -and ($null -eq $rej.moduly.wiedzafirmy)) ($rej | ConvertTo-Json -Compress)
+  $przed = Odcisk-Domu $dom2
+  $r = Modul "wiedzafirmy" "Instaluj" $dom2
+  Sprawdz "wiedzafirmy: Instaluj bez adresow = odmowa z powodem (brak_adresu, skad je wziac), dom nietkniety, zadania brak (proba negatywna)" (($r.Kod -eq 1) -and ($r.W.brak_adresu -eq $true) -and ($r.W.komunikat -match "MR_WIEDZA_FIRMY_SERWER") -and ($r.W.komunikat -match "lokalne\.json") -and ((Odcisk-Domu $dom2) -eq $przed) -and -not (Zadanie "WiedzaFirmyKlient")) $r.Tekst
+  $zle = @{ MR_WIEDZA_FIRMY_SERWER = "wiedza.test.invalid"; MR_WIEDZA_FIRMY_JFTOOLS = "https://jftools.test.invalid" }
+  $r = Modul "wiedzafirmy" "Instaluj" $dom2 @() $zle
+  Sprawdz "wiedzafirmy: adres bez http(s) = UWAGA i odmowa, nic nie zapisane (proba negatywna)" (($r.Kod -eq 1) -and (($r.Uwagi -join " ") -match "nie jest adresem http") -and ((Odcisk-Domu $dom2) -eq $przed)) $r.Tekst
+
+  # --- C. instalacja z adresami (rdzen Lore stawia modul wiedza - prawdziwa zaleznosc)
+  $r = Modul "wiedza" "Instaluj" $dom2
+  Sprawdz "wiedzafirmy: rdzen Lore (modul wiedza) gotowy" ($r.Kod -eq 0) $r.Tekst
+  [void](Czekaj-Na-Tlo)
+  $od = Get-Date
+  $r = Modul "wiedzafirmy" "Instaluj" $dom2 @() $script:AdresyWF
+  $rej = Rejestr $dom2
+  Sprawdz "wiedzafirmy: Instaluj z adresami ze zmiennych = ok, rejestr wiedzafirmy=true" (($r.Kod -eq 0) -and ($rej.moduly.wiedzafirmy -eq $true) -and (($r.Kroki -join " ") -match "adresy serwera firmy: zmienne")) $r.Tekst
+  $kp = Join-Path $dom2 ".claude\mr\wiedza-firmy\konfiguracja.json"
+  $k = $null; if (Test-Path $kp) { $k = [System.IO.File]::ReadAllText($kp) | ConvertFrom-Json }
+  Sprawdz "wiedzafirmy: konfiguracja.json z adresami (serwer_url, jftools_url - nazwy pol klienta) i zrodlem" ($k -and ($k.serwer_url -eq "https://wiedza.test.invalid") -and ($k.jftools_url -eq "https://jftools.test.invalid") -and ($k.zrodlo -eq $Repo) -and $k.zapisano) ("" + $(if ($k) { $k | ConvertTo-Json -Compress }))
+  $x = Xml-Zadania "WiedzaFirmyKlient"
+  Sprawdz "wiedzafirmy: zadanie MRTEST-WiedzaFirmyKlient - conhost --headless, uv w srodowisku Lore kopii, klient.py tick, ukryte" (($x -match "<Command>conhost\.exe</Command>") -and ($x -match "--headless") -and ($x -match [regex]::Escape((Join-Path $Repo "narzedzia\wiedza-firmy-klient\klient.py") + '" tick')) -and ($x -match [regex]::Escape('--directory "' + (Join-Path $Repo "lore"))) -and ($x -match "<Hidden>true</Hidden>")) $x
+  Sprawdz "wiedzafirmy: wyzwalacze - przy zalogowaniu +5 min (w kopii WYLACZONY) i co 30 min (w kopii od 2099)" (($x -match "(?s)<LogonTrigger>.*<Enabled>false</Enabled>.*<Delay>PT5M</Delay>.*</LogonTrigger>") -and ($x -match "(?s)<TimeTrigger>.*<StartBoundary>2099-01-01T00:00:00</StartBoundary>.*<Interval>PT30M</Interval>.*</TimeTrigger>") -and ($x -match "<MultipleInstancesPolicy>IgnoreNew")) $x
+  $zn = Czekaj-Na-Znacznik-WF $dom2 "ok" $od
+  $log = Join-Path $dom2 ".claude\mr\wiedza-firmy\atrapa-klient.log"
+  Sprawdz "wiedzafirmy: pierwszy tick od razu w tle (atrapa klienta wywolana z 'tick', znacznik wysylka ok)" ($zn -and (Test-Path $log) -and ((Get-Content $log -Raw) -match "(?m)^tick")) ("znacznik: $zn; log: $(if (Test-Path $log) { Get-Content $log -Raw })")
+  [void](Czekaj-Na-Tlo)
+  $r = Modul "wiedzafirmy" "Stan" $dom2
+  Sprawdz "wiedzafirmy: Stan po instalacji = dziala (znacznik swiezy, zadanie, konfiguracja)" (($r.Kod -eq 0) -and ($r.W.zainstalowany -eq $true) -and ($r.W.dziala -eq $true) -and ($r.W.zaproponowany -eq $true) -and (@($r.W.szczegoly.znaczniki).Count -eq 1)) ($r.W | ConvertTo-Json -Compress -Depth 6)
+
+  # --- D. blad tick: widoczny w Stan i w cyklu dziennym (proba negatywna)
+  $od = Get-Date
+  $r = Modul "wiedzafirmy" "Instaluj" $dom2 @() ($script:AdresyWF + @{ ATRAPA_KLIENT_PADA = "1" })
+  $zn = Czekaj-Na-Znacznik-WF $dom2 "blad" $od
+  Sprawdz "wiedzafirmy: tick z bledem zostawia znacznik blad (ponowny Instaluj = ok, zadanie podmienione, nie zdublowane)" (($r.Kod -eq 0) -and $zn -and (@(Get-ScheduledTask -ErrorAction SilentlyContinue | Where-Object { $_.TaskName -like "MRTEST-WiedzaFirmy*" }).Count -eq 1)) ("znacznik: $zn -- " + $r.Tekst)
+  [void](Czekaj-Na-Tlo)
+  $r = Modul "wiedzafirmy" "Stan" $dom2
+  Sprawdz "wiedzafirmy: blad tick widoczny w Stan - nie dziala, problem z krokiem i opisem" (($r.Kod -eq 0) -and ($r.W.dziala -eq $false) -and ((@($r.W.problemy) -join " ") -match "krok 'wysylka' skonczyl sie bledem .*atrapa")) ($r.W | ConvertTo-Json -Compress -Depth 6)
+  $kw = Join-Path $dom2 ".claude\wiedza"
+  New-Item -ItemType Directory -Force -Path $kw | Out-Null
+  $dzis = Get-Date -Format "yyyy-MM-dd"
+  [System.IO.File]::WriteAllText((Join-Path $kw ".cykl-stan"), "data: $dzis`r`nproby: 0`r`nstatus: ok`r`nczas: $dzis 08:00`r`n", $utf8)
+  $ostP = Join-Path $kw "cykl-ostatni.txt"
+  [System.IO.File]::WriteAllText($ostP, "data: $dzis 08:00`r`nstatus: ok`r`nopis: cykl przeszedl - test`r`n", $utf8)
+  $cykl = Join-Path $Repo "narzedzia\cykl-dzienny.ps1"
+  $przedOst = [System.IO.File]::ReadAllText($ostP)
+  $r = Uruchom $cykl @("-Zrodlo", $Repo, "-KatalogDomowy", $dom2, "-Proba") (Srodowisko $dom2)
+  Sprawdz "wiedzafirmy: cykl -Proba - ALARM Wiedza firmy na ekranie przebiegu, podsumowanie nietkniete" (($r.Tekst -match "BLAD\s+ALARM Wiedza firmy: krok 'wysylka' skonczyl sie bledem") -and ([System.IO.File]::ReadAllText($ostP) -eq $przedOst)) $r.Tekst
+  $r = Uruchom $cykl @("-Zrodlo", $Repo, "-KatalogDomowy", $dom2) (Srodowisko $dom2)
+  $o = Klucze-Pliku $ostP
+  Sprawdz "wiedzafirmy: cykl (dzien juz zamkniety) - ALARM na ekranie i na POCZATKU opisu podsumowania, klucz wiedza_firmy" (($r.Tekst -match "BLAD\s+ALARM Wiedza firmy") -and ($o["opis"] -like "ALARM Wiedza firmy: krok 'wysylka'*| cykl przeszedl - test") -and ($o["wiedza_firmy"] -like "ALARM Wiedza firmy:*") -and ($o["status"] -eq "ok")) ($r.Tekst + " PODSUMOWANIE " + [System.IO.File]::ReadAllText($ostP))
+  Znacznik-WF $dom2 "wysylka" "$((Get-Date).ToString('s'))|ok|naprawione (test)"
+  $r = Uruchom $cykl @("-Zrodlo", $Repo, "-KatalogDomowy", $dom2) (Srodowisko $dom2)
+  $o = Klucze-Pliku $ostP
+  Sprawdz "wiedzafirmy: cykl po naprawie - bez ALARM, stary alarm zdjety z opisu, wiedza_firmy: ok" (($r.Tekst -notmatch "ALARM Wiedza firmy") -and ($o["opis"] -eq "cykl przeszedl - test") -and ($o["wiedza_firmy"] -like "ok *")) ($r.Tekst + " PODSUMOWANIE " + [System.IO.File]::ReadAllText($ostP))
+
+  # --- E. nieswiezosc znacznikow z wstrzyknietym czasem (Ocena-Znacznikow-Wiedzy-Firmy)
+  $dn = Dom "wf-nieswieze"
+  New-Item -ItemType Directory -Force -Path (Join-Path $dn ".claude\mr\wiedza-firmy") | Out-Null
+  $t0 = [datetime]::Today.AddHours(12)
+  Znacznik-WF $dn "wysylka" "$($t0.AddHours(-30).ToString('s'))|ok|stary"
+  $o = Ocena-Znacznikow-Wiedzy-Firmy $dn $t0 $t0.AddHours(-3)
+  Sprawdz "wiedzafirmy: znacznik sprzed 30 h przy komputerze wlaczonym 3 h = ALARM (klient nie odezwal sie)" ((@($o.Problemy).Count -eq 1) -and ($o.Problemy[0] -match "nie odezwal sie od 30 h")) ($o.Problemy -join " | ")
+  $o = Ocena-Znacznikow-Wiedzy-Firmy $dn $t0 $t0.AddMinutes(-10)
+  Sprawdz "wiedzafirmy: ten sam znacznik 10 min po starcie Windows (np. po weekendzie) = bez alarmu, z uwaga (proba negatywna falszywego alarmu)" ((@($o.Problemy).Count -eq 0) -and (-not $o.Sprawdzone) -and ($o.Uwaga -match "Windows wstal")) (($o.Problemy -join " | ") + " / " + $o.Uwaga)
+  Znacznik-WF $dn "wysylka" "$($t0.AddHours(-10).ToString('s'))|ok|swiezy"
+  Znacznik-WF $dn "zgloszenie" "$($t0.AddDays(-20).ToString('s'))|ok|raz"
+  $o = Ocena-Znacznikow-Wiedzy-Firmy $dn $t0 $t0.AddHours(-3)
+  Sprawdz "wiedzafirmy: wysylka sprzed 10 h i stare jednorazowe zgloszenie = bez alarmu" (@($o.Problemy).Count -eq 0) ($o.Problemy -join " | ")
+  Znacznik-WF $dn "dzienny" "$($t0.AddHours(-50).ToString('s'))|ok|poranny"
+  $o = Ocena-Znacznikow-Wiedzy-Firmy $dn $t0 $t0.AddHours(-3)
+  Sprawdz "wiedzafirmy: dzienny sprzed 50 h przy swiezej wysylce = ALARM o kroku dzienny" ((@($o.Problemy).Count -eq 1) -and ($o.Problemy[0] -match "krok 'dzienny' nie chodzi od 50 h")) ($o.Problemy -join " | ")
+  Znacznik-WF $dn "dzienny" "to nie jest znacznik"
+  $o = Ocena-Znacznikow-Wiedzy-Firmy $dn $t0 $t0.AddHours(-3)
+  Sprawdz "wiedzafirmy: nieczytelny znacznik = ALARM, nie cisza" ((@($o.Problemy).Count -eq 1) -and ($o.Problemy[0] -match "'dzienny' jest nieczytelny")) ($o.Problemy -join " | ")
+  Remove-Item -LiteralPath (Join-Path $dn ".claude\mr\wiedza-firmy\znaczniki") -Recurse -Force
+  [System.IO.File]::WriteAllText((Join-Path $dn ".claude\mr\wiedza-firmy\konfiguracja.json"), "{`"wersja`":1,`"zapisano`":`"$($t0.AddHours(-30).ToString('yyyy-MM-dd HH:mm:ss'))`"}", $utf8)
+  $o = Ocena-Znacznikow-Wiedzy-Firmy $dn $t0 $t0.AddHours(-3)
+  Sprawdz "wiedzafirmy: zaden znacznik 30 h po instalacji = ALARM (zadanie nie chodzi)" ((@($o.Problemy).Count -eq 1) -and ($o.Problemy[0] -match "ani jednego znacznika od instalacji")) ($o.Problemy -join " | ")
+
+  # --- F. adresy z lokalne.json, pierwszenstwo parametru
+  $dl = Dom "wf-lokalne"
+  New-Item -ItemType Directory -Force -Path (Join-Path $dl ".claude\mr") | Out-Null
+  [System.IO.File]::WriteAllText((Join-Path $dl ".claude\mr\lokalne.json"), '{"wiedza_firmy":{"serwer":"https://lokalny.test.invalid","jftools":"https://lokalny-jf.test.invalid/"}}', $utf8)
+  $a = Adresy-Wiedzy-Firmy $dl
+  Sprawdz "wiedzafirmy: adresy z lokalne.json (pole wiedza_firmy), koncowy / zdjety" ($a.Jest -and ($a.Serwer -eq "https://lokalny.test.invalid") -and ($a.JFTools -eq "https://lokalny-jf.test.invalid") -and ($a.Skad -match "lokalne\.json")) ($a | ConvertTo-Json -Compress)
+  $a = Adresy-Wiedzy-Firmy $dl "https://parametr.test.invalid"
+  Sprawdz "wiedzafirmy: parametr wygrywa z lokalne.json, brakujacy adres dobierany z kolejnego zrodla" (($a.Serwer -eq "https://parametr.test.invalid") -and ($a.JFTools -eq "https://lokalny-jf.test.invalid")) ($a | ConvertTo-Json -Compress)
+
+  # --- G. Usun: zadanie i MCP jfwiedza zdjete, dane zostaja; -UsunDane kasuje; MCP, ktorego nie da sie zdjac = blad
+  $stub = Join-Path $dom2 ".atrapa-claude.json"
+  [System.IO.File]::WriteAllText($stub, '{"jfwiedza":"--transport http https://wiedza.test.invalid/mcp"}', $utf8)
+  $r = Modul "wiedzafirmy" "Usun" $dom2 @() @{ ATRAPA_PSUJ_REMOVE = "1" }
+  Sprawdz "wiedzafirmy: Usun, gdy claude mcp remove pada = ok:false z UWAGA i poleceniem do recznego zdjecia (proba negatywna)" (($r.Kod -eq 1) -and (($r.Uwagi -join " ") -match "nie udalo sie zdjac serwera jfwiedza") -and ((Get-Content $stub -Raw) -match "jfwiedza")) $r.Tekst
+  $r = Modul "wiedzafirmy" "Instaluj" $dom2 @() $script:AdresyWF
+  [void](Czekaj-Na-Tlo)
+  $r = Modul "wiedzafirmy" "Usun" $dom2
+  $rej = Rejestr $dom2
+  Sprawdz "wiedzafirmy: Usun - zadanie zdjete, jfwiedza zdjety z Claude Code, rejestr false, dane zostaja" (($r.Kod -eq 0) -and -not (Zadanie "WiedzaFirmyKlient") -and ((Get-Content $stub -Raw) -notmatch "jfwiedza") -and ($rej.moduly.wiedzafirmy -eq $false) -and (Test-Path $kp)) $r.Tekst
+  $wyw = @(Get-Content (Join-Path $dom2 ".atrapa-claude.log") | Where-Object { $_ -match "^mcp remove jfwiedza" })
+  Sprawdz "wiedzafirmy: claude wolany jako 'mcp remove jfwiedza -s user'" (@($wyw | Where-Object { $_ -match "-s user" }).Count -ge 1) ($wyw -join " | ")
+  $r = Modul "wiedzafirmy" "Stan" $dom2
+  Sprawdz "wiedzafirmy: Stan po Usun = wylaczona, zaproponowana, bez problemow" (($r.Kod -eq 0) -and ($r.W.zainstalowany -eq $false) -and ($r.W.zaproponowany -eq $true) -and (@($r.W.problemy).Count -eq 0)) ($r.W | ConvertTo-Json -Compress -Depth 6)
+  $r = Modul "wiedzafirmy" "Usun" $dom2 @("-UsunDane")
+  Sprawdz "wiedzafirmy: Usun -UsunDane kasuje ~\.claude\mr\wiedza-firmy" (($r.Kod -eq 0) -and -not (Test-Path (Join-Path $dom2 ".claude\mr\wiedza-firmy"))) $r.Tekst
 }
 
 # ---------------------------------------------------------------- przebieg
@@ -1260,6 +1464,7 @@ try {
         "zaleznosci" { Scenariusz-Zaleznosci } "baza" { Scenariusz-Baza } "wiedza" { Scenariusz-Wiedza } "lore" { Scenariusz-Lore }
         "wiedzalore" { Scenariusz-WiedzaLore } "kierownik" { Scenariusz-Kierownik } "skille" { Scenariusz-Skille } "kopia" { Scenariusz-Kopia }
         "rejestr" { Scenariusz-Rejestr } "proba" { Scenariusz-Proba } "stary" { Scenariusz-Stary } "usunczysty" { Scenariusz-UsunNaCzystym }
+        "wiedzafirmy" { Scenariusz-WiedzaFirmy }
       }
     } catch {
       Sprawdz "scenariusz $s wywrocil sie" $false ($_.Exception.Message + " " + $_.InvocationInfo.PositionMessage)

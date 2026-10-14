@@ -23,8 +23,13 @@
 #     pokazuje ich stan, dopoki ktos nie naprawi rejestru (umowa: przy bledzie nic nie
 #     wolno odinstalowac).
 
-$NADZ_MODULY = @("wiedza", "lore", "kierownik", "skille", "kopia")
-$NAZWY_MODULOW = @{ wiedza = "Wiedza"; lore = "Lore"; kierownik = "Kierownik"; skille = "Skille"; kopia = "Kopia zapasowa" }
+#   - Wiedza firmy (wiedzafirmy, 2026-10-14) ma TRZECI STAN (stan.ps1): brak klucza = "nie
+#     zaproponowano", czyli NIE ma jej (stara instalacja nie dostaje jej po cichu; dozor raz dziennie
+#     pyta - Dozor-Wiedza-Firmy). Przy nieczytelnym rejestrze jest tylko wtedy, gdy na dysku stoi jej
+#     konfiguracja - inaczej alarmowalaby u kazdego, kto jej nigdy nie mial.
+
+$NADZ_MODULY = @("wiedza", "lore", "kierownik", "skille", "kopia", "wiedzafirmy")
+$NAZWY_MODULOW = @{ wiedza = "Wiedza"; lore = "Lore"; kierownik = "Kierownik"; skille = "Skille"; kopia = "Kopia zapasowa"; wiedzafirmy = "Wiedza firmy" }
 
 function Plik-Rejestru-Instalacji { return (Join-Path $script:NadzDom ".claude\mr\instalacja.json") }
 
@@ -49,6 +54,7 @@ function Stan-Instalacji {
   }
   $m = [ordered]@{}
   foreach ($n in $NADZ_MODULY) { $m[$n] = $true }
+  $m["wiedzafirmy"] = $false   # trzeci stan: brak klucza = nie ma (patrz naglowek)
   if ($s) {
     $w.Zrodlo = "$($s.zrodlo)"
     $w.Data = "$($s.data)"
@@ -62,6 +68,7 @@ function Stan-Instalacji {
   if ($w.Blad) {
     $w.Zrodlo = "awaryjne"
     foreach ($n in $NADZ_MODULY) { $m[$n] = $true }
+    $m["wiedzafirmy"] = Test-Path -LiteralPath (Join-Path $script:NadzDom ".claude\mr\wiedza-firmy\konfiguracja.json")
   }
   $w.Moduly = [pscustomobject]$m
   return $w

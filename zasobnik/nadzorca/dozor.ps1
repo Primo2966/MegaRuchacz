@@ -73,6 +73,9 @@ function Dozor-Po-Danych($d, $pokazDymek, [bool]$wIkonie = $false) {
   # modulu w rejestrze. Co uruchomic i co pokazac, rozstrzyga zasobnik\terminy.ps1.
   Dozor-Terminy $wIkonie
 
+  # Wiedza firmy na starej instalacji (2026-10-14): jedno okienko "Dodac?" najwyzej raz dziennie.
+  Dozor-Wiedza-Firmy
+
   # Alarmy - jeden na sprawe na dobe, zeby nie uczyly ignorowania.
   foreach ($a in @($d.Alarmy)) {
     if (Alarm-Juz-Byl $a.Temat) { Notuj "alarm [$($a.Temat)] juz dzis byl - nie powtarzam"; continue }
@@ -167,6 +170,46 @@ function Zaplanuj-Terminy-Po-Starcie([datetime]$kiedy) {
   $script:ZegarTerminowPoStarcie.Stop()
   $script:ZegarTerminowPoStarcie.Interval = $ms
   $script:ZegarTerminowPoStarcie.Start()
+}
+
+# ------------------------------------------- Wiedza firmy na starej instalacji (2026-10-14)
+# Stara instalacja nie ma w rejestrze klucza wiedzafirmy ("nie zaproponowano" - trzeci stan w
+# narzedzia\instalacja\stan.ps1) i NIE dostaje modulu po cichu. Po aktualizacji MegaRuchacza nadzorca
+# wstaje od nowa i dozor pokazuje jedno okienko "Dodac Wiedze firmy? [Dodaj] [Nie teraz]"
+# (zasobnik\nadzorca\pytanie-wiedza-firmy.ps1, osobny proces - okno nadzorcy nie czeka). Kiedy pytac,
+# rozstrzyga Czy-Pytac-O-Wiedze-Firmy (narzedzia\instalacja\stan-wiedzy-firmy.ps1): najwyzej raz dziennie
+# (zapis "pokazane" robi samo okienko), tylko z rdzeniem Lore i znanymi adresami serwera firmy, nie
+# wczesniej niz 5 min po starcie Windows. "Nie teraz" = jutro znowu; "Dodaj" instaluje modul.
+function Skrypt-Pytania-Wiedzy-Firmy { return (Join-Path $script:NadzZrodlo "zasobnik\nadzorca\pytanie-wiedza-firmy.ps1") }
+
+# Plik decyzji wczytany kropka W FUNKCJI (jak umowa rejestru w Stan-Instalacji).
+function Czy-Pytac-Wiedza-Firmy([datetime]$teraz = [datetime]::Now, $startSystemu = $null) {
+  $plik = Join-Path $script:NadzZrodlo "narzedzia\instalacja\stan-wiedzy-firmy.ps1"
+  if (-not (Test-Path -LiteralPath $plik -PathType Leaf)) { return [pscustomobject]@{ Pytac = $false; Powod = "nie ma $plik" } }
+  . $plik
+  return (Czy-Pytac-O-Wiedze-Firmy $script:NadzDom $teraz $startSystemu)
+}
+
+function Dozor-Wiedza-Firmy {
+  try {
+    $c = Czy-Pytac-Wiedza-Firmy
+    if (-not $c.Pytac) { Notuj "dozor: o Wiedze firmy nie pytam - $($c.Powod)"; return }
+    Notuj "dozor: pytam o Wiedze firmy ($($c.Powod))"
+    if (-not (Ruszaj-Pytanie-Wiedzy-Firmy)) { Zanotuj-Wywrotke "pytanie o Wiedze firmy" "Odpal-W-Tle nie wystartowal zasobnik\nadzorca\pytanie-wiedza-firmy.ps1" }
+  } catch { Zanotuj-Wywrotke "decyzja o pytaniu o Wiedze firmy" $_ }
+}
+
+function Ruszaj-Pytanie-Wiedzy-Firmy {
+  $skrypt = Skrypt-Pytania-Wiedzy-Firmy
+  $arg = '-Zrodlo "' + $script:NadzZrodlo + '" -KatalogDomowy "' + $script:NadzDom + '"'
+  if ($script:NadzProba) {
+    Write-Host "[proba] NIE pokazuje pytania o Wiedze firmy: powershell -File ${skrypt} ${arg}"
+    return $true
+  }
+  if (-not (Test-Path -LiteralPath $skrypt)) { throw "nie ma $skrypt" }
+  $poszlo = Odpal-W-Tle $skrypt $arg
+  if ($poszlo) { Notuj "wystartowalo okienko pytania o Wiedze firmy" }
+  return $poszlo
 }
 
 # ------------------------------------------- aktualizacja automatyczna (2026-10-07)

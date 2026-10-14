@@ -7,7 +7,8 @@
 # Plik stanu: <KatalogDomowy>\.claude\mr\instalacja.json  (UTF-8 bez BOM)
 #   {
 #     "wersja": 1,
-#     "moduly": { "wiedza": true, "lore": true, "kierownik": true, "skille": true, "kopia": false },
+#     "moduly": { "wiedza": true, "lore": true, "kierownik": true, "skille": true, "kopia": false,
+#                 "wiedzafirmy": true },   (wiedzafirmy: brak klucza = nie zaproponowano - TRZECI STAN nizej)
 #     "kopia": { "zrodla": ["C:\\dev"], "cel": "G:\\..." }   albo null,
 #     "narzedzia": { "claude": true, "codex": false, "opencode": false }   albo null,
 #     "baza": true,
@@ -26,11 +27,34 @@
 #   - plik nieczytelny (pusty, wyzerowany, zly JSON) = wszystko wlaczone + pole "blad";
 #     przy bledzie NIC nie wolno odinstalowac, tylko alarmowac (Cisza jest zakazana);
 #   - brak klucza modulu w pliku = jak przy braku pliku.
+#
+# TRZECI STAN (moduly z Moduly-Z-Trzecim-Stanem, dzis "wiedzafirmy", 2026-10-14): true = jest,
+# false = ktos go swiadomie nie chcial, brak klucza / null = "nie zaproponowano". Brak klucza NIE
+# znaczy tu "wlaczony" - stara instalacja nie moze dostac takiego modulu po cichu; zamiast tego
+# nadzorca raz dziennie pyta (zasobnik\nadzorca\pytanie-wiedza-firmy.ps1). Przy nieczytelnym pliku
+# Modul-Wlaczony zwraca dla niego $true (nic nie wolno odinstalowac), ale nikt o niego nie pyta.
 
 # Lista modulow jako funkcja zwracajaca stala, NIE zmienna $script: - zakres $script: w PowerShellu
 # jest dynamiczny (skrypt aktualnie wykonywany), wiec funkcja wolana z innego skryptu widziala
 # pusta liste i wszystkie moduly wychodzily jako wylaczone (zlapal to test P59a).
-function Moduly-MegaRuchacza { return @('wiedza', 'lore', 'kierownik', 'skille', 'kopia') }
+function Moduly-MegaRuchacza { return @('wiedza', 'lore', 'kierownik', 'skille', 'kopia', 'wiedzafirmy') }
+
+# Moduly, dla ktorych brak klucza = "nie zaproponowano" (patrz TRZECI STAN w naglowku).
+function Moduly-Z-Trzecim-Stanem { return @('wiedzafirmy') }
+
+# 'wlaczony' / 'wylaczony' / 'nie-zaproponowano' / 'nieczytelny' (rejestr z bledem).
+function Stan-Modulu([string]$Nazwa, [string]$KatalogDomowy = $HOME) {
+  if ((Moduly-MegaRuchacza) -notcontains $Nazwa) { throw "nieznany modul MegaRuchacza: $Nazwa" }
+  $s = Czytaj-Instalacje $KatalogDomowy
+  if ($s.blad) { return 'nieczytelny' }
+  $v = $s.moduly.$Nazwa
+  if ($null -eq $v) {
+    if ((Moduly-Z-Trzecim-Stanem) -contains $Nazwa) { return 'nie-zaproponowano' }
+    return 'wlaczony'
+  }
+  if ([bool]$v) { return 'wlaczony' }
+  return 'wylaczony'
+}
 
 function Sciezka-Instalacji([string]$KatalogDomowy = $HOME) {
   return (Join-Path $KatalogDomowy '.claude\mr\instalacja.json')
@@ -40,6 +64,7 @@ function Domyslne-Moduly([string]$KatalogDomowy = $HOME) {
   $m = [ordered]@{}
   foreach ($n in (Moduly-MegaRuchacza)) { $m[$n] = $true }
   $m['kopia'] = Test-Path -LiteralPath (Join-Path $KatalogDomowy '.claude\mr\kopia-stan.txt')
+  foreach ($n in (Moduly-Z-Trzecim-Stanem)) { $m[$n] = $null }
   return $m
 }
 
@@ -93,7 +118,8 @@ function Modul-Wlaczony([string]$Nazwa, [string]$KatalogDomowy = $HOME) {
   $s = Czytaj-Instalacje $KatalogDomowy
   $v = $s.moduly.$Nazwa
   # Brak wartosci = wlaczony: blad odczytu nigdy nie moze wylaczyc (i odinstalowac) modulu.
-  if ($null -eq $v) { return $true }
+  # Wyjatek: modul z trzecim stanem przy czytelnym rejestrze - brak = "nie zaproponowano".
+  if ($null -eq $v) { return (-not ((-not $s.blad) -and ((Moduly-Z-Trzecim-Stanem) -contains $Nazwa))) }
   return [bool]$v
 }
 

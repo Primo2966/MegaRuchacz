@@ -147,8 +147,33 @@ function Zbierz-Alarmy($cykl, $rachunek, $inst = $null) {
       if ($kop) { $alarmy += $kop }
     } catch { Zanotuj-Wywrotke "alarm kopii zapasowej" $_ }
   }
+  # 7. Wiedza firmy: blad kroku klienta albo klient cichy dluzej niz prog (Alarm-Wiedzy-Firmy). Tylko
+  # z modulem w rejestrze - bez odczytu rejestru ($inst pusty) nie zgadujemy (trzeci stan, stan-instalacja.ps1).
+  if ($inst -and $inst.Moduly -and ($inst.Moduly.wiedzafirmy -eq $true)) {
+    try {
+      $wf = Alarm-Wiedzy-Firmy
+      if ($wf) { $alarmy += $wf }
+    } catch { Zanotuj-Wywrotke "alarm Wiedzy firmy" $_ }
+  }
 
   return ,$alarmy
+}
+
+# Klient Wiedzy firmy (zadanie WiedzaFirmyKlient) - te same znaczniki i progi, co w cyklu dziennym
+# (narzedzia\instalacja\stan-wiedzy-firmy.ps1 Ocena-Znacznikow-Wiedzy-Firmy). Cykl chodzi tylko z modulem
+# Wiedza i raz na dobe, a Wiedza firmy stoi takze na samym Lore - dlatego nadzorca ocenia ja sam.
+# Plik wczytany kropka W FUNKCJI (jak umowa rejestru w Stan-Instalacji): jego funkcje nie zasmiecaja nadzorcy.
+function Alarm-Wiedzy-Firmy {
+  $plik = Join-Path $script:NadzZrodlo "narzedzia\instalacja\stan-wiedzy-firmy.ps1"
+  if (-not (Test-Path -LiteralPath $plik -PathType Leaf)) { throw "nie ma $plik" }
+  . $plik
+  $o = Ocena-Znacznikow-Wiedzy-Firmy $script:NadzDom
+  if (@($o.Problemy).Count -eq 0) { return $null }
+  return (Alarm "wiedzafirmy" "MegaRuchacz: Wiedza firmy nie wysyła ustaleń" (
+    "Klient wspólnej bazy wiedzy firmy zgłasza kłopot: " + (@($o.Problemy) -join "; ") + ". " +
+    "Do czasu naprawy ustalenia z Twoich rozmów czekają na tym komputerze i nic nie przepada. " +
+    "Szczegoly: powershell -ExecutionPolicy Bypass -File $($script:NadzZrodlo)\narzedzia\instalacja\modul-wiedzafirmy.ps1 -Akcja Stan") "uwaga" (
+    "Wiedza firmy nie wysyła ustaleń do wspólnej bazy - szczegóły są w zakładce Szczegóły. Jeśli to się powtarza, daj znać Przemkowi."))
 }
 
 # Pliki pamięci z bajtami 0x00 w środku. 2026-10-02 zanik prądu tuż po porannym cyklu

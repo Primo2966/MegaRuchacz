@@ -119,7 +119,11 @@ try {
       } elseif ($Proba) {
         Plan "zalozylbym rejestr modulow $(Sciezka-Instalacji $KatalogDomowy) - wszystkie moduly wylaczone, do wlaczenia w oknie"
       } else {
-        foreach ($n in (Moduly-MegaRuchacza)) { $rej.moduly | Add-Member -NotePropertyName $n -NotePropertyValue $false -Force }
+        # Modul z trzecim stanem (stan.ps1) zostaje "nie zaproponowano" - false znaczyloby "nie chcial".
+        foreach ($n in (Moduly-MegaRuchacza)) {
+          if ((Moduly-Z-Trzecim-Stanem) -contains $n) { continue }
+          $rej.moduly | Add-Member -NotePropertyName $n -NotePropertyValue $false -Force
+        }
         $rej | Add-Member -NotePropertyName baza -NotePropertyValue $true -Force
         Zapisz-Instalacje $rej $KatalogDomowy
         Krok "zalozony rejestr modulow $(Sciezka-Instalacji $KatalogDomowy) - zaden modul jeszcze nie jest wlaczony"
