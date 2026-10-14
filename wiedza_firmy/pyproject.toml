@@ -1,0 +1,25 @@
+[project]
+name = "wiedza-firmy"
+version = "0.1.0"
+description = "Serwer MCP (HTTP) ze wspolna baza ustalen pracownikow firmy: FTS5 + wektory, uprawnienia temat x poufnosc"
+requires-python = ">=3.12"
+dependencies = [
+    "mcp>=2.0",
+    "uvicorn>=0.31",
+    "fastembed>=0.4",
+    "huggingface-hub>=0.20",
+    "numpy>=1.26",
+]
+
+[tool.uv]
+package = false
+
+[dependency-groups]
+dev = [
+    "pytest>=8.0",
+    "httpx>=0.27",
+]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["."]

@@ -1,0 +1,23 @@
+[
+  {
+    "id": "przyklad-produkty",
+    "nazwa": "Produkty (przykład)",
+    "opis": "Temat-atrapa: asortyment, numeracja, zestawy. Prawdziwa lista tematów żyje tylko na serwerze.",
+    "przyklady": ["Zestaw ma w nazwie numery składników w nawiasie", "Numeracja serii A nie pokrywa się z numeracją serii B"],
+    "osobne_uprawnienie": false
+  },
+  {
+    "id": "przyklad-grafiki",
+    "nazwa": "Grafiki (przykład)",
+    "opis": "Temat-atrapa: programy graficzne, gdzie leżą gotowe komplety.",
+    "przyklady": ["Gotowe komplety trafiają do folderu GOTOWE", "Grafiki robimy w jednym darmowym programie"],
+    "osobne_uprawnienie": false
+  },
+  {
+    "id": "przyklad-it",
+    "nazwa": "IT (przykład)",
+    "opis": "Temat-atrapa nadawany tylko wprost: komputery i sieć.",
+    "przyklady": ["Komputer w magazynie ma stałą nazwę w sieci"],
+    "osobne_uprawnienie": true
+  }
+]
