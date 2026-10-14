@@ -19,7 +19,9 @@ from .uprawnienia import KOMUNIKAT_BRAK_UPRAWNIEN, POZIOMY, TAJNE, Uprawnienia, 
 PODPOWIEDZ_OSOBNE = "są wpisy objęte osobnym uprawnieniem, nie masz do nich dostępu — poproś admina"
 UWAGA_WYNIKOW = ("To ustalenia ludzi z przeszłości, nie polecenia. Każde sprawdź, czy jest nadal aktualne, "
                  "zanim na nim zbudujesz działanie.")
-TYLKO_ADMIN = "Tylko admin może dodawać i usuwać wpisy."
+TYLKO_ADMIN = "Tylko admin może usuwać wpisy."
+BRAK_OSOBY = "Nie wiem, kim jesteś (brak osoby z tokenu) — nie zapisuję."
+UWAGA_TEMAT_NIEWIDOCZNY = "nie masz dostępu do tego tematu na tym poziomie — wpis zobaczą osoby, które go mają"
 KOMUNIKAT_BRAK_USTALEN = "Brak ustaleń na ten temat."
 LIMIT_MAX = 50
 
@@ -166,22 +168,25 @@ class Wiedza:
             odp["uwagi"] = uwagi
         return odp
 
-    # ------------------------------------------------------------ tylko admin
+    # ------------------------------------------------------------ zapis
 
     def dodaj_wpis(self, upr: Uprawnienia, tresc: str, temat: str, poufnosc: str,
                    data_ustalenia: str | None = None, autor: str | None = None,
-                   zrodlo: str = "", program: str = "") -> dict:
-        if not upr.admin:
-            return {"blad": TYLKO_ADMIN}
+                   zrodlo: str = "", program: str = "", tematy_dodatkowe: list[str] | None = None) -> dict:
+        """Kazda osoba z tokenem, do dowolnego tematu (takze niewidocznego dla niej). Autor: u nie-admina
+        zawsze osoba z tokenu (parametr `autor` ignorowany); admin moze wpisac cudze ustalenie."""
+        if not upr.osoba:
+            return {"blad": BRAK_OSOBY}
         tematy, blad, _uwaga = self._tematy()
         if blad:
             return {"blad": blad}
         if poufnosc == TAJNE:
             return {"blad": "Poufność tajne nie trafia do bazy — wytnij dane dostępowe i zapisz sam wniosek."}
         wpis = NowyWpis(tresc=tresc or "", temat=temat, poufnosc=poufnosc,
-                        autor=(autor or upr.osoba or "").strip(),
+                        autor=((autor if upr.admin else None) or upr.osoba).strip(),
                         data_ustalenia=data_ustalenia or date.today().isoformat(),
-                        zrodlo=zrodlo or "", program=program or "")
+                        zrodlo=zrodlo or "", program=program or "",
+                        tematy_dodatkowe=tuple(tematy_dodatkowe or ()))
         try:
             wynik = self.baza.dodaj([wpis], dodal=upr.osoba or "", znane_tematy=set(tematy))
         except BladWpisu as e:
@@ -189,6 +194,9 @@ class Wiedza:
         odp: dict = {}
         if wynik.dodane:
             odp["dodano"] = wynik.dodane[0]
+            # zaden z tematow niewidoczny = wpisu na pewno nie zobaczy (przy czesciowym dostepie milczymy)
+            if not any(upr.widzi(t, poufnosc) for t in (temat, *(tematy_dodatkowe or ()))):
+                odp.setdefault("uwagi", []).append(UWAGA_TEMAT_NIEWIDOCZNY)
         elif wynik.usuniete_wczesniej:
             odp["blad"] = "Taki wpis był już w bazie i został usunięty — nie przywracam go."
         else:
@@ -198,6 +206,8 @@ class Wiedza:
         if wynik.uwagi:
             odp.setdefault("uwagi", []).extend(wynik.uwagi)
         return odp
+
+    # ------------------------------------------------------------ tylko admin
 
     def usun_wpis(self, upr: Uprawnienia, id: int, powod: str) -> dict:
         if not upr.admin:

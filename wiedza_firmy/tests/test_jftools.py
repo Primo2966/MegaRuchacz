@@ -150,7 +150,7 @@ def test_admin_z_jftools_nie_robi_admina_a_zly_poziom_wypada(jft):
     upr = zrodlo.uprawnienia("ela")
     assert upr.admin is False
     assert dict(upr.tematy) == {"temat-c": "jawne"}
-    assert sr.wiedza.dodaj_wpis(upr, "Nowa rzecz", "temat-a", "jawne") == {"blad": "Tylko admin może dodawać i usuwać wpisy."}
+    assert sr.wiedza.usun_wpis(upr, 1, "chce") == {"blad": "Tylko admin może usuwać wpisy."}
 
 
 def test_admin_lokalny_i_bez_komputera_nie_pytaja_jftools(jft):

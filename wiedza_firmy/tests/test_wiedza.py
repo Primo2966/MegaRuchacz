@@ -10,8 +10,8 @@ import json
 
 from wiedza_firmy import sciezki
 from wiedza_firmy.baza import NowyWpis
-from wiedza_firmy.uprawnienia import KOMUNIKAT_BRAK_UPRAWNIEN, Uprawnienia
-from wiedza_firmy.wiedza import TYLKO_ADMIN
+from wiedza_firmy.uprawnienia import BRAK, KOMUNIKAT_BRAK_UPRAWNIEN, Uprawnienia
+from wiedza_firmy.wiedza import BRAK_OSOBY, TYLKO_ADMIN, UWAGA_TEMAT_NIEWIDOCZNY
 
 
 def tekst(odp: dict) -> str:
@@ -119,18 +119,55 @@ def test_5_ponowny_import_nie_wskrzesza_usunietego(srodowisko):
     assert "papuga" not in tekst(srodowisko.wiedza.szukaj_wiedzy(admin, "Zielona papuga", limit=50))
 
 
-# ---------------------------------------------------------------- (6) nie-admin nie zapisuje
+# ---------------------------------------------------------------- (6) nie-admin dodaje jako on sam, nie usuwa
 
 def _liczba_wpisow(srodowisko) -> tuple[int, int]:
     with srodowisko.baza.polacz() as conn:
         return conn.execute("SELECT COUNT(*), COUNT(usuniety) FROM wpisy").fetchone()
 
 
-def test_6_nie_admin_nie_moze_dodawac(srodowisko):
-    przed = _liczba_wpisow(srodowisko)
+def _autor(srodowisko, id: int) -> tuple[str, str]:
+    with srodowisko.baza.polacz() as conn:
+        return tuple(conn.execute("SELECT autor, dodal FROM wpisy WHERE id = ?", (id,)).fetchone())
+
+
+def test_6_nie_admin_dodaje_a_autorem_jest_zawsze_on(srodowisko):
+    """Decyzja 2026-10-14: kazdy z tokenem dodaje; parametr autor u nie-admina jest ignorowany."""
     for kto in ("ania-a", "wszystko-b", "bez-uprawnien"):
-        odp = srodowisko.wiedza.dodaj_wpis(srodowisko.upr(kto), "Nowa rzecz", "temat-a", "jawne")
-        assert odp == {"blad": TYLKO_ADMIN}, kto
+        odp = srodowisko.wiedza.dodaj_wpis(srodowisko.upr(kto), f"Nowa rzecz od {kto}", "temat-a", "jawne",
+                                           autor="admin")
+        assert "dodano" in odp, (kto, odp)
+        assert _autor(srodowisko, odp["dodano"]) == (kto, kto)
+
+
+def test_6_admin_moze_podac_autora(srodowisko):
+    odp = srodowisko.wiedza.dodaj_wpis(srodowisko.upr("admin"), "Ustalenie Celiny", "temat-a", "jawne", autor="Celina")
+    assert _autor(srodowisko, odp["dodano"]) == ("Celina", "admin")
+
+
+def test_6_nie_admin_dodaje_do_tematu_ktorego_nie_widzi(srodowisko):
+    upr = srodowisko.upr("ania-a")  # temat-a do wewnetrzne, temat-c (specjalny) wcale
+    odp = srodowisko.wiedza.dodaj_wpis(upr, "Szary bobr zna kod do bramy", "temat-c", "wewnetrzne")
+    assert "dodano" in odp and UWAGA_TEMAT_NIEWIDOCZNY in odp["uwagi"]
+    assert "bobr" not in tekst(srodowisko.wiedza.szukaj_wiedzy(upr, "szary bobr kod do bramy"))
+    widoczny = srodowisko.wiedza.dodaj_wpis(upr, "Bialy bobr", "temat-a", "jawne")
+    assert "uwagi" not in widoczny
+
+
+def test_6_dodaj_wpis_z_tematem_dodatkowym(srodowisko):
+    odp = srodowisko.wiedza.dodaj_wpis(srodowisko.upr("ania-a"), "Rudy lis w dwoch tematach", "temat-a", "jawne",
+                                       tematy_dodatkowe=["temat-b"])
+    assert "dodano" in odp
+    wynik = srodowisko.wiedza.szukaj_wiedzy(srodowisko.upr("wszystko-b"), "rudy lis w dwoch tematach")
+    assert tresci(wynik)[0] == "Rudy lis w dwoch tematach"
+    zly = srodowisko.wiedza.dodaj_wpis(srodowisko.upr("ania-a"), "Rudy lis 2", "temat-a", "jawne",
+                                       tematy_dodatkowe=["temat-a"])
+    assert "blad" in zly
+
+
+def test_6_bez_osoby_nie_dodaje(srodowisko):
+    przed = _liczba_wpisow(srodowisko)
+    assert srodowisko.wiedza.dodaj_wpis(BRAK, "Nowa rzecz", "temat-a", "jawne", autor="admin") == {"blad": BRAK_OSOBY}
     assert _liczba_wpisow(srodowisko) == przed
 
 
@@ -148,7 +185,7 @@ def test_6_admin_z_napisem_true_w_pliku_nie_jest_adminem(srodowisko):
     sciezki.plik_osob().write_text(json.dumps(dane), encoding="utf-8")
     upr = srodowisko.upr("ania-a")
     assert upr.admin is False
-    assert srodowisko.wiedza.dodaj_wpis(upr, "Nowa rzecz", "temat-a", "jawne") == {"blad": TYLKO_ADMIN}
+    assert srodowisko.wiedza.usun_wpis(upr, 1, "chce") == {"blad": TYLKO_ADMIN}
 
 
 # ---------------------------------------------------------------- admin i zapis

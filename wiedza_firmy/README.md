@@ -29,7 +29,13 @@ Kod Lore: katalog `lore` obok `wiedza_firmy` albo `WIEDZA_FIRMY_LORE`. Potrzebne
   `tajne` nie trafia do bazy wcale.
 - Brak tokenu albo nieznany token: **401**, nic się nie wykonuje.
 - Znany token bez uprawnień: narzędzia działają, ale nic nie zwracają („Nie masz jeszcze uprawnień — poproś admina.”).
-- Admin widzi wszystko i jako jedyny może dodawać i usuwać wpisy.
+- Admin widzi wszystko i jako jedyny może usuwać wpisy. Dodawać może każdy ze znanym tokenem (od 0.3.1), do
+  dowolnego tematu, także niewidocznego dla siebie; autorem jest wtedy zawsze on sam (parametr `autor` działa
+  tylko u admina).
+- Narzędzia tylko dla admina (`serwer.NARZEDZIA_ADMINA`, dziś `usun_wpis`) są niewidoczne na liście narzędzi
+  (`tools/list`) dla innych — filtruje je middleware SDK `FiltrNarzedziAdmina` przy każdym żądaniu, a wynik ma
+  `cacheScope: private`. Gdy źródło uprawnień nie odpowiada, lista jest ukrywana (z wpisem w logu). Odmowa przy
+  wywołaniu wprost zostaje jako druga linia obrony.
 - Wpis może mieć kilka tematów (od 0.3.0, niżej). Filtr uprawnień jest warunkiem SQL w obu kanałach wyszukiwania. Wpisy spoza uprawnień nie dostają się
   do rankingu. Podpowiedź „są wpisy w temacie X — poproś admina” podaje tylko nazwę tematu, bez treści,
   i to tylko wtedy, gdy ukryty wpis pasuje do pytania słowami i trafiłby do pierwszych wyników.
@@ -55,7 +61,8 @@ Wszystko to jest jednym warunkiem SQL (`baza.warunek_uprawnien`) w obu kanałach
 `szukaj_wiedzy` pokazuje w polu `tematy` (`id`, `nazwa`, `glowny`) tylko tematy, przez które pytający widzi wpis;
 `temat`/`temat_nazwa` to pierwszy z nich (główny, jeśli go widzi). Podpowiedź „poproś admina” nie podaje nazwy tematu
 specjalnego, do którego pytający nie ma dostępu wcale („są wpisy objęte osobnym uprawnieniem…”). `tematy()` bez zmian.
-`dodaj_wpis` (MCP) zapisuje sam temat główny; tematy dodatkowe nadaje import albo `ustaw_tematy`.
+`dodaj_wpis` (MCP) przyjmuje temat główny i opcjonalnie `tematy_dodatkowe` (od 0.3.1); hurtem tematy nadaje import
+albo `ustaw_tematy`.
 
 **Migracja** starej bazy idzie sama przy pierwszym otwarciu przez 0.3.0 (serwer, import, CLI): najpierw kopia
 `wiedza.db.kopia-przed-schematem-2-<czas>`, potem w jednej transakcji każdy wpis dostaje swój dotychczasowy temat jako
@@ -154,8 +161,10 @@ Serwer: streamable HTTP pod `/mcp` w trybie bezstanowym (każde żądanie niesie
 `WIEDZA_FIRMY_HOSTY` (opcjonalnie, nazwy i adresy rozdzielone przecinkami) włącza sprawdzanie nagłówka
 Host także przy `0.0.0.0`.
 
-Narzędzia MCP: `szukaj_wiedzy(pytanie, temat?, limit=8)`, `tematy()`, `moje_uprawnienia()`, a tylko
-dla admina: `dodaj_wpis(...)` i `usun_wpis(id, powod)`.
+Narzędzia MCP: `szukaj_wiedzy(pytanie, temat?, limit=8)`, `tematy()`, `moje_uprawnienia()`,
+`dodaj_wpis(...)` (każdy, tylko na wyraźne „dodaj do wiedzy firmy …”), a tylko dla admina `usun_wpis(id, powod)`.
+Instrukcje serwera (`serwer.INSTRUKCJE`, poniżej 4096 znaków, które czyta Claude Code) każą prośby „napisz/powiedz
+coś o X” obsługiwać przez `szukaj_wiedzy`, a przed zapisem pokazać treść, temat i poufność.
 
 ## Testy
 
