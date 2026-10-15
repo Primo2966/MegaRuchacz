@@ -4,6 +4,15 @@ Każda zmiana wypychana na gita dostaje tu wpis. Numer rośnie wg zasady:
 pierwsza cyfra — przebudowa łamiąca zgodność, druga — nowa funkcja,
 trzecia — poprawka.
 
+## 0.34.0 — 2026-10-15
+
+- **Znaczek źródła: 🟣 Lore / 🟠 jfwiedza.** Odpowiedź, na którą naprawdę wpłynęło Lore albo wiedza firmy, zaczyna się
+  od znaczka (oba, gdy oba); samo wywołanie bez przydatnego wyniku — bez znaczka. Zasada stoi w instrukcjach obu serwerów
+  MCP (wiedza firmy 0.4.2), więc działa u każdego, kto je podłączy, oraz w zasadach Lore dla Claude Code, Codeksa i OpenCode.
+- **Koszt tworzenia wiedzy: rozbicie na etapy** (czytanie rozmów, łączenie powtórzeń, tematy i poufność) zapisane na stałe
+  w koszty.jsonl; błędy opisane zdaniem po ludzku, nieudane podejście, po którym dzień przeszedł, jest szare z godziną.
+- Wiedza firmy 0.4.1: wpis wrażliwy z tematem specjalnym widoczny przez zwykły temat na poziomie wewnętrzne.
+
 ## 0.33.1 — 2026-10-15
 
 - Wiedza firmy: wpisy z komputera, który ma w JFTools tylko e-mail właściciela (bez imienia), są podpisane tym
