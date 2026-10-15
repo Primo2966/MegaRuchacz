@@ -72,7 +72,7 @@ HOME_ZMIENNA = "WIEDZA_FIRMY_KLIENT_HOME"
 JFTOOLS_DOMYSLNY = "https://tools.jfinvesting.pl/api/public/mcp-ecommerce-sterowanie"
 NAZWA_MCP = "jfwiedza"
 PACZKA = 100
-LIMIT_HTTP_S = 20
+LIMIT_HTTP_S = 120  # paczka 64 wpisow (dzien 14.10) nie zmiescila sie w 20 s - serwer zapisal, klient zglosil timeout
 LIMIT_CLAUDE_S = 90
 # Ponowne `claude mcp get` (z health-checkiem serwera) najwyzej co 6 h, gdy token sie nie zmienil -
 # wpis usuniety recznie wraca najpozniej po 6 h, a tick co 30 min nie odpala co chwile node'a.
