@@ -4,6 +4,23 @@ Każda zmiana wypychana na gita dostaje tu wpis. Numer rośnie wg zasady:
 pierwsza cyfra — przebudowa łamiąca zgodność, druga — nowa funkcja,
 trzecia — poprawka.
 
+## 0.33.0 — 2026-10-15
+
+- **Wiedza firmy w instalatorze** — nowy moduł „Wiedza firmy” (domyślnie zaznaczony; na starej instalacji jedno
+  pytanie „Dodać Wiedzę firmy?”). Komputer sam zgłasza się w panelu JFTools, a po zatwierdzeniu przez admina dostaje
+  dostęp do firmowej bazy wiedzy jfwiedza i wysyła do niej ustalenia z rozmów. Adres serwera przychodzi z JFTools,
+  nie leży w repo.
+- **Codzienne pełne czytanie dnia dla wiedzy firmy (próba)** — raz dziennie rano przegląd całego poprzedniego dnia
+  rozmów, z tematem i poziomem poufności przy każdym ustaleniu, wysyłka do jfwiedza. Domyślnie wyłączone; włącza się
+  w `konfiguracja.json` (`"dzienny": "pelny"`). Osobista poranna nauka bez zmian.
+- **Strona „Koszt tworzenia wiedzy”** (menu zasobnika) — dzień po dniu tańsza i pełna wersja w tokenach i w % całego
+  dziennego zużycia Claude'a.
+- Taniej: każde wywołanie modelu przy nauce i przeglądzie startuje „na czysto” (ok. 1,4 tys. zamiast 20 tys. tokenów
+  narzutu).
+- Zasady oszczędzania tokenów dla kierownika i workerów.
+- Poprawki: serwer wiedzy przedstawia się JFTools własną nazwą (Cloudflare odrzucał zapytania), klient czeka na
+  odpowiedź serwera do 120 s zamiast 20 s.
+
 ## 0.32.1 — 2026-10-13
 
 - **Przypomnienia oznaczone „tylko przypomnij” też robią się same w tle** — wcześniej pokazywały okienko i trzeba było
