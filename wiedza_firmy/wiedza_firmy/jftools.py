@@ -110,7 +110,9 @@ def pobierz_json(url: str, sekret: str, limit_s: float, parametry: Mapping[str, 
     BladJFTools (401/403 = zly sekret, 5xx = blad panelu: awaria, nie odpowiedz)."""
     if parametry:
         url = f"{url}?{urllib.parse.urlencode(parametry)}"
-    zadanie = urllib.request.Request(url, headers={"x-webhook-secret": sekret, "Accept": "application/json"})
+    zadanie = urllib.request.Request(url, headers={"x-webhook-secret": sekret, "Accept": "application/json",
+                                                       # Cloudflare przed JFTools odrzuca domyslny Python-urllib (Error 1010)
+                                                       "User-Agent": "wiedza-firmy"})
     try:
         with urllib.request.urlopen(zadanie, timeout=limit_s) as odp:
             kod, cialo = odp.status, odp.read()
