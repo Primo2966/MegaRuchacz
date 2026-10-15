@@ -33,7 +33,8 @@ profilem primo) - wtedy pierwszy przeglad historii jest pomijany, a dzienny zacz
 byc juz wczytany do Lore (indeksowanie po jego koncu), inaczej dzienny czeka. Ten sam dzien nie idzie dwa razy
 (stan.json, plik dzienne-<dzien>.json w kolejka\\ albo wyslano\\, zamek dzienny.lock); nieudany wraca przy
 nastepnym ticku (przeglad.py wznawia, zrobionych paczek nie powtarza). Po kazdej probie dnia jedna linia
-w koszty.jsonl: tokeny i $ z kopert `claude -p` tej proby (z dziennikow koszt.tsv przegladu dnia).
+w koszty.jsonl: tokeny i $ z kopert `claude -p` tej proby (z dziennikow koszt.tsv przegladu dnia), razem
+i w "etapy" osobno na etap - dzienniki znikaja z katalogiem dnia, linia zostaje.
 
 Podpis tokenu: surowy podpis Ed25519 (cryptography) tekstu "jfwiedza-token|{computerId}|{ts}|{nonce}"
 w UTF-8, base64 (standardowy, z dopelnieniem); serwer sprawdza go kluczem publicznym OpenSSH z JFTools.
@@ -1031,8 +1032,12 @@ class Klient:
 
     def koszt_proby(self, kat: Path, przed: dict[Path, int]) -> dict:
         """Suma wierszy dopisanych do koszt.tsv od `przed` - kazdy wiersz to jedno wywolanie `claude -p`,
-        tokeny i $ z jego koperty (usage, total_cost_usd); wywolanie bez koperty liczy sie, tokenow nie ma."""
-        s = {"wywolan": 0, **{pole: 0 for pole, _ in POLA_KOSZTU}, "usd": 0.0}
+        tokeny i $ z jego koperty (usage, total_cost_usd); wywolanie bez koperty liczy sie, tokenow nie ma.
+        "etapy": te same sumy osobno na kolumne `etap` (paczka, konsolidacja, tagi) - katalog dnia znika po
+        DZIENNY_TRZYMAJ_DNI, wiec rozbicie musi trafic do koszty.jsonl teraz."""
+        def pusty() -> dict:
+            return {"wywolan": 0, **{pole: 0 for pole, _ in POLA_KOSZTU}, "usd": 0.0, "znaki_wyslane": 0}
+        s = {**pusty(), "etapy": {}}
         for p in kat.rglob("koszt.tsv"):
             try:
                 linie = p.read_text(encoding="utf-8").splitlines()
@@ -1043,23 +1048,32 @@ class Klient:
             kol = linie[0].split("\t")
             for w in linie[1:][przed.get(p, 0):]:
                 d = dict(zip(kol, w.split("\t")))
-                s["wywolan"] += 1
-                for pole, kolumna in POLA_KOSZTU:
+                e = s["etapy"].setdefault((d.get("etap") or "").strip() or "?", pusty())
+                for cel in (s, e):
+                    cel["wywolan"] += 1
+                for pole, kolumna in POLA_KOSZTU + (("znaki_wyslane", "znaki_wyslane"),):
                     try:
-                        s[pole] += int(float(d.get(kolumna) or 0))
+                        n = int(float(d.get(kolumna) or 0))
                     except ValueError:
-                        pass
+                        continue
+                    for cel in (s, e):
+                        cel[pole] += n
                 try:
-                    s["usd"] += float(d.get("koszt_usd") or 0)
+                    usd = float(d.get("koszt_usd") or 0)
                 except ValueError:
-                    pass
+                    continue
+                for cel in (s, e):
+                    cel["usd"] += usd
         return s
 
     def dopisz_koszt(self, d: date, koszt: dict, faktow: int, ok: bool, blad: str | None) -> None:
-        """Jedna linia koszty.jsonl na probe dnia (format ustalony ze strona kosztow - nie zmieniac)."""
-        linia = {"dzien": d.isoformat(), "czas": teraz(), "wersja": DZIENNY_TRYB, "wywolan": koszt["wywolan"],
-                 **{pole: koszt[pole] for pole, _ in POLA_KOSZTU},
-                 "razem": sum(koszt[pole] for pole, _ in POLA_KOSZTU), "usd": round(koszt["usd"], 4),
+        """Jedna linia koszty.jsonl na probe dnia (format ustalony ze strona kosztow - nie zmieniac; "etapy"
+        dopisane 15.10.2026 - starsze linie go nie maja, strona bierze wtedy dzienniki dnia)."""
+        def sumy(k: dict) -> dict:
+            return {"wywolan": k["wywolan"], **{pole: k[pole] for pole, _ in POLA_KOSZTU},
+                    "razem": sum(k[pole] for pole, _ in POLA_KOSZTU), "usd": round(k["usd"], 4)}
+        etapy = {nazwa: {**sumy(e), "znaki_wyslane": e["znaki_wyslane"]} for nazwa, e in koszt["etapy"].items()}
+        linia = {"dzien": d.isoformat(), "czas": teraz(), "wersja": DZIENNY_TRYB, **sumy(koszt), "etapy": etapy,
                  "faktow": faktow, "ok": ok, "blad": None if ok else jedna_linia(blad or "blad", 500)}
         with open(self.koszty_plik, "a", encoding="utf-8", newline="\n") as f:
             f.write(json.dumps(linia, ensure_ascii=False) + "\n")

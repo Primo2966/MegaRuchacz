@@ -10,12 +10,16 @@
 #     (odpowiedz w kilku liniach liczona raz, najwieksze wartosci; workerzy wliczeni),
 #   - procenty: od calego dnia z odczytem z cache i bez niego, suma okresu od dni z danymi,
 #   - brak dziennika pelnej wersji: strona powstaje, karta "brak danych", proba z 14.10 w tabeli,
-#   - dzien z bledem przebiegu (obu wersji) na czerwono z opisem,
+#   - dzien z bledem przebiegu (obu wersji) na czerwono z opisem; blad pelnej wersji najpierw zdaniem
+#     po ludzku, surowy tekst w zwinietych szczegolach; nieudany przebieg dnia, ktory potem przeszedl,
+#     wyszarzony z godzina udanego,
 #   - rozbicie pelnej wersji na etapy z dziennikow koszt.tsv dnia: tylko wiersze tego przebiegu
 #     (okno czasu), suma etapow = suma z koszty.jsonl; przebieg bez katalogu dnia - "rozbicia nie ma",
+#     a pole "etapy" w koszty.jsonl ma pierwszenstwo przed dziennikami i dziala bez katalogu dnia,
 #   - dni zakonczone ida do pliku podrecznego i nie licza sie drugi raz.
 # Proby negatywne (kazda MUSI byc zlapana): brak licznika, uciety modul, zepsuta linia dziennika
-# pelnej wersji i tanszej, zepsuty plik podreczny, zly -Dzis, suma etapow niezgodna z suma przebiegu.
+# pelnej wersji i tanszej, zepsuty plik podreczny, zly -Dzis, suma etapow niezgodna z suma przebiegu
+# (z dziennikow i z pola etapy).
 
 param(
   [string]$Zrodlo = (Split-Path -Parent (Split-Path -Parent $PSScriptRoot)),
@@ -139,6 +143,42 @@ try {
   $pr10 = @($p2.Dni["2026-10-10"].ListaPrzebiegow | Where-Object { $_.Ok })[0]
   Sprawdz "etapy: wiersz bez rozbicia (katalogu dnia juz nie ma) - powod, bez uwagi" (($null -eq $pr10.Etapy) -and ($pr10.EtapyBrak -match "rozbicia na etapy już nie ma") -and (-not $pr10.EtapyUwaga)) "$($pr10 | Out-String)"
   Sprawdz "etapy: kazda proba dnia osobno (2 linie 10.10 -> 2 przebiegi)" (@($p2.Dni["2026-10-10"].ListaPrzebiegow).Count -eq 2)
+  # Rozbicie zapisane w koszty.jsonl (pole "etapy", klient.py od 15.10.2026) - ma pierwszenstwo przed
+  # dziennikami dnia i przetrwa ich skasowanie. 18.10: dziennik dnia mowi 2 000, etapy w linii 1 000 =
+  # suma linii -> bez uwagi (wygrywa linia). 12.10: katalogu dnia nie ma, rozbicie i tak jest.
+  # 13.10 (NEG): etapy w linii nie sumuja sie do linii -> uwaga z liczbami i zrodlem.
+  $trzy = Join-Path $Katalog "etapy.jsonl"
+  $et18 = '"etapy":{"paczka":{"wywolan":1,"wejscie":1000,"cache_zapis":0,"cache_odczyt":0,"wyjscie":0,"razem":1000,"usd":0.01,"znaki_wyslane":500}}'
+  $et12 = '"etapy":{"paczka":{"wywolan":2,"wejscie":100,"cache_zapis":0,"cache_odczyt":0,"wyjscie":20,"razem":120,"usd":0.2,"znaki_wyslane":7000},"konsolidacja":{"wywolan":1,"wejscie":30,"cache_zapis":0,"cache_odczyt":0,"wyjscie":5,"razem":35,"usd":0.05,"znaki_wyslane":10},"tagi":{"wywolan":1,"wejscie":40,"cache_zapis":0,"cache_odczyt":0,"wyjscie":5,"razem":45,"usd":0.05,"znaki_wyslane":10}}'
+  $et13 = '"etapy":{"paczka":{"wywolan":1,"wejscie":10,"cache_zapis":0,"cache_odczyt":0,"wyjscie":0,"razem":10,"usd":0.0,"znaki_wyslane":1}}'
+  Zapisz $trzy (@(
+    ('{"dzien":"2026-10-18","czas":"2026-10-19T03:00:00","wywolan":1,"wejscie":1000,"cache_zapis":0,"cache_odczyt":0,"wyjscie":0,"razem":1000,"usd":0.01,' + $et18 + ',"faktow":3,"ok":true,"blad":null}'),
+    '{"dzien":"2026-10-12","czas":"2026-10-13T09:10:09","wywolan":0,"razem":0,"usd":0.0,"etapy":{},"faktow":0,"ok":false,"blad":"przeglad odmowil pracy (kod 2), wznowie przy nastepnym uruchomieniu; log C:\\dom\\dzienny\\przeglad.log: ODMOWA: C:\\dom\\tematy-cache.json: brak ''zasady''"}',
+    ('{"dzien":"2026-10-12","czas":"2026-10-13T09:14:19","wywolan":4,"wejscie":170,"cache_zapis":0,"cache_odczyt":0,"wyjscie":30,"razem":200,"usd":0.3,' + $et12 + ',"faktow":7,"ok":true,"blad":null}'),
+    ('{"dzien":"2026-10-13","czas":"2026-10-14T09:00:00","wywolan":3,"razem":500,"usd":0.5,' + $et13 + ',"faktow":1,"ok":true,"blad":null}'),
+    '{"dzien":"2026-10-11","czas":"2026-10-12T09:00:00","wywolan":0,"razem":0,"usd":0.0,"etapy":{},"faktow":0,"ok":false,"blad":"nieoczekiwany blad OSError: brak miejsca na dysku C:\\dom\\dzienny; wywolan 0, $0.00"}'
+  ) -join "`n")
+  $p3 = Czytaj-Pelna $trzy
+  $uw3 = @(Dolacz-Etapy $p3 (Join-Path $Mr "wiedza-firmy\dzienny"))
+  $pr = @($p3.Dni["2026-10-18"].ListaPrzebiegow)[0]
+  Sprawdz "etapy z koszty.jsonl maja pierwszenstwo przed dziennikiem dnia (1 000 z linii, nie 2 000 z koszt.tsv)" ((@($pr.Etapy).Count -eq 1) -and (@($pr.Etapy)[0].Razem -eq 1000) -and (-not $pr.EtapyUwaga) -and ($pr.ZnakiCzytania -eq 500)) "$($pr | Out-String)"
+  $pr = @($p3.Dni["2026-10-12"].ListaPrzebiegow | Where-Object { $_.Ok })[0]
+  $e12 = @{}; foreach ($e in @($pr.Etapy)) { $e12[$e.Etap] = $e }
+  Sprawdz "etapy z koszty.jsonl bez katalogu dnia: rozbicie jest, kolejnosc etapow, paczki i znaki" ((@($pr.Etapy).Count -eq 3) -and (-not $pr.EtapyBrak) -and (-not $pr.EtapyUwaga) -and
+    (@($pr.Etapy)[0].Etap -eq "paczka") -and ($e12["paczka"].Czytal -eq 100) -and ($e12["paczka"].Napisal -eq 20) -and ($e12["tagi"].Razem -eq 45) -and ($pr.Paczek -eq 2) -and ($pr.ZnakiCzytania -eq 7000)) "$($pr | Out-String)"
+  $pr = @($p3.Dni["2026-10-13"].ListaPrzebiegow)[0]
+  Sprawdz "NEG etapy z koszty.jsonl niezgodne z linia - uwaga z liczbami i zrodlem" (($uw3.Count -eq 1) -and ($pr.EtapyUwaga -match "uruchomień 1 zamiast 3, tokenów 10 zamiast 500.*\(pole etapy w koszty\.jsonl\)")) "$uw3"
+  # Bledy po ludzku: zdanie na wierzch, surowy tekst zwiniety; szary, gdy pozniejszy przebieg przeszedl.
+  $h12 = Rozbicie-Przebiegow $p3.Dni["2026-10-12"]
+  Sprawdz "blad potem sukces: zdanie po ludzku, godzina udanego, wyszarzony" ($h12 -match '<div class="wyszarzony"><p>Pełne czytanie dnia 12\.10 \(przebieg 13\.10, 9:10\): Nie ruszyło: w pliku tematów brakowało zasad poufności\. Nic nie przeczytano, 0 tokenów\. Udało się w kolejnym podejściu o 9:14\.</p>') $h12
+  Sprawdz "blad potem sukces: surowy tekst tylko w zwinietych szczegolach technicznych" (($h12 -match '<details class="tech"><summary>szczegóły techniczne</summary><div>przeglad odmowil pracy \(kod 2\).*brak &#39;zasady&#39;</div></details>') -and ($h12 -notmatch 'class="czerwony"')) $h12
+  Sprawdz "przebieg udany: fakty, nie akapity" (($h12 -match "razem 200 tokenów · \`$0,30 · 7 faktów") -and ($h12 -notmatch "akapit")) $h12
+  $h11 = Rozbicie-Przebiegow $p3.Dni["2026-10-11"]
+  Sprawdz "sam blad: czerwony, nieznana przyczyna = pierwsza czesc bez sciezki" (($h11 -match '<div class="czerwony"><p>Pełne czytanie dnia 11\.10 \(przebieg 12\.10, 9:00\): Nie ruszyło: nieoczekiwany blad OSError: brak miejsca na dysku\. Nic nie przeczytano, 0 tokenów\.</p><details class="tech">') -and ($h11 -notmatch "wyszarzony|Udało się")) $h11
+  $w3 = @(Zloz-Dni @("2026-10-11", "2026-10-12") $t $null $p3 $null)
+  Sprawdz "dzien bez udanego przebiegu: w tabeli zdanie po ludzku, surowy tekst osobno" (($w3[1].Bledy[0] -eq "Pełna wersja: Nie ruszyło: nieoczekiwany blad OSError: brak miejsca na dysku. Nic nie przeczytano, 0 tokenów.") -and
+    ($w3[1].BledyTech[0] -match '^Pełna wersja: nieoczekiwany blad OSError: brak miejsca na dysku C:\\dom') -and (@($w3[0].Bledy).Count -eq 0)) "$($w3[1].Bledy) | $($w3[1].BledyTech)"
+  Sprawdz "dzien z kilkoma nieudanymi: liczba prob w zdaniu" (((Blad-Po-Ludzku "x" 0) -eq "Nie ruszyło: x. Nic nie przeczytano, 0 tokenów.") -and ($p2.Dni["2026-10-11"].BladLudzki -eq "Żadna z 2 prób nie przeszła. Ostatnia - Nie udało się do końca: drugi.")) "$($p2.Dni['2026-10-11'].BladLudzki)"
   $brakP = Dolacz-Probe (Czytaj-Pelna (Join-Path $Katalog "nie-ma.jsonl"))
   Sprawdz "pelna: brak dziennika = Jest false + proba 14.10" ((-not $brakP.Jest) -and $brakP.Dni["2026-10-14"].Proba -and ($brakP.Dni["2026-10-14"].Razem -eq 300120) -and ($brakP.Dni["2026-10-14"].Faktow -eq 63))
   $bt = Blad-Tanszej (Join-Path $Wiedza "cykl-ostatni.txt")
@@ -163,7 +203,7 @@ try {
   Sprawdz "karta tanszej: 12 000 tokenow, 0,2%, 8 faktow, 1 wywolanie" (($g.Html -match "12 000 <small>tokenów") -and ($g.Html -match "0,2% całego dnia") -and ($g.Html -match "8 faktów · 1 wywołanie"))
   Sprawdz "karta pelnej: 600 000, 10%, 60 faktow, 20 wywolan, koszt" (($g.Html -match "600 000 <small>tokenów") -and ($g.Html -match "10% całego dnia") -and ($g.Html -match "60 faktów · 20 wywołań") -and ($g.Html -match "koszt: 1,20 \$"))
   Sprawdz "rozbicie za wczoraj pod kartami: naglowek jak w makiecie i tabela etapow" (($g.Html -match "<h2>Pełne czytanie dnia - na co poszły tokeny</h2>") -and
-    ($g.Html -match "Pełne czytanie dnia 19\.10 \(przebieg 20\.10, 3:00\):</b> razem 600 tys\. tokenów · \`$1,20 · 60 akapitów") -and
+    ($g.Html -match "Pełne czytanie dnia 19\.10 \(przebieg 20\.10, 3:00\):</b> razem 600 tys\. tokenów · \`$1,20 · 60 faktów") -and
     ($g.Html -match "<td>czytanie rozmów</td><td>10</td><td>300\s000</td><td>100\s000</td><td>400\s000</td><td>\`$0,80</td>") -and
     ($g.Html -match "<td>łączenie powtórzeń</td><td>9</td>") -and ($g.Html -match "<td>tematy i poufność</td><td>1</td><td>45\s000</td><td>20\s000</td><td>65\s000</td><td>\`$0,04</td>") -and
     ($g.Html -match "w 10 paczkach: 10\s000 znaków"))
@@ -172,7 +212,7 @@ try {
     ($g.Html -match '<summary class="czerwony">pełna wersja: na co poszły tokeny - suma etapów się nie zgadza</summary>')) $g.Tekst
   Sprawdz "pelna = 50x tansza" ($g.Html -match "<b>50×</b>")
   Sprawdz "cale zuzycie 18.10 = 1,0 mln (ten sam licznik: odpowiedz raz, najwieksze wartosci)" ($g.Html -match "18\.10\.2026 nd</td><td>1,0</td>")
-  Sprawdz "dzien z bledem pelnej wersji na czerwono z opisem" (($g.Html -match '<tr class="zbledem"><td>18\.10\.2026') -and ($g.Html -match "Pełna wersja: limit wyczerpany"))
+  Sprawdz "dzien z bledem pelnej wersji na czerwono z opisem" (($g.Html -match '<tr class="zbledem"><td>18\.10\.2026') -and ($g.Html -match "Pełna wersja: Nie udało się do końca: limit wyczerpany.<details class=`"tech`"><summary>szczegóły techniczne</summary><div>Pełna wersja: limit wyczerpany</div></details>"))
   Sprawdz "dzien z bledem tanszej (cykl odlozony) na czerwono z opisem" (($g.Html -match '<tr class="zbledem"><td>16\.10\.2026') -and ($g.Html -match "Tańsza wersja: poranny automat 2026-10-17 08:00: cykl odlozony \(brak sieci\)"))
   Sprawdz "proba z 14.10 w tabeli, oznaczona" ($g.Html -match '14\.10\.2026 śr</td><td>0</td>.*?<span class="znacznik">próba</span> 300 120')
   Sprawdz "nadrabianie opisane przy dniu 18.10? (karty pokazuja 19.10 - tylko tabela: 30 000, 3%)" ($g.Html -match "18\.10\.2026 nd</td><td>1,0</td><td>30 000</td><td>3%</td><td>5</td>")

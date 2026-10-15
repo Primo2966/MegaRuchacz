@@ -38,7 +38,7 @@ $StatusyBezBledu = @("ok", "dogania", "nie nadaza")
 # Pokazywana TYLKO, gdy prawdziwy dziennik nie ma tego dnia - i zawsze z napisem "proba".
 $PROBA_PELNEJ = [pscustomobject]@{
   Dzien = "2026-10-14"; Razem = [long]300120; CacheOdczyt = [long]0; Wywolan = [long]16
-  Faktow = [long]63; Usd = 0.8886; Przebiegi = 1; Ok = $true; Blad = $null
+  Faktow = [long]63; Usd = 0.8886; Przebiegi = 1; Ok = $true; Blad = $null; BladLudzki = $null
   NieudaneWczesniej = 0; Proba = $true; ProbaOpis = "próba 14.10 (po optymalizacji)"; ListaPrzebiegow = @()
   ProbaPrzed = "przed optymalizacją ten sam dzień: 650 250 tokenów, 65 faktów, 22 wywołania, 1,87 $"
 }
@@ -155,6 +155,39 @@ function Blad-Tanszej($plik) {
 
 # --- pelna wersja --------------------------------------------------------------
 
+# Bledy pelnej wersji po ludzku. Surowy tekst (klient.py / przeglad.py: sciezki, kody wyjscia,
+# wyciag z logu) zostaje do "szczegolow technicznych"; wlasciciel czyta najpierw zdanie. Wzorzec
+# (regex na surowym tekscie) -> przyczyna; kolejnosc ma znaczenie - konkretne przed ogolnymi.
+$ZnaneBledy = @(
+  @("brak 'zasady'", "w pliku tematów brakowało zasad poufności"),
+  @("nie ma wypowiedzi z projektow", "w pamięci rozmów (Lore) nie było rozmów z wymaganych projektów"),
+  @("komputer zablokowany", "komputer jest zablokowany w JFTools"),
+  @("nie da sie uruchomic przegladu", "nie dało się uruchomić programu czytającego rozmowy"),
+  @("(?i)limit czasu|timed? ?out", "skończył się czas oczekiwania na odpowiedź"),
+  @("przeglad niekompletny", "część rozmów nie została przeczytana - reszta przy następnym uruchomieniu"),
+  @("przeglad odmowil pracy", "program czytający rozmowy odmówił pracy"),
+  @("przeglad przerwany", "program czytający rozmowy przerwał pracę")
+)
+
+function Blad-Po-Ludzku($surowy, $tokeny) {
+  # Jedno zdanie: "Nie ruszyło: <przyczyna>. Nic nie przeczytano, 0 tokenów." (bez kosztu) albo
+  # "Nie udało się do końca: <przyczyna>." (cos przeczytal). Nieznana przyczyna = pierwsza czesc
+  # surowego tekstu (do ';') bez sciezek i kodow wyjscia.
+  $t = ("" + $surowy).Trim()
+  $przyczyna = $null
+  foreach ($z in $ZnaneBledy) { if ($t -match $z[0]) { $przyczyna = $z[1]; break } }
+  if (-not $przyczyna) {
+    $c = ($t -split ';')[0]
+    $c = $c -replace '(?i)\b[a-z]:[\x5C/][^\s;,()]*', '' -replace '\(kod \d+\)', '' -replace '\s{2,}', ' '
+    $c = $c.Trim().Trim(',', ':', '-', '/').Trim()
+    if ($c.Length -gt 140) { $c = $c.Substring(0, 137).TrimEnd() + "…" }
+    if (-not $c) { $c = "przyczyna nieznana (zobacz szczegóły techniczne)" }
+    $przyczyna = $c
+  }
+  if (($null -eq $tokeny) -or ($tokeny -eq 0)) { return "Nie ruszyło: $przyczyna. Nic nie przeczytano, 0 tokenów." }
+  return "Nie udało się do końca: $przyczyna."
+}
+
 function Czytaj-Pelna($plik) {
   $w = [pscustomobject]@{ Plik = $plik; Jest = $false; Powod = ""; Zle = 0; PrzykladZlej = ""; Dni = @{} }
   if (-not (Test-Path -LiteralPath $plik)) {
@@ -181,7 +214,7 @@ function Czytaj-Pelna($plik) {
     $k = Klucz-Dnia $dzien
     if (-not $w.Dni.ContainsKey($k)) {
       $w.Dni[$k] = [pscustomobject]@{ Dzien = $k; Razem = $null; CacheOdczyt = $null; Wywolan = $null
-        Faktow = $null; Usd = $null; Przebiegi = 0; Ok = $false; Blad = $null
+        Faktow = $null; Usd = $null; Przebiegi = 0; Ok = $false; Blad = $null; BladLudzki = $null
         NieudaneWczesniej = 0; Proba = $false; ProbaOpis = ""; ProbaPrzed = ""; ListaPrzebiegow = @() }
     }
     $d = $w.Dni[$k]
@@ -192,8 +225,12 @@ function Czytaj-Pelna($plik) {
     # Kazda proba osobno - do rozbicia na etapy (Dolacz-Etapy); blad bez przyczyny opisany jak nizej.
     $bladProby = $null
     if ($o.ok -ne $true) { $bladProby = ("" + $o.blad).Trim(); if (-not $bladProby) { $bladProby = "próba nieudana (dziennik nie podał przyczyny)" } }
+    # "etapy" (klient.py od 15.10.2026) - rozbicie zapisane w linii; starsze linie go nie maja ($null).
+    $zapisEtapow = $null; $jestEtapy = $false
+    if ($o.PSObject.Properties["etapy"]) { $jestEtapy = $true; $zapisEtapow = $o.etapy }
     $d.ListaPrzebiegow += [pscustomobject]@{ Czas = ("" + $o.czas).Trim(); Ok = ($o.ok -eq $true); Blad = $bladProby
       Wywolan = (Liczba-Lub-Nic $o.wywolan); Razem = $razem; Usd = (Kwota-Lub-Nic $o.usd); Faktow = (Liczba-Lub-Nic $o.faktow)
+      JestEtapyZapis = $jestEtapy; EtapyZapis = $zapisEtapow
       Etapy = $null; Paczek = $null; ZnakiCzytania = $null; EtapyBrak = ""; EtapyUwaga = "" }
     $d.Razem       = Dodaj-Liczbe $d.Razem       $razem
     $d.CacheOdczyt = Dodaj-Liczbe $d.CacheOdczyt (Liczba-Lub-Nic $o.cache_odczyt)
@@ -218,7 +255,13 @@ function Czytaj-Pelna($plik) {
     if ($d.Ok) { $d.Blad = $null }
     else {
       $d.NieudaneWczesniej = 0
-      if ($d.Przebiegi -gt 1) { $d.Blad = "$($d.Przebiegi) prób, żadna nie przeszła; ostatni błąd: $($d.Blad)" }
+      # po ludzku z ostatniej proby (ta sama, ktorej blad stoi w $d.Blad)
+      $ost = @($d.ListaPrzebiegow)[-1]
+      $d.BladLudzki = Blad-Po-Ludzku $ost.Blad $ost.Razem
+      if ($d.Przebiegi -gt 1) {
+        $d.Blad = "$($d.Przebiegi) prób, żadna nie przeszła; ostatni błąd: $($d.Blad)"
+        $d.BladLudzki = "Żadna z $($d.Przebiegi) prób nie przeszła. Ostatnia - $($d.BladLudzki)"
+      }
     }
   }
   return $w
@@ -231,7 +274,10 @@ function Dolacz-Probe($pelna) {
 }
 
 # --- pelna wersja: rozbicie przebiegu na etapy ------------------------------------
-# Linia koszty.jsonl ma tylko sumy przebiegu. Pojedyncze wywolania modelu leza w dziennikach
+# Od 15.10.2026 klient.py zapisuje rozbicie w samej linii koszty.jsonl (pole "etapy": etap ->
+# wywolan, wejscie, cache_zapis, cache_odczyt, wyjscie, razem, usd, znaki_wyslane) - to ma
+# pierwszenstwo i przetrwa skasowanie katalogu dnia. Ponizej zapas dla starszych linii (bez pola).
+# Starsza linia koszty.jsonl ma tylko sumy przebiegu. Pojedyncze wywolania modelu leza w dziennikach
 # koszt.tsv przegladu dnia (dzienny\<dzien>\przeglad\.stan\ - paczki i konsolidacja,
 # ...\przeglad\tagi\.stan\ - tematy dodatkowe); klient.py liczy sume przebiegu z TYCH SAMYCH
 # wierszy (wszystkie koszt.tsv pod katalogiem dnia, te same cztery pola tokenow). Dzienniki
@@ -293,21 +339,43 @@ function Dolacz-Etapy($pelna, $katalogDzienny) {
       $od = $poprzedni; $poprzedni = $pr.Czas
       $kosztowal = (($null -ne $pr.Wywolan) -and ($pr.Wywolan -gt 0)) -or (($null -ne $pr.Razem) -and ($pr.Razem -gt 0))
       if (-not $kosztowal) { continue }
-      if ($null -eq $dziennik) { $pr.EtapyBrak = "rozbicia na etapy już nie ma - katalog roboczy tego dnia ($kat) klient kasuje po 14 dniach"; continue }
-      if ($null -eq (Dzien-Z $pr.Czas)) { $pr.EtapyUwaga = "linia dziennika pełnej wersji nie ma czasu przebiegu - nie wiem, które wywołania do niej należą"; $uwagi += $pr.EtapyUwaga; continue }
-      $wiersze = @($dziennik.Wiersze | Where-Object { ([string]::CompareOrdinal($_.Kiedy, $od) -gt 0) -and ([string]::CompareOrdinal($_.Kiedy, $pr.Czas) -le 0) })
       $etapy = [ordered]@{}
       foreach ($k in $NazwyEtapow.Keys) { $etapy[$k] = $null }
-      $paczek = 0; $znaki = $null
-      foreach ($r in $wiersze) {
-        $k = $r.Etap; if (-not $k) { $k = "?" }
-        if (-not $etapy[$k]) {
-          $nazwa = $NazwyEtapow[$k]; if (-not $nazwa) { $nazwa = "inny etap ('$k')" }
-          $etapy[$k] = [pscustomobject]@{ Etap = $k; Nazwa = $nazwa; Wywolan = 0; Czytal = [long]0; Napisal = [long]0; Razem = [long]0; Usd = 0.0 }
+      $paczek = 0; $znaki = $null; $ogon = ""
+      if ($pr.JestEtapyZapis) {
+        $skad = "pole etapy w koszty.jsonl"
+        if ($pr.EtapyZapis -isnot [System.Management.Automation.PSCustomObject]) {
+          $pr.EtapyUwaga = "Pełna wersja, dzień $($d.Dzien) (przebieg $($pr.Czas)): pole etapy w koszty.jsonl jest nieczytelne ('$($pr.EtapyZapis)') - rozbicia nie pokazuję"
+          $uwagi += $pr.EtapyUwaga; continue
         }
-        $e = $etapy[$k]
-        $e.Wywolan++; $e.Czytal += $r.Czytal; $e.Napisal += $r.Napisal; $e.Razem += ($r.Czytal + $r.Napisal); $e.Usd += $r.Usd
-        if ($k -eq "paczka") { $paczek++; $znaki = Dodaj-Liczbe $znaki $r.Znaki }
+        foreach ($p in $pr.EtapyZapis.PSObject.Properties) {
+          $k = $p.Name; $z = $p.Value
+          $nazwa = $NazwyEtapow[$k]; if (-not $nazwa) { $nazwa = "inny etap ('$k')" }
+          # brak liczby = 0, jak w dziennikach; zly zapis wyjdzie w sprawdzeniu sumy nizej
+          $l = @{}
+          foreach ($pole in @("wywolan", "wejscie", "cache_zapis", "cache_odczyt", "wyjscie", "razem", "znaki_wyslane")) { $n = Liczba-Lub-Nic $z.$pole; if ($null -eq $n) { $n = [long]0 }; $l[$pole] = $n }
+          $usd = Kwota-Lub-Nic $z.usd; if ($null -eq $usd) { $usd = 0.0 }
+          $etapy[$k] = [pscustomobject]@{ Etap = $k; Nazwa = $nazwa; Wywolan = $l["wywolan"]; Czytal = $l["wejscie"] + $l["cache_zapis"] + $l["cache_odczyt"]
+            Napisal = $l["wyjscie"]; Razem = $l["razem"]; Usd = $usd }
+          if ($k -eq "paczka") { $paczek = $l["wywolan"]; if ($l["znaki_wyslane"] -gt 0) { $znaki = $l["znaki_wyslane"] } }
+        }
+      } else {
+        $skad = "dzienniki koszt.tsv w $kat"
+        if ($null -eq $dziennik) { $pr.EtapyBrak = "rozbicia na etapy już nie ma - katalog roboczy tego dnia ($kat) klient kasuje po 14 dniach"; continue }
+        if ($null -eq (Dzien-Z $pr.Czas)) { $pr.EtapyUwaga = "linia dziennika pełnej wersji nie ma czasu przebiegu - nie wiem, które wywołania do niej należą"; $uwagi += $pr.EtapyUwaga; continue }
+        $wiersze = @($dziennik.Wiersze | Where-Object { ([string]::CompareOrdinal($_.Kiedy, $od) -gt 0) -and ([string]::CompareOrdinal($_.Kiedy, $pr.Czas) -le 0) })
+        foreach ($r in $wiersze) {
+          $k = $r.Etap; if (-not $k) { $k = "?" }
+          if (-not $etapy[$k]) {
+            $nazwa = $NazwyEtapow[$k]; if (-not $nazwa) { $nazwa = "inny etap ('$k')" }
+            $etapy[$k] = [pscustomobject]@{ Etap = $k; Nazwa = $nazwa; Wywolan = 0; Czytal = [long]0; Napisal = [long]0; Razem = [long]0; Usd = 0.0 }
+          }
+          $e = $etapy[$k]
+          $e.Wywolan++; $e.Czytal += $r.Czytal; $e.Napisal += $r.Napisal; $e.Razem += ($r.Czytal + $r.Napisal); $e.Usd += $r.Usd
+          if ($k -eq "paczka") { $paczek++; $znaki = Dodaj-Liczbe $znaki $r.Znaki }
+        }
+        if ($dziennik.Zle -gt 0) { $ogon += "; $($dziennik.Zle) nieczytelnych linii w dziennikach koszt.tsv" }
+        if ($dziennik.Blad) { $ogon += "; $($dziennik.Blad)" }
       }
       $pr.Etapy = @($etapy.Values | Where-Object { $_ })
       if ($paczek -gt 0) { $pr.Paczek = $paczek; $pr.ZnakiCzytania = $znaki }
@@ -318,11 +386,8 @@ function Dolacz-Etapy($pelna, $katalogDzienny) {
       if (($null -ne $pr.Razem) -and ($st -ne $pr.Razem)) { $rozne += "tokenów $(([long]$st).ToString('N0', [Globalization.CultureInfo]::GetCultureInfo('pl-PL'))) zamiast $(([long]$pr.Razem).ToString('N0', [Globalization.CultureInfo]::GetCultureInfo('pl-PL')))" }
       # klient.py zaokragla sume $ do 4 miejsc
       if (($null -ne $pr.Usd) -and ([math]::Abs($su - $pr.Usd) -gt 0.0006)) { $rozne += "kosztu $($su.ToString('0.0000', $script:Inv)) $ zamiast $($pr.Usd.ToString('0.0000', $script:Inv)) $" }
-      $ogon = ""
-      if ($dziennik.Zle -gt 0) { $ogon += "; $($dziennik.Zle) nieczytelnych linii w dziennikach koszt.tsv" }
-      if ($dziennik.Blad) { $ogon += "; $($dziennik.Blad)" }
       if ($rozne.Count -gt 0) {
-        $pr.EtapyUwaga = "Pełna wersja, dzień $($d.Dzien) (przebieg $($pr.Czas)): suma etapów nie zgadza się z sumą przebiegu - wychodzi $($rozne -join ', ') (dzienniki koszt.tsv w $kat)$ogon"
+        $pr.EtapyUwaga = "Pełna wersja, dzień $($d.Dzien) (przebieg $($pr.Czas)): suma etapów nie zgadza się z sumą przebiegu - wychodzi $($rozne -join ', ') ($skad)$ogon"
         $uwagi += $pr.EtapyUwaga
       }
     }
@@ -491,7 +556,7 @@ function Zloz-Dni([string[]]$klucze, $tansza, $bladTanszej, $pelna, $cale) {
     $r = [pscustomobject]@{
       Dzien = $k; Caly = $c; Tansza = $t; Pelna = $p
       ProcTansza = $null; ProcPelna = $null; ProcTanszaBezCache = $null; ProcPelnaBezCache = $null
-      Iloraz = $null; Bledy = @()
+      Iloraz = $null; Bledy = @(); BledyTech = @()
     }
     if ($t) { $r.ProcTansza = Procent $t.Tokeny $calosc; $r.ProcTanszaBezCache = Procent $t.Tokeny $bezCache }
     if ($p) {
@@ -499,7 +564,8 @@ function Zloz-Dni([string[]]$klucze, $tansza, $bladTanszej, $pelna, $cale) {
       $pBez = $null
       if ($null -ne $p.Razem) { $pBez = $p.Razem; if ($null -ne $p.CacheOdczyt) { $pBez = $p.Razem - $p.CacheOdczyt } }
       $r.ProcPelnaBezCache = Procent $pBez $bezCache
-      if (-not $p.Ok) { $r.Bledy += "Pełna wersja: $($p.Blad)" }
+      # zdanie po ludzku na wierzch, surowy tekst do "szczegolow technicznych" (strona.ps1)
+      if (-not $p.Ok) { $r.Bledy += "Pełna wersja: $($p.BladLudzki)"; $r.BledyTech += "Pełna wersja: $($p.Blad)" }
     }
     if ($t -and $p -and ($null -ne $t.Tokeny) -and ($t.Tokeny -gt 0) -and ($null -ne $p.Razem)) {
       $r.Iloraz = [double]$p.Razem / [double]$t.Tokeny

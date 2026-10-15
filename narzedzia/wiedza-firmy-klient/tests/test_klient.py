@@ -580,7 +580,15 @@ def plik_dnia(sr: Srodowisko, d: date) -> dict:
 
 
 POLA_KOSZTOW = {"dzien", "czas", "wersja", "wywolan", "wejscie", "cache_zapis", "cache_odczyt", "wyjscie", "razem",
-                "usd", "faktow", "ok", "blad"}
+                "usd", "etapy", "faktow", "ok", "blad"}
+POLA_ETAPU = {"wywolan", "wejscie", "cache_zapis", "cache_odczyt", "wyjscie", "razem", "usd", "znaki_wyslane"}
+
+
+def suma_etapow_zgodna(x: dict) -> bool:
+    """Suma etapow = suma linii (te same wiersze koszt.tsv; $ zaokraglone do 4 miejsc osobno)."""
+    e = list(x["etapy"].values())
+    tokeny = ("wywolan", "wejscie", "cache_zapis", "cache_odczyt", "wyjscie", "razem")
+    return all(sum(y[k] for y in e) == x[k] for k in tokeny) and abs(sum(y["usd"] for y in e) - x["usd"]) < 0.0001 * (len(x["etapy"]) + 1)
 
 
 @pytest.fixture
@@ -626,6 +634,11 @@ def test_dzienny_po_przegladzie_historii_raz_na_dobe(sr, po_starcie):
         assert set(x) == POLA_KOSZTOW and x["ok"] is True and x["blad"] is None and x["wersja"] == "pelny"
         assert (x["wywolan"], x["wejscie"], x["cache_zapis"], x["cache_odczyt"], x["wyjscie"]) == (3, 30, 3000, 1500, 300)
         assert x["razem"] == 4830 and x["usd"] == pytest.approx(0.375) and isinstance(x["usd"], float)
+        assert list(x["etapy"]) == ["paczka", "konsolidacja", "tagi"]  # atrapa: po jednym wywolaniu na etap
+        for e in x["etapy"].values():
+            assert set(e) == POLA_ETAPU and (e["wywolan"], e["razem"], e["znaki_wyslane"]) == (1, 1610, 100)
+            assert e["usd"] == pytest.approx(0.125)
+        assert suma_etapow_zgodna(x)
         assert datetime.fromisoformat(x["czas"])
     assert [x["faktow"] for x in k] == [1, 2]
     assert sr.atrapa.ile("POST", "/klient/wpisy") == 0  # pending: pliki dni czekaja w kolejce
@@ -666,6 +679,10 @@ def test_dzienny_blad_i_ponowienie(sr, po_starcie, monkeypatch):
     assert len(dzienne_wywolania(sr)) == 2 and len(plik_dnia(sr, dzien(1))["wpisy"]) == 1
     k = koszty(sr)
     assert [x["ok"] for x in k] == [False, True] and k[1]["blad"] is None and k[1]["wywolan"] == 3  # tylko ta proba
+    # etapy tez tylko z tej proby (paczka z nieudanej nie liczy sie drugi raz); nieudana ma swoje rozbicie
+    assert {n: e["wywolan"] for n, e in k[0]["etapy"].items()} == {"paczka": 1}
+    assert {n: e["wywolan"] for n, e in k[1]["etapy"].items()} == {"paczka": 1, "konsolidacja": 1, "tagi": 1}
+    assert all(suma_etapow_zgodna(x) for x in k)
     assert sr.stan()["dzienny"]["dni"][dzien(1).isoformat()]["proby"] == 2
     assert sr.run("tick") == 0 and len(dzienne_wywolania(sr)) == 2
 
@@ -691,6 +708,40 @@ def test_dzienny_czeka_po_starcie_na_lore_i_na_zamek(sr, po_starcie, monkeypatch
     assert [x["faktow"] for x in koszty(sr)] == [2]
 
 
+def test_koszt_proby_etapy_sumuja_sie_do_linii(sr, tmp_path):
+    # dzienniki jak przeglad.py: paczki i konsolidacja w przeglad\.stan, tematy w przeglad\tagi\.stan
+    nag = "kiedy\tetap\tklucz\topis\tsekundy\tznaki_wyslane\tznaki_odebrane\tinput_tokens\t" \
+          "cache_creation_input_tokens\tcache_read_input_tokens\toutput_tokens\ttokeny_razem\tkoszt_usd\twynik"
+
+    def w(etap, we, wy, usd, znaki="100"):
+        return f"2026-10-15T09:00:00\t{etap}\tk\to\t1\t{znaki}\t1\t{we}\t0\t0\t{wy}\t{we + wy}\t{usd}\tok"
+    kat = tmp_path / "dzien"
+    (kat / "przeglad" / ".stan").mkdir(parents=True)
+    (kat / "przeglad" / "tagi" / ".stan").mkdir(parents=True)
+    glowny = kat / "przeglad" / ".stan" / "koszt.tsv"
+    glowny.write_text("\n".join([nag, w("paczka", 999, 999, "9.0")]) + "\n", encoding="utf-8")
+    k = K.Klient(sr.home)
+    przed = k.koszt_dziennikow(kat)  # wiersz poprzedniej proby - nie wchodzi do tej
+    glowny.write_text("\n".join([nag, w("paczka", 999, 999, "9.0"), w("paczka", 100, 10, "0.33333"),
+                                 w("paczka", 200, 20, "0.33333", znaki="x"), w("konsolidacja", 50, 5, "0.33333"),
+                                 w("", 7, 0, "")]) + "\n", encoding="utf-8")
+    (kat / "przeglad" / "tagi" / ".stan" / "koszt.tsv").write_text("\n".join([nag, w("tagi", 30, 3, "0.1")]) + "\n",
+                                                                   encoding="utf-8")
+    k.dopisz_koszt(DZIS, k.koszt_proby(kat, przed), 5, True, None)
+    x = koszty(sr)[-1]
+    assert set(x) == POLA_KOSZTOW and (x["wywolan"], x["razem"]) == (5, 425)
+    assert list(x["etapy"]) == ["paczka", "konsolidacja", "?", "tagi"]  # pusty etap nie znika - "?"
+    p = x["etapy"]["paczka"]
+    assert (p["wywolan"], p["wejscie"], p["wyjscie"], p["razem"], p["znaki_wyslane"]) == (2, 300, 30, 330, 100)
+    assert x["etapy"]["?"]["usd"] == 0.0 and x["etapy"]["?"]["wywolan"] == 1
+    assert suma_etapow_zgodna(x)
+    # NEG: zepsuta suma etapu musi byc wykryta - inaczej sprawdzenie niczego nie pilnuje
+    for pole, o in (("razem", 1), ("wywolan", 1), ("usd", 0.01)):
+        zly = json.loads(json.dumps(x))
+        zly["etapy"]["tagi"][pole] += o
+        assert not suma_etapow_zgodna(zly), pole
+
+
 def test_dzienny_pusty_dzien_bez_modelu(sr, po_starcie):
     baza_lore(sr, [(dzien(1), 12, "tool"), (DZIS, 0, "user")])
     wlacz_dzienny(sr, dzienny_od=dzien(1).isoformat())
@@ -698,6 +749,7 @@ def test_dzienny_pusty_dzien_bez_modelu(sr, po_starcie):
     assert dzienne_wywolania(sr) == [] and not list((sr.home / "kolejka").glob("dzienne-*.json"))
     k = koszty(sr)
     assert len(k) == 1 and k[0]["ok"] is True and k[0]["wywolan"] == 0 and k[0]["faktow"] == 0
+    assert k[0]["etapy"] == {}  # bez wywolan - pusty slownik, nie brak pola
     assert sr.stan()["dzienny"]["dni"][dzien(1).isoformat()]["stan"] == "zrobiony"
 
 

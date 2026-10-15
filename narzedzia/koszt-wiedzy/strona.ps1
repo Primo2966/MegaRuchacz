@@ -145,6 +145,10 @@ tr.szczegoly>td{text-align:left;white-space:normal;padding:0 9px 6px}
 tr.szczegoly summary{cursor:pointer;color:var(--slaby);font-size:13.5px}
 tr.szczegoly summary.czerwony{color:var(--blad)}
 tr.szczegoly .rozbicie{padding:4px 0 0 18px}
+.wyszarzony{color:var(--slaby)}
+details.tech{margin:0 0 8px;font-size:12.5px;color:var(--slaby)}
+details.tech summary{cursor:pointer}
+details.tech div{white-space:pre-wrap;word-break:break-all;margin:4px 0 0 14px}
 @media (max-width:760px){.karty{grid-template-columns:1fr}.mnoznik{padding:4px 0}}
 '@
 
@@ -182,23 +186,45 @@ function Czas-Przebiegu($czas) {
   return ("" + $czas)
 }
 
+function Godzina-Udanego($czas, $czasBledu) {
+  # " o 9:14" (ten sam dzien co nieudany przebieg) albo " 16.10 o 9:14"; bez czytelnego czasu - nic
+  $d = [datetime]::MinValue
+  if (-not [datetime]::TryParse(("" + $czas), $script:Inv, [Globalization.DateTimeStyles]::None, [ref]$d)) { return "" }
+  $b = [datetime]::MinValue
+  if ([datetime]::TryParse(("" + $czasBledu), $script:Inv, [Globalization.DateTimeStyles]::None, [ref]$b) -and ($b.Date -eq $d.Date)) {
+    return " o $($d.ToString('H:mm', $script:Inv))"
+  }
+  return " $($d.ToString('dd.MM', $script:Inv)) o $($d.ToString('H:mm', $script:Inv))"
+}
+
 function Rozbicie-Przebiegow($p) {
   # Kazdy przebieg pelnej wersji tego dnia: naglowek z suma, tabela etapow (Dolacz-Etapy w dane.ps1)
   # albo powod, czemu jej nie ma; niezgodnosc sum i odrzucone przebiegi na czerwono.
   $sb = New-Object System.Text.StringBuilder
   $dzien = (Dzien-Z $p.Dzien).ToString("dd.MM", $script:Inv)
-  foreach ($pr in @($p.ListaPrzebiegow | Sort-Object Czas)) {
+  $lista = @($p.ListaPrzebiegow | Sort-Object Czas)
+  foreach ($pr in $lista) {
     $kiedy = "Pełne czytanie dnia $dzien (przebieg $(Czas-Przebiegu $pr.Czas))"
     $kosztowal = (($null -ne $pr.Wywolan) -and ($pr.Wywolan -gt 0)) -or (($null -ne $pr.Razem) -and ($pr.Razem -gt 0))
+    if (-not $pr.Ok) {
+      # Najpierw zdanie po ludzku, surowy tekst zwiniety. Czerwony tylko, gdy dzien nie ma zadnego
+      # udanego przebiegu - gdy pozniejsza proba przeszla, porazka jest wyszarzona z jej godzina.
+      $ludzki = Blad-Po-Ludzku $pr.Blad $pr.Razem
+      $udany = @($lista | Where-Object { $_.Ok -and ([string]::CompareOrdinal($_.Czas, $pr.Czas) -gt 0) }) | Select-Object -First 1
+      $klasa = "czerwony"
+      if ($udany) { $klasa = "wyszarzony"; $ludzki += " Udało się w kolejnym podejściu$(Godzina-Udanego $udany.Czas $pr.Czas)." }
+      elseif ($p.Ok) { $klasa = "wyszarzony"; $ludzki += " Ten dzień udał się w innym podejściu." }
+      $tech = "<details class=`"tech`"><summary>szczegóły techniczne</summary><div>$(Html $pr.Blad)</div></details>"
+    }
     if (-not $kosztowal) {
       if ($pr.Ok) { [void]$sb.Append("<p class=`"drobne`">$(Html $kiedy): bez uruchomień modelu - $(Html $pr.Blad)</p>") }
-      else { [void]$sb.Append("<p class=`"czerwony`">$(Html $kiedy): błąd, 0 tokenów - $(Html $pr.Blad)</p>") }
+      else { [void]$sb.Append("<div class=`"$klasa`"><p>$(Html $kiedy): $(Html $ludzki)</p>$tech</div>") }
       continue
     }
     $ile = "razem $(Html (Tokeny-Osi $pr.Razem)) tokenów · $(Html (Usd-Dol $pr.Usd))"
-    if ($pr.Ok -and ($null -ne $pr.Faktow)) { $ile += " · $(Liczba-Pl $pr.Faktow) $(Odmiana $pr.Faktow 'akapit' 'akapity' 'akapitów')" }
+    if ($pr.Ok -and ($null -ne $pr.Faktow)) { $ile += " · $(Liczba-Pl $pr.Faktow) $(Odmiana $pr.Faktow 'fakt' 'fakty' 'faktów')" }
     [void]$sb.Append("<p><b>$(Html $kiedy):</b> $ile</p>")
-    if (-not $pr.Ok) { [void]$sb.Append("<p class=`"czerwony`">ten przebieg się nie udał (jego koszt jest wliczony): $(Html $pr.Blad)</p>") }
+    if (-not $pr.Ok) { [void]$sb.Append("<div class=`"$klasa`"><p>Ten przebieg się nie udał (jego koszt jest wliczony). $(Html $ludzki)</p>$tech</div>") }
     if ($pr.EtapyUwaga) { [void]$sb.Append("<p class=`"czerwony`"><b>Uwaga:</b> $(Html $pr.EtapyUwaga)</p>") }
     if (@($pr.Etapy).Count -gt 0) {
       [void]$sb.Append("<table><thead><tr><th>etap</th><th>uruchomień</th><th>czytał (tokeny)</th><th>napisał (tokeny)</th><th>razem</th><th>$</th></tr></thead><tbody>")
@@ -352,7 +378,9 @@ function Zbuduj-Strone($m) {
     [void]$sb.Append("<tr class=`"$klasa`"><td>$(Data-Pl $r.Dzien -ZDniem)</td><td>$caly</td>")
     [void]$sb.Append("<td>$($tc[0])</td><td>$(Html $tc[1])</td><td>$($tc[2])</td><td>$($pc[0])</td><td>$($pc[1])</td><td>$($pc[2])</td><td>$(Html (Iloraz-Pl $r.Iloraz))</td></tr>")
     if (@($r.Bledy).Count -gt 0) {
-      [void]$sb.Append("<tr class=`"opis-bledu`"><td colspan=`"9`">$(Html ($r.Bledy -join ' · '))</td></tr>")
+      $tech = ""
+      if (@($r.BledyTech).Count -gt 0) { $tech = "<details class=`"tech`"><summary>szczegóły techniczne</summary><div>$(Html ($r.BledyTech -join ' · '))</div></details>" }
+      [void]$sb.Append("<tr class=`"opis-bledu`"><td colspan=`"9`">$(Html ($r.Bledy -join ' · '))$tech</td></tr>")
     }
     if ($r.Pelna -and (@($r.Pelna.ListaPrzebiegow).Count -gt 0)) {
       $lp = @($r.Pelna.ListaPrzebiegow)
