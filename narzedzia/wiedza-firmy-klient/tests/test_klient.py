@@ -11,10 +11,12 @@ import json
 import re
 import secrets
 import socket
+import sqlite3
 import sys
 import threading
 import time
 from collections import Counter
+from datetime import date, datetime, time as dtime, timedelta, timezone
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
@@ -520,3 +522,190 @@ def test_nieczytelny_token_wymieniany(sr):
     cid = str(sr.stan()["computerId"])
     assert K.dpapi_odszyfruj((sr.home / "token.dpapi").read_bytes()).decode() == sr.atrapa.wydane[cid]
     assert token_z_mcp(sr) == sr.atrapa.wydane[cid] and len(sr.atrapa.wpisy) == 150
+
+
+# ---------------------------------------------------------------- krok dzienny
+
+DZIS = date.today()
+
+
+def dzien(n: int) -> date:
+    return DZIS - timedelta(days=n)
+
+
+def chunk_ts(d: date, h: int) -> str:
+    return datetime.combine(d, dtime(h)).astimezone(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S.000Z")
+
+
+def baza_lore(sr: Srodowisko, chunki: list[tuple[date, int, str]], wczytane: str | None = None) -> Path:
+    """Atrapa lore.db: (dzien, godzina, rola); indexed_at = `wczytane` albo teraz (Lore swiezy)."""
+    sciezka = sr.tmp / "lore.db"
+    sciezka.unlink(missing_ok=True)
+    c = sqlite3.connect(sciezka)
+    c.execute("CREATE TABLE chunks (id INTEGER PRIMARY KEY, project TEXT NOT NULL, session TEXT NOT NULL, file TEXT NOT"
+              " NULL, line INTEGER NOT NULL, part INTEGER NOT NULL DEFAULT 0, ts TEXT NOT NULL, role TEXT NOT NULL, text"
+              " TEXT NOT NULL, indexed_at TEXT NOT NULL DEFAULT '')")
+    teraz_utc = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S.000Z")
+    for i, (d, h, rola) in enumerate(chunki, 1):
+        c.execute("INSERT INTO chunks VALUES (?,?,?,?,?,?,?,?,?,?)",
+                  (i, "C--dev-projekt", "s1", "plik.jsonl", i, 0, chunk_ts(d, h), rola, f"tekst {i}", wczytane or teraz_utc))
+    c.commit()
+    c.close()
+    return sciezka
+
+
+def wlacz_dzienny(sr: Srodowisko, **dodatkowe) -> None:
+    konf = json.loads((sr.home / "konfiguracja.json").read_text(encoding="utf-8"))
+    konf.update({"dzienny": "pelny", "lore_baza": str(sr.tmp / "lore.db"), **dodatkowe})
+    K.zapisz_json(sr.home / "konfiguracja.json", konf)
+
+
+def dzienne_wywolania(sr: Srodowisko) -> list[str]:
+    if not sr.przeglad_log.exists():
+        return []
+    return [x for x in sr.przeglad_log.read_text(encoding="utf-8").splitlines() if x.startswith("dzienny ")]
+
+
+def koszty(sr: Srodowisko) -> list[dict]:
+    plik = sr.home / "koszty.jsonl"
+    if not plik.exists():
+        return []
+    surowe = plik.read_bytes()
+    assert not surowe.startswith(b"\xef\xbb\xbf")  # UTF-8 bez BOM
+    return [json.loads(x) for x in surowe.decode("utf-8").splitlines()]
+
+
+def plik_dnia(sr: Srodowisko, d: date) -> dict:
+    return json.loads((sr.home / "kolejka" / f"dzienne-{d.isoformat()}.json").read_text(encoding="utf-8"))
+
+
+POLA_KOSZTOW = {"dzien", "czas", "wersja", "wywolan", "wejscie", "cache_zapis", "cache_odczyt", "wyjscie", "razem",
+                "usd", "faktow", "ok", "blad"}
+
+
+@pytest.fixture
+def po_starcie(monkeypatch):
+    monkeypatch.setattr(K, "dzis", lambda: DZIS)
+    monkeypatch.setattr(K, "sekundy_od_startu", lambda: 3600.0)
+
+
+def test_dzienny_domyslnie_wylaczony(sr, po_starcie):
+    baza_lore(sr, [(dzien(1), 10, "user"), (DZIS, 1, "user")])
+    konf = json.loads((sr.home / "konfiguracja.json").read_text(encoding="utf-8"))
+    K.zapisz_json(sr.home / "konfiguracja.json", {**konf, "dzienny_od": dzien(5).isoformat(),
+                                                   "lore_baza": str(sr.tmp / "lore.db")})
+    assert sr.run("tick") == 0 and sr.run("tick") == 0
+    assert sr.przeglady() == 1 and dzienne_wywolania(sr) == []  # dzienny_od bez "dzienny" nic nie zmienia
+    assert not (sr.home / "znaczniki" / "dzienny.txt").exists() and not (sr.home / "koszty.jsonl").exists()
+    assert not list((sr.home / "kolejka").glob("dzienne-*.json"))
+    assert sr.run("dzienny") == 0 and dzienne_wywolania(sr) == []
+
+
+def test_dzienny_po_przegladzie_historii_raz_na_dobe(sr, po_starcie):
+    # przeglad historii wystartowal przedwczoraj o 15:00 - wczesniejsze dni przeczytal on, przedwczoraj tylko po 15:00
+    baza_lore(sr, [(dzien(3), 12, "user"), (dzien(2), 10, "user"), (dzien(2), 20, "assistant"),
+                   (dzien(2), 21, "tool"), (dzien(1), 9, "user"), (dzien(1), 23, "conversation"), (DZIS, 0, "user")])
+    wlacz_dzienny(sr)
+    assert sr.run("tick") == 0  # pierwszy przeglad historii - dzienny czeka
+    assert sr.przeglady() == 1 and dzienne_wywolania(sr) == []
+    stan = sr.stan()
+    stan["przeglad"]["start"] = datetime.combine(dzien(2), dtime(15)).isoformat(timespec="seconds")
+    K.zapisz_json(sr.home / "stan.json", stan)
+    assert sr.run("tick") == 0
+    assert len(dzienne_wywolania(sr)) == 2 and sr.przeglady() == 3  # przedwczoraj i wczoraj, historia nie od nowa
+    assert len(plik_dnia(sr, dzien(2))["wpisy"]) == 1 and len(plik_dnia(sr, dzien(1))["wpisy"]) == 2
+    w = plik_dnia(sr, dzien(1))["wpisy"][0]
+    assert {"klucz", "tresc", "temat", "poufnosc"} <= set(w) and dzien(1).isoformat() in w["zrodlo"]
+    assert not (sr.home / "kolejka" / f"dzienne-{dzien(3).isoformat()}.json").exists()
+    assert "|ok|" in sr.znacznik("dzienny") and ZNACZNIK.match(sr.znacznik("dzienny"))
+    assert sr.stan()["dzienny"]["dni"][dzien(1).isoformat()]["stan"] == "zrobiony"
+    assert not list(sr.home.glob("dzienny/*/dzien.db"))  # kopia rozmow sprzatnieta
+    k = koszty(sr)
+    assert [x["dzien"] for x in k] == [dzien(2).isoformat(), dzien(1).isoformat()]
+    for x in k:
+        assert set(x) == POLA_KOSZTOW and x["ok"] is True and x["blad"] is None and x["wersja"] == "pelny"
+        assert (x["wywolan"], x["wejscie"], x["cache_zapis"], x["cache_odczyt"], x["wyjscie"]) == (3, 30, 3000, 1500, 300)
+        assert x["razem"] == 4830 and x["usd"] == pytest.approx(0.375) and isinstance(x["usd"], float)
+        assert datetime.fromisoformat(x["czas"])
+    assert [x["faktow"] for x in k] == [1, 2]
+    assert sr.atrapa.ile("POST", "/klient/wpisy") == 0  # pending: pliki dni czekaja w kolejce
+
+    assert sr.run("tick") == 0 and sr.run("dzienny") == 0  # ta sama doba - nic drugi raz
+    assert len(dzienne_wywolania(sr)) == 2 and len(koszty(sr)) == 2
+    assert "nic do zrobienia" in sr.znacznik("dzienny")
+    sr.atrapa.status = "active"
+    assert sr.run("tick") == 0
+    assert not list((sr.home / "kolejka").glob("*.json")) and len(sr.atrapa.wpisy) == 153
+    assert sr.run("tick") == 0 and len(dzienne_wywolania(sr)) == 2  # wyslany dzien tez sie nie powtarza
+
+
+def test_dzienny_nadrabia_najwyzej_3_dni_bez_przegladu_historii(sr, po_starcie):
+    baza_lore(sr, [(dzien(n), 12, "user") for n in range(6, 0, -1)] + [(DZIS, 0, "user")])
+    wlacz_dzienny(sr, dzienny_od=dzien(10).isoformat())
+    assert sr.run("tick") == 0
+    assert sr.przeglady() == 3  # same dni, bez przegladu historii
+    assert "pominiety" in sr.znacznik("przeglad") and "|ok|" in sr.znacznik("przeglad")
+    assert sorted(p.name for p in (sr.home / "kolejka").glob("dzienne-*.json")) == \
+        [f"dzienne-{dzien(n).isoformat()}.json" for n in (3, 2, 1)]
+    assert len(koszty(sr)) == 3
+
+
+def test_dzienny_blad_i_ponowienie(sr, po_starcie, monkeypatch):
+    baza_lore(sr, [(dzien(1), 12, "user"), (DZIS, 0, "user")])
+    wlacz_dzienny(sr, dzienny_od=dzien(1).isoformat())
+    monkeypatch.setenv("ATRAPA_PRZEGLAD_PADA", "1")
+    assert sr.run("tick") == 1
+    z = sr.znacznik("dzienny")
+    assert "|blad|" in z and dzien(1).isoformat() in z and "ponowie" in z
+    assert "[dzienny] BLAD" in (sr.home / "klient.log").read_text(encoding="utf-8")
+    assert not (sr.home / "kolejka" / f"dzienne-{dzien(1).isoformat()}.json").exists()
+    k = koszty(sr)
+    assert len(k) == 1 and k[0]["ok"] is False and k[0]["blad"] and k[0]["wywolan"] == 1 and k[0]["faktow"] == 0
+    monkeypatch.delenv("ATRAPA_PRZEGLAD_PADA")
+    assert sr.run("tick") == 0  # nastepny tick ponawia
+    assert len(dzienne_wywolania(sr)) == 2 and len(plik_dnia(sr, dzien(1))["wpisy"]) == 1
+    k = koszty(sr)
+    assert [x["ok"] for x in k] == [False, True] and k[1]["blad"] is None and k[1]["wywolan"] == 3  # tylko ta proba
+    assert sr.stan()["dzienny"]["dni"][dzien(1).isoformat()]["proby"] == 2
+    assert sr.run("tick") == 0 and len(dzienne_wywolania(sr)) == 2
+
+
+def test_dzienny_czeka_po_starcie_na_lore_i_na_zamek(sr, po_starcie, monkeypatch):
+    baza_lore(sr, [(dzien(1), 12, "user"), (dzien(1), 22, "user")], wczytane=chunk_ts(dzien(1), 22))
+    wlacz_dzienny(sr, dzienny_od=dzien(1).isoformat())
+    monkeypatch.setattr(K, "sekundy_od_startu", lambda: 60.0)
+    assert sr.run("tick") == 0
+    assert "po starcie" in sr.znacznik("dzienny") and dzienne_wywolania(sr) == []
+    monkeypatch.setattr(K, "sekundy_od_startu", lambda: 3600.0)
+    assert sr.run("tick") == 0  # Lore nie wczytal jeszcze nic po koncu wczorajszego dnia
+    assert "czekam, az Lore" in sr.znacznik("dzienny") and dzienne_wywolania(sr) == []
+    baza_lore(sr, [(dzien(1), 12, "user"), (dzien(1), 22, "user"), (DZIS, 0, "user")])
+    inny = K.Klient(sr.home)
+    assert inny.zamek_dzienny.zdobadz(0)
+    try:
+        assert sr.run("tick") == 0 and dzienne_wywolania(sr) == []  # dzienny trwa w innym procesie
+    finally:
+        inny.zamek_dzienny.zwolnij()
+    assert sr.run("tick") == 0 and len(dzienne_wywolania(sr)) == 1
+    assert len(plik_dnia(sr, dzien(1))["wpisy"]) == 2
+    assert [x["faktow"] for x in koszty(sr)] == [2]
+
+
+def test_dzienny_pusty_dzien_bez_modelu(sr, po_starcie):
+    baza_lore(sr, [(dzien(1), 12, "tool"), (DZIS, 0, "user")])
+    wlacz_dzienny(sr, dzienny_od=dzien(1).isoformat())
+    assert sr.run("tick") == 0
+    assert dzienne_wywolania(sr) == [] and not list((sr.home / "kolejka").glob("dzienne-*.json"))
+    k = koszty(sr)
+    assert len(k) == 1 and k[0]["ok"] is True and k[0]["wywolan"] == 0 and k[0]["faktow"] == 0
+    assert sr.stan()["dzienny"]["dni"][dzien(1).isoformat()]["stan"] == "zrobiony"
+
+
+def test_dzienny_wylaczony_po_wlaczeniu_odswieza_znacznik(sr, po_starcie):
+    baza_lore(sr, [(DZIS, 0, "user")])
+    wlacz_dzienny(sr, dzienny_od=DZIS.isoformat())
+    assert sr.run("tick") == 0 and "pierwszy dzien" in sr.znacznik("dzienny")
+    wlacz_dzienny(sr, dzienny="nie")
+    assert sr.run("tick") == 0
+    assert "wylaczony" in sr.znacznik("dzienny") and "|ok|" in sr.znacznik("dzienny")
+    assert sr.przeglady() == 1  # bez dziennego przeglad historii wraca do normalnej pracy

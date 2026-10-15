@@ -8,16 +8,32 @@ Podkomendy (wszystkie idempotentne, mozna wolac dowolnie czesto):
     przeglad  - GET /klient/tematy -> tematy-cache.json, potem przeglad.py --profil klient --format json
                 (tylko raz, do skutku; --ponow uruchamia jeszcze raz mimo zakonczenia)
     wyslij    - active: kolejka\\*.json po 100 wpisow na POST /klient/wpisy; pending: tylko znacznik
-    tick      - po kolei to, co potrzebne: zglos, wyslij, przeglad (gdy jeszcze nie zrobiony), wyslij
+    dzienny   - krok dzienny (proba od 15.10.2026, wlaczany w konfiguracja.json: "dzienny": "pelny";
+                domyslnie wylaczony): zakonczone dni rozmow z Lore -> kolejka\\dzienne-<RRRR-MM-DD>.json
+    tick      - po kolei to, co potrzebne: zglos, wyslij, przeglad (gdy jeszcze nie zrobiony), wyslij,
+                dzienny (gdy wlaczony), wyslij
 
 Uruchomienie (srodowisko uv Lore - ma `cryptography`):
     uv --directory C:\\dev\\claude-worker\\lore run python
         C:\\dev\\claude-worker\\narzedzia\\wiedza-firmy-klient\\klient.py tick
 
 Pliki w <home> = %WIEDZA_FIRMY_KLIENT_HOME% (domyslnie ~\\.claude\\mr\\wiedza-firmy):
-konfiguracja.json (opcjonalny: serwer_url i jftools_url nadpisuja client-config i adres domyslny),
-stan.json, klucz\\, token.dpapi, tematy-cache.json, kolejka\\, wyslano\\, odrzucone\\, klient.log,
-znaczniki\\{zgloszenie,token,przeglad,wysylka,status}.txt (`czas|ok|opis` albo `czas|blad|opis`).
+konfiguracja.json (opcjonalny: serwer_url i jftools_url nadpisuja client-config i adres domyslny; dzienny,
+dzienny_od - krok dzienny, nizej), stan.json, klucz\\, token.dpapi, tematy-cache.json, kolejka\\, wyslano\\,
+odrzucone\\, klient.log, dzienny\\<dzien>\\ (robocze przegladu dnia), koszty.jsonl (koszt kazdej proby dnia),
+znaczniki\\{zgloszenie,token,przeglad,wysylka,status,dzienny}.txt (`czas|ok|opis` albo `czas|blad|opis`).
+
+Krok dzienny ("dzienny": "pelny"): raz na dobe, najwczesniej DZIENNY_PO_STARCIE_S po starcie Windows,
+przeglad.py --profil klient przeglada kazdy zakonczony dzien od ostatniego zrobionego do wczoraj (najwyzej
+DZIENNY_NADRABIA_DNI ostatnie). Dzien = wycieta z lore.db kopia z chunkami tylko tego dnia (czas lokalny),
+dzienny\\<dzien>\\dzien.db - przeglad.py czyta ja przez --baza, wiec sam sie nie zmienia. Bez dubli z pierwszym
+przegladem historii: dzienny czeka, az ten sie skonczy, i bierze rozmowy od chwili jego startu (wczesniejsze
+przeczytal przeglad). "dzienny_od": "RRRR-MM-DD" = historia sprzed tego dnia przejrzana inna droga (u Primo
+profilem primo) - wtedy pierwszy przeglad historii jest pomijany, a dzienny zaczyna od tego dnia. Dzien musi
+byc juz wczytany do Lore (indeksowanie po jego koncu), inaczej dzienny czeka. Ten sam dzien nie idzie dwa razy
+(stan.json, plik dzienne-<dzien>.json w kolejka\\ albo wyslano\\, zamek dzienny.lock); nieudany wraca przy
+nastepnym ticku (przeglad.py wznawia, zrobionych paczek nie powtarza). Po kazdej probie dnia jedna linia
+w koszty.jsonl: tokeny i $ z kopert `claude -p` tej proby (z dziennikow koszt.tsv przegladu dnia).
 
 Podpis tokenu: surowy podpis Ed25519 (cryptography) tekstu "jfwiedza-token|{computerId}|{ts}|{nonce}"
 w UTF-8, base64 (standardowy, z dopelnieniem); serwer sprawdza go kluczem publicznym OpenSSH z JFTools.
@@ -38,6 +54,7 @@ import os
 import re
 import secrets
 import shutil
+import sqlite3
 import subprocess
 import sys
 import time
@@ -45,7 +62,7 @@ import unicodedata
 import urllib.error
 import urllib.request
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import date, datetime, time as godzina, timedelta
 from pathlib import Path
 from urllib.parse import urlparse
 
@@ -70,6 +87,17 @@ TEKST_PODPISU = "jfwiedza-token|{computerId}|{ts}|{nonce}"
 POLA_WPISU = ("klucz", "tresc", "temat", "tematy_dodatkowe", "poufnosc", "data", "zrodlo", "program")
 WYNIKI_GOTOWE = ("dodano", "duplikat", "usuniety_wczesniej")  # nie wysylac drugi raz
 LOG_MAX_BAJTOW = 1_000_000
+# Krok dzienny - opis w naglowku. Tryb "pelny" = caly dzien rozmow (proba wlasciciela 15.10.2026).
+DZIENNY_TRYB = "pelny"
+DZIENNY_NADRABIA_DNI = 3
+DZIENNY_PO_STARCIE_S = 300
+DZIENNY_TRZYMAJ_DNI = 14  # katalogi robocze dzienny\<dzien> i wpisy dni w stan.json
+FORMAT_KOLEJKI = "wiedza-firmy-kolejka/1"
+KOLUMNY_CHUNKOW = ("id", "project", "session", "file", "line", "part", "ts", "role", "text", "indexed_at")
+ROLE_ROZMOWY = ("user", "assistant", "conversation")  # te role czyta przeglad.py (ROLE)
+# koszty.jsonl: pole -> kolumna dziennika koszt.tsv przegladu (= pole usage koperty `claude -p`)
+POLA_KOSZTU = (("wejscie", "input_tokens"), ("cache_zapis", "cache_creation_input_tokens"),
+               ("cache_odczyt", "cache_read_input_tokens"), ("wyjscie", "output_tokens"))
 
 
 class BladSieci(Exception):
@@ -101,6 +129,32 @@ def czytaj_json(sciezka: Path):
 
 def jedna_linia(tekst: str, limit: int = 500) -> str:
     return " ".join(str(tekst).replace("|", "/").split())[:limit]
+
+
+def dzis() -> date:
+    return date.today()
+
+
+def sekundy_od_startu() -> float:
+    """Czas od startu Windows (GetTickCount64); poza Windows zegar monotoniczny."""
+    if os.name == "nt":
+        f = ctypes.windll.kernel32.GetTickCount64
+        f.restype = ctypes.c_uint64
+        return f() / 1000.0
+    return time.monotonic()
+
+
+def czas_lokalny(ts) -> datetime | None:
+    """Znacznik czasu z Lore (ISO UTC, '...Z') albo stan.json (lokalny bez strefy) -> czas lokalny ze strefa."""
+    try:
+        d = datetime.fromisoformat(str(ts or "").replace("Z", "+00:00"))
+    except ValueError:
+        return None
+    return d.astimezone()  # bez strefy = czas lokalny
+
+
+def koniec_dnia(d: date) -> datetime:
+    return datetime.combine(d + timedelta(days=1), godzina.min).astimezone()
 
 
 # ---------------------------------------------------------------- DPAPI (bez zaleznosci, ctypes)
@@ -308,10 +362,16 @@ class Klient:
         self.log_przegladu = home / "przeglad.log"
         self.zamek = Zamek(home / "klient.lock")
         self.zamek_przegladu = Zamek(home / "przeglad.lock")
+        self.zamek_dzienny = Zamek(home / "dzienny.lock")
+        self.dzienny_kat = home / "dzienny"
+        self.koszty_plik = home / "koszty.jsonl"
         self.stan: dict = {}
         self._token: str | None = None
         self._obce_tokeny: set[str] = set()  # token z istniejacego wpisu MCP (np. reczny token admina)
         self.przeglad_trwa = False  # przeglad w innym procesie - to nie blad ticka
+        self.przeglad_pominiety = False  # dzienny_od: historie przejrzano inna droga - to nie blad ticka
+        self._dni_dzienne: list[date] = []
+        self._granica_dzienna: datetime | None = None
 
     # -------------------------------------------------- stan, znaczniki, log
 
@@ -394,6 +454,13 @@ class Klient:
             return str(self.stan["serwer_url"]), jftools
         raise BladKlienta(f"nie znam adresu serwera wiedzy - JFTools client-config: {blad}; ponowie przy nastepnym "
                           f"uruchomieniu")
+
+    def ustawienie(self, klucz: str):
+        try:
+            d = czytaj_json(self.konf_plik)
+        except (OSError, ValueError):
+            return None
+        return d.get(klucz) if isinstance(d, dict) else None
 
     def polecenie(self, klucz: str) -> list[str] | None:
         try:
@@ -769,14 +836,18 @@ class Klient:
     def przeglad_zrobiony(self) -> bool:
         return (self.stan.get("przeglad") or {}).get("stan") == "zakonczony"
 
-    def uruchom_przeglad(self) -> tuple[bool, str]:
-        """Bez zamka glownego (trwa godzinami); wynik wpisuje wolajacy. Wznawianie robi sam przeglad.py."""
-        polecenie = self.polecenie_przegladu()
-        env = {**os.environ, HOME_ZMIENNA: str(self.home), "PYTHONIOENCODING": "utf-8"}
-        self.home.mkdir(parents=True, exist_ok=True)
-        if self.log_przegladu.exists() and self.log_przegladu.stat().st_size > LOG_MAX_BAJTOW:
-            zapisz_atomowo(self.log_przegladu, self.log_przegladu.read_bytes()[-LOG_MAX_BAJTOW // 2:])
-        with open(self.log_przegladu, "ab") as log:
+    def uruchom_przeglad(self, polecenie: list[str] | None = None, home: Path | None = None,
+                         log_plik: Path | None = None) -> tuple[bool, str]:
+        """Bez zamka glownego (trwa godzinami); wynik wpisuje wolajacy. Wznawianie robi sam przeglad.py.
+        Krok dzienny podaje wlasne polecenie (z --baza), home (dzienny\\<dzien>) i log."""
+        polecenie = polecenie or self.polecenie_przegladu()
+        home = home or self.home
+        log_plik = log_plik or self.log_przegladu
+        env = {**os.environ, HOME_ZMIENNA: str(home), "PYTHONIOENCODING": "utf-8"}
+        home.mkdir(parents=True, exist_ok=True)
+        if log_plik.exists() and log_plik.stat().st_size > LOG_MAX_BAJTOW:
+            zapisz_atomowo(log_plik, log_plik.read_bytes()[-LOG_MAX_BAJTOW // 2:])
+        with open(log_plik, "ab") as log:
             log.write(f"\n===== {teraz()} start: {' '.join(polecenie)}\n".encode("utf-8"))
             log.flush()
             try:
@@ -787,11 +858,309 @@ class Klient:
             log.write(f"===== {teraz()} koniec, kod {r.returncode}\n".encode("utf-8"))
         if r.returncode == 0:
             return True, "przeglad zakonczony"
-        ogon = self.log_przegladu.read_text(encoding="utf-8", errors="replace").strip().splitlines()[-4:-1]
+        ogon = log_plik.read_text(encoding="utf-8", errors="replace").strip().splitlines()[-4:-1]
         # przeglad.py: 1 = dziury (ponowienie tym samym poleceniem wznawia), 2 = odmowa (np. zly tematy-cache.json)
         rodzaj = {1: "przeglad niekompletny", 2: "przeglad odmowil pracy"}.get(r.returncode, "przeglad przerwany")
         return False, f"{rodzaj} (kod {r.returncode}), wznowie przy nastepnym uruchomieniu; " \
-                      f"log {self.log_przegladu}: {' / '.join(ogon)}"
+                      f"log {log_plik}: {' / '.join(ogon)}"
+
+    # -------------------------------------------------- krok: dzienny
+
+    def dzienny_wlaczony(self) -> bool:
+        return self.ustawienie("dzienny") == DZIENNY_TRYB
+
+    def dzienny_od(self) -> date | None:
+        """"dzienny_od" z konfiguracja.json (tylko przy wlaczonym dziennym); zly zapis to blad, nie cisza."""
+        w = self.ustawienie("dzienny_od") if self.dzienny_wlaczony() else None
+        if not w:
+            return None
+        try:
+            return date.fromisoformat(str(w))
+        except ValueError:
+            raise BladKlienta(f"zle \"dzienny_od\" w {self.konf_plik}: {jedna_linia(w, 50)!r} (ma byc RRRR-MM-DD)") from None
+
+    def _dzienny_od_bez_bledu(self) -> date | None:
+        try:
+            return self.dzienny_od()
+        except BladKlienta:
+            return None  # blad pokaze znacznik dzienny; przeglad historii idzie wtedy normalnie
+
+    def baza_lore(self) -> Path:
+        w = self.ustawienie("lore_baza")
+        if w:
+            return Path(str(w))
+        lore = str(Path(__file__).resolve().parents[2] / "lore")
+        if lore not in sys.path:
+            sys.path.insert(0, lore)
+        from lore.db import DB_PATH  # srodowisko uv Lore (jak przeglad.py)
+        return DB_PATH
+
+    def lore_wczytal_do(self, baza: Path) -> datetime | None:
+        """Do kiedy Lore na pewno wczytal rozmowy: najpozniejszy indexed_at albo ts (oba ISO UTC)."""
+        if not baza.exists():
+            raise BladKlienta(f"brak bazy Lore: {baza}")
+        conn = sqlite3.connect(f"file:{baza.as_posix()}?mode=ro", uri=True)
+        try:
+            kolumny = {r[1] for r in conn.execute("PRAGMA table_info(chunks)")}
+            pola = "max(ts)" + (", max(indexed_at)" if "indexed_at" in kolumny else "")
+            wiersz = conn.execute(f"SELECT {pola} FROM chunks").fetchone()
+        finally:
+            conn.close()
+        czasy = [c for c in (czas_lokalny(x) for x in wiersz if x) if c]
+        return max(czasy) if czasy else None
+
+    def zbuduj_baze_dnia(self, baza: Path, dzien: date, granica: datetime | None, cel: Path) -> int:
+        """Kopia tabeli chunks tylko z dnia `dzien` (czas lokalny), od `granica`. Zwraca liczbe chunkow rozmowy."""
+        od, do = (dzien - timedelta(days=1)).isoformat(), (dzien + timedelta(days=2)).isoformat()  # ts jest w UTC
+        src = sqlite3.connect(f"file:{baza.as_posix()}?mode=ro", uri=True)
+        try:
+            kolumny = {r[1] for r in src.execute("PRAGMA table_info(chunks)")}
+            wybor = ", ".join(k if k in kolumny or k != "indexed_at" else "'' AS indexed_at" for k in KOLUMNY_CHUNKOW)
+            wiersze = []
+            for r in src.execute(f"SELECT {wybor} FROM chunks WHERE ts >= ? AND ts < ?", (od, do)):
+                c = czas_lokalny(r[6])
+                if c and c.date() == dzien and (granica is None or c >= granica):
+                    wiersze.append(r)
+        finally:
+            src.close()
+        cel.parent.mkdir(parents=True, exist_ok=True)
+        cel.unlink(missing_ok=True)
+        dst = sqlite3.connect(cel)
+        try:
+            dst.execute("CREATE TABLE chunks (id INTEGER PRIMARY KEY, project TEXT NOT NULL, session TEXT NOT NULL,"
+                        " file TEXT NOT NULL, line INTEGER NOT NULL, part INTEGER NOT NULL DEFAULT 0, ts TEXT NOT NULL,"
+                        " role TEXT NOT NULL, text TEXT NOT NULL, indexed_at TEXT NOT NULL DEFAULT '')")
+            dst.executemany(f"INSERT INTO chunks VALUES ({','.join('?' * len(KOLUMNY_CHUNKOW))})", wiersze)
+            dst.commit()
+        finally:
+            dst.close()
+        return sum(1 for r in wiersze if r[7] in ROLE_ROZMOWY)
+
+    def plik_dnia(self, d: date) -> Path:
+        return self.kolejka / f"dzienne-{d.isoformat()}.json"
+
+    def dzien_zrobiony(self, d: date) -> bool:
+        s = ((self.stan.get("dzienny") or {}).get("dni") or {}).get(d.isoformat()) or {}
+        return s.get("stan") == "zrobiony" or self.plik_dnia(d).exists() or (self.wyslano / self.plik_dnia(d).name).exists()
+
+    def tematy_dzienne(self, serwer: str) -> str | None:
+        """Swieze tematy z serwera, gdy jest token; przy awarii (albo bez tokenu) ostatnie z tematy-cache.json.
+        Zwraca powod czekania (brak tokenu i cache) albo None."""
+        if self.token() is not None:
+            try:
+                self.pobierz_tematy(serwer)
+                return None
+            except (BladSieci, BladKlienta) as e:
+                if not self.tematy_plik.exists():
+                    raise BladKlienta(f"brak tematow - {e}") from e
+                self.loguj(f"UWAGA: tematy z serwera niedostepne ({jedna_linia(e, 200)}) - dzienny bierze "
+                           f"{self.tematy_plik.name} z {(self.stan.get('tematy') or {}).get('pobrano') or '?'}")
+                return None
+        return None if self.tematy_plik.exists() else "czeka na token (tematy wiedzy podaje serwer)"
+
+    def przygotuj_dzienny(self, serwer: str):
+        """Pod zamkiem glownym: ktore dni przejrzec teraz. Niepusta lista = zamek dzienny.lock zdobyty (zwalnia
+        przeprowadz_dzienny); [] = nic teraz (znacznik mowi czemu); False = blad (znacznik)."""
+        if not self.dzienny_wlaczony():
+            if (self.znaczniki / "dzienny.txt").exists():  # byl wlaczony - stary znacznik nie moze zostarzec w alarm
+                self.znacznik("dzienny", True, f"wylaczony (konfiguracja.json bez \"dzienny\": \"{DZIENNY_TRYB}\")")
+            return []
+        if self.stan.get("status") == "blocked":
+            return self.znacznik("dzienny", False, "komputer zablokowany w JFTools - dzienny przeglad wstrzymany")
+        po_starcie = sekundy_od_startu()
+        if po_starcie < DZIENNY_PO_STARCIE_S:
+            self.znacznik("dzienny", True, f"czekam {DZIENNY_PO_STARCIE_S // 60} min po starcie Windows "
+                                           f"(minelo {int(po_starcie)} s)")
+            return []
+        od = self.dzienny_od()
+        if od:
+            pierwszy, granica = od, None
+        elif self.przeglad_zrobiony():
+            granica = czas_lokalny((self.stan.get("przeglad") or {}).get("start"))
+            if granica is None:
+                return self.znacznik("dzienny", False, "stan.json nie ma czasu startu przegladu historii - nie wiem, "
+                                                       "od kiedy czytac (ustaw \"dzienny_od\" albo `przeglad --ponow`)")
+            pierwszy = granica.date()
+        else:
+            p = (self.stan.get("przeglad") or {}).get("stan") or "nie robiony"
+            self.znacznik("dzienny", True, f"czeka na pierwszy przeglad calej historii ({'trwa' if self.przeglad_trwa else p})"
+                                           f" - rozmowy sprzed jego startu przeczyta on sam")
+            return []
+        if not self.zamek_przegladu.zdobadz(0):  # np. reczne `przeglad --ponow` - nie czytac tego samego naraz
+            self.znacznik("dzienny", True, "przeglad historii trwa w innym procesie - dzienny poczeka")
+            return []
+        self.zamek_przegladu.zwolnij()
+        if not self.zamek_dzienny.zdobadz(0):
+            self.loguj("dzienny przeglad juz trwa w innym procesie - nie uruchamiam drugiego")
+            return []
+        try:
+            wczoraj = dzis() - timedelta(days=1)
+            d = max(pierwszy, dzis() - timedelta(days=DZIENNY_NADRABIA_DNI))
+            dni = []
+            while d <= wczoraj:
+                if not self.dzien_zrobiony(d):
+                    dni.append(d)
+                d += timedelta(days=1)
+            if not dni:
+                self.znacznik("dzienny", True, f"nic do zrobienia - dni do {wczoraj} zrobione (od {pierwszy})"
+                              if pierwszy <= wczoraj else f"pierwszy dzien do przejrzenia: {pierwszy}")
+                self.zamek_dzienny.zwolnij()
+                return []
+            wczytane = self.lore_wczytal_do(self.baza_lore())
+            gotowe = [d for d in dni if wczytane and wczytane >= koniec_dnia(d)]
+            if not gotowe:
+                self.znacznik("dzienny", True, f"czekam, az Lore wczyta rozmowy z konca dnia {dni[0]} (ostatnio "
+                                               f"wczytane: {wczytane.isoformat(timespec='minutes') if wczytane else 'nic'})")
+                self.zamek_dzienny.zwolnij()
+                return []
+            czekaj = self.tematy_dzienne(serwer)
+            if czekaj:
+                self.znacznik("dzienny", True, f"{czekaj}; do przejrzenia: {', '.join(map(str, gotowe))}")
+                self.zamek_dzienny.zwolnij()
+                return []
+        except BaseException:
+            self.zamek_dzienny.zwolnij()
+            raise
+        self._granica_dzienna = granica
+        self.znacznik("dzienny", True, f"przegladam dni: {', '.join(map(str, gotowe))}")
+        return gotowe
+
+    def koszt_dziennikow(self, kat: Path) -> dict[Path, int]:
+        """Ile wierszy maja teraz dzienniki koszt.tsv przegladu dnia (paczki, konsolidacja, tematy dodatkowe)."""
+        return {p: max(0, len(p.read_text(encoding="utf-8").splitlines()) - 1) for p in kat.rglob("koszt.tsv")}
+
+    def koszt_proby(self, kat: Path, przed: dict[Path, int]) -> dict:
+        """Suma wierszy dopisanych do koszt.tsv od `przed` - kazdy wiersz to jedno wywolanie `claude -p`,
+        tokeny i $ z jego koperty (usage, total_cost_usd); wywolanie bez koperty liczy sie, tokenow nie ma."""
+        s = {"wywolan": 0, **{pole: 0 for pole, _ in POLA_KOSZTU}, "usd": 0.0}
+        for p in kat.rglob("koszt.tsv"):
+            try:
+                linie = p.read_text(encoding="utf-8").splitlines()
+            except OSError:
+                continue
+            if not linie:
+                continue
+            kol = linie[0].split("\t")
+            for w in linie[1:][przed.get(p, 0):]:
+                d = dict(zip(kol, w.split("\t")))
+                s["wywolan"] += 1
+                for pole, kolumna in POLA_KOSZTU:
+                    try:
+                        s[pole] += int(float(d.get(kolumna) or 0))
+                    except ValueError:
+                        pass
+                try:
+                    s["usd"] += float(d.get("koszt_usd") or 0)
+                except ValueError:
+                    pass
+        return s
+
+    def dopisz_koszt(self, d: date, koszt: dict, faktow: int, ok: bool, blad: str | None) -> None:
+        """Jedna linia koszty.jsonl na probe dnia (format ustalony ze strona kosztow - nie zmieniac)."""
+        linia = {"dzien": d.isoformat(), "czas": teraz(), "wersja": DZIENNY_TRYB, "wywolan": koszt["wywolan"],
+                 **{pole: koszt[pole] for pole, _ in POLA_KOSZTU},
+                 "razem": sum(koszt[pole] for pole, _ in POLA_KOSZTU), "usd": round(koszt["usd"], 4),
+                 "faktow": faktow, "ok": ok, "blad": None if ok else jedna_linia(blad or "blad", 500)}
+        with open(self.koszty_plik, "a", encoding="utf-8", newline="\n") as f:
+            f.write(json.dumps(linia, ensure_ascii=False) + "\n")
+
+    def wpisy_pliku_dnia(self, d: date) -> list[dict]:
+        p = self.plik_dnia(d)
+        try:
+            dane = czytaj_json(p) if p.exists() else {}
+        except (OSError, ValueError):
+            return []
+        w = dane.get("wpisy") if isinstance(dane, dict) else None
+        return w if isinstance(w, list) else []
+
+    def przenies_kolejke_dnia(self, d: date, kat: Path) -> int:
+        """Kolejka przegladu dnia (dzienny\\<dzien>\\kolejka\\przeglad-*.json) -> kolejka\\dzienne-<dzien>.json,
+        atomowo, bez dubli kluczy; zrodlo mowi, z ktorego dnia. Zwraca liczbe wpisow w pliku dnia."""
+        pliki = sorted((kat / "kolejka").glob("przeglad-*.json"))
+        wpisy = self.wpisy_pliku_dnia(d)
+        klucze = {w.get("klucz") for w in wpisy if isinstance(w, dict)}
+        wersja = ""
+        for p in pliki:
+            dane = czytaj_json(p)
+            wersja = str(dane.get("wersja_tematow") or wersja)
+            for w in dane.get("wpisy") or []:
+                if isinstance(w, dict) and w.get("klucz") not in klucze:
+                    klucze.add(w.get("klucz"))
+                    wpisy.append({**w, "zrodlo": f"dzienny przeglad rozmow (Lore) z dnia {d.isoformat()}"})
+        if pliki and wpisy:
+            zapisz_json(self.plik_dnia(d), {"format": FORMAT_KOLEJKI, "rodzaj": "dzienny", "dzien": d.isoformat(),
+                                            "utworzono": teraz(), "wersja_tematow": wersja, "wpisy": wpisy})
+        for p in pliki:  # dopiero po zapisie pliku dnia - padniecie w srodku niczego nie gubi
+            p.unlink()
+        return len(wpisy)
+
+    def przejrzyj_dzien(self, d: date) -> tuple[bool, int, str]:
+        """Poza zamkiem glownym (pod dzienny.lock). Zawsze konczy sie linia w koszty.jsonl."""
+        kat = self.dzienny_kat / d.isoformat()
+        baza_dnia = kat / "dzien.db"
+        kat.mkdir(parents=True, exist_ok=True)
+        przed = self.koszt_dziennikow(kat)
+        faktow = 0
+        try:
+            shutil.copyfile(self.tematy_plik, kat / "tematy-cache.json")
+            n = self.zbuduj_baze_dnia(self.baza_lore(), d, self._granica_dzienna, baza_dnia)
+            if n == 0:
+                ok, opis = True, "brak rozmow tego dnia - bez wywolan modelu"
+            else:
+                ok, opis = self.uruchom_przeglad(self.polecenie_przegladu() + ["--baza", str(baza_dnia)], kat,
+                                                 kat / "przeglad.log")
+                if ok:
+                    faktow = self.przenies_kolejke_dnia(d, kat)
+                    opis = f"{faktow} faktow w {self.plik_dnia(d).name} (z {n} fragmentow rozmow)"
+        except (OSError, ValueError, sqlite3.Error, BladKlienta) as e:
+            ok, opis = False, f"nieoczekiwany blad {type(e).__name__}: {jedna_linia(e, 300)}"
+        finally:
+            baza_dnia.unlink(missing_ok=True)  # kopia rozmow nie lezy dluzej niz trzeba
+        if not ok:
+            faktow = len(self.wpisy_pliku_dnia(d))
+        koszt = self.koszt_proby(kat, przed)
+        self.dopisz_koszt(d, koszt, faktow, ok, opis)
+        return ok, faktow, f"{opis}; wywolan {koszt['wywolan']}, ${koszt['usd']:.2f}"
+
+    def przytnij_dzienne(self) -> None:
+        granica = (dzis() - timedelta(days=DZIENNY_TRZYMAJ_DNI)).isoformat()
+        dni = (self.stan.get("dzienny") or {}).get("dni") or {}
+        for k in [k for k in dni if k < granica]:
+            dni.pop(k)
+        if self.dzienny_kat.is_dir():
+            for kat in self.dzienny_kat.iterdir():
+                if kat.is_dir() and kat.name < granica:
+                    shutil.rmtree(kat, ignore_errors=True)
+
+    def przeprowadz_dzienny(self, dni: list[date]) -> int:
+        """Przeglady dni poza zamkiem glownym (pod dzienny.lock z przygotuj_dzienny), wynik i wysylka pod glownym."""
+        wyniki = []
+        try:
+            for d in dni:
+                try:
+                    wyniki.append((d, *self.przejrzyj_dzien(d)))
+                except Exception as e:  # linia kosztu albo cos zupelnie nieprzewidzianego - dzien wroci
+                    wyniki.append((d, False, 0, f"nieoczekiwany blad {type(e).__name__}: {jedna_linia(e, 300)}"))
+        finally:
+            self.zamek_dzienny.zwolnij()
+        zle = [w for w in wyniki if not w[1]]
+        opis = "; ".join(f"{d}: {'ok' if ok else 'BLAD'} {o}" for d, ok, _f, o in wyniki)
+
+        def praca(serwer, jftools):
+            dni_st = self.stan.setdefault("dzienny", {}).setdefault("dni", {})
+            for d, ok, faktow, o in wyniki:
+                s = dni_st.setdefault(d.isoformat(), {})
+                s.update({"stan": "zrobiony" if ok else "blad", "proby": int(s.get("proby") or 0) + 1,
+                          "faktow": faktow, "koniec": teraz(), "opis": jedna_linia(o, 300)})
+            self.stan["dzienny"]["ostatni"] = teraz()
+            self.przytnij_dzienne()
+            self.znacznik("dzienny", not zle, opis + ("; nieudane dni ponowie przy nastepnym uruchomieniu" if zle else ""))
+            return 0 if self._krok("wysylka", self.krok_wysylka, serwer) and not zle else 1
+        w = self._z_zamkiem("dzienny", CZEKAJ_NA_ZAMEK_S, praca)
+        if w is None:  # stan nie zapisany - plik dnia w kolejce i tak nie da zrobic dnia drugi raz
+            self.znacznik("dzienny", not zle, f"{opis}; nie zapisano stanu (zamek zajety)")
+            return 1
+        return w
 
     # -------------------------------------------------- polecenia
 
@@ -859,6 +1228,12 @@ class Klient:
             p = self.stan["przeglad"]
             self.znacznik("przeglad", True, f"zakonczony {p.get('zakonczono')} - nie powtarzam")
             return False
+        od = self._dzienny_od_bez_bledu()
+        if od and not ponow:  # historie sprzed `od` przejrzano inna droga, dalej idzie krok dzienny - bez dubli
+            self.przeglad_pominiety = True
+            self.znacznik("przeglad", True, f"pominiety: konfiguracja dzienny_od={od} (historia sprzed tego dnia "
+                                            f"przejrzana inna droga), dni od {od} robi krok dzienny")
+            return False
         if self.token() is None:
             self.znacznik("przeglad", False, "czeka na token (zgloszenie komputera)")
             return False
@@ -899,7 +1274,7 @@ class Klient:
         if w is None:
             return 2
         if w != 0:
-            return 0 if w == -1 and (self.przeglad_zrobiony() or self.przeglad_trwa) else 1
+            return 0 if w == -1 and (self.przeglad_zrobiony() or self.przeglad_trwa or self.przeglad_pominiety) else 1
         return self.przeprowadz_przeglad()
 
     def cmd_tick(self) -> int:
@@ -910,8 +1285,14 @@ class Klient:
                   self.znacznik("token", False, "czeka na zgloszenie komputera")) and ok
             ok = self._krok("wysylka", self.krok_wysylka, serwer) and ok
             uruchom = self.przygotuj_przeglad(serwer, False)
-            if not uruchom and not self.przeglad_zrobiony() and not self.przeglad_trwa:
+            if not uruchom and not self.przeglad_zrobiony() and not self.przeglad_trwa and not self.przeglad_pominiety:
                 ok = False
+            # przeglad historii ma pierwszenstwo - dzienny najwczesniej przy kolejnym ticku (wylaczony tylko
+            # odswieza swoj znacznik)
+            if not uruchom or not self.dzienny_wlaczony():
+                dni = self._krok("dzienny", self.przygotuj_dzienny, serwer)
+                ok = ok and dni is not False
+                self._dni_dzienne = dni or []
             return (2 if uruchom else 0) if ok else (3 if uruchom else 1)
         w = self._z_zamkiem("tick", 0, praca)
         if w is None:
@@ -919,7 +1300,20 @@ class Klient:
         if w in (2, 3):
             wp = self.przeprowadz_przeglad()
             return 0 if (w == 2 and wp == 0) else 1
+        if self._dni_dzienne:
+            wd = self.przeprowadz_dzienny(self._dni_dzienne)
+            return w if wd == 0 else 1
         return w
+
+    def cmd_dzienny(self) -> int:
+        def praca(serwer, jftools):
+            dni = self._krok("dzienny", self.przygotuj_dzienny, serwer)
+            self._dni_dzienne = dni or []
+            return 1 if dni is False else 0
+        w = self._z_zamkiem("dzienny", CZEKAJ_RECZNIE_S, praca)
+        if w is None:
+            return 2
+        return self.przeprowadz_dzienny(self._dni_dzienne) if w == 0 and self._dni_dzienne else w
 
 
 def domyslny_home() -> Path:
@@ -932,7 +1326,7 @@ def main(argv: list[str] | None = None) -> int:
             strumien.reconfigure(encoding="utf-8", errors="replace")
     a = argparse.ArgumentParser(description="Klient Wiedzy firmy (jfwiedza) na komputerze pracownika")
     pod = a.add_subparsers(dest="polecenie", required=True)
-    for nazwa in ("zglos", "status", "wyslij", "tick"):
+    for nazwa in ("zglos", "status", "wyslij", "dzienny", "tick"):
         pod.add_parser(nazwa)
     p = pod.add_parser("przeglad")
     p.add_argument("--ponow", action="store_true", help="uruchom przeglad mimo zakonczenia")
@@ -946,6 +1340,8 @@ def main(argv: list[str] | None = None) -> int:
         return k.cmd_wyslij()
     if o.polecenie == "przeglad":
         return k.cmd_przeglad(o.ponow)
+    if o.polecenie == "dzienny":
+        return k.cmd_dzienny()
     return k.cmd_tick()
 
 
