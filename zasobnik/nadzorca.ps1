@@ -485,6 +485,25 @@ $menu.Items.Add((Nowa-Pozycja "Przelicz liczby teraz (nic nie kosztuje)" {
     Pokaz-Dymek "MegaRuchacz: nie przeliczylem" "Nie udalo sie przeliczyc liczb: $($_.Exception.Message)"
   }
 })) | Out-Null
+# Strona "Koszt tworzenia wiedzy z rozmow" w przegladarce (narzedzia\koszt-wiedzy\koszt-wiedzy.ps1
+# -Otworz): odswieza ja i otwiera osobny, niewidoczny proces - ikona nie staje na czas liczenia,
+# a gdy strona sie nie zbuduje, przegladarka pokazuje strone bledu z powodem. Modelu nie wola.
+$menu.Items.Add((Nowa-Pozycja "Koszt tworzenia wiedzy" {
+  try {
+    $skryptKosztu = Join-Path $Zrodlo "narzedzia\koszt-wiedzy\koszt-wiedzy.ps1"
+    if (-not (Test-Path -LiteralPath $skryptKosztu)) { throw "nie ma $skryptKosztu" }
+    $ogon = "-NoProfile -NonInteractive -ExecutionPolicy Bypass -File `"$skryptKosztu`" -KatalogDomowy `"$KatalogDomowy`" -Zrodlo `"$Zrodlo`" -Otworz"
+    try { Start-Process -FilePath "conhost.exe" -ArgumentList ("--headless powershell.exe " + $ogon) -WindowStyle Hidden -ErrorAction Stop | Out-Null }
+    catch {
+      Notuj "koszt tworzenia wiedzy: conhost --headless nie wystartowal, probuje zwyklym powershellem"
+      Start-Process -FilePath "powershell.exe" -ArgumentList $ogon -WindowStyle Hidden -ErrorAction Stop | Out-Null
+    }
+    Notuj "koszt tworzenia wiedzy: odswiezam i otwieram strone"
+  } catch {
+    Zanotuj-Wywrotke "strona kosztu tworzenia wiedzy z menu" $_
+    Pokaz-Dymek "MegaRuchacz: nie otworzylem strony" "Nie udalo sie otworzyc strony z kosztem tworzenia wiedzy: $($_.Exception.Message)"
+  }
+})) | Out-Null
 $menu.Items.Add((New-Object System.Windows.Forms.ToolStripSeparator)) | Out-Null
 $menu.Items.Add((Nowa-Pozycja "Zamknij MegaRuchacza (ikona zniknie)" {
   Notuj "nadzorca zakonczony z menu - do najblizszego zalogowania nikt nie pilnuje cyklu"

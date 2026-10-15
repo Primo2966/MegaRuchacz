@@ -889,6 +889,25 @@ function Pilnuj-Kopii-Dziennych($stan) {
   foreach ($l in $wy) { Krok "$l" }
 }
 
+# Strona "Koszt tworzenia wiedzy z rozmow" (narzedzia\koszt-wiedzy\koszt-wiedzy.ps1) odswiezana zaraz po
+# porannym czytaniu, zeby jego koszt byl na niej od razu. Strona to tylko podglad: jej klopot nie
+# zatrzymuje cyklu, ale nie przechodzi po cichu - kod 2 (czegos nie policzyla) i 1 (nie powstala) to UWAGA.
+function Odswiez-Koszt-Wiedzy {
+  $skrypt = Join-Path $PSScriptRoot "koszt-wiedzy\koszt-wiedzy.ps1"
+  if (-not (Test-Path $skrypt)) { Ostrzezenie "nie ma $skrypt - strony z kosztem tworzenia wiedzy nie odswiezam"; return }
+  if ($Proba) { Plan "odswiezylbym strone z kosztem tworzenia wiedzy ($skrypt)"; return }
+  $global:LASTEXITCODE = 0
+  try {
+    $wy = @(& $skrypt -KatalogDomowy $KatalogDomowy -Zrodlo $Zrodlo 2>&1)
+    $kod = $LASTEXITCODE
+  } catch {
+    $wy = @("$($_.Exception.Message)")
+    $kod = 1
+  }
+  if ($kod -eq 0) { Krok "strona z kosztem tworzenia wiedzy odswiezona"; return }
+  Ostrzezenie ("strona z kosztem tworzenia wiedzy (kod $kod): " + (($wy | ForEach-Object { "$_" } | Where-Object { $_ -match "^(UWAGA|BLAD)" }) -join " | "))
+}
+
 function Uruchom-Cykl {
   $dzis = (Get-Date -Format "yyyy-MM-dd")
   $stan = Czytaj-Klucze $script:PlikStanu
@@ -987,6 +1006,7 @@ function Uruchom-Cykl {
 
   Wylow-Fakty $stan $nadrabiaj $przeszkoda
   $kodWeryfikacji = Sprawdz-Wiedze
+  Odswiez-Koszt-Wiedzy
 
   # Po pracy pytamy kolejke jeszcze raz - to jedyna pewna odpowiedz, ile naprawde zostalo.
   # Liczba wyczytana z tekstu przebiegu ($script:Zostalo) sluzy juz tylko za zapas.
