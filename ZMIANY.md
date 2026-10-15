@@ -4,6 +4,11 @@ Każda zmiana wypychana na gita dostaje tu wpis. Numer rośnie wg zasady:
 pierwsza cyfra — przebudowa łamiąca zgodność, druga — nowa funkcja,
 trzecia — poprawka.
 
+## 0.33.1 — 2026-10-15
+
+- Wiedza firmy: wpisy z komputera, który ma w JFTools tylko e-mail właściciela (bez imienia), są podpisane tym
+  e-mailem zamiast nazwą komputera.
+
 ## 0.33.0 — 2026-10-15
 
 - **Wiedza firmy w instalatorze** — nowy moduł „Wiedza firmy” (domyślnie zaznaczony; na starej instalacji jedno
