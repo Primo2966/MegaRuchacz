@@ -138,6 +138,13 @@ tr.opis-bledu td{background:var(--blad-tlo);color:var(--blad);text-align:left;wh
 .suma p{margin:4px 0}
 .stopka{margin-top:30px;color:var(--slaby);font-size:13.5px}
 .stopka p{margin:4px 0}
+.rozbicie p{margin:4px 0}
+.rozbicie table{width:auto;margin:6px 0 12px}
+.rozbicie th{text-align:right}.rozbicie th:first-child{text-align:left}
+tr.szczegoly>td{text-align:left;white-space:normal;padding:0 9px 6px}
+tr.szczegoly summary{cursor:pointer;color:var(--slaby);font-size:13.5px}
+tr.szczegoly summary.czerwony{color:var(--blad)}
+tr.szczegoly .rozbicie{padding:4px 0 0 18px}
 @media (max-width:760px){.karty{grid-template-columns:1fr}.mnoznik{padding:4px 0}}
 '@
 
@@ -159,6 +166,52 @@ function Karta-Wersji($klasa, $tytul, $tokeny, $proc, $fakty, $wywolania, $proba
   }
   if ($blad) { [void]$sb.Append("<div class=`"drobne czerwony`">$(Html $blad)</div>") }
   [void]$sb.Append("</section>")
+  return $sb.ToString()
+}
+
+function Usd-Dol($x) {
+  # "$0,93" - zapis z makiety rozbicia na etapy
+  if ($null -eq $x) { return "?" }
+  return "$" + ([double]$x).ToString("0.00", $script:Pl)
+}
+
+function Czas-Przebiegu($czas) {
+  # ISO z koszty.jsonl -> "15.10, 9:14"
+  $d = [datetime]::MinValue
+  if ([datetime]::TryParse(("" + $czas), $script:Inv, [Globalization.DateTimeStyles]::None, [ref]$d)) { return $d.ToString("dd.MM, H:mm", $script:Inv) }
+  return ("" + $czas)
+}
+
+function Rozbicie-Przebiegow($p) {
+  # Kazdy przebieg pelnej wersji tego dnia: naglowek z suma, tabela etapow (Dolacz-Etapy w dane.ps1)
+  # albo powod, czemu jej nie ma; niezgodnosc sum i odrzucone przebiegi na czerwono.
+  $sb = New-Object System.Text.StringBuilder
+  $dzien = (Dzien-Z $p.Dzien).ToString("dd.MM", $script:Inv)
+  foreach ($pr in @($p.ListaPrzebiegow | Sort-Object Czas)) {
+    $kiedy = "Pełne czytanie dnia $dzien (przebieg $(Czas-Przebiegu $pr.Czas))"
+    $kosztowal = (($null -ne $pr.Wywolan) -and ($pr.Wywolan -gt 0)) -or (($null -ne $pr.Razem) -and ($pr.Razem -gt 0))
+    if (-not $kosztowal) {
+      if ($pr.Ok) { [void]$sb.Append("<p class=`"drobne`">$(Html $kiedy): bez uruchomień modelu - $(Html $pr.Blad)</p>") }
+      else { [void]$sb.Append("<p class=`"czerwony`">$(Html $kiedy): błąd, 0 tokenów - $(Html $pr.Blad)</p>") }
+      continue
+    }
+    $ile = "razem $(Html (Tokeny-Osi $pr.Razem)) tokenów · $(Html (Usd-Dol $pr.Usd))"
+    if ($pr.Ok -and ($null -ne $pr.Faktow)) { $ile += " · $(Liczba-Pl $pr.Faktow) $(Odmiana $pr.Faktow 'akapit' 'akapity' 'akapitów')" }
+    [void]$sb.Append("<p><b>$(Html $kiedy):</b> $ile</p>")
+    if (-not $pr.Ok) { [void]$sb.Append("<p class=`"czerwony`">ten przebieg się nie udał (jego koszt jest wliczony): $(Html $pr.Blad)</p>") }
+    if ($pr.EtapyUwaga) { [void]$sb.Append("<p class=`"czerwony`"><b>Uwaga:</b> $(Html $pr.EtapyUwaga)</p>") }
+    if (@($pr.Etapy).Count -gt 0) {
+      [void]$sb.Append("<table><thead><tr><th>etap</th><th>uruchomień</th><th>czytał (tokeny)</th><th>napisał (tokeny)</th><th>razem</th><th>$</th></tr></thead><tbody>")
+      foreach ($e in @($pr.Etapy)) {
+        [void]$sb.Append("<tr><td>$(Html $e.Nazwa)</td><td>$(Liczba-Pl $e.Wywolan)</td><td>$(Liczba-Pl $e.Czytal)</td><td>$(Liczba-Pl $e.Napisal)</td><td>$(Liczba-Pl $e.Razem)</td><td>$(Html (Usd-Dol $e.Usd))</td></tr>")
+      }
+      [void]$sb.Append("</tbody></table>")
+      if ($pr.Paczek) {
+        $zn = ""; if ($null -ne $pr.ZnakiCzytania) { $zn = ": $(Liczba-Pl $pr.ZnakiCzytania) znaków (razem z instrukcją dla modelu)" }
+        [void]$sb.Append("<p class=`"drobne`">Rozmowy tego dnia poszły do czytania w $($pr.Paczek) $(Odmiana $pr.Paczek 'paczce' 'paczkach' 'paczkach')$zn.</p>")
+      }
+    } elseif ($pr.EtapyBrak) { [void]$sb.Append("<p class=`"drobne`">$(Html $pr.EtapyBrak)</p>") }
+  }
   return $sb.ToString()
 }
 
@@ -268,6 +321,9 @@ function Zbuduj-Strone($m) {
   [void]$sb.Append((Karta-Wersji "p" "Pełne czytanie dnia (wiedza firmy)" $(if ($p) { $p.Razem } else { $null }) $(if ($k) { $k.ProcPelna } else { $null }) `
     $(if ($p) { $p.Faktow } else { $null }) $(if ($p) { $p.Wywolan } else { $null }) $(if ($p) { [bool]$p.Proba } else { $false }) $dodP $brakP $bladP))
   [void]$sb.Append("</div>`n")
+  if ($p -and (@($p.ListaPrzebiegow).Count -gt 0)) {
+    [void]$sb.Append("<h2>Pełne czytanie dnia - na co poszły tokeny</h2><div class=`"panel rozbicie`">$(Rozbicie-Przebiegow $p)</div>`n")
+  }
 
   # --- wykres
   [void]$sb.Append("<h2>Ostatnie $DniWykresu dni</h2><div class=`"panel`">")
@@ -297,6 +353,14 @@ function Zbuduj-Strone($m) {
     [void]$sb.Append("<td>$($tc[0])</td><td>$(Html $tc[1])</td><td>$($tc[2])</td><td>$($pc[0])</td><td>$($pc[1])</td><td>$($pc[2])</td><td>$(Html (Iloraz-Pl $r.Iloraz))</td></tr>")
     if (@($r.Bledy).Count -gt 0) {
       [void]$sb.Append("<tr class=`"opis-bledu`"><td colspan=`"9`">$(Html ($r.Bledy -join ' · '))</td></tr>")
+    }
+    if ($r.Pelna -and (@($r.Pelna.ListaPrzebiegow).Count -gt 0)) {
+      $lp = @($r.Pelna.ListaPrzebiegow)
+      $sum = "pełna wersja: na co poszły tokeny"
+      if ($lp.Count -gt 1) { $sum += " ($($lp.Count) $(Odmiana $lp.Count 'przebieg' 'przebiegi' 'przebiegów'))" }
+      $klSum = ""
+      if (@($lp | Where-Object { $_.EtapyUwaga }).Count -gt 0) { $sum += " - suma etapów się nie zgadza"; $klSum = " class=`"czerwony`"" }
+      [void]$sb.Append("<tr class=`"szczegoly`"><td colspan=`"9`"><details><summary$klSum>$(Html $sum)</summary><div class=`"rozbicie`">$(Rozbicie-Przebiegow $r.Pelna)</div></details></td></tr>")
     }
   }
   [void]$sb.Append("</tbody></table></div>`n")

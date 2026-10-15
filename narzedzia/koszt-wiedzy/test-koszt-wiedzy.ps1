@@ -11,9 +11,11 @@
 #   - procenty: od calego dnia z odczytem z cache i bez niego, suma okresu od dni z danymi,
 #   - brak dziennika pelnej wersji: strona powstaje, karta "brak danych", proba z 14.10 w tabeli,
 #   - dzien z bledem przebiegu (obu wersji) na czerwono z opisem,
+#   - rozbicie pelnej wersji na etapy z dziennikow koszt.tsv dnia: tylko wiersze tego przebiegu
+#     (okno czasu), suma etapow = suma z koszty.jsonl; przebieg bez katalogu dnia - "rozbicia nie ma",
 #   - dni zakonczone ida do pliku podrecznego i nie licza sie drugi raz.
 # Proby negatywne (kazda MUSI byc zlapana): brak licznika, uciety modul, zepsuta linia dziennika
-# pelnej wersji i tanszej, zepsuty plik podreczny, zly -Dzis.
+# pelnej wersji i tanszej, zepsuty plik podreczny, zly -Dzis, suma etapow niezgodna z suma przebiegu.
 
 param(
   [string]$Zrodlo = (Split-Path -Parent (Split-Path -Parent $PSScriptRoot)),
@@ -77,6 +79,19 @@ try {
     '{zepsute'
   ) -join "`n"
   Zapisz $plikPelnej $jsonl
+  # Dzienniki wywolan pelnej wersji (jak przeglad.py): 19.10 = 10 paczek x 40 000 + 9 konsolidacji
+  # x 15 000 + 1 tagi x 65 000 = 600 000 tokenow, 20 wywolan, 1,20 $ - zgodne z koszty.jsonl; jeden
+  # wiersz PO czasie przebiegu (nastepna proba) nie moze sie wliczyc. 18.10: 2 000 tokenow zamiast 1 000.
+  $nagKosztu = "kiedy`tetap`tklucz`topis`tsekundy`tznaki_wyslane`tznaki_odebrane`tinput_tokens`tcache_creation_input_tokens`tcache_read_input_tokens`toutput_tokens`ttokeny_razem`tkoszt_usd`twynik"
+  function Wiersz-Kosztu($kiedy, $etap, $we, $tw, $od, $wy, $usd) { return "$kiedy`t$etap`tk`topis`t1.0`t1000`t10`t$we`t$tw`t$od`t$wy`t$($we + $tw + $od + $wy)`t$usd`tok" }
+  $dzienny = Join-Path $Mr "wiedza-firmy\dzienny"
+  $tsv = @($nagKosztu)
+  for ($i = 0; $i -lt 10; $i++) { $tsv += (Wiersz-Kosztu "2026-10-20T02:10:0$i" "paczka" 0 15000 15000 10000 "0.0800") }
+  for ($i = 0; $i -lt 9; $i++) { $tsv += (Wiersz-Kosztu "2026-10-20T02:20:0$i" "konsolidacja" 0 5000 5000 5000 "0.0400") }
+  $tsv += (Wiersz-Kosztu "2026-10-20T05:00:00" "paczka" 0 0 0 99999 "9.0000")
+  Zapisz (Join-Path $dzienny "2026-10-19\przeglad\.stan\koszt.tsv") ($tsv -join "`n")
+  Zapisz (Join-Path $dzienny "2026-10-19\przeglad\tagi\.stan\koszt.tsv") ((@($nagKosztu, (Wiersz-Kosztu "2026-10-20T03:00:00" "tagi" 5000 20000 20000 20000 "0.0400"))) -join "`n")
+  Zapisz (Join-Path $dzienny "2026-10-18\przeglad\.stan\koszt.tsv") ((@($nagKosztu, (Wiersz-Kosztu "2026-10-19T02:59:00" "paczka" 2000 0 0 0 "0.0100"))) -join "`n")
   # Transkrypty: 19.10 = 6 000 000 tokenow (odczyt z cache 5 000 000), w tym odpowiedz zapisana
   # w dwoch liniach (pierwsza z czesciowym output) i worker w ...\subagents\; 18.10 = 1 000 000 bez cache.
   Zapisz (Join-Path $Projekty "proj\sesja.jsonl") (@(
@@ -111,6 +126,19 @@ try {
   Sprawdz "pelna: kilka prob dnia - tokeny i $ sumowane, fakty z ostatniej udanej, dzien udany" (($d10.Razem -eq 120) -and ([math]::Abs($d10.Usd - 0.75) -lt 1e-9) -and ($d10.Faktow -eq 4) -and $d10.Ok -and ($null -eq $d10.Blad) -and ($d10.NieudaneWczesniej -eq 1)) "$($d10 | Out-String)"
   $d11 = $p2.Dni["2026-10-11"]
   Sprawdz "pelna: zadna proba nie przeszla = blad z liczba prob i ostatnim bledem" ((-not $d11.Ok) -and ($d11.Razem -eq 20) -and ($d11.Blad -eq "2 prób, żadna nie przeszła; ostatni błąd: drugi")) "$($d11.Blad)"
+  $uw = @(Dolacz-Etapy $p (Join-Path $Mr "wiedza-firmy\dzienny"))
+  $pr19 = @($p.Dni["2026-10-19"].ListaPrzebiegow)[0]
+  $e19 = @{}; foreach ($e in @($pr19.Etapy)) { $e19[$e.Etap] = $e }
+  Sprawdz "etapy: czytanie 10 x 40 000, laczenie 9 x 15 000, tematy 1 x 65 000 (wiersz po przebiegu pominiety)" ((@($pr19.Etapy).Count -eq 3) -and
+    ($e19["paczka"].Wywolan -eq 10) -and ($e19["paczka"].Razem -eq 400000) -and ($e19["paczka"].Czytal -eq 300000) -and ($e19["paczka"].Napisal -eq 100000) -and
+    ($e19["konsolidacja"].Razem -eq 135000) -and ($e19["tagi"].Razem -eq 65000) -and ($e19["tagi"].Czytal -eq 45000) -and ($pr19.Paczek -eq 10) -and ($pr19.ZnakiCzytania -eq 10000)) "$($pr19.Etapy | Out-String)"
+  Sprawdz "etapy: suma zgodna z koszty.jsonl = brak uwagi" (-not $pr19.EtapyUwaga) $pr19.EtapyUwaga
+  $pr18 = @($p.Dni["2026-10-18"].ListaPrzebiegow)[0]
+  Sprawdz "NEG etapy: suma niezgodna z koszty.jsonl - uwaga z liczbami, nie cisza" (($uw.Count -eq 1) -and ($pr18.EtapyUwaga -match "suma etapów nie zgadza się.*tokenów 2\s000 zamiast 1\s000")) "$uw"
+  [void](Dolacz-Etapy $p2 (Join-Path $Mr "wiedza-firmy\dzienny"))
+  $pr10 = @($p2.Dni["2026-10-10"].ListaPrzebiegow | Where-Object { $_.Ok })[0]
+  Sprawdz "etapy: wiersz bez rozbicia (katalogu dnia juz nie ma) - powod, bez uwagi" (($null -eq $pr10.Etapy) -and ($pr10.EtapyBrak -match "rozbicia na etapy już nie ma") -and (-not $pr10.EtapyUwaga)) "$($pr10 | Out-String)"
+  Sprawdz "etapy: kazda proba dnia osobno (2 linie 10.10 -> 2 przebiegi)" (@($p2.Dni["2026-10-10"].ListaPrzebiegow).Count -eq 2)
   $brakP = Dolacz-Probe (Czytaj-Pelna (Join-Path $Katalog "nie-ma.jsonl"))
   Sprawdz "pelna: brak dziennika = Jest false + proba 14.10" ((-not $brakP.Jest) -and $brakP.Dni["2026-10-14"].Proba -and ($brakP.Dni["2026-10-14"].Razem -eq 300120) -and ($brakP.Dni["2026-10-14"].Faktow -eq 63))
   $bt = Blad-Tanszej (Join-Path $Wiedza "cykl-ostatni.txt")
@@ -134,6 +162,14 @@ try {
   Sprawdz "karty: wczoraj 19.10, cały dzień 6,0 mln" ($g.Html -match "Wczoraj, 19\.10\.2026</b> · cały dzień Claude: 6,0 mln")
   Sprawdz "karta tanszej: 12 000 tokenow, 0,2%, 8 faktow, 1 wywolanie" (($g.Html -match "12 000 <small>tokenów") -and ($g.Html -match "0,2% całego dnia") -and ($g.Html -match "8 faktów · 1 wywołanie"))
   Sprawdz "karta pelnej: 600 000, 10%, 60 faktow, 20 wywolan, koszt" (($g.Html -match "600 000 <small>tokenów") -and ($g.Html -match "10% całego dnia") -and ($g.Html -match "60 faktów · 20 wywołań") -and ($g.Html -match "koszt: 1,20 \$"))
+  Sprawdz "rozbicie za wczoraj pod kartami: naglowek jak w makiecie i tabela etapow" (($g.Html -match "<h2>Pełne czytanie dnia - na co poszły tokeny</h2>") -and
+    ($g.Html -match "Pełne czytanie dnia 19\.10 \(przebieg 20\.10, 3:00\):</b> razem 600 tys\. tokenów · \`$1,20 · 60 akapitów") -and
+    ($g.Html -match "<td>czytanie rozmów</td><td>10</td><td>300\s000</td><td>100\s000</td><td>400\s000</td><td>\`$0,80</td>") -and
+    ($g.Html -match "<td>łączenie powtórzeń</td><td>9</td>") -and ($g.Html -match "<td>tematy i poufność</td><td>1</td><td>45\s000</td><td>20\s000</td><td>65\s000</td><td>\`$0,04</td>") -and
+    ($g.Html -match "w 10 paczkach: 10\s000 znaków"))
+  Sprawdz "szczegoly w tabeli: rozwijane przy dniu" ($g.Html -match '<tr class="szczegoly"><td colspan="9"><details><summary>pełna wersja: na co poszły tokeny</summary>')
+  Sprawdz "NEG niezgodna suma etapow 18.10: na gorze strony i czerwone szczegoly" (($g.Html -match "<li>Pełna wersja, dzień 2026-10-18 \(przebieg 2026-10-19T03:00:00\): suma etapów nie zgadza się") -and
+    ($g.Html -match '<summary class="czerwony">pełna wersja: na co poszły tokeny - suma etapów się nie zgadza</summary>')) $g.Tekst
   Sprawdz "pelna = 50x tansza" ($g.Html -match "<b>50×</b>")
   Sprawdz "cale zuzycie 18.10 = 1,0 mln (ten sam licznik: odpowiedz raz, najwieksze wartosci)" ($g.Html -match "18\.10\.2026 nd</td><td>1,0</td>")
   Sprawdz "dzien z bledem pelnej wersji na czerwono z opisem" (($g.Html -match '<tr class="zbledem"><td>18\.10\.2026') -and ($g.Html -match "Pełna wersja: limit wyczerpany"))

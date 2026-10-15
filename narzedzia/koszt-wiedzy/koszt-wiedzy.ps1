@@ -25,7 +25,7 @@
 # podrecznego <dom>\.claude\mr\koszt-wiedzy-dni.tsv i nie licza sie drugi raz.
 #
 # BUDOWA. Ten plik: parametry, sciezki, przebieg i exit. Reszta obok, kazdy z naglowkiem:
-#   dane.ps1    zrodla liczb (dzienniki obu wersji, cale zuzycie dnia), dni, sumy
+#   dane.ps1    zrodla liczb (dzienniki obu wersji, rozbicie pelnej na etapy, cale zuzycie dnia), dni, sumy
 #   strona.ps1  HTML: karty, wykres SVG, tabela, suma, stopka, strona bledu
 # Test: narzedzia\koszt-wiedzy\test-koszt-wiedzy.ps1.
 
@@ -105,6 +105,8 @@ try {
   $pelna = Dolacz-Probe (Czytaj-Pelna $plikPelnej)
   # Brak dziennika pelnej wersji to NIE awaria - ten krok jeszcze nie ruszyl; karta mowi "brak danych".
   if ($pelna.Jest -eq $false -and (Test-Path -LiteralPath $plikPelnej)) { $uwagi += "Pełna wersja: $($pelna.Powod)" }
+  # Rozbicie przebiegow na etapy; suma etapow, ktora nie zgadza sie z suma przebiegu, idzie na gore.
+  foreach ($u in @(Dolacz-Etapy $pelna (Join-Path $Mr "wiedza-firmy\dzienny"))) { $uwagi += $u }
   if ($pelna.Zle -gt 0) { $uwagi += "Pełna wersja: $($pelna.Zle) linii dziennika $plikPelnej nie da się odczytać (np. $($pelna.PrzykladZlej)) - pominięte" }
 
   $klucze = Zakres-Dni $dzisData $tansza $bladTanszej $pelna
