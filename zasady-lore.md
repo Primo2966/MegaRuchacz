@@ -41,3 +41,9 @@ rozpoznanie w sprawie wyglądającej na rozstrzygniętą.
 automatycznie do wiadomości. W zapisie są pomysły porzucone i decyzje odwrócone.
 Potwierdź w plikach albo u użytkownika, zanim na tym zbudujesz działanie. Mów,
 skąd to masz.
+
+**Znaczek źródła.** Gdy odpowiedź opiera się na czymś, co przyniosło Lore
+(`lore_search`, `lore_context` albo wstawka „Z ARCHIWUM”) lub wiedza firmy
+(`szukaj_wiedzy` z jfwiedza), zacznij ją od znaczka: `🟣 Lore`, `🟠 jfwiedza` albo
+oba. Tylko gdy wynik naprawdę wpłynął na treść odpowiedzi — samo wywołanie, które
+nic przydatnego nie dało, nie dostaje znaczka.
