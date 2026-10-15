@@ -12,7 +12,7 @@ i wtyczka JFTools - zmiana ksztaltu tylko razem z nimi:
 - GET /klient/tematy  (takze pending) -> {tematy, zasady, wersja}; zasady z zasady-klienta.md w katalogu danych.
 - POST /klient/wpisy  {paczka_id, wpisy[<=100]} -> {wyniki: [{klucz, wynik: dodano|duplikat|usuniety_wczesniej|blad,
   opis?}]}; pending = 409 czeka_na_zatwierdzenie, blocked/nieznany = 403. Autor = owner.name z JFTools, bez
-  niego nazwa komputera; pole autora z ciala nie jest czytane wcale.
+  niego owner.email, dopiero potem nazwa komputera (jftools.Dostep.autor); pole autora z ciala nie jest czytane wcale.
 
 Poza /klient/token kazda trasa wymaga `Authorization: Bearer <token>` (401 jak w /mcp). Trasy dzialaja tylko
 w trybie JFTools (WIEDZA_FIRMY_UPRAWNIENIA=jftools) - bez niego 503 "wylaczone".
@@ -405,7 +405,7 @@ class Klienci:
             return 413, {"kod": "za_duzo", "opis": f"najwyżej {LIMIT_WPISOW} wpisów w paczce (jest {len(wpisy)})",
                          "limit": LIMIT_WPISOW}
         paczka = str(dane.get("paczka_id") or "")[:100]
-        autor = dostep.wlasciciel or dostep.nazwa or osoba
+        autor = dostep.autor or osoba
         tematy, blad, _uwaga = self.wiedza._tematy()
         if blad:
             self._licz("odmowy", "wpisy tematy_niedostepne")

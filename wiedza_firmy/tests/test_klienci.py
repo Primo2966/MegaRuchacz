@@ -465,11 +465,18 @@ def test_wpisy_bez_wlasciciela_autor_to_nazwa_komputera(swiat):
     assert r.json()["autor"] == "PC-ELA-2" and r.json()["wyniki"][0]["wynik"] == "dodano"
 
 
-def test_wpisy_owner_z_pustym_name_tez_nazwa_komputera(swiat, capsys):
-    swiat.atrapa.komputery["15"]["owner"] = {"email": "x@example.com", "name": None}
+def test_wpisy_owner_z_samym_emailem_autor_to_email(swiat, capsys):
+    # tak wyglada dzis wiekszosc komputerow w JFTools (np. PRIMO-DZIK: sam e-mail, bez imienia i nazwiska)
+    swiat.atrapa.komputery["15"]["owner"] = {"email": " x@example.com ", "name": None}
     token = swiat.daj_token("15")
-    assert swiat.wpisy(token, [wpis("Szary kret")]).json()["autor"] == "PC-ELA-2"
+    assert swiat.wpisy(token, [wpis("Szary kret")]).json()["autor"] == "x@example.com"
     assert "pominiete z odpowiedzi" not in capsys.readouterr().err
+
+
+def test_wpisy_owner_bez_name_i_emaila_autor_to_nazwa_komputera(swiat):
+    swiat.atrapa.komputery["15"]["owner"] = {"email": None, "name": None}
+    token = swiat.daj_token("15")
+    assert swiat.wpisy(token, [wpis("Rudy kret")]).json()["autor"] == "PC-ELA-2"
 
 
 def test_limit_100_wpisow(swiat):
@@ -518,10 +525,13 @@ def test_tematy_zasady_z_pliku_a_brak_pliku_to_pusty_tekst_i_dziennik(swiat, cap
 
 def test_owner_ksztalty():
     d, pom = jftools.Dostep.z_odpowiedzi(odpowiedz("1", owner={"email": "a@b", "name": " Ola "}), "1")
-    assert d.wlasciciel == "Ola" and pom == []
+    assert d.wlasciciel == "Ola" and d.wlasciciel_email == "a@b" and d.autor == "Ola" and pom == []
     for owner in (None, {"email": None, "name": None}, {"email": "a@b", "name": None}):
         d, pom = jftools.Dostep.z_odpowiedzi(odpowiedz("1", owner=owner), "1")
         assert d.wlasciciel == "" and pom == [], owner
+        assert d.autor == ("a@b" if owner and owner["email"] else "PC Eli"), owner
+    d, pom = jftools.Dostep.z_odpowiedzi(odpowiedz("1", owner={"email": 5, "name": None}), "1")
+    assert d.wlasciciel_email == "" and d.autor == "PC Eli" and pom
     d, pom = jftools.Dostep.z_odpowiedzi(odpowiedz("1", owner="Ola"), "1")
     assert d.wlasciciel == "" and pom
     stara = odpowiedz("1")

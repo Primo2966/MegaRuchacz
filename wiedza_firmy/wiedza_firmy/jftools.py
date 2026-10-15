@@ -13,7 +13,7 @@ Po wlaczeniu:
 - Status komputera inny niz active (pending, blocked, 404) = zero uprawnien z komunikatem dlaczego.
 - Tematy: GET <baza>/knowledge-topics; gdy JFTools nie odpowiada - ostatnia znana lista, potem tematy.json.
 - Krok 3 (0.4.0): wlasciciel komputera z pola `owner: {email, name}` odpowiedzi knowledge-permissions (autor
-  wpisow z klienta), klucze publiczne komputerow z GET <baza>/keys (KluczeJFTools, podpis przy /klient/token),
+  wpisow z klienta: name, bez niego email, dopiero potem nazwa komputera), klucze publiczne komputerow z GET <baza>/keys (KluczeJFTools, podpis przy /klient/token),
   komputer usuniety z JFTools (404) = znacznik `wygasl` na jego wpisie `komputer-<id>` w osoby.json.
 
 Pamiec jak w ecommerce-helper (src/ecommerce_helper/uprawnienia.py): odpowiedz wazna 10 min (komputer bez
@@ -142,6 +142,12 @@ class Dostep:
     nazwa: str = ""
     granty: dict[str, str] = field(default_factory=dict)  # temat_id -> najwyzszy poziom
     wlasciciel: str = ""  # owner.name z JFTools (0.4.0); pusty = panel nie przypisal osoby albo stara wtyczka
+    wlasciciel_email: str = ""  # owner.email - autor wpisow, gdy panel ma przy komputerze sam e-mail bez nazwiska
+
+    @property
+    def autor(self) -> str:
+        """Podpis wpisow z tego komputera: imie i nazwisko wlasciciela, bez nich jego e-mail, potem nazwa komputera."""
+        return self.wlasciciel or self.wlasciciel_email or self.nazwa
 
     @classmethod
     def z_odpowiedzi(cls, dane: Any, komputer: str) -> tuple["Dostep", list[str]]:
@@ -169,17 +175,21 @@ class Dostep:
             else:
                 pominiete.append(f"{temat}={str(poziom)[:30]!r}")
         # owner: {"email": str|null, "name": str|null} albo null (wtyczka 84b58e6); name null = admin nie wpisal osoby
-        wlasciciel = ""
+        wlasciciel = wlasciciel_email = ""
         owner = dane.get("owner")
         if isinstance(owner, dict):
             if isinstance(owner.get("name"), str):
                 wlasciciel = owner["name"].strip()
             elif owner.get("name") is not None:
                 pominiete.append(f"owner.name={str(owner.get('name'))[:60]!r} (oczekiwany tekst albo null)")
+            if isinstance(owner.get("email"), str):
+                wlasciciel_email = owner["email"].strip()
+            elif owner.get("email") is not None:
+                pominiete.append(f"owner.email={str(owner.get('email'))[:60]!r} (oczekiwany tekst albo null)")
         elif owner is not None:
             pominiete.append(f"owner={str(owner)[:60]!r} (oczekiwany obiekt {{email, name}} albo null)")
         return cls(status=status, nazwa=str(kmp.get("name") or "").strip(), granty=granty,
-                   wlasciciel=wlasciciel), pominiete
+                   wlasciciel=wlasciciel, wlasciciel_email=wlasciciel_email), pominiete
 
 
 @dataclass
