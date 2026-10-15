@@ -174,7 +174,10 @@ def warunek_uprawnien(upr: Uprawnienia, temat: str | None = None,
     Wpis jest widoczny, gdy jednoczesnie:
       - kazdy jego temat specjalny osoba ma do poziomu >= poufnosc wpisu (I),
       - osoba ma do poziomu >= poufnosc ktorykolwiek z jego tematow zwyklych (LUB), a gdy wpis nie ma
-        zwyklych - ktorykolwiek temat w ogole (wpis bez tematow nie jest widoczny dla nikogo poza adminem),
+        zwyklych - ktorykolwiek temat w ogole (wpis bez tematow nie jest widoczny dla nikogo poza adminem);
+        wyjatek: wpis wrazliwy z tematem specjalnym wymaga w temacie zwyklym tylko poziomu wewnetrzne -
+        czesc wrazliwa pilnuje temat specjalny (tam i tak trzeba miec wrazliwe), a wrazliwe wpisy bez
+        tematu specjalnego dalej wymagaja wrazliwego tematu zwyklego (nie wyciekaja przez zwykle tematy),
       - przy `temat`: ten temat jest wsrod tematow wpisu i osoba widzi wpis przez niego.
     """
     if upr.admin:
@@ -194,11 +197,23 @@ def warunek_uprawnien(upr: Uprawnienia, temat: str | None = None,
         return None
     d = "(" + " OR ".join(czesci) + ")"  # osoba widzi wpis przez temat wiersza wt
     zw, zw_args = _wsrod("wt.temat_id", zwykle)
+    # poziom wpisu liczony w tematach zwyklych: wrazliwy z tematem specjalnym = wewnetrzne
+    ws, ws_args = _wsrod("ws.temat_id", zwykle)
+    efekt = (f"(CASE WHEN w.poufnosc = 'wrazliwe' AND EXISTS (SELECT 1 FROM wpisy_tematy ws"
+             f" WHERE ws.wpis_id = w.id AND NOT ({ws})) THEN 'wewnetrzne' ELSE w.poufnosc END)")
+    czesci_zw, d_zw_args = [], []
+    for t, najwyzszy in sorted(upr.tematy.items()):
+        poziomy = poziomy_do(najwyzszy)
+        if not poziomy:
+            continue
+        czesci_zw.append(f"(wt.temat_id = ? AND {efekt} IN ({', '.join('?' * len(poziomy))}))")
+        d_zw_args += [t, *ws_args, *poziomy]
+    d_zw = "(" + " OR ".join(czesci_zw) + ")"
     sql = ("w.usuniety IS NULL"
            f" AND {_NIE_MA_TEMATU.format(f'NOT ({zw}) AND NOT {d}')}"
-           f" AND ({_MA_TEMAT.format(f'({zw}) AND {d}')}"
+           f" AND ({_MA_TEMAT.format(f'({zw}) AND {d_zw}')}"
            f" OR ({_NIE_MA_TEMATU.format(f'({zw})')} AND {_MA_TEMAT.format(d)}))")
-    args = [*zw_args, *d_args, *zw_args, *d_args, *zw_args, *d_args]
+    args = [*zw_args, *d_args, *zw_args, *d_zw_args, *zw_args, *d_args]
     if temat:
         sql += " AND " + _MA_TEMAT.format(f"wt.temat_id = ? AND {d}")
         args += [temat, *d_args]

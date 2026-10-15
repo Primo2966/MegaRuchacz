@@ -38,6 +38,10 @@ WPISY = {
     "nosorozec": NowyWpis("Miedziany nosorozec zna serwer frazy rankingowej.", "seo", "jawne",
                           "Bartek", "2026-10-03", tematy_dodatkowe=("it",)),
     "flaming": NowyWpis("Cytrynowy flaming stoi przy samej grafice.", "grafiki", "jawne", "Celina", "2026-10-04"),
+    "tygrys": NowyWpis("Fioletowy tygrys liczy budzet fraz w ofertach.", "seo", "wrazliwe",
+                       "Dorota", "2026-10-05", tematy_dodatkowe=("oferty",)),
+    "pantera": NowyWpis("Zielona pantera zna oplaty za wystawienie oferty.", "oferty", "wrazliwe",
+                        "Dorota", "2026-10-06"),
 }
 
 
@@ -143,7 +147,27 @@ def test_admin_widzi_wszystko_ze_wszystkimi_tematami(sr):
     odp = sr.szukaj_wiedzy(Uprawnienia(osoba="szef", admin=True), "tukan wieloryb nosorozec flaming", limit=50)
     tematy = {w["tresc"].split()[1].lower(): [t["id"] for t in w["tematy"]] for w in odp["wyniki"]}
     assert tematy == {"tukan": ["grafiki", "seo"], "wieloryb:": ["grafiki", "oferty"], "nosorozec": ["seo", "it"],
-                      "flaming": ["grafiki"]}
+                      "flaming": ["grafiki"], "tygrys": ["seo", "oferty"], "pantera": ["oferty"]}
+
+
+# ---------------------------------------------------------------- wrazliwy z tematem specjalnym i zwyklym
+
+def test_wrazliwy_specjalny_ze_zwyklym_widoczny_bez_wrazliwego_zwyklego(sr):
+    """Czesc wrazliwa pilnuje temat specjalny; w zwyklym wystarczy wewnetrzne."""
+    odp = szukaj(sr, U(seo="wrazliwe", oferty="wewnetrzne"), "tygrys")
+    w = next(w for w in odp["wyniki"] if "tygrys" in w["tresc"].lower())
+    assert [t["id"] for t in w["tematy"]] == ["seo"]
+
+
+def test_wrazliwy_specjalny_ze_zwyklym_niewidoczny_bez_pelnego_specjalnego(sr):
+    assert not widzi(sr, U(oferty="wrazliwe"), "tygrys")
+    assert not widzi(sr, U(seo="wewnetrzne", oferty="wrazliwe"), "tygrys")
+    assert not widzi(sr, U(seo="wrazliwe"), "tygrys")
+
+
+def test_wrazliwy_bez_specjalnego_nie_wycieka_przez_zwykly(sr):
+    assert not widzi(sr, U(oferty="wewnetrzne"), "pantera")
+    assert widzi(sr, U(oferty="wrazliwe"), "pantera")
 
 
 # ---------------------------------------------------------------- filtr w SQL, przed rankingiem
