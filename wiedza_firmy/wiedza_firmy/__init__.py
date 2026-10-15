@@ -15,7 +15,7 @@ import os
 import sys
 from pathlib import Path
 
-__version__ = "0.4.1"
+__version__ = "0.4.2"
 
 
 def _katalog_lore() -> Path:

@@ -18,7 +18,12 @@ mcp = MCPServer(
     instructions=(
         "Memory of every Claude Code conversation on this machine (all projects and windows). "
         "Call lore_search when you start a task, to check what has already been settled in other "
-        "sessions, before you ask the user about things they may have explained elsewhere."
+        "sessions, before you ask the user about things they may have explained elsewhere. "
+        "When your answer relies on something this server brought (lore_search, lore_context or an "
+        "inserted „Z ARCHIWUM” fragment), start the answer with the badge `🟣 Lore`. Only when the "
+        "result really shaped the content of the answer - a call that gave nothing useful gets no "
+        "badge. If the answer also uses the company knowledge (jfwiedza, badge `🟠 jfwiedza`), put "
+        "both badges."
     ),
 )
 

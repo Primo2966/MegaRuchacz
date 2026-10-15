@@ -158,6 +158,13 @@ def test_instrukcje_mieszcza_sie_i_zaczynaja_od_najwazniejszego():
     assert INSTRUKCJE.index("szukaj_wiedzy") < 300 and INSTRUKCJE.index("dodaj do wiedzy firmy") < 400
 
 
+def test_instrukcje_kaza_znaczek_zrodla(srodowisko):
+    """Znaczek zrodla ma dzialac u kazdego klienta MCP, nie tylko u wlasciciela - stoi w instrukcjach serwera."""
+    mcp = serwer.zbuduj_mcp(srodowisko.wiedza, srodowisko.zrodlo)
+    assert "`🟠 jfwiedza`" in mcp.instructions and "`🟣 Lore`" in mcp.instructions
+    assert "nie dostaje znaczka" in mcp.instructions
+
+
 # ---------------------------------------------------------------- osoba z tokenu, zadanie po zadaniu
 
 def test_1_przez_http_temat_a_nie_widzi_b(klient, srodowisko):
