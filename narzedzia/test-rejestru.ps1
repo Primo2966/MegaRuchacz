@@ -70,6 +70,7 @@ function Hooki([string]$plik) {
         if ($c -like "*straznik-zasad.ps1*") { $nasze += "$z/straznik" }
         elseif ($c -like "*orchestrator-reminder.json*") { $nasze += "$z/przypomnienie" }
         elseif ($c -like "*narzedzia/terminy.js*") { $nasze += "$z/terminy" }
+        elseif ($c -like "*narzedzia/znacznik-zrodla.js*") { $nasze += "$z/znacznik" }
         elseif ($c -match 'mr-log\.js') { $nasze += "$z/rejestr" }
         else { $cudze += "$z|$c" }
       }
@@ -251,6 +252,7 @@ function Sprawdz-Dom([string]$co, [string]$dom, $ocz, [bool]$migracja) {
   $chciane = @("SessionStart/straznik", "SessionStart/terminy")
   if ($ocz.kierownik -or $ocz.lore -or $ocz.wiedza) { $chciane += "UserPromptSubmit/przypomnienie" }
   if ($ocz.kierownik) { $chciane += @("SubagentStart/rejestr", "SubagentStop/rejestr") }
+  if ($ocz.lore) { $chciane += "Stop/znacznik" }   # znacznik Lore/jfwiedza (wiedzafirmy w macierzy nie ma - trzeci stan)
   $chciane = @($chciane | Sort-Object)
   Sprawdz "${co}: hooki MegaRuchacza = $($chciane -join ', ')" ((($h.Nasze) -join ",") -eq ($chciane -join ",")) ($h.Nasze -join ",")
   Sprawdz "${co}: cudze hooki nietkniete" ((($h.Cudze) -join ",") -eq ('PreToolUse|echo cudzy-hook,SessionStart|node "C:/Users/x/.orca/hooks/start.js"')) ($h.Cudze -join ",")

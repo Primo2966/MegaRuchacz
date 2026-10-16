@@ -1307,6 +1307,7 @@ function Rodzaj-Hooka($h) {
   if ($p -like "*megaruchacz-sesja.json*")     { return "zasady" }
   if ($p -like "*orchestrator-reminder.json*") { return "przypomnienie" }
   if ($p -match 'narzedzia[\\/]terminy\.js') { return "terminy" }     # przypomnienia z terminem (2026-10-05)
+  if ($p -match 'narzedzia[\\/]znacznik-zrodla\.js') { return "znacznik" }   # znacznik Lore/jfwiedza po odpowiedzi (2026-10-16)
   if ($p -match 'mr-log\.js(?![A-Za-z0-9])')  { return "rejestr" }   # mr-log.js i megaruchacz-mr-log.js
   return $null
 }
@@ -1431,6 +1432,7 @@ function Wzory-Hookow-Globalnych($zrodlo, $domClaude) {
               '/narzedzia/straznik-zasad.ps1" -Zrodlo "' + $r + '" -Projekt "$CLAUDE_PROJECT_DIR" || true'
   $przypomnienie = 'node "' + $r + '/narzedzia/przypomnienie.js" "' + $przyp + '" || cat "' + $przyp + '"'
   $terminy = 'node "' + $r + '/narzedzia/terminy.js" start || true'
+  $znacznik = 'node "' + $r + '/narzedzia/znacznik-zrodla.js" || true'
   $wzory = @()
   if ((Rodzaje-Hookow-Wylaczone) -notcontains "straznik") {
     $wzory += [pscustomobject]@{ zdarzenie = "SessionStart"; rodzaj = "straznik"
@@ -1446,6 +1448,14 @@ function Wzory-Hookow-Globalnych($zrodlo, $domClaude) {
   if ((Rodzaje-Hookow-Wylaczone) -notcontains "przypomnienie") {
     $wzory += [pscustomobject]@{ zdarzenie = "UserPromptSubmit"; rodzaj = "przypomnienie"
       hook = [pscustomobject]@{ type = "command"; command = $przypomnienie; shell = "bash"; timeout = 5 } }
+  }
+  # Znacznik zrodla (narzedzia\znacznik-zrodla.js) na Stop: po kazdej odpowiedzi linia dla uzytkownika
+  # (systemMessage), czy tura siegala do Lore albo wiedzy firmy - liczona z transkryptu, bo znaczka
+  # stawianego przez model w praktyce nie bylo. Bez statusMessage: chodzi po kazdej odpowiedzi,
+  # migajacy napis bylby szumem. Przy wylaczonych modulach lore i wiedzafirmy nie ma czego znakowac.
+  if ((Rodzaje-Hookow-Wylaczone) -notcontains "znacznik") {
+    $wzory += [pscustomobject]@{ zdarzenie = "Stop"; rodzaj = "znacznik"
+      hook = [pscustomobject]@{ type = "command"; command = $znacznik; shell = "bash"; timeout = 5 } }
   }
   if ((Rodzaje-Hookow-Wylaczone) -notcontains "rejestr") {
     $wzory += [pscustomobject]@{ zdarzenie = "SubagentStart"; rodzaj = "rejestr"
@@ -1464,6 +1474,8 @@ function Rodzaje-Hookow-Wylaczone {
   $w = @()
   if ((Modul-Wylaczony "kierownik") -and (Modul-Wylaczony "wiedza") -and (Modul-Wylaczony "lore")) { $w += "przypomnienie" }
   if (Modul-Wylaczony "kierownik") { $w += "rejestr" }
+  # wiedzafirmy ma trzeci stan (brak klucza = nie zaproponowano) - znacznik zostaje przy nim tylko przy jawnym true
+  if ((Modul-Wylaczony "lore") -and ($script:Instalacja.moduly.wiedzafirmy -ne $true)) { $w += "znacznik" }
   if (Baza-Usunieta) { $w += @("straznik", "terminy") }
   return $w
 }
