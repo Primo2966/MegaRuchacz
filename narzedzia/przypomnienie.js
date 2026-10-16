@@ -40,6 +40,9 @@
 // ladunku konczyl skrypt na wejsciu i zabieral je ze soba. Gdy nie ma nic do doklejenia, skrypt
 // nie wypisuje nic. Zmienne do testow: MR_INSTALACJA (plik rejestru), MR_INSTALACJA_ALARM (stan
 // alarmu o nieczytelnym rejestrze).
+//
+// Od 2026-10-16 za archiwum idzie tez "Z WIEDZY FIRMY" - wpisy ze wspolnej wiedzy firmy (serwer
+// jfwiedza), przy module wiedzafirmy. Szczegoly i uzasadnienia progow: sekcja "wiedza firmy" nizej.
 
 const fs = require("fs");
 const os = require("os");
@@ -307,6 +310,295 @@ function archiwum(wejscie, budzet, plikStanu) {
   return wynik;
 }
 
+// ---------------------------------------------------------------- wiedza firmy (jfwiedza)
+
+// Od 2026-10-16 obok archiwum idzie tez podpowiedz ze wspolnej wiedzy firmy (serwer MCP jfwiedza,
+// kod w wiedza_firmy\ tego repo): to samo szukaj_wiedzy, ktore Claude ma jako narzedzie, ale wolane
+// przez automat - jak przy Lore, model sam po nie nie siega. Na serwerze to FTS5 + lokalny model
+// wektorow (mmlw przez fastembed/ONNX, wiedza_firmy\wiedza_firmy\wektory.py) - zadnego platnego API.
+// Jedno zadanie HTTP (serwer jest bezstanowy: tools/call bez initialize) z tymi samymi naglowkami,
+// ktorych uzywa klient MCP Claude Code (~\.claude.json, mcpServers.jfwiedza) - token nie lezy ani
+// w repo, ani w pliku stanu, ani w zadnym komunikacie.
+// Rownolegle z Lore: zadanie najpierw wychodzi, potem Lore (spawnSync blokuje petle, ale odpowiedz
+// serwera czeka w buforze gniazda), na koncu odbior - czasy sie nie sumuja.
+// Wlaczone tylko przy wiedzafirmy === true w rejestrze instalacji (trzeci stan, stan.ps1: brak
+// klucza = nie zaproponowano; rejestr nieczytelny = jak przed ta zmiana, czyli bez) i przy wpisie
+// jfwiedza w konfiguracji. Bez wpisu - cisza i "brak-konfiguracji" w stanie: komputer bez wiedzy
+// firmy to nie awaria.
+// Zmienne do testow: MR_JFWIEDZA_KONFIG (plik w ukladzie ~\.claude.json), MR_JFWIEDZA_STAN.
+
+const NAGLOWEK_WIEDZY = "Z WIEDZY FIRMY (jfwiedza, automat) - trop, nie dowod; moze byc nieaktualne. Calosc: szukaj_wiedzy.";
+const SERWER_WIEDZY = "jfwiedza";
+// Ten sam sufit i to samo uzasadnienie kosztu co MAX_ARCHIWUM (doklejka zostaje w historii rozmowy).
+const MAX_WIEDZY = 450;
+const POZYCJI_WIEDZY = 3;
+// Pozycja z mniej niz tyloma znakami tresci to urwane zdanie bez sensu - wtedy mniej pozycji.
+const MIN_TRESCI = 100;
+// Limit od wyslania do odpowiedzi - jak CZAS_PYTHONA_MS. Zmierzone 2026-10-16 w sieci biura:
+// 155-180 ms przy cieplym serwerze.
+const CZAS_WIEDZY_MS = 650;
+// Ile najwyzej czekac na wyslanie zadania, zanim ruszy Lore (polaczenie w LAN to kilka ms; host
+// nieosiagalny nie moze wstrzymywac Lore).
+const CZAS_WYSLANIA_MS = 100;
+// Awaria sieci (limit czasu, odmowa polaczenia, HTTP 5xx) krzyczy dopiero za trzecim razem z rzedu.
+// Pojedyncza jest spodziewana: serwer co 10 min odswieza w trakcie zadania liste tematow z JFTools
+// (do 3 s - jftools.LIMIT_ZAPYTANIA_S; pierwsze zapytanie 2026-10-16 trwalo 4265 ms) i co godzine sam
+// sie restartuje po aktualizacji. Trzech wiadomosci z rzedu to nie tlumaczy - odswiezenie konczy sie
+// po stronie serwera, nawet gdy my juz nie czekamy. Bledy pewne (401 - zly token, smieci w odpowiedzi,
+// zla konfiguracja) krzycza od razu.
+const PROG_AWARII_SIECI = 3;
+// Po progu nie pytamy przy kazdej wiadomosci, tylko co tyle minut: serwer poza zasiegiem (laptop
+// poza biurem) kosztowalby inaczej do CZAS_WIEDZY_MS na kazdy enter.
+const MINUT_PRZERWY_PO_AWARII = 5;
+// Pytanie do serwera: poczatek wiadomosci wystarczy (to wyszukiwanie, nie rozmowa).
+const MAX_PYTANIA = 400;
+
+// Konfiguracja klienta MCP: { brak } = nie ma czego pytac (cisza), { blad } = jest, ale zepsuta (alarm).
+function konfiguracjaWiedzy(plik) {
+  let t;
+  try { t = fs.readFileSync(plik, "utf8").replace(/^﻿/, ""); }
+  catch (e) {
+    if (e && e.code === "ENOENT") return { brak: "brak pliku " + plik.replace(os.homedir(), "~") };
+    return { blad: "nie umiem odczytac " + plik.replace(os.homedir(), "~") + ": " + (e && e.message || e) };
+  }
+  let j;
+  try { j = JSON.parse(t); } catch (e) { return { blad: plik.replace(os.homedir(), "~") + " nieczytelny: " + e.message }; }
+  const s = j && j.mcpServers && j.mcpServers[SERWER_WIEDZY];
+  if (!s) return { brak: "brak serwera " + SERWER_WIEDZY + " w " + plik.replace(os.homedir(), "~") };
+  if (typeof s.url !== "string" || !s.url) return { blad: "wpis " + SERWER_WIEDZY + " bez adresu url" };
+  const naglowki = {};
+  if (s.headers && typeof s.headers === "object") {
+    for (const k of Object.keys(s.headers)) if (typeof s.headers[k] === "string") naglowki[k] = s.headers[k];
+  }
+  return { url: s.url, naglowki };
+}
+
+// Pytanie z wiadomosci albo "" - za krotka wiadomosc ("ok", "tak") daje na serwerze same smieci
+// tuz nad progiem trafnosci (wektory.py: jednowyrazowe 0,74-0,75), wiec nie pytamy wcale.
+function pytanieWiedzy(tresc) {
+  const t = String(tresc).replace(/\s+/g, " ").trim();
+  const slowa = t.split(" ").filter((s) => (s.match(/\p{L}/gu) || []).length >= 3);
+  return slowa.length >= 2 ? t.slice(0, MAX_PYTANIA) : "";
+}
+
+function opisBleduSieci(e) {
+  const kod = e && e.code ? e.code : "";
+  if (kod === "ECONNREFUSED") return "serwer odmowil polaczenia (" + kod + ")";
+  if (kod === "EHOSTUNREACH" || kod === "ENETUNREACH" || kod === "ENOTFOUND" || kod === "EAI_AGAIN") return "serwer poza zasiegiem (" + kod + ")";
+  return "blad sieci: " + (kod ? kod + " " : "") + String(e && e.message || e).slice(0, 120);
+}
+
+// Wysyla zadanie i od razu wraca. wynik: { http, cialo } albo { siec: true, blad }.
+function wyslijPytanie(konf, pytanie, limit) {
+  let u;
+  try { u = new URL(konf.url); } catch (e) { return { blad: "zly adres serwera " + SERWER_WIEDZY + ": " + konf.url }; }
+  const modul = u.protocol === "https:" ? require("https") : (u.protocol === "http:" ? require("http") : null);
+  if (!modul) return { blad: "nieobslugiwany adres serwera " + SERWER_WIEDZY + ": " + konf.url };
+  const cialo = JSON.stringify({ jsonrpc: "2.0", id: 1, method: "tools/call",
+    params: { name: "szukaj_wiedzy", arguments: { pytanie, limit } } });
+  const naglowki = Object.assign({}, konf.naglowki, { "Content-Type": "application/json",
+    "Accept": "application/json, text/event-stream", "Content-Length": Buffer.byteLength(cialo) });
+  const h = { req: null, wynik: null, wyslane: null };
+  h.wynik = new Promise((gotowe) => {
+    h.req = modul.request(u, { method: "POST", headers: naglowki, agent: false }, (odp) => {
+      let dane = "";
+      odp.setEncoding("utf8");
+      odp.on("data", (k) => { dane += k; });
+      odp.on("end", () => gotowe({ http: odp.statusCode, cialo: dane }));
+      odp.on("error", (e) => gotowe({ siec: true, blad: "przerwana odpowiedz: " + e.message }));
+    });
+    h.req.on("error", (e) => gotowe({ siec: true, blad: opisBleduSieci(e) }));
+  });
+  h.wyslane = new Promise((gotowe) => { h.req.on("finish", gotowe); });
+  h.req.end(cialo);
+  return h;
+}
+
+// Odpowiedz serwera -> { dane } albo { blad, siec }. Odpowiedz bywa JSON-em albo SSE (data: ...).
+function rozbierzOdpowiedz(w) {
+  if (w.siec) return { blad: w.blad, siec: true };
+  if (w.http === 401 || w.http === 403) {
+    return { blad: "serwer odrzucil token (HTTP " + w.http + ") - zly albo wycofany token jfwiedza w ~\\.claude.json" };
+  }
+  if (w.http >= 500) return { blad: "serwer zwrocil HTTP " + w.http, siec: true };
+  if (w.http !== 200) return { blad: "serwer zwrocil HTTP " + w.http };
+  let tekst = String(w.cialo || "").trim();
+  if (/^(event|data|id):/m.test(tekst) && !tekst.startsWith("{")) {
+    const linie = tekst.split(/\r?\n/).filter((l) => l.startsWith("data:"));
+    tekst = linie.length ? linie[linie.length - 1].slice(5).trim() : "";
+  }
+  let j;
+  try { j = JSON.parse(tekst); } catch (e) { return { blad: "odpowiedz to nie JSON: " + tekst.slice(0, 80) }; }
+  if (j && j.error) return { blad: "blad serwera: " + String(j.error.message || JSON.stringify(j.error)).slice(0, 150) };
+  const r = j && j.result;
+  const pierwszy = r && Array.isArray(r.content) && r.content[0] && typeof r.content[0].text === "string" ? r.content[0].text : null;
+  if (r && r.isError) return { blad: "szukaj_wiedzy zwrocilo blad: " + String(pierwszy || "").slice(0, 150) };
+  let dane = null;
+  if (pierwszy !== null) { try { dane = JSON.parse(pierwszy); } catch (e) { dane = null; } }
+  if (!dane && r && r.structuredContent && typeof r.structuredContent === "object") dane = r.structuredContent;
+  if (!dane || !Array.isArray(dane.wyniki)) return { blad: "odpowiedz szukaj_wiedzy bez listy wynikow" };
+  return { dane };
+}
+
+// Linia wpisu najwyzej `max` znakow albo null, gdy na tresc zostaloby mniej niz MIN_TRESCI.
+function pozycjaWiedzy(w, max) {
+  const glowa = "- [" + (w.autor || "?") + ", " + (w.data || "?") + ", #" + w.id + "] ";
+  let t = String(w.tresc).replace(/\s+/g, " ").trim();
+  const miejsce = max - glowa.length;
+  if (t.length > miejsce) {
+    if (miejsce - 3 < MIN_TRESCI) return null;
+    t = t.slice(0, miejsce - 3);
+    const spacja = t.lastIndexOf(" ");
+    if (spacja > MIN_TRESCI) t = t.slice(0, spacja);
+    t = t.replace(/[\s,;:.\-]+$/, "") + "...";
+  }
+  return glowa + t;
+}
+
+// Blok do doklejenia: najwyzej POZYCJI_WIEDZY wpisow jeszcze niedoklejonych w tej rozmowie. Krotkie
+// wpisy ida w calosci, dlugie dziela reszte miejsca po rowno; za malo miejsca na sensowna tresc =
+// o jeden wpis mniej. Blok nigdy nie przekracza budzetu - przyciete sa tresci wpisow (z "..."), nie blok.
+function blokWiedzy(wyniki, budzet, juz) {
+  const nowe = wyniki.filter((w) => w && typeof w.tresc === "string" && w.id !== undefined && juz.indexOf(w.id) < 0);
+  for (let k = Math.min(POZYCJI_WIEDZY, nowe.length); k >= 1; k--) {
+    const wybrane = nowe.slice(0, k);
+    let zostalo = budzet - NAGLOWEK_WIEDZY.length - k;   // k znakow nowej linii
+    const linie = new Array(k);
+    const kolejnosc = wybrane.map((w, i) => i)
+      .sort((a, b) => String(wybrane[a].tresc).length - String(wybrane[b].tresc).length);
+    let ok = true;
+    kolejnosc.forEach((i, n) => {
+      if (!ok) return;
+      const l = pozycjaWiedzy(wybrane[i], Math.floor(zostalo / (k - n)));
+      if (l === null) { ok = false; return; }
+      linie[i] = l;
+      zostalo -= l.length;
+    });
+    if (ok) return { blok: [NAGLOWEK_WIEDZY].concat(linie).join("\n"), ids: wybrane.map((w) => w.id) };
+  }
+  return { blok: "", ids: [] };
+}
+
+// Krok 1 (przed Lore): decyzja, czy pytac, i wyslanie. Nic tu nie czeka na odpowiedz.
+function zacznijWiedze(tresc, sesja, plikKonfigu, plikStanu) {
+  const u = { start: Date.now(), plikStanu, sesja, stan: czytajStan(plikStanu), h: null, gotowy: null };
+  u.sesje = u.stan.sesje && typeof u.stan.sesje === "object" ? u.stan.sesje : {};
+  u.juz = (sesja && u.sesje[sesja] && Array.isArray(u.sesje[sesja].ids)) ? u.sesje[sesja].ids : [];
+  const aw = u.stan.awaria;
+  const konf = typeof tresc === "string" ? konfiguracjaWiedzy(plikKonfigu) : null;
+  const pytanie = typeof tresc === "string" ? pytanieWiedzy(tresc) : "";
+  if (!konf) {
+    // brak tresci wiadomosci melduje juz archiwum (alarm Lore) - tu tylko slad
+    u.gotowy = { status: "pominiete", powod: "brak tresci wiadomosci na wejsciu" };
+  } else if (konf.brak) {
+    u.gotowy = { status: "brak-konfiguracji", powod: konf.brak };
+  } else if (konf.blad) {
+    u.gotowy = { awaria: true, siec: false, powod: konf.blad };
+  } else if (!pytanie) {
+    u.gotowy = { status: "pominiete", powod: "za krotka wiadomosc" };
+  } else if (aw && aw.siec && aw.ile >= PROG_AWARII_SIECI && !isNaN(Date.parse(aw.proba)) &&
+             (u.start - Date.parse(aw.proba)) / 60000 < MINUT_PRZERWY_PO_AWARII) {
+    u.gotowy = { status: "przerwa", powod: "po " + aw.ile + " awariach sieci z rzedu pytam co " + MINUT_PRZERWY_PO_AWARII + " min", przerwa: true };
+  } else {
+    const h = wyslijPytanie(konf, pytanie, Math.min(10, POZYCJI_WIEDZY + u.juz.length));
+    if (h.blad) u.gotowy = { awaria: true, siec: false, powod: h.blad };
+    else u.h = h;
+  }
+  return u;
+}
+
+// Czeka, az zadanie wyjdzie do gniazda (najwyzej CZAS_WYSLANIA_MS) - dopiero potem moze ruszyc Lore.
+function wyslanaWiedza(u) {
+  if (!u.h) return Promise.resolve();
+  let zegar;
+  return Promise.race([u.h.wyslane, u.h.wynik, new Promise((g) => { zegar = setTimeout(g, CZAS_WYSLANIA_MS); })])
+    .then(() => clearTimeout(zegar));
+}
+
+// Krok 2 (po Lore): odbior, blok, alarm i stan. dlugoscReszty = ile znakow ma juz ladunek bez nas.
+// Zwraca { blok, alarm }; stan zapisuje ZAWSZE (takze przy braku konfiguracji - "bylem tu").
+async function skonczWiedze(u, dlugoscReszty) {
+  let w = u.gotowy;
+  if (!w) {
+    // Najmniej 5 ms: po dlugim Lore termin minal, a odpowiedz moze juz czekac w buforze gniazda -
+    // zegar ustawiony na 0 odpalilby sie przed jej odczytem.
+    const zostalo = Math.max(u.start + CZAS_WIEDZY_MS - Date.now(), 5);
+    let zegar;
+    const odp = await Promise.race([u.h.wynik, new Promise((g) => {
+      zegar = setTimeout(() => g({ siec: true, blad: "jfwiedza nie odpowiedziala w " + CZAS_WIEDZY_MS + " ms" }), zostalo);
+    })]);
+    clearTimeout(zegar);
+    u.h.req.destroy();
+    const r = rozbierzOdpowiedz(odp);
+    if (r.blad) {
+      w = { awaria: true, siec: !!r.siec, powod: r.blad };
+    } else {
+      const d = r.dane;
+      w = { status: d.wyniki.length ? "trafienia" : "brak-trafien",
+            powod: d.wyniki.length ? "" : String(d.komunikat || ""), wyniki: d.wyniki,
+            uwagi: Array.isArray(d.uwagi) ? d.uwagi.map((x) => String(x).slice(0, 200)) : null };
+    }
+  }
+
+  const stan = u.stan;
+  const teraz = new Date();
+  let alarm = "";
+  if (w.awaria) {
+    const ile = (stan.awaria ? Number(stan.awaria.ile) || 0 : 0) + 1;
+    const ta_sama = stan.awaria && stan.awaria.powod === w.powod;
+    stan.awaria = { powod: w.powod, siec: w.siec, od: ta_sama ? stan.awaria.od : teraz.toISOString(),
+                    ile, proba: teraz.toISOString() };
+    // Awarie sieci liczymy jako jeden rodzaj: limit czasu i odmowa polaczenia na zmiane to wciaz ta sama awaria.
+    const rodzaj = w.siec ? "siec" : w.powod;
+    const ostatni = stan.alarm && Date.parse(stan.alarm.czas);
+    const swiezy = stan.alarm && stan.alarm.rodzaj === rodzaj && !isNaN(ostatni) &&
+      (teraz - ostatni) / 3600000 < GODZIN_MIEDZY_ALARMAMI;
+    if ((!w.siec || ile >= PROG_AWARII_SIECI) && !swiezy) {
+      stan.alarm = { rodzaj, powod: w.powod, czas: teraz.toISOString() };
+      alarm = "UWAGA: podpowiedz z wiedzy firmy (jfwiedza) nie dziala - " + w.powod +
+        (w.siec ? " (" + ile + " razy z rzedu)" : "") + ". Szczegoly: " + u.plikStanu.replace(os.homedir(), "~");
+      if (alarm.length > MAX_STAN) alarm = alarm.slice(0, MAX_STAN - 3) + "...";
+    }
+  } else if (!w.przerwa) {
+    delete stan.awaria;
+    delete stan.alarm;
+  }
+
+  let blok = "";
+  let status = w.awaria ? "awaria" : w.status;
+  let powod = w.powod;
+  if (w.wyniki && w.wyniki.length) {
+    const budzet = Math.min(MAX_WIEDZY, SUFIT_LADUNKU - dlugoscReszty - (alarm ? alarm.length + 1 : 0) - 2);
+    const b = blokWiedzy(w.wyniki, budzet, u.juz);
+    if (b.blok.length > budzet) {
+      // nie powinno sie zdarzyc (blokWiedzy liczy sie z budzetem) - ale sufit krzyczy, nie ucina
+      status = "za-dlugi";
+      powod = "blok " + b.blok.length + " znakow przy budzecie " + budzet + " - odrzucony";
+    } else if (b.blok) {
+      blok = b.blok;
+      if (u.sesja) u.sesje[u.sesja] = { czas: teraz.toISOString(), ids: u.juz.concat(b.ids).slice(-100) };
+    } else if (w.wyniki.some((x) => x && u.juz.indexOf(x.id) < 0)) {
+      status = "brak-miejsca";
+      powod = "trafienia sa, ale budzet " + budzet + " znakow nie miesci zadnej pozycji";
+    } else {
+      status = "juz-doklejone";
+      powod = "wszystkie trafienia sa juz w tej rozmowie";
+    }
+  }
+
+  const klucze = Object.keys(u.sesje).sort((a, b) => String(u.sesje[b].czas).localeCompare(String(u.sesje[a].czas)));
+  for (const k of klucze.slice(PAMIETANYCH_SESJI)) delete u.sesje[k];
+  stan.czas = teraz.toISOString();
+  stan.wynik = status;
+  stan.powod = powod;
+  stan.ms = Date.now() - u.start;
+  if (w.uwagi && w.uwagi.length) stan.uwagi_serwera = w.uwagi; else delete stan.uwagi_serwera;
+  stan.doklejono_znakow = blok.length;
+  stan.sesje = u.sesje;
+  zapiszStan(u.plikStanu, stan);
+  return { blok, alarm };
+}
+
 // ---------------------------------------------------------------- powiadomienia (P26)
 
 // Powiadomienie o koncu workera (albo innego zadania w tle) to nie wiadomosc uzytkownika.
@@ -357,8 +649,10 @@ const MODULY_PRZYPOMNIENIA = ["kierownik", "wiedza", "lore"];
 // Rejestr wybranych modulow - te same zasady odczytu co Czytaj-Instalacje w stan.ps1: brak pliku =
 // wszystko wlaczone; pusty, z bajtem 0x00, zly JSON albo bez "moduly" = wszystko wlaczone + blad;
 // brak klucza modulu (albo null) = wlaczony. Jeden maly odczyt pliku na wiadomosc.
+// wiedzafirmy ma TRZECI STAN (stan.ps1): wlaczony tylko przy jawnym true. Brak rejestru, brak klucza
+// i rejestr nieczytelny = bez podpowiedzi z wiedzy firmy, czyli dokladnie jak przed nia.
 function rejestrInstalacji(plik) {
-  const wszystko = {};
+  const wszystko = { wiedzafirmy: false };
   for (const n of MODULY_PRZYPOMNIENIA) wszystko[n] = true;
   const zly = (powod) => ({ moduly: wszystko, blad: "nie umiem odczytac rejestru instalacji " +
     plik.replace(os.homedir(), "~") + ": " + powod });
@@ -378,6 +672,7 @@ function rejestrInstalacji(plik) {
     const v = j.moduly[n];
     moduly[n] = (v === undefined || v === null) ? true : Boolean(v);
   }
+  moduly.wiedzafirmy = j.moduly.wiedzafirmy === true;
   return { moduly, blad: null };
 }
 
@@ -427,6 +722,9 @@ async function glowna() {
     path.join(os.homedir(), ".claude", "mr", "instalacja.json");
   const plikAlarmuRejestru = process.env.MR_INSTALACJA_ALARM ||
     path.join(os.homedir(), ".claude", "mr", ".instalacja-alarm.json");
+  const plikKonfiguWiedzy = process.env.MR_JFWIEDZA_KONFIG || path.join(os.homedir(), ".claude.json");
+  const plikStanuWiedzy = process.env.MR_JFWIEDZA_STAN ||
+    path.join(os.homedir(), ".claude", "wiedza", ".wiedza-firmy-stan.json");
 
   // Wejscie hooka NAJPIERW: o tym, ze to powiadomienie, trzeba wiedziec, zanim linia cyklu
   // zniknie z dysku (meldunek koncowy pokazuje sie tylko raz - nie moze pojsc do powiadomienia).
@@ -474,6 +772,19 @@ async function glowna() {
   if (mod.wiedza) { try { linia = liniaCyklu(plikPostepu); } catch (e) { linia = ""; } }
   if (linia) kontekst.additionalContext = linia + (kontekst.additionalContext ? "\n" + kontekst.additionalContext : "");
 
+  // Wiedza firmy rusza PRZED archiwum, zeby oba czekania szly naraz (opis przy zacznijWiedze).
+  let wiedza = null;
+  if (mod.wiedzafirmy) {
+    try {
+      const sesja = prosba ? (prosba.session_id || prosba.sessionId || null) : null;
+      wiedza = zacznijWiedze(tresc, sesja, plikKonfiguWiedzy, plikStanuWiedzy);
+      await wyslanaWiedza(wiedza);
+    } catch (e) {
+      wiedza = null;
+      process.stderr.write("przypomnienie.js: podpowiedz z wiedzy firmy padla przy wysylce: " + (e && e.stack || e) + "\n");
+    }
+  }
+
   // Podpowiedz z archiwum. Cokolwiek tu padnie, przypomnienie wychodzi nizej bez zmian.
   const zasady = kontekst.additionalContext;
   if (mod.lore) {
@@ -487,6 +798,20 @@ async function glowna() {
     } catch (e) {
       kontekst.additionalContext = zasady;
       process.stderr.write("przypomnienie.js: podpowiedz z archiwum padla: " + (e && e.stack || e) + "\n");
+    }
+  }
+  // Podpowiedz z wiedzy firmy - na koniec, za archiwum; alarm na poczatek. Awaria nie rusza reszty.
+  if (wiedza) {
+    const przed = kontekst.additionalContext;
+    try {
+      const w = await skonczWiedze(wiedza, przed.length);
+      let calosc = przed;
+      if (w.blok) calosc = calosc ? calosc + "\n\n" + w.blok : w.blok;
+      if (w.alarm) calosc = w.alarm + (calosc ? "\n" + calosc : "");
+      kontekst.additionalContext = calosc;
+    } catch (e) {
+      kontekst.additionalContext = przed;
+      process.stderr.write("przypomnienie.js: podpowiedz z wiedzy firmy padla: " + (e && e.stack || e) + "\n");
     }
   }
   // Alarm o rejestrze na samym poczatku - sufit ucina koniec, poczatek przezywa zawsze.
