@@ -11,7 +11,8 @@ Po wlaczeniu:
 - Flaga admin zostaje w osoby.json. Pole "admin" z odpowiedzi JFTools jest pomijane - zdalny panel
   nie robi nikogo adminem. Pole `uprawnienia` z osoby.json jest wtedy pomijane.
 - Status komputera inny niz active (pending, blocked, 404) = zero uprawnien z komunikatem dlaczego.
-- Tematy: GET <baza>/knowledge-topics; gdy JFTools nie odpowiada - ostatnia znana lista, potem tematy.json.
+- Tematy: GET <baza>/knowledge-topics, odswiezane w tle (0.4.3: zapytanie nie czeka, gdy jakas lista jest);
+  gdy JFTools nie odpowiada - ostatnia znana lista, potem tematy.json.
 - Krok 3 (0.4.0): wlasciciel komputera z pola `owner: {email, name}` odpowiedzi knowledge-permissions (autor
   wpisow z klienta: name, bez niego email, dopiero potem nazwa komputera), klucze publiczne komputerow z GET <baza>/keys (KluczeJFTools, podpis przy /klient/token),
   komputer usuniety z JFTools (404) = znacznik `wygasl` na jego wpisie `komputer-<id>` w osoby.json.
@@ -68,6 +69,11 @@ PRZERWA_PO_BLEDZIE_S = 30.0
 # traci dostep od razu): godzina przykrywa krotka awarie albo przenosiny panelu, a odebrane w panelu
 # uprawnienie i tak nie przezyje awarii dluzej niz godzine.
 PAMIEC_MAX_S = 3600.0
+# Lista tematow bez udanego odswiezenia dluzej niz godzine = UWAGA w dzienniku przy kazdej nieudanej probie.
+# Tematy nie daja dostepu (stara lista nikomu nic nie otwiera), ale nowy albo przemianowany w panelu temat
+# nie dociera do serwera; godzina = ta sama granica co PAMIEC_MAX_S: krotka awarie przemilczamy (sam BLAD),
+# dluzsza znaczy, ze JFTools lezy na serio albo zmienil sie sekret - admin ma to zobaczyc.
+STARA_LISTA_TEMATOW_S = 3600.0
 
 STATUSY = ("pending", "active", "blocked")
 # Odpowiedzi rozstrzygajace, nie awarie: zero dostepu bez siegania po pamiec (pamiec zostaje nimi zastapiona).
@@ -397,16 +403,21 @@ def _tematy_z_odpowiedzi(dane: Any) -> tuple[list[tematy_mod.Temat], list[str]]:
 
 class TematyJFTools:
     """Tematy z JFTools z pamiecia; przy awarii ostatnia znana lista (bez limitu wieku - tematy nie daja
-    dostepu do niczego), a bez niej tematy.json serwera. Kazde zastepstwo idzie do `uwaga` odpowiedzi."""
+    dostepu do niczego), a bez niej tematy.json serwera. Kazde zastepstwo idzie do `uwaga` odpowiedzi.
+
+    0.4.3: zapytanie nie czeka na JFTools, gdy jest juz jakas lista. Przeterminowana lista wraca od razu,
+    a odswiezenie idzie w tle (jedno naraz, po bledzie nie czesciej niz co przerwa_po_bledzie_s). Czeka
+    tylko pierwsze zapytanie po starcie, zanim serwer zna jakakolwiek liste z JFTools - jak dotad."""
 
     def __init__(self, url: str = URL_DOMYSLNY, sekret: str = "", plik_tematow: Path | None = None, *,
                  pobierz: Callable[[], Any] | None = None, limit_s: float = LIMIT_ZAPYTANIA_S,
                  waznosc_s: float = WAZNOSC_S, przerwa_po_bledzie_s: float = PRZERWA_PO_BLEDZIE_S,
-                 zegar: Callable[[], float] = time.time) -> None:
+                 stara_lista_s: float = STARA_LISTA_TEMATOW_S, zegar: Callable[[], float] = time.time) -> None:
         self.url = baza_url(url) + SCIEZKA_TEMATOW
         self.plik_tematow = plik_tematow
         self.waznosc_s = waznosc_s
         self.przerwa_po_bledzie_s = przerwa_po_bledzie_s
+        self.stara_lista_s = stara_lista_s
         self.zegar = zegar
         self._pobierz = pobierz or (lambda: pobierz_json(self.url, sekret, limit_s))
         self._znane: dict[str, tematy_mod.Temat] | None = None
@@ -414,6 +425,7 @@ class TematyJFTools:
         self._blad: str | None = None
         self._blad_czas: float | None = None
         self._zamek = threading.Lock()
+        self._watek: threading.Thread | None = None  # odswiezanie w tle; zywy = drugiego nie startujemy
 
     def _zastepstwo(self) -> tuple[dict[str, tematy_mod.Temat], str | None, str | None]:
         if self._znane is not None and self._czas is not None:
@@ -425,30 +437,64 @@ class TematyJFTools:
                         "- zgłoś adminowi"), None
         return z_pliku, None, f"lista tematów z pliku serwera — JFTools nie odpowiada ({self._blad})"
 
+    def _pobierz_liste(self) -> dict[str, tematy_mod.Temat] | None:
+        """Jedno zapytanie do JFTools BEZ zamka (moze trwac do limit_s). None = awaria, juz zapisana i w dzienniku."""
+        try:
+            dane = self._pobierz()
+            if dane in (NIEZNANY, ZLE_ID):
+                raise BladJFTools(f"HTTP {404 if dane == NIEZNANY else 400} na knowledge-topics")
+            lista, pominiete = _tematy_z_odpowiedzi(dane)
+        except Exception as e:
+            opis = str(e)[:200] if isinstance(e, BladJFTools) else f"{type(e).__name__}: {str(e)[:200]}"
+            with self._zamek:
+                self._blad_czas, self._blad = self.zegar(), opis
+                znane, czas = self._znane, self._czas
+            if znane is not None and czas is not None:
+                wiek = self.zegar() - czas
+                log(f"BLAD JFTools (tematy): {opis} - zostaje ostatnia znana lista z {_godzina(czas)}")
+                if wiek > self.stara_lista_s:
+                    log(f"UWAGA JFTools (tematy): lista tematow ma {int(wiek // 60)} min (prog "
+                        f"{int(self.stara_lista_s // 60)} min) - zmiany tematow w panelu nie docieraja do serwera")
+            else:
+                log(f"BLAD JFTools (tematy): {opis} - lista z tematy.json")
+            return None
+        if pominiete:
+            log(f"UWAGA JFTools: tematy z blednym id albo bez nazwy pominiete: {', '.join(pominiete)}")
+        nowe = {t.id: t for t in lista}
+        with self._zamek:
+            if self._blad_czas is not None and self._znane is not None:
+                log(f"JFTools (tematy) znowu odpowiada - tematow {len(nowe)}")
+            self._znane, self._czas, self._blad, self._blad_czas = nowe, self.zegar(), None, None
+        return nowe
+
+    def _odswiez_w_tle(self) -> None:
+        try:
+            self._pobierz_liste()
+        except Exception as e:  # _pobierz_liste sam lapie awarie JFTools; tu tylko bledy w samym kodzie
+            log(f"BLAD odswiezania tematow w tle: {type(e).__name__}: {str(e)[:200]}")
+
     def slownik(self) -> tuple[dict[str, tematy_mod.Temat], str | None, str | None]:
         """(tematy, blad, uwaga). blad = nie da sie uzyc zadnej listy; uwaga = lista zastepcza."""
         with self._zamek:
             teraz = self.zegar()
-            if self._znane is not None and self._czas is not None and self._blad_czas is None \
-                    and teraz - self._czas < self.waznosc_s:
-                return self._znane, None, None
+            if self._znane is not None and self._czas is not None:
+                swieza = self._blad_czas is None and teraz - self._czas < self.waznosc_s
+                po_przerwie = self._blad_czas is None or teraz - self._blad_czas >= self.przerwa_po_bledzie_s
+                if not swieza and po_przerwie and not (self._watek is not None and self._watek.is_alive()):
+                    self._watek = threading.Thread(target=self._odswiez_w_tle, name="tematy-jftools", daemon=True)
+                    self._watek.start()
+                if self._blad_czas is None:
+                    return self._znane, None, None
+                return self._zastepstwo()
             if self._blad_czas is not None and teraz - self._blad_czas < self.przerwa_po_bledzie_s:
                 return self._zastepstwo()
-            try:
-                dane = self._pobierz()
-                if dane in (NIEZNANY, ZLE_ID):
-                    raise BladJFTools(f"HTTP {404 if dane == NIEZNANY else 400} na knowledge-topics")
-                lista, pominiete = _tematy_z_odpowiedzi(dane)
-            except Exception as e:
-                self._blad_czas = self.zegar()
-                self._blad = str(e)[:200] if isinstance(e, BladJFTools) else f"{type(e).__name__}: {str(e)[:200]}"
-                log(f"BLAD JFTools (tematy): {self._blad} - "
-                    f"{'ostatnia znana lista' if self._znane is not None else 'lista z tematy.json'}")
-                return self._zastepstwo()
-            if pominiete:
-                log(f"UWAGA JFTools: tematy z blednym id albo bez nazwy pominiete: {', '.join(pominiete)}")
-            self._znane, self._czas, self._blad, self._blad_czas = {t.id: t for t in lista}, self.zegar(), None, None
-            return self._znane, None, None
+        # Zadnej listy z JFTools jeszcze nie ma: czekamy na odpowiedz (jak przed 0.4.3) zamiast zgadywac.
+        # Rownolegle pierwsze zapytania moga zapytac JFTools kazde osobno - zdarza sie tylko tuz po starcie.
+        nowe = self._pobierz_liste()
+        if nowe is not None:
+            return nowe, None, None
+        with self._zamek:
+            return self._zastepstwo()
 
 
 # --------------------------------------------------------------------------- ustawienia procesu

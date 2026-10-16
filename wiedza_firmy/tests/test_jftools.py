@@ -351,9 +351,11 @@ def test_tematy_z_jftools_i_zastepstwa(jft, capsys):
     zegar.t += 60
     wiedza.tematy(admin)
     assert atrapa.ile("/knowledge-topics") == 1
-    # JFTools lezy -> ostatnia znana lista z uwaga
+    # JFTools lezy -> ostatnia znana lista od razu, odswiezenie w tle pada, potem lista z uwaga
     zegar.t += jftools.WAZNOSC_S
     atrapa.zatrzymaj()
+    assert "uwagi" not in wiedza.tematy(admin)
+    zt._watek.join(5)
     odp = wiedza.tematy(admin)
     assert {t["id"] for t in odp["tematy"]} == {"temat-a", "temat-x"}
     assert odp["uwagi"][0].startswith("lista tematów z pamięci z")
@@ -376,6 +378,97 @@ def test_tematy_jftools_lezy_bez_pamieci_tematy_json(jft):
     odp = wiedza.tematy(zrodlo.uprawnienia("admin"))
     assert {t["id"] for t in odp["tematy"]} == {"temat-a", "temat-b", "temat-c"}
     assert odp["uwagi"] == ["lista tematów z pliku serwera — JFTools nie odpowiada (HTTP 403)"]
+
+
+def _tematy_wolne(atrapa, zegar) -> TematyJFTools:
+    """Zrodlo tematow z limitem 5 s - atrapa z opoznieniem 1 s odpowiada, zanim minie limit zapytania."""
+    atrapa.tematy = TEMATY_JFT
+    zt = TematyJFTools(atrapa.url, SEKRET, zegar=zegar, limit_s=5)
+    tematy, blad, uwaga = zt.slownik()
+    assert set(tematy) == {"temat-a", "temat-x"} and blad is None and uwaga is None
+    return zt
+
+
+def test_tematy_przeterminowane_wracaja_od_razu_odswiezenie_w_tle(jft):
+    sr, atrapa, zrodlo, zegar = jft
+    zt = _tematy_wolne(atrapa, zegar)
+    zegar.t += jftools.WAZNOSC_S
+    atrapa.zwloka_s = 1.0
+    atrapa.tematy = TEMATY_JFT + [{"id": "temat-n", "nazwa": "Nowy z panelu"}]
+    start = time.monotonic()
+    tematy, blad, uwaga = zt.slownik()
+    tematy2, _, _ = zt.slownik()  # drugie zapytanie w trakcie odswiezania - nie startuje drugiego
+    assert time.monotonic() - start < 0.3, "zapytanie czekalo na JFTools"
+    assert set(tematy) == set(tematy2) == {"temat-a", "temat-x"} and blad is None and uwaga is None
+    zt._watek.join(5)
+    assert set(zt.slownik()[0]) == {"temat-a", "temat-x", "temat-n"}
+    assert atrapa.ile("/knowledge-topics") == 2
+    # przez Wiedza tez od razu
+    zegar.t += jftools.WAZNOSC_S
+    start = time.monotonic()
+    Wiedza(sr.baza, zrodlo_tematow=zt).tematy(zrodlo.uprawnienia("admin"))
+    assert time.monotonic() - start < 0.3
+    zt._watek.join(5)
+
+
+def test_tematy_pierwsze_zapytanie_bez_listy_czeka_na_jftools(jft):
+    _, atrapa, _, zegar = jft
+    atrapa.zwloka_s = 0.3
+    start = time.monotonic()
+    zt = _tematy_wolne(atrapa, zegar)  # lista z JFTools, nie tematy.json ani pusta
+    assert time.monotonic() - start >= 0.25  # zwloka 0,3 s; zegar Windows bywa o ~15 ms zgrubny
+    assert zt._watek is None
+
+
+def test_tematy_jftools_padlo_stara_lista_dziala_blad_w_dzienniku(jft, capsys):
+    _, atrapa, _, zegar = jft
+    zt = _tematy_wolne(atrapa, zegar)
+    capsys.readouterr()
+    zegar.t += jftools.WAZNOSC_S
+    atrapa.sekret = "inny"  # 403 - awaria, nie odpowiedz
+    assert set(zt.slownik()[0]) == {"temat-a", "temat-x"}
+    zt._watek.join(5)
+    tematy, blad, uwaga = zt.slownik()
+    assert set(tematy) == {"temat-a", "temat-x"} and blad is None
+    assert uwaga.startswith("lista tematów z pamięci z") and "HTTP 403" in uwaga
+    err = capsys.readouterr().err
+    assert "BLAD JFTools (tematy): HTTP 403 - zostaje ostatnia znana lista" in err
+    assert "UWAGA JFTools (tematy)" not in err  # lista ma dopiero 10 min - bez alarmu
+    # w przerwie po bledzie nie pytamy JFTools co zapytanie
+    watek = zt._watek
+    zegar.t += 1
+    zt.slownik()
+    assert zt._watek is watek and atrapa.ile("/knowledge-topics") == 2
+    # lista starsza niz prog -> UWAGA w dzienniku przy kolejnej nieudanej probie
+    zegar.t += jftools.STARA_LISTA_TEMATOW_S
+    assert set(zt.slownik()[0]) == {"temat-a", "temat-x"}
+    zt._watek.join(5)
+    assert "UWAGA JFTools (tematy): lista tematow ma" in capsys.readouterr().err
+    # JFTools wraca -> nowa lista, bez uwagi
+    atrapa.sekret = SEKRET
+    zegar.t += jftools.PRZERWA_PO_BLEDZIE_S
+    zt.slownik()
+    zt._watek.join(5)
+    assert zt.slownik()[2] is None and atrapa.ile("/knowledge-topics") == 4
+    assert "znowu odpowiada" in capsys.readouterr().err
+
+
+def test_tematy_blad_w_kodzie_w_tle_nie_cichy(jft, capsys):
+    _, atrapa, _, zegar = jft
+    odpowiedzi = [TEMATY_JFT]
+
+    def pobierz():
+        if odpowiedzi:
+            return odpowiedzi.pop()
+        raise RuntimeError("cos peklo")
+
+    zt = TematyJFTools(atrapa.url, SEKRET, pobierz=pobierz, zegar=zegar)
+    zt.slownik()
+    zegar.t += jftools.WAZNOSC_S
+    zt.slownik()
+    zt._watek.join(5)
+    assert "RuntimeError: cos peklo" in zt.slownik()[2]
+    assert "BLAD JFTools (tematy): RuntimeError: cos peklo" in capsys.readouterr().err
 
 
 # ---------------------------------------------------------------- przelacznik
