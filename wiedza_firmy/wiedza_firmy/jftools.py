@@ -22,6 +22,8 @@ dostepu - 1 min, zeby nadane uprawnienia zadzialaly szybko), zapytanie ma limit 
 ponawiania. Gdy JFTools nie odpowiada (siec, limit czasu, zly sekret, zla odpowiedz), obowiazuja ostatnio
 znane uprawnienia, najwyzej sprzed godziny (PAMIEC_MAX_S), potem zero. Kazda awaria idzie do dziennika, a odpowiedz
 narzedzia mowi "uprawnienia z pamieci z <czas>" albo dlaczego nie ma zadnych.
+0.4.4: znany aktywny komputer z przeterminowanym wpisem nie czeka na JFTools - odswiezenie idzie w tle
+(decyzja uzytkownika z 2026-10-16, granice w ZrodloJFTools._z_pamieci).
 """
 
 from __future__ import annotations
@@ -201,10 +203,12 @@ class Dostep:
 @dataclass
 class _Pamiec:
     znany: Dostep | None = None
-    czas: float | None = None
+    czas: float | None = None  # ostatnia UDANA odpowiedz JFTools o tym komputerze
     blad_czas: float | None = None
     blad: str | None = None
-    zamek: threading.Lock = field(default_factory=threading.Lock)
+    zamek: threading.Lock = field(default_factory=threading.Lock)  # stan wpisu; nigdy w trakcie zapytania do JFTools
+    zamek_pytania: threading.Lock = field(default_factory=threading.Lock)  # jedno zapytanie na komputer naraz
+    watek: threading.Thread | None = None  # odswiezanie w tle; zywy = drugiego nie startujemy
 
 
 def _godzina(czas: float) -> str:
@@ -244,37 +248,94 @@ class ZrodloJFTools(ZrodloPlikowe):
                       f"z ostatnich {int(self.pamiec_max_s // 60)} min — spróbuj za kilka minut; jeśli to trwa, "
                       "daj znać adminowi.")
 
-    def dostep(self, komputer: str) -> tuple[Dostep | None, str | None]:
-        """(dostep, ostrzezenie). dostep None = nie wiadomo (JFTools milczy, nic znanego z PAMIEC_MAX_S)
-        - wtedy ostrzezenie mowi dlaczego. Ostrzezenie przy dostepie = dostep z pamieci."""
-        p = self._pamiec(komputer)
-        with p.zamek:  # jedno zapytanie na komputer naraz; inne watki czekaja na jego wynik
-            teraz = self.zegar()
-            if p.znany is not None and p.czas is not None and p.blad_czas is None:
-                limit = self.waznosc_s if p.znany.status == "active" else self.waznosc_bez_dostepu_s
-                if teraz - p.czas < limit:
-                    return p.znany, None
-            if p.blad_czas is not None and teraz - p.blad_czas < self.przerwa_po_bledzie_s:
-                return self._ostatnio_znany(p)
-            try:
-                nowy, pominiete = Dostep.z_odpowiedzi(self._pobierz(komputer), komputer)
-            except Exception as e:  # siec, limit czasu, 401/403, zla odpowiedz - nigdy "wszystko"
+    def _z_pamieci(self, p: _Pamiec, komputer: str, w_tle: bool) -> tuple[Dostep | None, str | None] | None:
+        """Odpowiedz bez czekania na JFTools albo None = trzeba zapytac i poczekac. Wolane pod p.zamek.
+
+        0.4.4 - decyzja uzytkownika z 2026-10-16: znany AKTYWNY komputer z przeterminowanym wpisem (starszym
+        niz waznosc_s) dostaje ostatnio znane uprawnienia od razu, a pytanie do JFTools idzie w tle (jedno naraz,
+        po bledzie nie czesciej niz co przerwa_po_bledzie_s). Wczesniej co ~10 min jedno szukaj_wiedzy czekalo
+        na JFTools do 3 s. Swiadomie zaakceptowany koszt: uprawnienie odebrane w panelu JFTools moze jeszcze
+        zadzialac do konca jednego odswiezenia (~10 min plus czas zapytania w tle) - zapytanie, ktore odpali
+        odswiezenie, dostaje stare granty; nastepne po odswiezeniu juz to, co powiedzial JFTools (blocked,
+        404 = odmowa). Okres waznosci (waznosc_s) sie NIE wydluza: przeterminowany wpis tylko przeczekuje
+        odswiezenie w tle.
+        Granice (bezpieczenstwo):
+        - komputer nieznany serwerowi (zadnej udanej odpowiedzi) - czeka na JFTools jak dotad, nigdy na kredyt;
+        - komputer bez dostepu (pending, blocked, 404, 400) - czeka jak dotad: stary wpis i tak jest odmowa,
+          a czekanie sprawia, ze uprawnienie nadane w panelu dziala od pierwszego zapytania po minucie;
+        - wpis starszy niz pamiec_max_s (godzina bez udanej odpowiedzi o tym komputerze) - nie wraca od razu:
+          zapytanie czeka na JFTools, a gdy ten nie odpowiada - odmowa + UWAGA w dzienniku. To ta sama granica,
+          co przy awarii przed 0.4.4 (PAMIEC_MAX_S), wiec odebrane uprawnienie nie przezyje awarii ani
+          bezczynnosci komputera dluzej niz godzine; odmowa jest bezpieczniejsza niz granty sprzed godziny."""
+        teraz = self.zegar()
+        if p.znany is not None and p.czas is not None and p.blad_czas is None:
+            limit = self.waznosc_s if p.znany.status == "active" else self.waznosc_bez_dostepu_s
+            if teraz - p.czas < limit:
+                return p.znany, None
+        if w_tle and p.znany is not None and p.znany.status == "active" and p.czas is not None \
+                and teraz - p.czas <= self.pamiec_max_s:
+            po_przerwie = p.blad_czas is None or teraz - p.blad_czas >= self.przerwa_po_bledzie_s
+            if po_przerwie and not (p.watek is not None and p.watek.is_alive()):
+                p.watek = threading.Thread(target=self._odswiez_w_tle, args=(komputer, p),
+                                           name=f"uprawnienia-jftools-{komputer}", daemon=True)
+                p.watek.start()
+            if p.blad_czas is None:
+                return p.znany, None
+            return self._ostatnio_znany(p)
+        if p.blad_czas is not None and teraz - p.blad_czas < self.przerwa_po_bledzie_s:
+            return self._ostatnio_znany(p)
+        return None
+
+    def _zapytaj(self, komputer: str, p: _Pamiec) -> tuple[Dostep | None, str | None]:
+        """Jedno zapytanie do JFTools i zapis wyniku. Wolane pod p.zamek_pytania, BEZ p.zamek (trwa do limit_s)."""
+        try:
+            nowy, pominiete = Dostep.z_odpowiedzi(self._pobierz(komputer), komputer)
+        except Exception as e:  # siec, limit czasu, 401/403, zla odpowiedz - nigdy "wszystko"
+            with p.zamek:
                 p.blad_czas = self.zegar()
                 p.blad = str(e)[:200] if isinstance(e, BladJFTools) else f"{type(e).__name__}: {str(e)[:200]}"
                 self.ostatni_blad = f"{_godzina(p.blad_czas)} komputer {komputer}: {p.blad}"
                 dostep, ostrzezenie = self._ostatnio_znany(p)
-                log(f"BLAD JFTools (uprawnienia komputera {komputer}): {p.blad} - "
-                    f"{'ostatnio znane z ' + _godzina(p.czas) if dostep else 'zero uprawnien'}")
-                return dostep, ostrzezenie
-            if pominiete:
-                log(f"UWAGA JFTools komputer {komputer}: pominiete z odpowiedzi (granty z nieznanym poziomem, zly owner): {', '.join(pominiete)}")
+                blad, czas = p.blad, p.czas
+            log(f"BLAD JFTools (uprawnienia komputera {komputer}): {blad} - "
+                f"{'ostatnio znane z ' + _godzina(czas) if dostep else 'zero uprawnien'}")
+            if dostep is None and czas is not None:  # komputer znany, ale ostatnia udana odpowiedz za stara
+                log(f"UWAGA JFTools (uprawnienia komputera {komputer}): brak udanego odswiezenia od "
+                    f"{int((self.zegar() - czas) // 60)} min (prog {int(self.pamiec_max_s // 60)} min) - "
+                    "odmowa, dopoki JFTools nie odpowie")
+            return dostep, ostrzezenie
+        if pominiete:
+            log(f"UWAGA JFTools komputer {komputer}: pominiete z odpowiedzi (granty z nieznanym poziomem, zly owner): {', '.join(pominiete)}")
+        with p.zamek:
             poprzedni = p.znany.status if p.znany else None
             if nowy.status != poprzedni or p.blad_czas is not None:
                 log(f"JFTools komputer {komputer}: status {nowy.status}, tematow {len(nowy.granty)}")
-            if nowy.status != poprzedni:
-                self._oznacz_wygasly(komputer, nowy.status == NIEZNANY)
             p.znany, p.czas, p.blad_czas, p.blad = nowy, self.zegar(), None, None
-            return nowy, None
+        if nowy.status != poprzedni:
+            self._oznacz_wygasly(komputer, nowy.status == NIEZNANY)
+        return nowy, None
+
+    def _odswiez_w_tle(self, komputer: str, p: _Pamiec) -> None:
+        try:
+            with p.zamek_pytania:
+                self._zapytaj(komputer, p)
+        except Exception as e:  # _zapytaj sam lapie awarie JFTools; tu tylko bledy w samym kodzie
+            log(f"BLAD odswiezania uprawnien komputera {komputer} w tle: {type(e).__name__}: {str(e)[:200]}")
+
+    def dostep(self, komputer: str) -> tuple[Dostep | None, str | None]:
+        """(dostep, ostrzezenie). dostep None = nie wiadomo (JFTools milczy, nic znanego z PAMIEC_MAX_S)
+        - wtedy ostrzezenie mowi dlaczego. Ostrzezenie przy dostepie = dostep z pamieci."""
+        p = self._pamiec(komputer)
+        with p.zamek:
+            wynik = self._z_pamieci(p, komputer, w_tle=True)
+        if wynik is not None:
+            return wynik
+        with p.zamek_pytania:  # jedno zapytanie na komputer naraz; inne watki czekaja na jego wynik
+            with p.zamek:  # ktos mogl zapytac, gdy czekalismy - jego wynik (albo przerwa po bledzie) wystarczy
+                wynik = self._z_pamieci(p, komputer, w_tle=False)
+            if wynik is not None:
+                return wynik
+            return self._zapytaj(komputer, p)
 
     def _oznacz_wygasly(self, komputer: str, wygasl: bool) -> None:
         """Komputer usuniety z JFTools (404) -> `wygasl` na jego wpisie automatycznym; wrocil -> znacznik znika."""

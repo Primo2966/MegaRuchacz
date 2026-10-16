@@ -105,6 +105,15 @@ class Swiat:
     def mija(self, s: float) -> None:
         self.zegar.t += s
 
+    def odswiez(self, kid: str) -> None:
+        """0.4.4: przeterminowany wpis aktywnego komputera odswieza sie w tle - zapytanie, ktore to odpala, dostaje
+        jeszcze stary wpis (decyzja uzytkownika 2026-10-16); tu odpalamy je i czekamy na koniec odswiezenia."""
+        self.zrodlo.dostep(kid)
+        watek = self.zrodlo._pamieci[kid].watek
+        assert watek is not None
+        watek.join(5)
+        assert not watek.is_alive()
+
 
 @pytest.fixture
 def swiat(srodowisko):
@@ -377,6 +386,7 @@ def test_blocked_403_wszedzie_puste_narzedzia_a_odblokowanie_przywraca_ten_sam_t
     swiat.atrapa.komputery["12"]["computer"]["status"] = "blocked"
     swiat.atrapa.komputery["12"]["grants"] = {}
     swiat.mija(jftools.WAZNOSC_S + 1)
+    swiat.odswiez("12")
     for sciezka in ("/klient/status", "/klient/tematy"):
         r = swiat.get(sciezka, token)
         assert r.status_code == 403 and r.json()["kod"] == "zablokowany" and r.json()["status"] == "blocked", sciezka
@@ -416,6 +426,7 @@ def test_usuniety_z_jftools_wygasl_403_i_powrot(swiat):
     swiat.get("/klient/status", token)  # status active trafia do pamieci
     del swiat.atrapa.komputery["12"]
     swiat.mija(jftools.WAZNOSC_S + 1)
+    swiat.odswiez("12")
     r = swiat.get("/klient/status", token)
     assert r.status_code == 403 and r.json()["kod"] == "nieznany_komputer" and r.json()["status"] == "nieznany"
     assert osoby_json()["komputer-12"]["wygasl"]

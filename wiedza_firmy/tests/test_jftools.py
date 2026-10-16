@@ -120,6 +120,17 @@ def jft(srodowisko, atrapa):
     return srodowisko, atrapa, zrodlo, zegar
 
 
+def odswiez(zrodlo: ZrodloJFTools, komputer: str):
+    """Zapytanie, ktore przy przeterminowanym wpisie aktywnego komputera odpala odswiezenie w tle (0.4.4),
+    i czekanie na koniec tego odswiezenia. Zwraca to, co dostalo samo zapytanie (jeszcze stary wpis)."""
+    wynik = zrodlo.dostep(komputer)
+    watek = zrodlo._pamieci[komputer].watek
+    if watek is not None:
+        watek.join(5)
+        assert not watek.is_alive()
+    return wynik
+
+
 def tekst(odp: dict) -> str:
     return json.dumps(odp, ensure_ascii=False).lower()
 
@@ -198,6 +209,7 @@ def test_usuniety_komputer_404_i_zle_id_400_to_zero_a_nie_pamiec(jft):
     assert not zrodlo.uprawnienia("ela").puste
     del atrapa.komputery["12"]  # admin usunal komputer w panelu
     zegar.t += jftools.WAZNOSC_S + 1
+    assert odswiez(zrodlo, "12")[0].status == "active"  # 0.4.4: zapytanie odpalajace odswiezenie - stary wpis
     upr = zrodlo.uprawnienia("ela")
     assert upr.puste and upr.komunikat == KOMUNIKAT_NIEZNANY and upr.ostrzezenie is None
     # id, ktorego wtyczka nie przyjmuje (wpisane recznie w osoby.json) -> 400 -> zero, tez bez pamieci
@@ -259,6 +271,7 @@ def test_jftools_lezy_przy_pamieci_ostatnio_znane_z_ostrzezeniem(jft, capsys):
     kiedy = jftools._godzina(zegar.t)
     zegar.t += jftools.WAZNOSC_S + 1  # pamiec wygasla, trzeba zapytac
     atrapa.zatrzymaj()
+    assert odswiez(zrodlo, "12") == (zrodlo._pamieci["12"].znany, None)  # od razu, bez ostrzezenia; tlo pada
     upr = zrodlo.uprawnienia("ela")
     assert dict(upr.tematy) == {"temat-a": "jawne"}
     assert upr.ostrzezenie.startswith(f"uprawnienia z pamięci z {kiedy}")
@@ -307,7 +320,7 @@ def test_pamiec_10_min_dla_aktywnego_1_min_dla_czekajacego(jft):
     zrodlo.uprawnienia("ela")
     assert atrapa.ile("/knowledge-permissions") == n  # aktywny: 10 min bez pytania
     zegar.t += 2
-    zrodlo.uprawnienia("ela")
+    odswiez(zrodlo, "12")
     assert atrapa.ile("/knowledge-permissions") == n + 1
 
 
@@ -322,6 +335,134 @@ def test_po_bledzie_przerwa_bez_ponawiania(jft):
     atrapa.komputery["12"] = odpowiedz("12", grants={"temat-a": "jawne"})
     assert not zrodlo.uprawnienia("ela").puste
     assert atrapa.ile("/knowledge-permissions") == 2
+
+
+# ---------------------------------------------------------------- odswiezanie uprawnien w tle (0.4.4)
+
+def _zrodlo_wolne(atrapa, zegar, grants=None) -> ZrodloJFTools:
+    """Zrodlo z limitem 5 s (atrapa ze zwloka 1 s odpowiada przed limitem) i komputerem 12 znanym jako active."""
+    atrapa.komputery["12"] = odpowiedz("12", grants=grants or {"temat-a": "jawne"})
+    zrodlo = ZrodloJFTools(sciezki.plik_osob(), atrapa.url, SEKRET, limit_s=5, zegar=zegar)
+    dostep, ostrzezenie = zrodlo.dostep("12")
+    assert dostep.status == "active" and ostrzezenie is None
+    return zrodlo
+
+
+def test_uprawnienia_przeterminowane_wracaja_od_razu_odswiezenie_w_tle(jft):
+    _, atrapa, _, zegar = jft
+    zrodlo = _zrodlo_wolne(atrapa, zegar)
+    zegar.t += jftools.WAZNOSC_S
+    atrapa.zwloka_s = 1.0
+    atrapa.komputery["12"] = odpowiedz("12", grants={"temat-a": "wewnetrzne", "temat-b": "jawne"})
+    start = time.monotonic()
+    upr = zrodlo.uprawnienia("ela")
+    upr2 = zrodlo.uprawnienia("ela")  # drugie zapytanie w trakcie odswiezania - nie startuje drugiego
+    assert time.monotonic() - start < 0.3, "zapytanie czekalo na JFTools"
+    assert dict(upr.tematy) == dict(upr2.tematy) == {"temat-a": "jawne"}
+    assert upr.ostrzezenie is None and upr2.ostrzezenie is None
+    zrodlo._pamieci["12"].watek.join(5)
+    assert atrapa.ile("/knowledge-permissions") == 2
+    upr = zrodlo.uprawnienia("ela")
+    assert dict(upr.tematy) == {"temat-a": "wewnetrzne", "temat-b": "jawne"} and upr.ostrzezenie is None
+    assert atrapa.ile("/knowledge-permissions") == 2  # swiezy wpis - bez pytania
+
+
+def test_uprawnienia_nieznany_komputer_czeka_na_jftools(jft):
+    _, atrapa, zrodlo, zegar = jft
+    atrapa.zwloka_s = 0.3
+    start = time.monotonic()
+    zrodlo = _zrodlo_wolne(atrapa, zegar)  # pierwsze zapytanie: active z JFTools, nie zgadywanie
+    assert time.monotonic() - start >= 0.25  # zwloka 0,3 s; zegar Windows bywa o ~15 ms zgrubny
+    assert zrodlo._pamieci["12"].watek is None
+    # komputer bez dostepu tez czeka (nadane w panelu uprawnienie dziala od pierwszego zapytania po minucie)
+    atrapa.zwloka_s = 0
+    atrapa.komputery["13"] = odpowiedz("13", status="pending")
+    assert zrodlo.dostep("13")[0].status == "pending"
+    atrapa.komputery["13"] = odpowiedz("13", grants={"temat-a": "jawne"})
+    zegar.t += jftools.WAZNOSC_BEZ_DOSTEPU_S
+    atrapa.zwloka_s = 0.3
+    start = time.monotonic()
+    assert zrodlo.dostep("13")[0].status == "active"
+    assert time.monotonic() - start >= 0.25 and zrodlo._pamieci["13"].watek is None
+
+
+@pytest.mark.parametrize("zmiana,komunikat", [
+    ("blocked", KOMUNIKAT_BLOCKED), ("pending", KOMUNIKAT_PENDING), ("usuniety", KOMUNIKAT_NIEZNANY)])
+def test_uprawnienia_odebrane_w_panelu_odmowa_po_odswiezeniu(jft, zmiana, komunikat):
+    """Proba negatywna: stary wpis wolno dac najwyzej zapytaniu, ktore odpala odswiezenie - nastepne juz odmowa."""
+    sr, atrapa, zrodlo, zegar = jft
+    atrapa.komputery["12"] = odpowiedz("12", grants={"temat-a": "wrazliwe"})
+    assert not zrodlo.uprawnienia("ela").puste
+    if zmiana == "usuniety":
+        del atrapa.komputery["12"]
+    else:
+        atrapa.komputery["12"] = odpowiedz("12", status=zmiana, grants={"temat-a": "wrazliwe"})
+    zegar.t += jftools.WAZNOSC_S
+    dostep, _ = odswiez(zrodlo, "12")
+    assert dostep.status == "active"  # swiadomie zaakceptowany koszt (decyzja 2026-10-16)
+    upr = zrodlo.uprawnienia("ela")
+    assert upr.puste and upr.komunikat == komunikat and upr.ostrzezenie is None
+    assert sr.wiedza.szukaj_wiedzy(upr, "zielona papuga")["wyniki"] == []
+    assert zrodlo._pamieci["12"].watek is None or not zrodlo._pamieci["12"].watek.is_alive()
+
+
+def test_uprawnienia_jftools_lezy_dluzej_niz_prog_odmowa_i_uwaga(jft, capsys):
+    sr, atrapa, zrodlo, zegar = jft
+    atrapa.komputery["12"] = odpowiedz("12", grants={"temat-a": "jawne"})
+    assert not zrodlo.uprawnienia("ela").puste
+    t0, kiedy = zegar.t, jftools._godzina(zegar.t)
+    capsys.readouterr()
+    atrapa.sekret = "inny"  # 403 - awaria, nie odpowiedz
+    zegar.t += jftools.WAZNOSC_S
+    assert odswiez(zrodlo, "12") == (zrodlo._pamieci["12"].znany, None)
+    upr = zrodlo.uprawnienia("ela")  # odswiezenie padlo - pamiec z ostrzezeniem, jak przed 0.4.4
+    assert dict(upr.tematy) == {"temat-a": "jawne"} and upr.ostrzezenie.startswith(f"uprawnienia z pamięci z {kiedy}")
+    err = capsys.readouterr().err
+    assert "BLAD JFTools (uprawnienia komputera 12): HTTP 403 - ostatnio znane" in err and "UWAGA" not in err
+    # w przerwie po bledzie nikt nie pyta JFTools
+    n = atrapa.ile("/knowledge-permissions")
+    zegar.t += 1
+    zrodlo.uprawnienia("ela")
+    assert atrapa.ile("/knowledge-permissions") == n
+    # po przerwie kolejna proba znowu w tle, zapytanie z pamiecia od razu
+    zegar.t += jftools.PRZERWA_PO_BLEDZIE_S
+    assert odswiez(zrodlo, "12")[1].startswith("uprawnienia z pamięci")
+    assert atrapa.ile("/knowledge-permissions") == n + 1
+    # ponad prog bez udanej odpowiedzi -> zapytanie czeka na JFTools, ten nie odpowiada -> odmowa + UWAGA
+    zegar.t = t0 + jftools.PAMIEC_MAX_S + 1
+    upr = zrodlo.uprawnienia("ela")
+    assert upr.puste and "Nie da się teraz sprawdzić uprawnień w JFTools (HTTP 403)" in upr.komunikat
+    assert zrodlo._pamieci["12"].watek is None or not zrodlo._pamieci["12"].watek.is_alive()
+    assert atrapa.ile("/knowledge-permissions") == n + 2
+    err = capsys.readouterr().err
+    assert "BLAD JFTools (uprawnienia komputera 12): HTTP 403 - zero uprawnien" in err
+    assert "UWAGA JFTools (uprawnienia komputera 12): brak udanego odswiezenia od 60 min (prog 60 min) - odmowa" in err
+    # w przerwie po bledzie dalej odmowa, nie stary wpis
+    zegar.t += 1
+    assert zrodlo.uprawnienia("ela").puste
+    # JFTools wraca -> uprawnienia znowu sa
+    atrapa.sekret = SEKRET
+    zegar.t += jftools.PRZERWA_PO_BLEDZIE_S
+    upr = zrodlo.uprawnienia("ela")
+    assert dict(upr.tematy) == {"temat-a": "jawne"} and upr.ostrzezenie is None
+
+
+def test_uprawnienia_blad_w_tle_nie_cichy(jft, capsys):
+    _, atrapa, _, zegar = jft
+    odpowiedzi = [odpowiedz("12", grants={"temat-a": "jawne"})]
+
+    def pobierz(komputer):
+        if odpowiedzi:
+            return odpowiedzi.pop()
+        raise RuntimeError("cos peklo")
+
+    zrodlo = ZrodloJFTools(sciezki.plik_osob(), atrapa.url, SEKRET, pobierz=pobierz, zegar=zegar)
+    assert zrodlo.dostep("12")[1] is None
+    zegar.t += jftools.WAZNOSC_S
+    odswiez(zrodlo, "12")
+    assert "RuntimeError: cos peklo" in zrodlo.dostep("12")[1]
+    assert "BLAD JFTools (uprawnienia komputera 12): RuntimeError: cos peklo" in capsys.readouterr().err
+    assert "cos peklo" in zrodlo.stan()["ostatni_blad"]
 
 
 # ---------------------------------------------------------------- tematy
