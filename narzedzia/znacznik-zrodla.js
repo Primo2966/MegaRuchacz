@@ -1,6 +1,6 @@
 // Znacznik zrodla - hook Stop Claude Code. Po kazdej odpowiedzi mowi uzytkownikowi, czy w tej
 // turze Claude siegnal do pamieci rozmow (Lore) albo do wiedzy firmy (jfwiedza), np.
-//   🟣 Lore: wyszukano 1×, doklejono z archiwum · 🟠 jfwiedza: wyszukano 2× (w tym workerzy 1×)
+//   🟣 Lore: wyszukano 1× · 🟠 jfwiedza: wyszukano 2× (w tym workerzy 1×)
 // Gdy nic z tego nie zaszlo - nie wypisuje nic (bez szumu).
 //
 // Dlaczego hook, a nie zasada dla modelu: do 0.34.0 znaczek 🟣 Lore / 🟠 jfwiedza mial stawiac
@@ -13,11 +13,10 @@
 //   - to samo u workerow: pliki <sesja>\subagents\agent-*.jsonl obok transkryptu, wpisy
 //     z czasem od poprzedniego Stop tej rozmowy (pamietany w pliku stanu) - dzieki temu
 //     wywolanie workera w tle, ktory pracowal miedzy turami, liczy sie raz, w najblizszej
-//     odpowiedzi; rozmowa nieznana stanowi = od poczatku tury,
-//   - doklejki hookow do wiadomosci uzytkownika: naglowki "Z ARCHIWUM (Lore" (przypomnienie.js)
-//     i "Z WIEDZY FIRMY (jfwiedza" - TYLKO we wpisach hookow (attachment hook_additional_context
-//     albo meta-wiadomosc), nigdy w tresci pisanej przez uzytkownika: wiadomosc, ktora te
-//     naglowki cytuje, nie jest doklejka.
+//     odpowiedzi; rozmowa nieznana stanowi = od poczatku tury.
+// Doklejki hookow do wiadomosci uzytkownika ("Z ARCHIWUM (Lore", "Z WIEDZY FIRMY (jfwiedza")
+// NIE daja linii: to podpowiedz automatu, a nie dowod, ze odpowiedz sie na niej oparla -
+// linia przy samej doklejce byla falszywym alarmem (16.10).
 // Linia idzie w polu systemMessage ("Warning message shown to the user" w schemacie hookow
 // Claude Code 2.1.x) - widzi ja uzytkownik, model nie. Bez "decision" - tura konczy sie zawsze.
 //
@@ -36,8 +35,8 @@ const path = require("path");
 
 // Serwery MCP, ktore znakujemy. Nazwa serwera to czesc miedzy "mcp__" a nastepnym "__".
 const ZRODLA = [
-  { klucz: "lore", znaczek: "\u{1F7E3} Lore", serwer: "lore", naglowek: "Z ARCHIWUM (Lore", doklejka: "doklejono z archiwum" },
-  { klucz: "jfwiedza", znaczek: "\u{1F7E0} jfwiedza", serwer: "jfwiedza", naglowek: "Z WIEDZY FIRMY (jfwiedza", doklejka: "doklejono z wiedzy firmy" },
+  { klucz: "lore", znaczek: "\u{1F7E3} Lore", serwer: "lore" },
+  { klucz: "jfwiedza", znaczek: "\u{1F7E0} jfwiedza", serwer: "jfwiedza" },
 ];
 const RAZY = "×";
 
@@ -149,7 +148,7 @@ function czynnosc(narzedzie) {
 
 function noweLiczniki() {
   const l = {};
-  for (const z of ZRODLA) l[z.klucz] = { czynnosci: {}, workerzy: 0, wszystkich: 0, doklejka: false };
+  for (const z of ZRODLA) l[z.klucz] = { czynnosci: {}, workerzy: 0, wszystkich: 0 };
   return l;
 }
 
@@ -168,25 +167,6 @@ function policzWywolanie(liczniki, nazwa, odWorkera) {
 function wywolaniaWe(wpis) {
   if (!wpis || wpis.type !== "assistant" || !wpis.message || !Array.isArray(wpis.message.content)) return [];
   return wpis.message.content.filter((c) => c && c.type === "tool_use" && typeof c.name === "string");
-}
-
-// Tekst doklejki hooka - tylko z wpisow, ktore pisze hook, nigdy z wiadomosci uzytkownika.
-function tekstDoklejki(wpis) {
-  if (!wpis) return "";
-  if (wpis.type === "attachment" && wpis.attachment) {
-    const a = wpis.attachment;
-    const rodzaj = String(a.type || "") + " " + String(a.hookEvent || "");
-    if (!/hook/i.test(rodzaj)) return "";
-    if (typeof a.content === "string") return a.content;
-    if (Array.isArray(a.content)) return a.content.map((x) => (typeof x === "string" ? x : JSON.stringify(x))).join("\n");
-    return "";
-  }
-  if (wpis.type === "user" && wpis.isMeta && wpis.message) {
-    const c = wpis.message.content;
-    const t = typeof c === "string" ? c : Array.isArray(c) ? c.map((x) => (x && x.text) || "").join("\n") : "";
-    return /hook/i.test(t) ? t : "";
-  }
-  return "";
 }
 
 function czasWpisu(w) {
@@ -232,7 +212,6 @@ function linia(liczniki) {
   for (const z of ZRODLA) {
     const l = liczniki[z.klucz];
     const elementy = Object.keys(l.czynnosci).map((k) => k + " " + l.czynnosci[k] + RAZY);
-    if (l.doklejka) elementy.push(z.doklejka);
     if (!elementy.length) continue;
     let t = z.znaczek + ": " + elementy.join(", ");
     if (l.workerzy) t += " (w tym workerzy " + l.workerzy + RAZY + ")";
@@ -299,8 +278,6 @@ function zbadaj(prosba, stan) {
       if (c.id) widziane.add(c.id);
       policzWywolanie(liczniki, c.name, Boolean(w.isSidechain));
     }
-    const d = tekstDoklejki(w);
-    if (d) for (const z of ZRODLA) if (d.indexOf(z.naglowek) >= 0) liczniki[z.klucz].doklejka = true;
   }
 
   // Workerzy: od poprzedniego Stop tej rozmowy, a gdy go nie znamy - od poczatku tury.

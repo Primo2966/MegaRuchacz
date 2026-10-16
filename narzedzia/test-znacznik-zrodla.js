@@ -1,5 +1,5 @@
 // Proba hooka znacznika zrodla (narzedzia\znacznik-zrodla.js) na sztucznych transkryptach:
-// tura z Lore, z jfwiedza, z doklejka, u workera, bez niczego (proba negatywna - takze
+// tura z Lore, z jfwiedza, u workera, bez niczego (proba negatywna - takze sama doklejka hooka,
 // wiadomosc cytujaca naglowek doklejki i definicje narzedzi w transkrypcie), tura dluzsza niz
 // pierwszy kawalek czytania, uszkodzony i brakujacy transkrypt, zepsuty plik stanu.
 // Wszystko w %TEMP%, prawdziwy stan (~\.claude\mr) nietkniety; hook bez okna (windowsHide).
@@ -110,15 +110,25 @@ try {
       r.msg === JFW + ": wyszukano 2" + X + ", tematy 1" + X, r.msg);
   }
 
-  // 3. doklejki obu hookow (Lore i wiedza firmy) bez wywolan + oba serwery naraz
+  // 3. PROBA NEGATYWNA: same doklejki obu hookow (Lore i wiedza firmy), bez wywolan - zadnej
+  //    linii: doklejka to podpowiedz automatu, nie dowod, ze odpowiedz sie na niej oparla
+  {
+    const p = zapisz("doklejka", [uzytkownik("pytanie", 1),
+      doklejka("TRYB MEGARUCHACZA ...\n\nZ ARCHIWUM (Lore, automat) - trop, nie dowod.\n- #1 ...", 1),
+      doklejka("Z WIEDZY FIRMY (jfwiedza, automat) - ...", 1), odpowiedz("ok", 4)]);
+    const r = uruchom(stop(p));
+    sprawdz("tylko doklejka: kod 0 i pusty wypis (zadnej linii)", r.kod === 0 && r.stdout.trim() === "", r.stdout);
+    sprawdz("tylko doklejka: stan 'nic'", stan().wynik === "nic", JSON.stringify(stan()));
+  }
+
+  // 3b. doklejki + wywolanie jfwiedza: linia tylko z wywolania, bez dopisku o doklejce i bez Lore
   {
     const a = narzedzie("mcp__jfwiedza__szukaj_wiedzy", 3);
-    const p = zapisz("doklejka", [uzytkownik("pytanie", 1),
+    const p = zapisz("doklejka-i-wywolanie", [uzytkownik("pytanie", 1),
       doklejka("TRYB MEGARUCHACZA ...\n\nZ ARCHIWUM (Lore, automat) - trop, nie dowod.\n- #1 ...", 1),
       doklejka("Z WIEDZY FIRMY (jfwiedza, automat) - ...", 1), a, odpowiedz("ok", 4)]);
     const r = uruchom(stop(p));
-    sprawdz("doklejka: '" + LORE + ": doklejono z archiwum · " + JFW + ": wyszukano 1" + X + ", doklejono z wiedzy firmy'",
-      r.msg === LORE + ": doklejono z archiwum · " + JFW + ": wyszukano 1" + X + ", doklejono z wiedzy firmy", r.msg);
+    sprawdz("doklejka + wywolanie: '" + JFW + ": wyszukano 1" + X + "'", r.msg === JFW + ": wyszukano 1" + X, r.msg);
   }
 
   // 4. PROBA NEGATYWNA: nic z Lore/jfwiedza - wiadomosc cytuje naglowki doklejek, w transkrypcie
