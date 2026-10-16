@@ -51,9 +51,9 @@ automatycznie do wiadomości. W zapisie są pomysły porzucone i decyzje odwróc
 Potwierdź w plikach albo u użytkownika, zanim na tym zbudujesz działanie. Mów,
 skąd to masz.
 
-**Znaczek źródła — w PIERWSZEJ linii odpowiedzi.** Zawsze, gdy w tej turze wywołałeś
-`lore_search`, `lore_context` albo `szukaj_wiedzy` (jfwiedza) lub doklejona wstawka
-„Z ARCHIWUM” wpłynęła na treść, pierwsza linia odpowiedzi zaczyna się od znaczka:
-`🟣 Lore`, `🟠 jfwiedza` albo oba. Nie w środku, nie na końcu — użytkownik zgłosił,
-że w praktyce znaczków nie widzi. Bez znaczka tylko wtedy, gdy wynik nic
-przydatnego nie dał i nie wpłynął na treść.
+**Znaczek źródła — w PIERWSZEJ linii odpowiedzi.** Tylko wtedy, gdy treść odpowiedzi
+faktycznie opiera się na danych z Lore (`lore_search`, `lore_context`, wstawka
+„Z ARCHIWUM”) albo z wiedzy firmy (`szukaj_wiedzy`, wstawka „Z WIEDZY FIRMY”):
+pierwsza linia zaczyna się od `🟣 Lore`, `🟠 jfwiedza` albo obu — krótko, sam znaczek.
+Samo wyszukanie albo doklejona wstawka, z której nic nie wziąłeś do odpowiedzi
+(np. odpowiedź opiera się na świeżym sprawdzeniu) — bez znaczka.
