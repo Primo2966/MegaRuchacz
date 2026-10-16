@@ -4,6 +4,14 @@ Każda zmiana wypychana na gita dostaje tu wpis. Numer rośnie wg zasady:
 pierwsza cyfra — przebudowa łamiąca zgodność, druga — nowa funkcja,
 trzecia — poprawka.
 
+## 0.35.1 — 2026-10-16
+
+- **Linia pod odpowiedzią bez fałszywych alarmów** — „🟣 Lore / 🟠 jfwiedza” pojawia się tylko wtedy, gdy Claude
+  (albo worker) naprawdę wyszukał w Lore lub wiedzy firmy. Samo doklejenie podpowiedzi do wiadomości już jej nie daje.
+- Wiedza firmy 0.4.4: uprawnienia komputerów z JFTools odświeżane w tle — znany aktywny komputer nie czeka na JFTools
+  (odebrane w panelu uprawnienie działa najdłużej do jednego odświeżenia, decyzja użytkownika 16.10); nowy komputer
+  i komputer bez dostępu czekają jak dotąd; brak udanej odpowiedzi ponad godzinę = odmowa i ostrzeżenie w dzienniku.
+
 ## 0.35.0 — 2026-10-16
 
 - **Widać, kiedy Claude sięgnął do Lore albo wiedzy firmy.** Pod odpowiedzią pojawia się linia, np.
