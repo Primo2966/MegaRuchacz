@@ -4,6 +4,20 @@ Każda zmiana wypychana na gita dostaje tu wpis. Numer rośnie wg zasady:
 pierwsza cyfra — przebudowa łamiąca zgodność, druga — nowa funkcja,
 trzecia — poprawka.
 
+## 0.35.0 — 2026-10-16
+
+- **Widać, kiedy Claude sięgnął do Lore albo wiedzy firmy.** Pod odpowiedzią pojawia się linia, np.
+  „🟣 Lore: wyszukano 1× · 🟠 jfwiedza: wyszukano 2×” — stawia ją program (hook po zakończeniu odpowiedzi), a nie model,
+  więc nie zależy od tego, czy Claude pamięta o znaczku. Liczy też wyszukania workerów i doklejki z archiwum.
+  Gdy nic nie użyto — brak linii.
+- **Podpowiedzi „Z WIEDZY FIRMY”** doklejane do wiadomości obok „Z ARCHIWUM” (Lore): do 3 wpisów z autorem i datą,
+  równolegle z Lore (+30–60 ms), tylko na komputerze z modułem Wiedza firmy. Serwer niedostępny — nic nie wyskakuje,
+  ostrzeżenie dopiero przy trzeciej awarii z rzędu; zły klucz — ostrzeżenie od razu.
+- **Zasady Lore: reguła korzystania z wiedzy firmy** — jedno `szukaj_wiedzy` na starcie zadań firmowych, przy temacie
+  firmowym Lore i jfwiedza razem; znaczek źródła obowiązkowo w pierwszej linii odpowiedzi.
+- Wiedza firmy 0.4.3: lista tematów z JFTools odświeża się w tle — wyszukiwania nie czekają już 3–4 s raz na ~10 min.
+  Przy awarii JFTools zostaje ostatnia lista, a lista starsza niż godzina daje ostrzeżenie w dzienniku serwera.
+
 ## 0.34.0 — 2026-10-15
 
 - **Znaczek źródła: 🟣 Lore / 🟠 jfwiedza.** Odpowiedź, na którą naprawdę wpłynęło Lore albo wiedza firmy, zaczyna się
