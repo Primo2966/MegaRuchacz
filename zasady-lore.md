@@ -33,6 +33,15 @@ Działa przeszukiwalna pamięć wszystkich rozmów na tej maszynie — narzędzi
 serię. Niebanalne = wymaga zrozumienia projektu, wraca do tematu sprzed dziś albo
 dotyczy decyzji. Nie przy literówce.
 
+**Wiedza firmy (jfwiedza).** Gdy dostępne jest narzędzie `szukaj_wiedzy`: na starcie
+każdego zadania dotyczącego firmy (produkty, oferty, Amazon/eBay/Allegro, klienci,
+wysyłki, procedury, ludzie) zrób jedno wyszukanie. Jedno, nie serię. Nie przy czysto
+technicznej pracy nad kodem. Sięgaj też zawsze, gdy pada „jak u nas się robi…”,
+„co wiemy o…”, albo gdy masz zapytać o coś, co mógł już ustalić ktoś inny w firmie.
+Lore to rozmowy z tego komputera, jfwiedza to ustalenia całej firmy — przy temacie
+firmowym oba. Gdy serwer nie odpowiada — pracuj dalej bez niego, jednym zdaniem
+powiedz, że wiedza firmy jest niedostępna.
+
 Sięgaj też zawsze, gdy użytkownik powołuje się na ustalenie („ustaliliśmy",
 „mówiłem ci kiedyś"), gdy masz zadać pytanie brzmiące jak już zadane albo robić
 rozpoznanie w sprawie wyglądającej na rozstrzygniętą.
@@ -42,8 +51,9 @@ automatycznie do wiadomości. W zapisie są pomysły porzucone i decyzje odwróc
 Potwierdź w plikach albo u użytkownika, zanim na tym zbudujesz działanie. Mów,
 skąd to masz.
 
-**Znaczek źródła.** Gdy odpowiedź opiera się na czymś, co przyniosło Lore
-(`lore_search`, `lore_context` albo wstawka „Z ARCHIWUM”) lub wiedza firmy
-(`szukaj_wiedzy` z jfwiedza), zacznij ją od znaczka: `🟣 Lore`, `🟠 jfwiedza` albo
-oba. Tylko gdy wynik naprawdę wpłynął na treść odpowiedzi — samo wywołanie, które
-nic przydatnego nie dało, nie dostaje znaczka.
+**Znaczek źródła — w PIERWSZEJ linii odpowiedzi.** Zawsze, gdy w tej turze wywołałeś
+`lore_search`, `lore_context` albo `szukaj_wiedzy` (jfwiedza) lub doklejona wstawka
+„Z ARCHIWUM” wpłynęła na treść, pierwsza linia odpowiedzi zaczyna się od znaczka:
+`🟣 Lore`, `🟠 jfwiedza` albo oba. Nie w środku, nie na końcu — użytkownik zgłosił,
+że w praktyce znaczków nie widzi. Bez znaczka tylko wtedy, gdy wynik nic
+przydatnego nie dał i nie wpłynął na treść.
