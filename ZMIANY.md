@@ -4,6 +4,13 @@ Każda zmiana wypychana na gita dostaje tu wpis. Numer rośnie wg zasady:
 pierwsza cyfra — przebudowa łamiąca zgodność, druga — nowa funkcja,
 trzecia — poprawka.
 
+## 0.35.2 — 2026-10-16
+
+- **Kropka 🟣 Lore / 🟠 jfwiedza znaczy „odpowiedź wykorzystała dane z pamięci”** — nie „szukał” ani „doklejono”.
+  Linia pod odpowiedzią to sam znaczek, pojawia się tylko, gdy w treści są konkrety (liczby, numery, daty, frazy)
+  z Lore lub wiedzy firmy, których nie było w świeżym sprawdzeniu. Progi skalibrowane na 2780 prawdziwych turach;
+  numery użytych wpisów zapisują się w pliku stanu. Zasady Lore mówią to samo modelowi.
+
 ## 0.35.1 — 2026-10-16
 
 - **Linia pod odpowiedzią bez fałszywych alarmów** — „🟣 Lore / 🟠 jfwiedza” pojawia się tylko wtedy, gdy Claude
