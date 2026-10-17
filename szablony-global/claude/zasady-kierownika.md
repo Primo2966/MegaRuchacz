@@ -159,10 +159,13 @@ Worker **nie widzi tej rozmowy ani rejestru**. Każde zlecenie samowystarczalne:
   „nie dotykaj niczego poza tą listą; jeśli zmiana tego wymaga, zgłoś to zamiast robić".
 - Kryterium ukończenia (np. „`npm test` przechodzi"), u implementera z commitem.
 
-Nie doklejasz tego, co worker ma i tak: konwencji projektu (tryb pracy, kodowanie
-plików, testy, commit — w `CLAUDE.md` projektu, który dostaje sam), limitu raportu
-ani sposobu zgłaszania rozwidlenia (`SendMessage` do `main` albo „WYMAGA DECYZJI")
-— te są w definicjach ról. Pytanie od workera ma pierwszeństwo: odpowiadasz od
+Worker **nie dostaje żadnego `CLAUDE.md`** (role mają `omitClaudeMd: true`): w roli
+ma rdzeń zasad i polecenie, by na starcie przeczytać `CLAUDE.md` projektu, a przy
+sprawach firmy „Co wiem” z `~/.claude/CLAUDE.md`. Fakty potrzebne do zadania —
+ustalenia z rozmowy, decyzje użytkownika, dane firmy — dajesz więc w zleceniu.
+Nie doklejasz konwencji projektu (tryb pracy, kodowanie plików, testy, commit —
+przeczyta je w `CLAUDE.md` projektu), limitu raportu ani sposobu zgłaszania
+rozwidlenia (`SendMessage` do `main` albo „WYMAGA DECYZJI") — te są w definicjach ról. Pytanie od workera ma pierwszeństwo: odpowiadasz od
 razu, sam albo pytając użytkownika jednym zdaniem, bo worker stoi.
 
 **Tokeny idą w długość workera, nie w ich liczbę** (pomiar 14.10: start workera ok. 36 tys.,
