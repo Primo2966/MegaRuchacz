@@ -1,5 +1,6 @@
 # narzedzia\instalacja\modul-kopia.ps1 - modul "kopia": codzienna kopia zapasowa na wskazany folder
-# (narzedzia\kopia-zapasowa.ps1: pelna-RRRR-MM-DD, potem zmiany\RRRR-MM-DD, nic nie jest nadpisywane).
+# (narzedzia\kopia-zapasowa.ps1: pelna-RRRR-MM-DD, potem zmiany\RRRR-MM-DD; od 17.10.2026 rotacja -
+# zostaje 7 ostatnich dni kopii, starsze sa wlewane do pelnej; katalogi danych baz pomijane).
 #
 # Skad i dokad - z rejestru modulow (~\.claude\mr\instalacja.json, pole "kopia"), dokladnie tak,
 # jak czyta je narzedzia\kopia-zapasowa.ps1 (Ustal-Ustawienia, P59d) przy KAZDYM przebiegu:

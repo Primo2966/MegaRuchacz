@@ -15,16 +15,39 @@
 # i Codeksa i UWAGA w dzienniku; rejestr nieczytelny = ustawienia jak bez rejestru i ALARM
 # w dzienniku i pliku stanu (kopia ma isc, a ktos ma sie dowiedziec).
 #
-# UKLAD KOPII - nic nigdy nie jest nadpisywane ani kasowane:
-#   Backup\pelna-RRRR-MM-DD\C\dev\...       pierwsza pelna kopia (sciezki jak na dysku C:)
+# UKLAD KOPII:
+#   Backup\pelna-RRRR-MM-DD\C\dev\...       pelna kopia (sciezki jak na dysku C:) = stan sprzed
+#                                           -Trzymaj dni kopii (data w nazwie = dzien jej zalozenia)
 #   Backup\zmiany\RRRR-MM-DD\C\...          kazdego dnia tylko pliki nowe i zmienione
 #   Backup\dziennik.txt                     data, ile plikow, ile MB, alarmy, bledy, pominiete
-#   ~\.claude\mr\kopia-stan.txt             znacznik "bylem tu" (stan=OK/ALARM/BLAD/TRWA)
+#   ~\.claude\mr\kopia-stan.txt             znacznik "bylem tu" (stan=OK/ALARM/BLAD/TRWA, przyczyna=)
 #   ~\.claude\mr\kopia-indeks.tsv           co juz jest w kopii (sciezka, rozmiar, czas)
-# Usuniecie pliku u zrodla NIE usuwa go z kopii. Drugi przebieg tego samego dnia
-# idzie do zmiany\RRRR-MM-DD_GGMM - istniejacego pliku w kopii nie ruszamy nigdy.
+#   ~\.claude\mr\kopia-w-uzyciu.tsv         od kiedy ktory plik jest zablokowany (W UZYCIU)
+# W dniu kopii istniejacego pliku w kopii nie ruszamy: drugi przebieg tego samego dnia
+# idzie do zmiany\RRRR-MM-DD_GGMMSS. Usuniecie pliku u zrodla NIE usuwa go z kopii.
 # Odtwarzanie: najnowsza wersja pliku = jego kopia w najmlodszym katalogu zmiany\
 # (albo w pelna-*, jesli od tamtej pory sie nie zmienial).
+#
+# ROTACJA (od 17.10.2026; do tego dnia nic nie bylo kasowane i kopia urosla do ~36 GB
+# w 16 dni): po udanym przebiegu zostaja katalogi zmiany\ z -Trzymaj ostatnich DNI, w ktorych
+# byla kopia (domyslnie 7). Starszy dzien jest WLEWANY do najnowszej pelna-* (jego pliki
+# zastepuja tam starsze wersje - kazdy byl sprawdzony na zera, zanim trafil do kopii) i znika.
+# Dzien sprzed najnowszej pelna-* (np. po -Pierwsza) jest kasowany bez wlewania, a starsza
+# pelna-* - gdy najnowsza wypadnie z okna -Trzymaj dni. Rotacja dotyka WYLACZNIE katalogow
+# pelna-RRRR-MM-DD* i zmiany\RRRR-MM-DD* w celu - nic innego w folderze kopii.
+# Uwaga: Dysk Google przenosi usuniete i zastapione pliki do kosza, ktory liczy sie do
+# limitu konta jeszcze 30 dni - miejsce wraca po oproznieniu kosza albo po 30 dniach.
+#
+# BLEDY - trzy rodzaje, zeby jeden zablokowany plik nie zaslanial co dzien prawdziwej awarii:
+#   - kopia nie poszla (brak celu / dysku, brak miejsca, ustawienia): stan=BLAD, blad=<powod>,
+#     przyczyna=BRAK_CELU|BRAK_MIEJSCA|USTAWIENIA|PRZERWANA; brak miejsca dodatkowo linia ALARM;
+#   - kopia poszla, ale czesci plikow nie dalo sie skopiowac: stan=BLAD bez blad=, przyczyna=PLIKI,
+#     linie BLAD z nazwami;
+#   - plik zablokowany przez inny program (W UZYCIU): ostrzezenie z nazwa w dzienniku i stanie,
+#     stan zostaje OK - plik pojdzie w nastepnym przebiegu. Dopiero zablokowany od -Trzymaj dni
+#     (zadnej swiezej kopii w calym oknie rotacji) staje sie linia BLAD.
+# Katalogi danych baz (Postgres, MySQL, MongoDB) sa ZAWSZE pomijane, z wpisem BAZA w dzienniku
+# i stanie (informacja, nie blad) - patrz KopiaIO.Przejdz.
 #
 # Dlaczego tak: 2026-10-02 rano pliki pamieci (~\.claude\CLAUDE.md, wiedza\) zostaly
 # wyzerowane. Kopia nadpisujaca skasowalaby zdrowa wersje. Dlatego (1) kazdy dzien
@@ -41,6 +64,8 @@
 #   kopia-zapasowa.ps1 -ZSekretami     dolacza .env, klucze SSH, ~\.claude\sekrety (domyslnie NIE)
 #   kopia-zapasowa.ps1 -ZalozZadanie   zadanie MegaRuchaczKopia, codziennie o -Godzina (12:30)
 #   kopia-zapasowa.ps1 -UsunZadanie
+#   -Trzymaj <N>                       ile ostatnich dni kopii trzymac osobno (domyslnie 7)
+#   -WolneBajty <B>                    tylko testy: udaje wolne miejsce na dysku celu
 #   -KatalogDomowy <kat>               podmiana katalogu domowego (testy): rejestr, lokalne.json,
 #                                      "~" w ustawieniach, plik stanu i indeks liczone od niego
 # Pliku logowania Claude'a (.credentials.json) i auth.json Codeksa NIE kopiujemy nigdy -
@@ -65,6 +90,13 @@ param(
   [string]$PlikStanu = "",
   [string]$PlikIndeksu = "",
   [string]$Data = "",
+  # 7 dni: zerowanie plikow z 02.10.2026 wyszlo na jaw tego samego dnia, a alarm kopii widac
+  # w oknie nadzorcy najpozniej po dwoch dobach (prog "kopia nie idzie") - tydzien daje
+  # zapas na weekend i kilka dni nieobecnosci. Wersje starsze niz tydzien nie znikaja do zera:
+  # zostaje stan sprzed 7 dni w pelna-* (a pamiec ma jeszcze kopie-dzienne.ps1 lokalnie).
+  # Wiecej dni = wiecej miejsca: dzien to dzis 0,5-2 GB (glownie grafiki z C:\dev i lore.db).
+  [int]$Trzymaj = 7,
+  [long]$WolneBajty = -1,
   [string]$KatalogDomowy = $env:USERPROFILE
 )
 
@@ -73,6 +105,10 @@ $NazwaZadania = "MegaRuchaczKopia"
 $H = $KatalogDomowy.TrimEnd('\')
 if (-not $PlikStanu) { $PlikStanu = "$H\.claude\mr\kopia-stan.txt" }
 if (-not $PlikIndeksu) { $PlikIndeksu = "$H\.claude\mr\kopia-indeks.tsv" }
+$PlikWUzyciu = Join-Path (Split-Path -Parent $PlikStanu) "kopia-w-uzyciu.tsv"
+if ($Trzymaj -lt 1) { Write-Host "BLAD  -Trzymaj musi byc co najmniej 1 (podano $Trzymaj)" -ForegroundColor Red; exit 1 }
+# rodzaj bledu przerywajacego kopie (patrz naglowek, BLEDY) - ustawiany tuz przed throw
+$script:Przyczyna = "PRZERWANA"
 if (-not $Data) { $Data = Get-Date -Format "yyyy-MM-dd" }
 
 # Zrodla, cel i wykluczenia projektow - z rejestru instalacji albo z pliku obok
@@ -258,21 +294,29 @@ public static class KopiaIO {
       do { if (d.Name != "." && d.Name != "..") dzieci.Add(d); } while (FindNextFileW(h, out d));
       FindClose(h);
 
-      bool projekt = false, profil = false, pgPid = false, pgWer = false;
+      bool projekt = false, profil = false, pgWer = false, pgKonf = false, mysql = false, mongo = false;
       foreach (var c in dzieci) {
         if ((c.Attr & 0x10) != 0) continue;
         string n = c.Name.ToLowerInvariant();
         if (n == "package.json" || n == "pyproject.toml" || n == "setup.py") projekt = true;
         else if (n == "local state") profil = true;
-        else if (n == "postmaster.pid") pgPid = true;
         else if (n == "pg_version") pgWer = true;
+        else if (n == "postmaster.pid" || n == "postgresql.conf" || n == "pg_hba.conf") pgKonf = true;
+        else if (n == "ibdata1" || n == "aria_log_control") mysql = true;
+        else if (n == "wiredtiger" || n == "mongod.lock") mongo = true;
       }
       if (profil) {
         pominiete.Add(new KopiaPominiety { Sciezka = kat, Powod = "profil przegladarki (plik 'Local State') - odtwarzalny, trzyma ciasteczka sesji", Katalog = true });
         continue;
       }
-      if (pgPid && pgWer) {
-        pominiete.Add(new KopiaPominiety { Sciezka = kat, Powod = "BLAD: Postgres dziala (postmaster.pid) - kopia plikow w biegu bylaby niespojna; zatrzymaj serwer albo zrob pg_dump", Katalog = true });
+      // Katalog danych bazy - ZAWSZE poza kopia (od 17.10.2026). Dzialajacy serwer trzyma pliki
+      // otwarte i zmienia je w trakcie, wiec kopia plik po pliku jest niespojna; do 17.10 dzialajacy
+      // Postgres (C:\dev\tools\pgdata) dawal BLAD w kazdym przebiegu od 05.10, ktory zaslanial
+      // wszystko inne. Kopia bazy to jej zrzut (pg_dump, mysqldump, mongodump) - osobna sprawa.
+      // Wpis "BAZA:" idzie do dziennika i stanu jako informacja, nie blad.
+      string baza = (pgWer && pgKonf) ? "Postgres" : mysql ? "MySQL/MariaDB" : mongo ? "MongoDB" : null;
+      if (baza != null) {
+        pominiete.Add(new KopiaPominiety { Sciezka = kat, Powod = "BAZA: katalog danych bazy " + baza + " - pliki dzialajacej bazy sa niespojne, kopia bazy to jej zrzut (np. pg_dump)", Katalog = true });
         continue;
       }
       foreach (var c in dzieci) {
@@ -339,7 +383,11 @@ public static class KopiaIO {
     tmp = dst + ".kopia-tmp";
     DeleteFileW(L(tmp));
     hd = CreateFileW(L(tmp), 0x40000000, 0, IntPtr.Zero, 1, 0, IntPtr.Zero);
-    if (hd.IsInvalid) { int e = Marshal.GetLastWin32Error(); tmp = null; return "BLAD:zalozenie pliku w kopii (blad Win32 " + e + ")"; }
+    if (hd.IsInvalid) {
+      int e = Marshal.GetLastWin32Error(); tmp = null;
+      if (e == 112 || e == 39) return "PELNY:zalozenie pliku w kopii (blad Win32 " + e + " - brak miejsca)";
+      return "BLAD:zalozenie pliku w kopii (blad Win32 " + e + ")";
+    }
     ws = new FileStream(hd, FileAccess.Write, 1 << 16);
     return null;
   }
@@ -453,6 +501,7 @@ public static class KopiaIO {
     } catch (IOException ex) {
       int e = Marshal.GetHRForException(ex) & 0xFFFF;
       if (e == 32 || e == 33) return "W_UZYCIU";
+      if (e == 112 || e == 39) return "PELNY:" + ex.Message;
       return "BLAD:" + ex.Message;
     } catch (Exception ex) {
       return "BLAD:" + ex.Message;
@@ -461,6 +510,61 @@ public static class KopiaIO {
       if (tmp != null) DeleteFileW(L(tmp));
       if (!hs.IsClosed) hs.Dispose();
     }
+  }
+
+  // --- rotacja (od 17.10.2026) ---
+  // Pliki katalogu kopii (dlugie sciezki), bez schodzenia za dowiazania.
+  static void Drzewo(string korzen, List<string> pliki, List<string> katalogi) {
+    var stos = new Stack<string>();
+    stos.Push(korzen.TrimEnd('\\'));
+    while (stos.Count > 0) {
+      string kat = stos.Pop();
+      katalogi.Add(kat);
+      FIND d;
+      IntPtr h = FindFirstFileExW(L(kat) + @"\*", 1, out d, 0, IntPtr.Zero, 2);
+      if (h == ZLY) continue;
+      do {
+        if (d.Name == "." || d.Name == "..") continue;
+        string p = kat + "\\" + d.Name;
+        if ((d.Attr & 0x10) != 0 && (d.Attr & 0x400) == 0) stos.Push(p); else pliki.Add(p);
+      } while (FindNextFileW(h, out d));
+      FindClose(h);
+    }
+  }
+
+  // Usuwa katalog z cala zawartoscia. Wynik: lista bledow (pusta = usuniety).
+  public static List<string> UsunDrzewo(string korzen) {
+    var bledy = new List<string>();
+    var pliki = new List<string>(); var katalogi = new List<string>();
+    Drzewo(korzen, pliki, katalogi);
+    foreach (var p in pliki) {
+      if (!DeleteFileW(L(p)) && !RemoveDirectoryW(L(p))) bledy.Add(p + " (blad Win32 " + Marshal.GetLastWin32Error() + ")");
+    }
+    for (int i = katalogi.Count - 1; i >= 0; i--) {
+      if (!RemoveDirectoryW(L(katalogi[i])) && bledy.Count == 0) bledy.Add(katalogi[i] + " (blad Win32 " + Marshal.GetLastWin32Error() + ")");
+    }
+    zalozone.Clear();
+    return bledy;
+  }
+
+  // Wlewa katalog dnia (zmiany\RRRR-MM-DD) do pelnej kopii: kazdy plik przechodzi na swoje
+  // miejsce w pelnej, zastepujac starsza wersje; resztki *.kopia-tmp (przerwany zapis) sa
+  // kasowane. Wynik: liczba przeniesionych plikow; bledy dopisuje do listy.
+  public static int Wlej(string dzien, string pelna, List<string> bledy) {
+    var pliki = new List<string>(); var katalogi = new List<string>();
+    dzien = dzien.TrimEnd('\\'); pelna = pelna.TrimEnd('\\');
+    Drzewo(dzien, pliki, katalogi);
+    int n = 0;
+    foreach (var p in pliki) {
+      if (p.EndsWith(".kopia-tmp", StringComparison.OrdinalIgnoreCase)) { DeleteFileW(L(p)); continue; }
+      string dst = pelna + p.Substring(dzien.Length);
+      try { ZalozKatalog(dst.Substring(0, dst.LastIndexOf('\\'))); }
+      catch (Exception ex) { bledy.Add(p + " - " + ex.Message); continue; }
+      // 1 = MOVEFILE_REPLACE_EXISTING (ten sam dysk - przemianowanie, bez kopiowania danych)
+      if (MoveFileExW(L(p), L(dst), 1)) n++;
+      else bledy.Add(p + " -> " + dst + " (blad Win32 " + Marshal.GetLastWin32Error() + ")");
+    }
+    return n;
   }
 }
 '@
@@ -511,7 +615,7 @@ Regula "^$eH\\\.claude\\skills\\\.trash$" "kosz po usunietych skillach (zaklada 
 # wyzerowany po zaniku pradu = 1 z 21 alarmow.
 Regula "^$eH\\\.claude\\mr\\terminy\\zrob-[^\\]*\.ps1$" "skrypt startowy przypomnienia (zasobnik\terminy.ps1) - jednorazowy, zapisywany od nowa" $false
 Regula "^$eH\\\.claude\\lore\.db\.przed-[^\\]*$" "stara migawka lore.db sprzed migracji (184 MB) - aktualna lore.db jest w kopii" $false
-Regula "^$eH\\\.claude\\mr\\kopia-indeks\.tsv(\.nowy)?$" "indeks samej kopii (zmienia sie co dzien)" $false
+Regula "^$eH\\\.claude\\mr\\kopia-(indeks|w-uzyciu)\.tsv(\.nowy)?$" "indeks samej kopii (zmienia sie co dzien)" $false
 Regula "^$eH\\\.codex\\(\.sandbox|\.sandbox-bin|\.tmp|tmp|cache|packages|thread-writer-locks)$" "katalog techniczny Codeksa (programy, piaskownica, pamiec podreczna)" $true
 Regula "^$eH\\\.codex\\plugins\\cache$" "wtyczki Codeksa pobrane z sieci - odtwarzalne" $true
 Regula "^$eH\\\.codex\\models_cache\.json$" "pamiec podreczna Codeksa" $false
@@ -700,7 +804,7 @@ function Ustal-Ustawienia {
 # Bez ustawien nie ma kopii - ale nie po cichu: stan=BLAD z powodem (nadzorca go pokaze).
 function Bez-Ustawien([string]$powod) {
   Write-Host "BLAD  kopia nie ruszyla: $powod" -ForegroundColor Red
-  if (-not $Proba) { Zapisz-Stan ("stan=BLAD`r`nostatnia=" + (Get-Date).ToString("yyyy-MM-dd HH:mm:ss") + "`r`nblad=$powod`r`n") }
+  if (-not $Proba) { Zapisz-Stan ("stan=BLAD`r`nostatnia=" + (Get-Date).ToString("yyyy-MM-dd HH:mm:ss") + "`r`nprzyczyna=USTAWIENIA`r`nblad=$powod`r`n") }
   exit 1
 }
 
@@ -727,6 +831,69 @@ foreach ($w in $Ustawienia.Wykluczenia) {
   else { Regula $wz $w.Powod ([bool]$w.Katalog) }
 }
 
+# --- rotacja (naglowek: ROTACJA) ----------------------------------------------
+# Wola ja tylko udany przebieg (indeks zapisany). Wynik: opis do dziennika; bledy -> $Bledy
+# (plik, ktorego nie dalo sie przeniesc/usunac, zostaje w katalogu dnia - nastepny przebieg
+# sprobuje znowu, nic nie ginie).
+function Data-Katalogu([string]$nazwa) {
+  $m = [regex]::Match($nazwa, '^(?:pelna-)?(\d{4}-\d{2}-\d{2})(?:_[0-9-]+)?$')
+  if ($m.Success) { return $m.Groups[1].Value }
+  return $null
+}
+
+function Rotacja {
+  $opis = New-Object 'System.Collections.Generic.List[string]'
+  $pelne = @(Get-ChildItem -LiteralPath $Cel -Directory -Filter "pelna-*" -ErrorAction Stop |
+             Where-Object { Data-Katalogu $_.Name } | Sort-Object Name -Descending)
+  if ($pelne.Count -eq 0) { return "rotacja: brak pelnej kopii - nic do wlania" }
+  $baza = $pelne[0].FullName; $dataBazy = Data-Katalogu $pelne[0].Name
+  $dni = @()
+  if (Test-Path -LiteralPath "$Cel\zmiany") {
+    $dni = @(Get-ChildItem -LiteralPath "$Cel\zmiany" -Directory -ErrorAction Stop |
+             Where-Object { Data-Katalogu $_.Name } | Sort-Object Name)
+  }
+  # dni kopii = daty katalogow zmiany\ i data najnowszej pelnej; zostaje $Trzymaj najmlodszych
+  $daty = @(@($dni | ForEach-Object { Data-Katalogu $_.Name }) + @($dataBazy) | Sort-Object -Unique -Descending)
+  $zostaja = @($daty | Select-Object -First $Trzymaj)
+  $wlane = 0; $plikow = 0; $usuniete = 0
+  foreach ($d in $dni) {
+    $data = Data-Katalogu $d.Name
+    if ($zostaja -contains $data) { continue }
+    if ($d.FullName.TrimEnd('\') -eq $Przebieg) { continue }   # dzisiejszego nie ruszamy nigdy
+    $bl = New-Object 'System.Collections.Generic.List[string]'
+    if ($data -ge $dataBazy) {
+      $plikow += [KopiaIO]::Wlej($d.FullName, $baza, $bl)
+      foreach ($b in $bl) { $Bledy.Add("rotacja: nie przenioslem do pelnej kopii: $b") }
+      if ($bl.Count -gt 0) { continue }   # zostaje do nastepnego przebiegu
+      $wlane++
+    } else { $usuniete++ }
+    foreach ($b in [KopiaIO]::UsunDrzewo($d.FullName)) { $Bledy.Add("rotacja: nie usunalem $b") }
+  }
+  if ($wlane) { $opis.Add("wlane do $($pelne[0].Name): $wlane $(if ($wlane -eq 1) { 'dzien' } else { 'dni' }) ($plikow plikow)") }
+  if ($usuniete) { $opis.Add("usuniete dni sprzed $($pelne[0].Name): $usuniete") }
+  if (-not ($zostaja -contains $dataBazy)) {
+    foreach ($p in @($pelne | Select-Object -Skip 1)) {
+      foreach ($b in [KopiaIO]::UsunDrzewo($p.FullName)) { $Bledy.Add("rotacja: nie usunalem $b") }
+      $opis.Add("usunieta starsza pelna kopia $($p.Name)")
+    }
+  }
+  $txt = "rotacja (trzymam $Trzymaj ostatnich dni kopii): "
+  if ($opis.Count) { return $txt + ($opis -join "; ") }
+  return $txt + "nic do zrobienia"
+}
+
+# Pliki W UZYCIU: od kiedy kazdy jest zablokowany (sciezka TAB data). Zwraca slownik.
+function Czytaj-WUzyciu {
+  $s = @{}
+  if (-not (Test-Path -LiteralPath $PlikWUzyciu)) { return $s }
+  try {
+    foreach ($l in [IO.File]::ReadAllLines($PlikWUzyciu)) {
+      $c = $l.Split("`t"); if ($c.Count -eq 2 -and (Data-Katalogu $c[1])) { $s[$c[0]] = $c[1] }
+    }
+  } catch { $Uwagi.Add("nie odczytalem $PlikWUzyciu ($($_.Exception.Message)) - liczenie dni blokady od nowa") }
+  return $s
+}
+
 # --- start --------------------------------------------------------------------
 
 $t0 = Get-Date
@@ -749,8 +916,10 @@ try {
     Zapisz-Stan ("stan=TRWA`r`nstart=" + $t0.ToString("yyyy-MM-dd HH:mm:ss") + "`r`ncel=$Cel`r`n" +
                  "# TRWA ze starym startem = kopia przerwana (wylaczony komputer, zabity proces)`r`n")
     $rodzic = Split-Path -Parent $Cel
+    $script:Przyczyna = "BRAK_CELU"
     if (-not (Test-Path -LiteralPath $rodzic)) { throw "nie ma katalogu nad celem kopii: $rodzic (Dysk Google nie wystartowal?)" }
     if (-not (Test-Path -LiteralPath $Cel)) { New-Item -ItemType Directory -Force -Path $Cel | Out-Null }
+    $script:Przyczyna = "PRZERWANA"
   }
 
   # indeks: co juz jest w kopii
@@ -771,6 +940,12 @@ try {
   $pelne = @()
   if (Test-Path -LiteralPath $Cel) { $pelne = @(Get-ChildItem -LiteralPath $Cel -Directory -Filter "pelna-*" -ErrorAction SilentlyContinue) }
   $Pelna = [bool]$Pierwsza
+  if (-not $Pelna -and $indeksJest -and $pelne.Count -eq 0) {
+    # Indeks jest, a pelnej kopii w celu nie ma (folder kopii usuniety albo nowy cel): przyrost
+    # wzialby same zmiany od wczoraj i kopia bylaby dziurawa bez slowa - robimy pelna.
+    $Pelna = $true
+    $Uwagi.Add("w celu $Cel nie ma pelnej kopii (pelna-*), choc indeks jest - robie pelna od nowa")
+  }
   if (-not $Pelna -and -not $indeksJest) {
     if ($pelne.Count -eq 0) {
       $Pelna = $true
@@ -838,6 +1013,25 @@ try {
   $sumaDoKopii = ($DoKopii | Measure-Object Rozmiar -Sum).Sum
   if (-not $sumaDoKopii) { $sumaDoKopii = 0 }
 
+  # Wolne miejsce na dysku celu PRZED kopiowaniem. Potrzeba: rozmiar kopii + 10% (pliki rosna
+  # miedzy listowaniem a kopiowaniem - transkrypty, lore.db; w 2,5 min przebiegu o megabajty,
+  # nigdy o 10%) + 512 MB (system i pamiec podreczna Dysku Google nie moga zostac z zerem).
+  # Dysk Google pokazuje jako wolne miejsce to, co zglasza jego klient (zwykle miejsce na
+  # dysku z jego pamiecia podreczna, nie limit konta) - pelne konto wyjdzie dopiero przy
+  # wysylce w chmurze, poza zasiegiem tego skryptu.
+  $wolne = [long]-1
+  if ($WolneBajty -ge 0) { $wolne = $WolneBajty }
+  else {
+    try { $wolne = (New-Object IO.DriveInfo([IO.Path]::GetPathRoot($Cel))).AvailableFreeSpace }
+    catch { $Uwagi.Add("nie sprawdzilem wolnego miejsca na $Cel ($($_.Exception.Message))") }
+  }
+  $potrzeba = [long]($sumaDoKopii * 1.1) + 512MB
+  if ($wolne -ge 0 -and $wolne -lt $potrzeba) {
+    $script:Przyczyna = "BRAK_MIEJSCA"
+    $msg = "brak miejsca na dysku celu ($Cel): wolne $(MB $wolne), potrzeba $(MB $potrzeba) (kopia $(MB $sumaDoKopii) + zapas)"
+    if ($Proba) { $Alarmy.Add("ALARM BRAK MIEJSCA - $msg") } else { throw $msg }
+  }
+
   # kopiowanie (albo przy -Proba samo sprawdzenie zer)
   $skopiowane = 0; $bajty = [long]0; $wyzerowane = 0
   $ostatniMeldunek = Get-Date
@@ -869,6 +1063,10 @@ try {
       $Uwagi.Add("zniknal w trakcie kopii (usuniety u zrodla): $($k.Sciezka)")
     } elseif ($wynik -eq "ISTNIEJE") {
       $Bledy.Add("w kopii juz jest $dst - nie nadpisuje")
+    } elseif ($wynik.StartsWith("PELNY:")) {
+      # dysk celu pelny - kazdy nastepny plik i tak padnie; przerywamy cala kopie
+      $script:Przyczyna = "BRAK_MIEJSCA"
+      throw "brak miejsca na dysku celu ($Cel) przy kopiowaniu $($k.Sciezka): $($wynik.Substring(6)); skopiowane do tej chwili: $skopiowane z $($DoKopii.Count) plikow"
     } else {
       $Bledy.Add("$($k.Sciezka) - $($wynik -replace '^BLAD:', '')")
     }
@@ -879,10 +1077,11 @@ try {
     }
   }
 
-  $czasTrwania = (Get-Date) - $t0
   $sekrety = @($Pominiete | Where-Object { $_.Sekret })
+  $Bazy = @($Pominiete | Where-Object { $_.Powod.StartsWith("BAZA:") } | ForEach-Object { "BAZA DANYCH pominieta (kopia bazy to jej zrzut, np. pg_dump): $($_.Sciezka) - $($_.Powod.Substring(5).Trim())" })
 
   if ($Proba) {
+    $czasTrwania = (Get-Date) - $t0
     Write-Output "PROBA - nic nie zostalo skopiowane ani zapisane"
     Write-Output ("ustawienia: " + $Ustawienia.Skad)
     Write-Output ("zrodla: " + ($Zrodla -join "; "))
@@ -891,7 +1090,8 @@ try {
     foreach ($a in $Alarmy) { Write-Output $a }
     foreach ($b in $Bledy) { Write-Output "BLAD  $b" }
     foreach ($z in $Dziury) { Write-Output $z }
-    Write-Output ("rodzaj: $rodzaj  ->  $Cel\$nazwa")
+    foreach ($z in $Bazy) { Write-Output $z }
+    Write-Output ("rodzaj: $rodzaj  ->  $Cel\$nazwa  (rotacja: trzymam $Trzymaj ostatnich dni kopii)")
     Write-Output ("do skopiowania: {0} plikow, {1}  (nowe {2}, zmienione {3}, bez zmian {4}, pliki -wal/-shm w kopii bazy {5})" -f $DoKopii.Count, (MB $sumaDoKopii), $nowe, $zmienione, $bezZmian, $towarzyszace)
     Write-Output ""
     Write-Output "wedlug zrodla (C:\dev - wedlug projektu):"
@@ -944,28 +1144,65 @@ try {
   [IO.File]::WriteAllText($nowy, $sb.ToString(), (New-Object Text.UTF8Encoding($false)))
   Move-Item -LiteralPath $nowy -Destination $PlikIndeksu -Force
 
+  # Pliki W UZYCIU: od kiedy zablokowany. Pojedyncza blokada to ostrzezenie (plik pojdzie jutro);
+  # blokada od $Trzymaj dni = w calym oknie rotacji nie ma jego swiezej kopii -> linia BLAD.
+  $stareBlokady = Czytaj-WUzyciu
+  $noweBlokady = @{}
+  $LinieWUzyciu = New-Object 'System.Collections.Generic.List[string]'
+  foreach ($u in $WUzyciu) {
+    $od = if ($stareBlokady.ContainsKey($u)) { $stareBlokady[$u] } else { $Data }
+    $noweBlokady[$u] = $od
+    $dniBlokady = 0
+    try { $dniBlokady = [int]([datetime]::ParseExact($Data, "yyyy-MM-dd", $null) - [datetime]::ParseExact($od, "yyyy-MM-dd", $null)).TotalDays }
+    catch { $Uwagi.Add("zla data blokady '$od' dla $u - licze od dzis") }
+    if ($dniBlokady -ge $Trzymaj) {
+      $Bledy.Add("plik zablokowany przez inny program od $od ($dniBlokady dni) - w kopii z ostatnich $Trzymaj dni nie ma jego swiezej wersji; zamknij program, ktory go trzyma, albo wyklucz plik w ustawieniach kopii: $u")
+    } else {
+      $LinieWUzyciu.Add("W UZYCIU (pominiety, zablokowany przez inny program$(if ($od -ne $Data) { " od $od" }); sprobuje w nastepnym przebiegu): $u")
+    }
+  }
+  try {
+    $sbU = New-Object Text.StringBuilder
+    foreach ($kv in $noweBlokady.GetEnumerator()) { [void]$sbU.Append($kv.Key).Append("`t").Append($kv.Value).Append("`r`n") }
+    if ($noweBlokady.Count) { [IO.File]::WriteAllText($PlikWUzyciu, $sbU.ToString(), (New-Object Text.UTF8Encoding($false))) }
+    elseif (Test-Path -LiteralPath $PlikWUzyciu) { Remove-Item -LiteralPath $PlikWUzyciu -Force }
+  } catch { $Uwagi.Add("nie zapisalem $PlikWUzyciu ($($_.Exception.Message)) - dni blokady plikow beda liczone od nowa") }
+
+  # rotacja - tylko po udanym przebiegu; jej bledy ida do $Bledy, nie przerywaja wpisu
+  $opisRotacji = ""
+  try { $opisRotacji = Rotacja }
+  catch { $Bledy.Add("rotacja przerwana: $($_.Exception.Message) - stare kopie zostaja, nastepny przebieg sprobuje znowu") }
+  $czasTrwania = (Get-Date) - $t0
+
   # dziennik - alarmy na POCZATKU wpisu
   $stan = if ($Alarmy.Count) { "ALARM" } elseif ($Bledy.Count) { "BLAD" } else { "OK" }
+  $przyczyna = if ($Bledy.Count) { "PLIKI" } else { "" }
   $d = New-Object Text.StringBuilder
   [void]$d.AppendLine("=== " + $t0.ToString("yyyy-MM-dd HH:mm") + "  $rodzaj  stan=$stan  ->  $nazwa")
   foreach ($a in $Alarmy) { [void]$d.AppendLine($a) }
   [void]$d.AppendLine(("skopiowane: {0} plikow, {1}  (nowe {2}, zmienione {3}; bez zmian {4}); czas {5:hh\:mm\:ss}" -f $skopiowane, (MB $bajty), $nowe, $zmienione, $bezZmian, $czasTrwania))
-  [void]$d.AppendLine(("pominiete: wyzerowane {0}, w uzyciu {1}, bledy {2}, sekrety {3}{4}, wykluczone katalogi/pliki {5}; skopiowane mimo dziury {6}" -f $wyzerowane, $WUzyciu.Count, $Bledy.Count, $sekrety.Count, $(if ($ZSekretami) { " (z -ZSekretami)" } else { " (bez -ZSekretami)" }), ($Pominiete.Count - $sekrety.Count), $Dziury.Count))
+  [void]$d.AppendLine(("pominiete: wyzerowane {0}, w uzyciu {1}, bledy {2}, sekrety {3}{4}, bazy danych {5}, wykluczone katalogi/pliki {6}; skopiowane mimo dziury {7}" -f $wyzerowane, $WUzyciu.Count, $Bledy.Count, $sekrety.Count, $(if ($ZSekretami) { " (z -ZSekretami)" } else { " (bez -ZSekretami)" }), $Bazy.Count, ($Pominiete.Count - $sekrety.Count - $Bazy.Count), $Dziury.Count))
+  if ($opisRotacji) { [void]$d.AppendLine($opisRotacji) }
   foreach ($b in $Bledy) { [void]$d.AppendLine("BLAD  $b") }
   foreach ($z in $Dziury) { [void]$d.AppendLine($z) }
-  foreach ($u in $WUzyciu) { [void]$d.AppendLine("W UZYCIU (pominiety, sprobuje jutro): $u") }
+  foreach ($u in $LinieWUzyciu) { [void]$d.AppendLine($u) }
+  foreach ($z in $Bazy) { [void]$d.AppendLine($z) }
   foreach ($u in $Uwagi) { [void]$d.AppendLine("UWAGA $u") }
   [void]$d.AppendLine("")
   [IO.File]::AppendAllText("$Cel\dziennik.txt", $d.ToString(), (New-Object Text.UTF8Encoding($false)))
 
   $s = "stan=$stan`r`nostatnia=" + (Get-Date).ToString("yyyy-MM-dd HH:mm:ss") + "`r`nrodzaj=$rodzaj`r`ncel=$Przebieg`r`n" +
        "plikow=$skopiowane`r`nmb=" + [Math]::Round($bajty / 1MB, 1) + "`r`nalarmy=$($Alarmy.Count)`r`nbledy=$($Bledy.Count)`r`nw_uzyciu=$($WUzyciu.Count)`r`n" +
-       "dziury=$($Dziury.Count)`r`nustawienia=$($Ustawienia.Skad)`r`n"
+       "dziury=$($Dziury.Count)`r`nprzyczyna=$przyczyna`r`ntrzymam_dni=$Trzymaj`r`nustawienia=$($Ustawienia.Skad)`r`n"
+  if ($opisRotacji) { $s += "rotacja=$opisRotacji`r`n" }
   # alarmy i dziury ida zawsze w calosci; lista bledow skrocona do 20 - ostrzezenie PRZED nia
   foreach ($a in $Alarmy) { $s += "$a`r`n" }
   foreach ($z in $Dziury) { $s += "$z`r`n" }
   if ($Bledy.Count -gt 20) { $s += "UWAGA lista bledow skrocona: ponizej 20 z $($Bledy.Count), pelna w $Cel\dziennik.txt`r`n" }
   foreach ($b in ($Bledy | Select-Object -First 20)) { $s += "BLAD  $b`r`n" }
+  if ($LinieWUzyciu.Count -gt 20) { $s += "UWAGA lista plikow W UZYCIU skrocona: ponizej 20 z $($LinieWUzyciu.Count), pelna w $Cel\dziennik.txt`r`n" }
+  foreach ($u in ($LinieWUzyciu | Select-Object -First 20)) { $s += "$u`r`n" }
+  foreach ($z in $Bazy) { $s += "$z`r`n" }
   Zapisz-Stan $s
 
   Write-Output $d.ToString()
@@ -976,8 +1213,10 @@ try {
   $msg = $_.Exception.Message
   Write-Host "BLAD  kopia przerwana: $msg" -ForegroundColor Red
   if (-not $Proba) {
-    Zapisz-Stan ("stan=BLAD`r`nostatnia=" + (Get-Date).ToString("yyyy-MM-dd HH:mm:ss") + "`r`nblad=$msg`r`n")
-    try { [IO.File]::AppendAllText("$Cel\dziennik.txt", "=== " + $t0.ToString("yyyy-MM-dd HH:mm") + "  stan=BLAD  kopia przerwana: $msg`r`n`r`n") }
+    # brak miejsca to awaria, ktora sama nie minie - linia ALARM (okno nadzorcy: od razu pilne)
+    $al = if ($script:Przyczyna -eq "BRAK_MIEJSCA") { "ALARM BRAK MIEJSCA - kopia nie poszla: $msg`r`n" } else { "" }
+    Zapisz-Stan ("stan=BLAD`r`nostatnia=" + (Get-Date).ToString("yyyy-MM-dd HH:mm:ss") + "`r`nprzyczyna=$($script:Przyczyna)`r`nblad=$msg`r`n" + $al)
+    try { [IO.File]::AppendAllText("$Cel\dziennik.txt", "=== " + $t0.ToString("yyyy-MM-dd HH:mm") + "  stan=BLAD  przyczyna=$($script:Przyczyna)  kopia przerwana: $msg`r`n`r`n") }
     catch { Write-Host "BLAD  nie da sie dopisac do dziennika: $($_.Exception.Message)" -ForegroundColor Red }
   }
   exit 1
