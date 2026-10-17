@@ -133,6 +133,10 @@ INDEXED = "COALESCE(NULLIF(indexed_at, ''), ts)"
 LAYERS = ("stala", "biezaca", "referencyjna")
 SECTIONS = ("uzytkownik", "firma", "projekty", "praca")  # the subsections of "## Co wiem"
 DEFAULT_LAYER, DEFAULT_SECTION = "stala", "projekty"  # the safest guess: visible and easy to move
+# The mark of a fact the user told the agent to remember ("zapamiętaj"), glued to its label:
+# "stala/firma/zapamietaj". lore.verify counts such a fact as confirmed — the user said it himself,
+# on purpose, so it does not wait for a second conversation (Trail.confirmations).
+REMEMBERED = "zapamietaj"
 # A listing lands in a file whose name says what is in it — there is no catch-all file. The user's
 # decision (2026-09-30): a sack of unrelated facts under a placeholder name, pointed at from nowhere,
 # is exactly what he does not want. A name the model did not give is derived from the text
@@ -185,6 +189,8 @@ FACTS_SCHEMA = json.dumps({
                 "tresc": {"type": "string"},
                 "warstwa": {"type": "string", "enum": ["stala", "biezaca"]},
                 "podsekcja": {"type": "string", "enum": list(SECTIONS)},
+                # true only for a fact out of a message marked "zapamietaj" (SELECTION_NOTE)
+                REMEMBERED: {"type": "boolean"},
             },
             "required": ["tresc", "warstwa"],
             "additionalProperties": False,
@@ -232,8 +238,8 @@ Wypisz fakty, które warto znać w każdym nowym oknie rozmowy, i każdemu przyp
   mówi o swoich rzeczach, nad czym pracuje, jakie decyzje zapadły, jak chce pracować, jakie ma
   konwencje i zasady. Zmienia się w miesiącach. Do takiego faktu podaj też "podsekcja":
   "uzytkownik", "firma", "projekty" albo "praca".
-- "biezaca" — sprawy w toku: co jest otwarte, co czeka na czyjąś decyzję, co się zacięło, jaki
-  eksperyment trwa. Zmienia się w dniach.
+- "biezaca" — TYLKO krótki zakaz albo warunek, który obowiązuje przez kilka dni (np. „do piątku
+  nie zmieniać cen na DE”). Nic innego.
 - "referencyjna" — długie zestawienia: listy, tabele, struktury numeracji, wyliczenia wariantów.
   Poznajesz je po tym, że są długie i wyliczające, a nie po temacie. Do takiego faktu MUSISZ podać
   "plik" i "odsylacz". "plik" — nazwa pliku w katalogu wiedzy: opisowa, po polsku, bez polskich
@@ -244,8 +250,15 @@ Wypisz fakty, które warto znać w każdym nowym oknie rozmowy, i każdemu przyp
   ("inne.md", "notatki.md", "rozne.md"). "odsylacz" — jedno krótkie zdanie, co jest w tym
   pliku, bez ścieżki; stanie w trwałej wiedzy jako opis pliku.
 
-Pomiń opisy błędów i wszystko, co i tak widać w kodzie (nazwy plików, funkcji, struktura
-repozytorium).
+NIE wypisuj stanu zadań i postępów (co zrobiono, co jest otwarte, co czeka na decyzję, co się
+zacięło, jaki eksperyment trwa), terminów i przypomnień ani poleceń jednorazowych („zrób teraz X”).
+To zostaje w historii rozmów, a terminy prowadzi osobne narzędzie — w wiedzy byłoby szumem, który
+po kilku dniach jest już nieprawdą. Pomiń też opisy błędów i wszystko, co i tak widać w kodzie
+(nazwy plików, funkcji, struktura repozytorium).
+
+Każdy fakt to JEDNO zdanie, najwyżej ok. 200 znaków, w formie „sytuacja → co robić” (kiedy X —
+rób Y, bo Z), tak żeby agent mógł go od razu zastosować. Suchy fakt bez tego, co z niego wynika,
+jest bezużyteczny. Wyjątek: zestawienie ("referencyjna") może być dłuższe.
 
 To jest automat: Twoja odpowiedź leci wprost do pliku, nikt jej teraz nie czyta. Nie zwracaj się do
 użytkownika, nie zadawaj pytań, nie proponuj działań, niczego nie zapisuj i nie sięgaj po narzędzia
@@ -265,7 +278,9 @@ wybrano: "poprawka" — użytkownik poprawia agenta; "powtorzenie" — mówił t
 czyli agent tego nie wiedział, a powinien; "zapamietaj" — wprost kazał to zapamiętać. Linia
 "model:" to koniec poprzedniej odpowiedzi agenta, podany tylko po to, żeby było wiadomo, co jest
 poprawiane — faktów NIGDY nie bierz z linii "model:", tylko z linii "user:". Przy poprawce faktem
-jest to, jak jest naprawdę według użytkownika, a nie to, co agent twierdził."""
+jest to, jak jest naprawdę według użytkownika, a nie to, co agent twierdził. Fakt z wiadomości
+"zapamietaj" to fakt potwierdzony przez samego użytkownika: daj mu warstwę "stala" i "zapamietaj":
+true (przy każdym innym fakcie pomiń to pole albo daj false)."""
 HARVEST_PROMPT = PROMPT + SELECTION_NOTE
 
 # glued to the end of the instruction at the moment of the call (with_known_files) — the list
@@ -1077,12 +1092,13 @@ które agent w powyższym materiale WYKORZYSTAŁ — zastosował w odpowiedzi al
 w liniach "model:" albo w tym, na co odpowiada użytkownik) — albo które użytkownik sam przywołał.
 Sam wspólny temat to nie użycie. Tych faktów NIE wypisuj w "fakty". Gdy żaden — "uzyte": [].
 """
-# A cost limit like MAX_INPUT_CHARS: the list never grows past this. 7 500 characters is ~2 500
-# tokens at CHARS_PER_TOKEN, which with USAGE_NOTE keeps the addition under the ~3 000 tokens the
-# user allowed (2026-10-01). The whole durable layer has an 8 000 character ceiling and the
-# automaton's facts are only a part of it, so in practice the cut is the dormant facts' — and when it
-# happens, the run says how many were left out (Watched.left_out) instead of dropping them quietly.
-MAX_WATCHED_CHARS = 7_500
+# A cost limit like MAX_INPUT_CHARS: the list never grows past this. 7 500 characters was ~2 500
+# tokens at CHARS_PER_TOKEN, under the ~3 000 tokens the user allowed (2026-10-01). Doubled with the
+# ceiling of the durable layer (8 000 -> 16 000, the plan of 2026-10-17): the facts put to sleep to
+# make room in a full layer wake up only when their use is seen, so a list cut short would leave
+# them asleep for good. 15 000 characters is ~5 000 tokens once a day — a background run, not a
+# session. When it still cuts, the run says how many were left out (Watched.left_out).
+MAX_WATCHED_CHARS = 15_000
 
 
 @dataclass
@@ -1752,7 +1768,9 @@ def fact_survival(today: str, days: int = LEARNING_DAYS) -> dict[str, int]:
         elif event == verify.SLEPT:
             state[key] = "uspione"
         elif event == verify.UNDONE:
-            state[key] = "in" if detail.startswith(verify.CHANGE_KINDS["U"]) else "cofniete"
+            # an undone sleep or exit from the current layer puts the fact back in the knowledge
+            back = (verify.CHANGE_KINDS["U"], verify.CHANGE_KINDS["E"])
+            state[key] = "in" if detail.startswith(back) else "cofniete"
     present = _knowledge_keys(verify.fact_key)
     out = dict.fromkeys(SURVIVAL_KEYS, 0)
     out["wylowione"] = len(first)
@@ -1792,13 +1810,15 @@ class Fact:
     section: str = DEFAULT_SECTION  # only read for the "stala" layer
     file: str = ""  # only for "referencyjna": the listing goes to ~/.claude/wiedza/<file>
     pointer: str = ""  # the single line that stands in the durable knowledge instead of the listing
+    remember: bool = False  # "stala" only: the user said "zapamiętaj" (REMEMBERED)
 
     def label(self) -> str:
-        """'stala/firma', 'biezaca', 'referencyjna:struktura-sku.md' — the bracket in the entry."""
+        """'stala/firma', 'stala/firma/zapamietaj', 'biezaca', 'referencyjna:struktura-sku.md' —
+        the bracket in the entry."""
         if self.layer == "referencyjna":
             return f"referencyjna:{self.file}"
         if self.layer == "stala":
-            return f"stala/{self.section}"
+            return f"stala/{self.section}" + (f"/{REMEMBERED}" if self.remember else "")
         return self.layer
 
 
@@ -1878,7 +1898,8 @@ def _as_fact(raw, rejected: list | None = None) -> Fact | None:
         pointer = " ".join(str(item.get("odsylacz") or "").split())
         return Fact(text, layer, file=name, pointer=pointer)
     section = str(item.get("podsekcja") or "").strip().lower()
-    return Fact(text, layer, section if section in SECTIONS else DEFAULT_SECTION)
+    remember = layer == "stala" and item.get(REMEMBERED) is True
+    return Fact(text, layer, section if section in SECTIONS else DEFAULT_SECTION, remember=remember)
 
 
 def file_name(proposed: str) -> str:
@@ -2025,7 +2046,9 @@ def waiting_facts() -> list[Fact]:
         if layer == "referencyjna":
             out.append(Fact(text, layer, file=detail))
         else:
-            out.append(Fact(text, layer, detail if detail in SECTIONS else DEFAULT_SECTION))
+            section, _, mark = detail.partition("/")
+            out.append(Fact(text, layer, section if section in SECTIONS else DEFAULT_SECTION,
+                            remember=layer == "stala" and mark == REMEMBERED))
     return out
 
 

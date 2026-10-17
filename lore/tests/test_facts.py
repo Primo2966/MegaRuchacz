@@ -529,6 +529,41 @@ def test_the_schema_demands_a_file_name_for_a_listing():
     assert all("plik" not in s["properties"] for s in shapes if s is not listing)
 
 
+def test_a_fact_the_user_said_to_remember_carries_the_mark():
+    """"zapamiętaj" = a confirmed fact (plan 2026-10-17): the mark rides in the label to the trail,
+    where lore.verify counts it as confirmed (test_verify: ..._said_to_remember_...)."""
+    schema = json.loads(facts.FACTS_SCHEMA)
+    plain = next(s for s in schema["properties"]["fakty"]["items"]["anyOf"]
+                 if "referencyjna" not in s["properties"]["warstwa"]["enum"])
+    assert plain["properties"][facts.REMEMBERED] == {"type": "boolean"}
+    assert facts.REMEMBERED not in plain["required"]  # the archive dig sends no reasons
+    assert json.loads(facts.STRICT_FACTS_SCHEMA)  # the strict shape still builds
+    item = {"tresc": "Marka firmy nazywa się PRZYKLAD.", "warstwa": "stala", "podsekcja": "firma"}
+    assert facts._as_fact({**item, "zapamietaj": True}).label() == "stala/firma/zapamietaj"
+    # probe: no mark, a false one, or a "biezaca" fact — no "zapamietaj" in the label
+    assert facts._as_fact(item).label() == "stala/firma"
+    assert facts._as_fact({**item, "zapamietaj": False}).label() == "stala/firma"
+    assert facts._as_fact({**item, "warstwa": "biezaca", "zapamietaj": True}).label() == "biezaca"
+    assert '"zapamietaj"' in facts.SELECTION_NOTE and "potwierdzony" in facts.SELECTION_NOTE
+
+
+def test_the_waiting_room_reads_the_mark_back(one_chunk):
+    facts.append_facts([facts.Fact("Marka firmy nazywa się PRZYKLAD.", "stala", "firma",
+                                   remember=True)], day="2026-09-16")
+    (back,) = facts.waiting_facts()
+    assert back.section == "firma" and back.remember and back.label() == "stala/firma/zapamietaj"
+
+
+def test_the_prompt_keeps_task_state_and_deadlines_out_of_the_knowledge():
+    """The plan of 2026-10-17: 57 entries of "Bieżące", most of them the state of some task."""
+    p = facts.PROMPT
+    assert "NIE wypisuj stanu zadań i postępów" in p and "terminów i przypomnień" in p
+    assert "poleceń jednorazowych" in p
+    assert "TYLKO krótki zakaz albo warunek" in p  # "biezaca" is no longer "sprawy w toku"
+    assert "sprawy w toku" not in p
+    assert "JEDNO zdanie, najwyżej ok. 200 znaków" in p and "„sytuacja → co robić”" in p
+
+
 def test_the_model_is_shown_the_files_already_there(one_chunk):
     facts.KNOWLEDGE_DIR.mkdir(parents=True, exist_ok=True)
     (facts.KNOWLEDGE_DIR / "polaczenia-ssh.md").write_text("# SSH przez Tailscale\n", encoding="utf-8")
@@ -982,15 +1017,17 @@ def many_asleep(count: int = 200) -> None:
     (facts.KNOWLEDGE_DIR / facts.DORMANT_NAME).write_text("\n".join(lines) + "\n", encoding="utf-8")
 
 
-def test_the_use_check_stays_within_three_thousand_tokens(known_rules):
-    """The user's limit for what the change adds to the daily call (2026-10-01), counted the way the
-    cost is counted (CHARS_PER_TOKEN) — however many facts there are to ask about."""
+def test_the_use_check_stays_within_five_thousand_tokens(known_rules):
+    """The limit for what the change adds to the daily call — 3 000 tokens since 2026-10-01, doubled
+    with the ceiling of the durable layer on 2026-10-17 (MAX_WATCHED_CHARS) — counted the way the
+    cost is counted (CHARS_PER_TOKEN), however many facts there are to ask about."""
     many_asleep()
 
     watched = facts.watched_facts()
 
+    assert facts.MAX_WATCHED_CHARS == 15_000  # the number the test is sized for
     assert watched.left_out > 0  # the cap did bite, and the run knows how many it left out
-    assert len(watched.block()) / facts.CHARS_PER_TOKEN <= 3000
+    assert len(watched.block()) / facts.CHARS_PER_TOKEN <= 5300
 
 
 def test_probe_the_token_test_notices_a_list_without_a_cap(known_rules, monkeypatch):
@@ -999,7 +1036,7 @@ def test_probe_the_token_test_notices_a_list_without_a_cap(known_rules, monkeypa
 
     watched = facts.watched_facts()
 
-    assert watched.left_out == 0 and len(watched.block()) / facts.CHARS_PER_TOKEN > 3000
+    assert watched.left_out == 0 and len(watched.block()) / facts.CHARS_PER_TOKEN > 5300
 
 
 def test_probe_the_use_test_notices_a_list_the_model_never_gets(known_rules, monkeypatch):

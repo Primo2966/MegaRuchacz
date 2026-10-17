@@ -1632,15 +1632,41 @@ def test_an_entry_the_automaton_wrote_expires_after_fourteen_days(sandbox):
     assert s["wygasle"] == "1" and "wygaslo 1" in s["powod"]
 
 
-def test_an_old_entry_the_user_wrote_himself_is_only_counted(sandbox):
-    current_entries(sandbox, "[2026-09-01] Czekam na odpowiedź hurtowni.")
+def test_an_old_entry_the_user_wrote_himself_ages_out_too_and_comes_back_by_its_id(sandbox):
+    """Since 2026-10-17 the user makes no decisions about entries: a hand-written entry of the current
+    layer ages out like any other — with a trail line, a history line and an id that brings it back."""
+    own = "Czekam na odpowiedź hurtowni."
+    current_entries(sandbox, f"[2026-09-01] {own}")
     before = rules_text(sandbox)
 
     r = verify.run(day="2026-09-20")
 
-    assert r["expired"] == [] and r["own_old"] == ["Czekam na odpowiedź hurtowni."]
-    assert rules_text(sandbox) == before
-    assert state(sandbox)["stare_reczne_w_biezacej"] == "1"
+    assert r["expired"] == [own] and r["expired_own"] == [own] and own not in rules_text(sandbox)
+    s = state(sandbox)
+    assert s["wygasle_reczne"] == "1" and s["stare_reczne_w_biezacej"] == "0"
+    assert "wygaslo 1 z biezacej (w tym 1 wpisanych recznie)" in s["powod"]
+    assert f"| wygasł | biezaca -> CLAUDE.md | wpis z 2026-09-01, starszy niz 14 dni; zmiana E-" \
+           in trail(sandbox)
+    assert f"{own} — wyjęte 2026-09-20 z Bieżących" in history(sandbox)
+    assert "wyjalem z biezacej 1" in s["meldunek"] and "meldunek_1" not in s  # counted, not listed
+
+    u = verify.undo(r["changes"][0], day="2026-09-20")
+
+    assert u["status"] == "ok" and f"- [2026-09-01] {own}" in subsection(sandbox, "### Bieżące")
+    # the user wanted it back: its age counts from the undo, the next run does not take it again
+    assert verify.run(day="2026-09-21")["expired"] == []
+    assert f"- [2026-09-01] {own}" in rules_text(sandbox)
+    assert verify.run(day=later("2026-09-20", 15))["expired"] == [own]
+    assert before.count(own) == 1
+
+
+def test_probe_a_young_hand_written_entry_stays(sandbox):
+    """The other half: the age rule, not "every hand-written entry goes"."""
+    current_entries(sandbox, "[2026-09-10] Czekam na odpowiedź hurtowni.")
+
+    r = verify.run(day="2026-09-20")
+
+    assert r["expired"] == [] and "Czekam na odpowiedź hurtowni." in rules_text(sandbox)
 
 
 def test_expiry_takes_out_only_the_old_entries(sandbox):
@@ -2283,3 +2309,288 @@ def test_probe_without_counting_uses_the_used_fact_would_wait(sandbox, monkeypat
     used_in(TWO_MACHINES, "2026-09-17", "rozmowa-b")
 
     assert verify.run(day="2026-09-18")["promoted"] == []
+
+
+# ---------------------------------------------------------------- nothing confirmed is lost (plan 1a, 2026-10-17)
+#
+# Every rule here has its probe: the same scenario with the rule switched off (monkeypatch), showing
+# the test sees the difference.
+
+EARNED = "Użytkownik prowadzi całą sprzedaż z jednego biura pod Poznaniem."
+NEW_FACT = "Użytkownik wysyła paczki raz dziennie, zawsze po południu."
+
+
+def earned_and_waiting(sandbox, monkeypatch, fact: str = EARNED) -> None:
+    """A fact confirmed in two conversations, sitting in the current layer since 2026-09-01 and not
+    promoted: MAX_PROMOTIONS = 0 stands in for "the limit of the run was taken by others"."""
+    monkeypatch.setattr(verify, "MAX_PROMOTIONS", 0)
+    heard_twice(fact)
+    waiting_room(sandbox, entry(fact, "stala/uzytkownik", day="2026-09-01"))
+    verify.run(day="2026-09-01")
+
+
+def test_a_fact_deferred_by_the_limit_does_not_age_out(sandbox, monkeypatch):
+    earned_and_waiting(sandbox, monkeypatch)
+
+    r = verify.run(day="2026-09-20")  # 19 days old
+
+    assert r["deferred"] == [EARNED] and r["expired"] == []
+    assert EARNED in subsection(sandbox, "### Bieżące")
+
+
+def test_probe_without_the_protection_the_deferred_fact_ages_out(sandbox, monkeypatch):
+    earned_and_waiting(sandbox, monkeypatch)
+    monkeypatch.setattr(verify.Trail, "earned", lambda self, key: False)
+
+    r = verify.run(day="2026-09-20")
+
+    assert r["expired"] == [EARNED] and EARNED not in rules_text(sandbox)
+
+
+def test_a_fact_stopped_by_a_ceiling_of_pinned_entries_waits_and_the_run_says_so(sandbox):
+    leave_room(sandbox, 0)  # a durable layer full of what the user wrote himself
+    heard_twice(EARNED)
+    waiting_room(sandbox, entry(EARNED, "stala/uzytkownik", day="2026-09-01"))
+    verify.run(day="2026-09-01")
+
+    r = verify.run(day="2026-09-20")
+
+    assert r["over_limit"] == [EARNED] and r["expired"] == [] and r["slept"] == []
+    assert EARNED in subsection(sandbox, "### Bieżące")
+    s = state(sandbox)
+    assert s["stala_pelna"] == "zostaly same wpisy przypiete"
+    assert s["powod"].startswith("UWAGA: warstwa stala pelna")
+
+
+def full_with_an_automatons_fact(sandbox) -> None:
+    """TWO_MACHINES promoted by the automaton, then the durable layer padded so that NEW_FACT is one
+    character short of fitting."""
+    promote(sandbox)
+    leave_room(sandbox, len(f"- {NEW_FACT}"))
+    heard_twice(NEW_FACT)
+    waiting_room(sandbox, entry(NEW_FACT, "stala/uzytkownik", day="2026-09-19"))
+
+
+def test_a_full_durable_layer_puts_the_least_used_automatons_entry_to_sleep(sandbox):
+    full_with_an_automatons_fact(sandbox)
+
+    r = verify.run(day="2026-09-20")
+
+    assert verify.STABLE_LIMIT == 16000
+    assert r["promoted"] == [NEW_FACT] and r["slept"] == [TWO_MACHINES]
+    assert r["slept_for_room"] == [TWO_MACHINES] and r["over_limit"] == []
+    assert TWO_MACHINES not in rules_text(sandbox) and NEW_FACT in rules_text(sandbox)
+    assert "Nie jest programistą" in rules_text(sandbox)  # the pinned entry is never touched
+    line = [x for x in dormant(sandbox).splitlines() if TWO_MACHINES in x]
+    assert len(line) == 1 and "| U-" in line[0]
+    assert "pełna stała (16000 zn.)" in history(sandbox)
+    assert verify.stable_chars(rules_text(sandbox).splitlines()) <= verify.STABLE_LIMIT
+    assert state(sandbox)["uspione_dla_miejsca"] == "1"
+    # used again, it wakes up — the ordinary way back
+    used_in(TWO_MACHINES, "2026-09-25", "rozmowa-z")
+    (sandbox / "CLAUDE.md").write_text(re.sub(r"\n- X+\n", "\n- X\n", rules_text(sandbox)),
+                                       encoding="utf-8")  # the padding gone: room again
+    assert verify.run(day="2026-09-26")["woken"] == [TWO_MACHINES]
+
+
+def test_probe_without_making_room_the_promotion_is_stopped(sandbox, monkeypatch):
+    full_with_an_automatons_fact(sandbox)
+    monkeypatch.setattr(verify, "make_room", lambda chosen, *a, **k: chosen)
+
+    r = verify.run(day="2026-09-20")
+
+    assert r["promoted"] == [] and r["over_limit"] == [NEW_FACT] and r["slept"] == []
+
+
+def bulky_current(sandbox, count: int = 30) -> list[str]:
+    """`count` entries of ~250 characters in "Bieżące", the oldest first, all younger than 14 days
+    on 2026-09-20 — written by hand, nothing confirms them."""
+    texts = [f"Wpis numer {n:02d} o sprawie bieżącej " + "x" * 220 for n in range(count)]
+    days = [later("2026-09-07", n * 13 // count) for n in range(count)]
+    current_entries(sandbox, *(f"[{d}] {t}" for d, t in zip(days, texts)))
+    return texts
+
+
+def test_the_current_layer_over_its_ceiling_loses_the_oldest_unconfirmed_first(sandbox, monkeypatch):
+    monkeypatch.setattr(verify, "MAX_PROMOTIONS", 0)
+    texts = bulky_current(sandbox)
+    heard_twice(texts[0])  # the oldest one is confirmed — it stays
+
+    r = verify.run(day="2026-09-20")
+
+    assert verify.CURRENT_LIMIT == 6000
+    assert r["expired"] == [] and r["trimmed"]
+    assert r["trimmed"] == texts[1:1 + len(r["trimmed"])]  # the oldest unconfirmed ones, in order
+    assert texts[0] in rules_text(sandbox) and texts[-1] in rules_text(sandbox)
+    assert verify.current_chars(rules_text(sandbox).splitlines()) <= verify.CURRENT_LIMIT
+    s = state(sandbox)
+    assert s["zdjete_progiem_biezacej"] == str(len(r["trimmed"]))
+    assert s["prog_biezacej"].endswith("/6000") and int(s["prog_biezacej"].split("/")[0]) <= 6000
+    assert "ponad prog biezacej 6000 znakow, najstarszy niepotwierdzony; zmiana E-" in trail(sandbox)
+    # each with an id that brings it back
+    u = verify.undo(r["changes"][0], day="2026-09-20")
+    assert u["status"] == "ok" and texts[1] in rules_text(sandbox)
+
+
+def test_probe_under_a_high_ceiling_nothing_is_trimmed(sandbox, monkeypatch):
+    monkeypatch.setattr(verify, "CURRENT_LIMIT", 10**6)
+    bulky_current(sandbox)
+
+    assert verify.run(day="2026-09-20")["trimmed"] == []
+
+
+def test_a_current_layer_full_of_confirmed_entries_stays_and_says_so(sandbox, monkeypatch):
+    earned_and_waiting(sandbox, monkeypatch)
+    monkeypatch.setattr(verify, "CURRENT_LIMIT", 10)
+
+    r = verify.run(day="2026-09-05")
+
+    assert r["trimmed"] == [] and EARNED in rules_text(sandbox)
+    assert "UWAGA: biezaca ponad progiem" in state(sandbox)["powod"]
+
+
+def test_the_note_under_the_section_counts_what_left_and_points_to_lore(sandbox):
+    current_entries(sandbox, "[2026-09-01] Czekam na odpowiedź hurtowni.")
+    verify.run(day="2026-09-20")
+    text = rules_text(sandbox)
+
+    note = verify.tail_note(1)
+    assert note in text and "lore_search" in note
+    # right under the section — after its last subsection, before the installer's block
+    assert text.index("### Dane referencyjne") < text.index(note) < text.index("<!-- MegaRuchacz:start")
+    # it ends the section: not a fact, never written under, not counted twice
+    lines = text.splitlines()
+    assert all(not e.text.startswith("Pominięto") for e in verify.entries(lines))
+    body = verify.insert_entry(lines[slice(*verify.section_bounds(lines))], ["- nowy"],
+                               "### Dane referencyjne")
+    assert note not in "\n".join(body)
+    # nothing new — nothing rewritten; the count follows what really left
+    verify.run(day="2026-09-21")
+    assert rules_text(sandbox) == text
+    assert verify.with_tail_note(lines, 1) == lines
+    assert note not in "\n".join(verify.with_tail_note(lines, 0))
+
+
+def test_probe_nothing_left_means_no_note(sandbox):
+    current_entries(sandbox, "[2026-09-15] Czekam na odpowiedź hurtowni.")
+
+    verify.run(day="2026-09-20")
+
+    assert verify.TAIL_PREFIX not in rules_text(sandbox)
+
+
+def test_undo_refuses_to_write_outside_this_installation(sandbox):
+    """2026-10-17 14:18: an undo tried out in a sandbox overwrote the real CLAUDE.md."""
+    foreign = sandbox.parent / f"{sandbox.name}-prawdziwy" / "CLAUDE.md"
+    foreign.parent.mkdir(parents=True, exist_ok=True)
+    foreign.write_text("PRAWDZIWY\n", encoding="utf-8")
+    journal_record(sandbox, foreign)
+
+    u = verify.undo("A-260920-1", day="2026-09-20")
+
+    assert u["status"] == "odmowa" and u["undone"] == [] and "ODMOWA" in u["problems"][0]
+    assert foreign.read_text(encoding="utf-8") == "PRAWDZIWY\n"
+    assert "cofnieto" not in (sandbox / "wiedza" / verify.JOURNAL_NAME).read_text(encoding="utf-8")
+
+
+def test_probe_the_same_record_on_a_file_of_this_installation_is_undone(sandbox):
+    journal_record(sandbox, sandbox / "CLAUDE.md")
+
+    u = verify.undo("A-260920-1", day="2026-09-20")
+
+    assert u["status"] == "ok" and rules_text(sandbox) == "KOPIA\n"
+
+
+def journal_record(sandbox, path: Path) -> None:
+    copy = sandbox / "wiedza" / "kopie" / "zmiany" / "A-260920-1-CLAUDE-test.md"
+    copy.parent.mkdir(parents=True, exist_ok=True)
+    copy.write_text("KOPIA\n", encoding="utf-8")
+    now = verify._sha(verify._read_exact(path))
+    rec = {"id": "A-260920-1", "dzien": "2026-09-20", "rodzaj": "awans", "przedmiot": "x",
+           "stare": "", "sekcja": "", "opis": "", "ops": [],
+           "pliki": {str(path): {"kopia": str(copy), "po": now, "bylo": True}}}
+    (sandbox / "wiedza" / verify.JOURNAL_NAME).write_text(
+        __import__("json").dumps(rec, ensure_ascii=False) + "\n", encoding="utf-8")
+
+
+def test_a_bracketed_path_with_a_space_is_read_whole():
+    text = "`wiedza/dysk-google-mapa.md` — mapa Dysku Google (G:\\Mój dysk): gdzie leżą grafiki"
+    assert verify.paths_in(text) == ["G:\\Mój dysk"]
+
+
+def test_probe_a_bracket_closing_far_away_is_not_a_path():
+    assert verify.paths_in("(C:\\a b c d e f) i dalej") == ["C:\\a"]
+
+
+def test_a_bare_path_with_a_space_is_extended_when_the_disk_knows_it():
+    text = "Mapa leży w G:\\Mój dysk i tam ją trzymamy."
+    there = {"G:\\Mój dysk"}
+
+    checks = verify.check_paths(text, lambda p: p in there)
+
+    assert [(c.claim, c.ok) for c in checks] == [("G:\\Mój dysk", True)]
+    # probe: the disk does not know it either way — the path stays as the text gives it, missing
+    assert [(c.claim, c.ok) for c in verify.check_paths(text, lambda p: False)] == [("G:\\Mój", False)]
+
+
+def test_the_audit_no_longer_flags_half_of_a_path_with_a_space():
+    body = ["### Dane referencyjne", "",
+            "- `wiedza/dysk-google-mapa.md` — mapa Dysku Google (G:\\Mój dysk): gdzie leżą grafiki"]
+    gone = verify.audit_rules(body, lambda p: False, "2026-10-17")
+    assert gone.stale and gone.stale[0][1] == ["G:\\Mój dysk"]  # the whole path, not "G:\\Mój"
+    assert verify.audit_rules(body, lambda p: p == "G:\\Mój dysk", "2026-10-17").stale == []
+
+
+def test_the_copies_of_two_agents_md_files_do_not_overwrite_each_other(sandbox):
+    """Codex and OpenCode both call their file AGENTS.md (A-261015-1 lost a copy that way)."""
+    codex_file(sandbox)
+    opencode = sandbox / ".config" / "opencode" / "AGENTS.md"
+    opencode.parent.mkdir(parents=True, exist_ok=True)
+    opencode.write_text(AGENTS.replace("(Codex)", "(OpenCode)"), encoding="utf-8")
+    befores = {str(codex_path(sandbox)): "(Codex)", str(opencode): "(OpenCode)"}
+    heard_twice(TWO_MACHINES)
+    waiting_room(sandbox, entry(TWO_MACHINES, "stala/uzytkownik"))
+
+    r = verify.run(day=PROMOTED_ON)
+
+    assert len(set(r["backups"])) == 3 and all(Path(b).is_file() for b in r["backups"])
+    rec = [x for x in verify.read_journal() if x.get("id", "").startswith("A-")][0]
+    copies = {p: snap["kopia"] for p, snap in rec["pliki"].items() if p in befores}
+    assert len(set(copies.values())) == 2
+    for path, copy in copies.items():  # each copy is of its own file
+        assert befores[path] in Path(copy).read_text(encoding="utf-8").splitlines()[0]
+
+
+def test_probe_named_by_the_file_alone_the_copies_collide():
+    a = Path("C:/x/.codex/AGENTS.md")
+    b = Path("C:/x/.config/opencode/AGENTS.md")
+    assert a.name == b.name and verify._origin(a) != verify._origin(b)
+
+
+def test_a_fact_the_user_said_to_remember_is_confirmed_by_one_conversation(sandbox):
+    fact = facts.Fact("Marka firmy nazywa się PRZYKLAD.", "stala", "firma", remember=True)
+    assert fact.label() == "stala/firma/zapamietaj"
+    facts.note_sources([fact], "rozmowy", "2026-09-16", ["rozmowa-a"])
+    waiting_room(sandbox, entry(fact.text, fact.label()))
+
+    r = verify.run(day="2026-09-17")
+
+    assert r["promoted"] == [fact.text] and fact.text in subsection(sandbox, "### O firmie")
+
+
+def test_probe_without_the_mark_one_conversation_is_not_enough(sandbox):
+    fact = facts.Fact("Marka firmy nazywa się PRZYKLAD.", "stala", "firma")
+    facts.note_sources([fact], "rozmowy", "2026-09-16", ["rozmowa-a"])
+    waiting_room(sandbox, entry(fact.text, fact.label()))
+
+    assert verify.run(day="2026-09-17")["promoted"] == []
+
+
+def test_exits_from_the_current_layer_are_counted_not_listed_in_the_report():
+    recs = [{"id": f"E-260920-{n}", "dzien": "2026-09-20", "przedmiot": "x"} for n in range(1, 9)]
+    recs.append({"id": "A-260920-9", "dzien": "2026-09-20", "przedmiot": "awans", "stare": ""})
+
+    lines = verify.report_lines(recs, "2026-09-20")
+
+    assert not lines[0].startswith("UWAGA") and "wyjalem z biezacej 8" in lines[0]
+    assert len(lines) == 2 and lines[1].startswith("A-260920-9")
