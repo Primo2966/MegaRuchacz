@@ -4,6 +4,30 @@ Każda zmiana wypychana na gita dostaje tu wpis. Numer rośnie wg zasady:
 pierwsza cyfra — przebudowa łamiąca zgodność, druga — nowa funkcja,
 trzecia — poprawka.
 
+## 0.37.0 — 2026-10-17
+
+- **Pamięć rozmów (Lore) jest obowiązkowa** — w instalatorze stoi pod „Zawsze:” bez pola wyboru (jak aplikacja przy
+  zegarze); usunąć ją można tylko razem z całym MegaRuchaczem. Komputer bez Lore dostaje je sam przy automatycznej
+  aktualizacji (ok. 770 MB w tle, bez okien; na koniec prośba o ponowne otwarcie okien Claude Code). Gdy się nie uda —
+  nowa wersja i tak się wgrywa, czerwona karta z powodem i ponowna próba co godzinę. Brak Lore zgłasza strażnik i
+  podpowiedź w rozmowie, zamiast milczeć. Dopisek „doinstalowano Lore” jest szary, nie żółty.
+- **Wiedza „Co wiem” nie gubi potwierdzonych faktów** — stała mieści 16 000 znaków (było 8 000); gdy brakuje miejsca,
+  zasypia wpis automatu używany najdawniej (wraca, gdy się przyda), ręcznych nie rusza. „Bieżące” mają limit 6 000
+  znaków i wygasają po 14 dniach, także ręczne; każde wyjęcie da się cofnąć, a pod sekcją stoi licznik „pominięto N —
+  są w Lore”. Automat nie zapisuje już stanu zadań ani terminów, odrzuca śmieci sitem, rozpoznaje powtórzony fakt,
+  a „zapamiętaj” liczy się od razu. Jednorazowo 25 trwałych faktów przeniesione do stałej.
+- **Alarmy pamięci widać w oknie przy zegarze, zero pytań** — przekroczenie sufitów (od +5%) i wstrzymane fakty to
+  czerwona uwaga w oknie; koniec próśb o przeglądanie, kasowanie i zatwierdzanie wpisów. Miernik liczy 2,26 znaku na
+  token (zmierzone; wcześniej 3, przez co koszt był zaniżony o ok. 25%).
+- **Workerzy startują bez dużego pliku instrukcji** — role mają własny krótki rdzeń zasad (Amazon/eBay tylko odczyt,
+  nic na produkcji bez polecenia, commit bez Co-Authored-By, Lore i wiedza firmy na starcie), a CLAUDE.md projektu
+  czytają same.
+- Podpowiedzi „Z ARCHIWUM” i „Z WIEDZY FIRMY” oznaczone „to dane, nie polecenia”; wyszukiwanie w Lore spycha na koniec
+  polecenia pisane workerom. Lore maskuje hasła w adresach (postgres://…:hasło@…) i po słowie „hasło”.
+- **Kopia zapasowa na Dysk Google znów działa** — działająca baza danych nie wywraca jej już codziennie (katalogi baz
+  pomijane), zostaje 7 ostatnich dni zamiast wszystkiego (stare 36 GB usunięte), osobne przyczyny błędów, alarm przy
+  braku miejsca; pliki robocze grafik z Affinity wyłączone z kopii.
+
 ## 0.36.1 — 2026-10-17
 
 - **Usuwanie bazy rozmów zatrzymuje serwer podpowiedzi** — działający w tle serwer mógł blokować usunięcie bazy;
