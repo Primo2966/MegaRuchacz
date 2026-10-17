@@ -2594,3 +2594,121 @@ def test_exits_from_the_current_layer_are_counted_not_listed_in_the_report():
 
     assert not lines[0].startswith("UWAGA") and "wyjalem z biezacej 8" in lines[0]
     assert len(lines) == 2 and lines[1].startswith("A-260920-9")
+
+
+# ---------------------------------------------------------------- the ceiling of the whole block (step 1b)
+
+def block_now(sandbox) -> int:
+    return verify.block_chars(rules_text(sandbox).splitlines())
+
+
+def test_a_run_that_would_grow_the_block_past_its_ceiling_writes_nothing_and_raises(sandbox,
+                                                                                    monkeypatch):
+    monkeypatch.setattr(verify, "BLOCK_LIMIT", block_now(sandbox) + 5)  # the new fact will not fit
+    waiting_room(sandbox, entry("Marka firmy nazywa się PRZYKLAD.", "stala/firma"))
+    before = rules_text(sandbox)
+
+    with pytest.raises(RuntimeError) as e:
+        verify.run(day="2026-09-17")
+
+    assert "ALARM" in str(e.value) and "ponad sufit" in str(e.value)
+    assert rules_text(sandbox) == before
+    assert waiting(sandbox) == ["- [ ] [2026-09-16] (stala/firma) Marka firmy nazywa się PRZYKLAD."]
+    s = state(sandbox)
+    assert (s["przebieg"], s["blok_ponad_sufitem"]) == ("blad", "1") and s["powod"].startswith("ALARM")
+    r = verify.run(dry_run=True, day="2026-09-17")  # the dry run reports it, without raising
+    assert r["status"] == "blad" and r["block_over"][0][2] > verify.BLOCK_LIMIT
+
+
+def test_probe_without_the_guard_the_block_grows_past_the_ceiling(sandbox, monkeypatch):
+    monkeypatch.setattr(verify, "BLOCK_LIMIT", block_now(sandbox) + 5)
+    monkeypatch.setattr(verify, "block_overflow", lambda *args: [])
+    waiting_room(sandbox, entry("Marka firmy nazywa się PRZYKLAD.", "stala/firma"))
+
+    verify.run(day="2026-09-17")
+
+    assert "Marka firmy nazywa się PRZYKLAD." in rules_text(sandbox)
+    assert block_now(sandbox) > verify.BLOCK_LIMIT
+
+
+def test_a_block_already_over_the_ceiling_may_still_shrink(sandbox, monkeypatch):
+    current_entries(sandbox, "[2026-09-01] Czekam na odpowiedź hurtowni.")
+    monkeypatch.setattr(verify, "BLOCK_LIMIT", 10)
+
+    r = verify.run(day="2026-09-20")
+
+    assert r["status"] == "ok" and r["expired"] == ["Czekam na odpowiedź hurtowni."]
+    assert state(sandbox)["prog_bloku"] == f"{block_now(sandbox)}/10"
+
+
+def test_the_ceiling_of_the_block_is_the_sum_of_the_two_layers():
+    assert verify.BLOCK_LIMIT == verify.STABLE_LIMIT + verify.CURRENT_LIMIT == 22000
+    lines = RULES.splitlines()
+    # the whole section with its heading — what the two layer counts split between them
+    assert verify.block_chars(lines) >= verify.stable_chars(lines)
+    assert verify.block_chars(verify.with_tail_note(lines, 5)) == verify.block_chars(lines)
+
+
+# ---------------------------------------------------------------- the date a fact holds until
+
+DUE = "Nie zmieniać cen na DE do piątku. (ważne do 2026-09-18)"
+
+
+def test_a_current_entry_leaves_the_day_after_its_own_date(sandbox):
+    current_entries(sandbox, f"[2026-09-15] {DUE}")
+
+    assert verify.run(day="2026-09-18")["expired"] == []  # on the day it still holds
+    r = verify.run(day="2026-09-19")
+
+    assert r["expired"] == [DUE] and DUE not in rules_text(sandbox)  # 4 days old — the date decides
+    assert "termin waznosci 2026-09-18 minal" in trail(sandbox)
+    assert state(sandbox)["po_terminie"] == "1"
+    # an exit with an id: taken back, it stays — the user wants it
+    assert verify.undo(r["changes"][0], day="2026-09-19")["status"] == "ok"
+    assert DUE in rules_text(sandbox)
+    assert verify.run(day="2026-09-20")["expired"] == [] and DUE in rules_text(sandbox)
+
+
+def test_probe_without_the_date_rule_the_young_entry_stays(sandbox, monkeypatch):
+    monkeypatch.setattr(verify, "past_due", lambda *args: "")
+    current_entries(sandbox, f"[2026-09-15] {DUE}")
+
+    assert verify.run(day="2026-09-19")["expired"] == [] and DUE in rules_text(sandbox)
+
+
+def test_a_confirmed_fact_past_its_date_goes_all_the_same(sandbox, monkeypatch):
+    monkeypatch.setattr(verify, "MAX_PROMOTIONS", 0)
+    current_entries(sandbox, f"[2026-09-15] {DUE}")
+    heard_twice(DUE)  # earned its promotion — protects it from ageing, not from its own date
+
+    r = verify.run(day="2026-09-19")
+
+    assert r["expired"] == [DUE] and r["promoted"] == []
+
+
+def test_a_durable_entry_past_its_date_falls_asleep_and_is_not_woken_by_a_mention(sandbox):
+    standing(sandbox, DUE)
+
+    r = verify.run(day="2026-09-19")
+
+    assert r["slept"] == [DUE] and r["due"] == [DUE]
+    assert DUE not in subsection(sandbox, "### Nad czym pracuje")
+    dormant = (sandbox / "wiedza" / "uspione.md").read_text(encoding="utf-8")
+    assert "termin waznosci" not in dormant and DUE in dormant
+    heard(DUE, "stala/projekty", "rozmowa-c", day="2026-09-20")  # said again — still not true
+    assert verify.run(day="2026-09-21")["woken"] == []
+
+
+def test_probe_a_durable_entry_without_a_date_stays(sandbox):
+    standing(sandbox, "Nie zmieniać cen na DE do piątku.")
+    assert verify.run(day="2026-09-19")["slept"] == []
+
+
+def test_a_fact_past_its_date_is_never_promoted(sandbox):
+    current_entries(sandbox, f"[2026-09-15] {DUE}")
+    heard_twice(DUE)  # two conversations — the promotion it would have earned
+
+    r = verify.run(day="2026-09-19")
+
+    assert r["promoted"] == [] and r["expired"] == [DUE]
+    assert DUE not in rules_text(sandbox)

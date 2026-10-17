@@ -34,7 +34,7 @@ import sqlite3
 import subprocess
 import sys
 import tempfile
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from datetime import datetime, timedelta, timezone
 
 from pathlib import Path
@@ -137,6 +137,15 @@ DEFAULT_LAYER, DEFAULT_SECTION = "stala", "projekty"  # the safest guess: visibl
 # "stala/firma/zapamietaj". lore.verify counts such a fact as confirmed — the user said it himself,
 # on purpose, so it does not wait for a second conversation (Trail.confirmations).
 REMEMBERED = "zapamietaj"
+# The date a fact holds until, given by the model when the fact says it itself ("do piątku nie
+# zmieniać cen na DE"). It is written into the sentence at once — " (ważne do 2026-10-24)" — so it
+# rides along wherever the fact goes (waiting room, rules, trail, uspione.md) and an agent reading
+# it sees the date too; lore.verify takes the fact out of the knowledge the day after (VALID_UNTIL_RE),
+# with an id to bring it back. The pattern of agentmemory remember.ts: the expiry is set when the
+# fact is written, not guessed later.
+VALID_UNTIL = "wazne_do"
+VALID_UNTIL_NOTE = " (ważne do {day})"
+VALID_UNTIL_RE = re.compile(r"\(ważne do (\d{4}-\d{2}-\d{2})\)")
 # A listing lands in a file whose name says what is in it — there is no catch-all file. The user's
 # decision (2026-09-30): a sack of unrelated facts under a placeholder name, pointed at from nowhere,
 # is exactly what he does not want. A name the model did not give is derived from the text
@@ -191,6 +200,9 @@ FACTS_SCHEMA = json.dumps({
                 "podsekcja": {"type": "string", "enum": list(SECTIONS)},
                 # true only for a fact out of a message marked "zapamietaj" (SELECTION_NOTE)
                 REMEMBERED: {"type": "boolean"},
+                # RRRR-MM-DD, only for a fact that says itself until when it holds (VALID_UNTIL).
+                # No "pattern": the date is checked here (_as_fact), not trusted to a schema dialect
+                VALID_UNTIL: {"type": "string"},
             },
             "required": ["tresc", "warstwa"],
             "additionalProperties": False,
@@ -240,6 +252,9 @@ Wypisz fakty, które warto znać w każdym nowym oknie rozmowy, i każdemu przyp
   "uzytkownik", "firma", "projekty" albo "praca".
 - "biezaca" — TYLKO krótki zakaz albo warunek, który obowiązuje przez kilka dni (np. „do piątku
   nie zmieniać cen na DE”). Nic innego.
+- Gdy fakt sam mówi, do kiedy obowiązuje (jak „do piątku” wyżej), podaj też "wazne_do": ten dzień
+  jako RRRR-MM-DD, liczony od daty wiadomości. Po tym dniu fakt sam zniknie z wiedzy. Fakt bez
+  takiego terminu — bez tego pola.
 - "referencyjna" — długie zestawienia: listy, tabele, struktury numeracji, wyliczenia wariantów.
   Poznajesz je po tym, że są długie i wyliczające, a nie po temacie. Do takiego faktu MUSISZ podać
   "plik" i "odsylacz". "plik" — nazwa pliku w katalogu wiedzy: opisowa, po polsku, bez polskich
@@ -1811,6 +1826,7 @@ class Fact:
     file: str = ""  # only for "referencyjna": the listing goes to ~/.claude/wiedza/<file>
     pointer: str = ""  # the single line that stands in the durable knowledge instead of the listing
     remember: bool = False  # "stala" only: the user said "zapamiętaj" (REMEMBERED)
+    until: str = ""  # RRRR-MM-DD the fact holds until (VALID_UNTIL) — already noted in `text`
 
     def label(self) -> str:
         """'stala/firma', 'stala/firma/zapamietaj', 'biezaca', 'referencyjna:struktura-sku.md' —
@@ -1899,7 +1915,178 @@ def _as_fact(raw, rejected: list | None = None) -> Fact | None:
         return Fact(text, layer, file=name, pointer=pointer)
     section = str(item.get("podsekcja") or "").strip().lower()
     remember = layer == "stala" and item.get(REMEMBERED) is True
-    return Fact(text, layer, section if section in SECTIONS else DEFAULT_SECTION, remember=remember)
+    until = valid_day(str(item.get(VALID_UNTIL) or "").strip())
+    if until and not VALID_UNTIL_RE.search(text):
+        text += VALID_UNTIL_NOTE.format(day=until)
+    return Fact(text, layer, section if section in SECTIONS else DEFAULT_SECTION, remember=remember,
+                until=until)
+
+
+def valid_day(text: str) -> str:
+    """The text when it is a real day RRRR-MM-DD, '' otherwise — a made-up date sets no expiry."""
+    try:
+        return text if datetime.strptime(text, "%Y-%m-%d").strftime("%Y-%m-%d") == text else ""
+    except ValueError:
+        return ""
+
+
+def valid_until(text: str) -> str:
+    """The day the sentence says it holds until (VALID_UNTIL_NOTE); '' when it says none."""
+    m = VALID_UNTIL_RE.search(text or "")
+    return valid_day(m.group(1)) if m else ""
+
+
+# ---------------------------------------------------------------- the sieve after the model
+
+# What PROMPT asks for, checked by rules once the answer is back: the model is told, the sieve makes
+# sure. A fact it lets through still goes the whole way (waiting room, current layer, two
+# conversations); one it stops is not lost quietly — it goes to SIEVE_NAME, to the log, and back
+# to the model in the next prompt (rejected_block), so it stops proposing the same kind of thing
+# (the pattern of ai-memory auto_improve.rs: the recent rejections ride along with the request).
+# The listings ("referencyjna") are long and dry by nature — the sieve does not touch them.
+#
+# PROMPT asks for "najwyżej ok. 200 znaków"; the sieve stops at twice that. Measured 2026-10-17 on
+# the real "Bieżące" and the trail of the office machine (126 facts): between 300 and 400 stands one
+# rule with its reason (the price rule between markets, 354; the release routine of the MCP, 352);
+# over 400 it is several facts glued into one entry (the tool for translating graphics: 525, six
+# requirements; selling on another market: 786).
+MAX_FACT_LEN = 400
+# The state of a task, a deadline, a one-off order — what PROMPT says not to write down: after a
+# few days it is no longer true. Only phrases that do not occur in a standing rule: "gotowe" is not
+# here ("Gotowe komplety A+ wycinać do…" is a rule), neither is a bare "czeka" nor "przypomnienia"
+# ("Przypomnienia mają być trwałe i widoczne" is a rule as well — only "przypomnij" is an order).
+_TASK_STATE = re.compile(
+    r"\b(?:zrobion[oay]\w*|zrobi[lł]\w*|w\s+toku|do\s+zrobienia|czekam\w*|zaci[eę][lł]\w*"
+    r"|jeszcze\s+nie\s+(?:zrobi|sprawdz|wdro)\w*|nie\s+zosta[lł]\w*\s+(?:zrobion|wdro|sprawdzon)\w*"
+    r"|jutro|wczoraj|dzisiaj|dzi[sś](?:iaj)?\b|teraz\s+trwa\w*|w\s+trakcie\s+test\w*"
+    r"|zosta[lł][aoy]?\s+wys[lł]an\w*|obecnie\s+robi\w*|przypomnij\b)",
+    re.IGNORECASE)
+# "Sytuacja -> co robić": a fact that says what follows from it. Recognised by a word that carries
+# an obligation, a wish, a ban or a condition, by an infinitive (Polish instructions are infinitives:
+# "robić", "wycinać", "podawać") or by an arrow. A sentence with none of them is a dry fact
+# ("Pliki robocze leżą w …") — PROMPT calls it useless, the sieve stops it.
+_ACTION_WORDS = frozenset("""
+ma maja musi musza trzeba nalezy wolno nie nigdy zawsze tylko wylacznie chce chca woli oczekuje
+wymaga wymagaja powinien powinna powinno powinny gdy kiedy jesli jezeli przy bo zeby aby zamiast
+zakaz zakazane uwaga pulapka najpierw dopiero domyslnie nazywa nazywaja oznacza znaczy sie
+""".split())
+# "sie": the impersonal instruction ("Etykiety bierze się z folderu…", "Ceny liczy się tak:…") — it
+# lets a few dry sentences through as well; a dry fact let in costs one entry that ages out, a rule
+# stopped is gone from the knowledge
+_QUOTED = re.compile(r"„[^”]*”|\"[^\"]*\"|“[^”]*”")
+# Who the user is and what the company does (the subsections "uzytkownik" and "firma") are
+# descriptions by PROMPT's own definition of "stala" — the form rule would stop exactly those
+# ("Firma podpisuje korespondencję z Amazonem nazwą JF Investing"). The other two rules hold there.
+DESCRIBED_SECTIONS = frozenset({"uzytkownik", "firma"})
+_ARROW = re.compile(r"→|->|=>")
+SIEVE_NAME = ".odrzucone-sito.tsv"  # dzien \t powod \t tresc — next to .koszt-cyklu.txt
+# what rides along with the prompt: the pattern's numbers (ai-memory: up to 50 rejections from the
+# last 180 days) — older ones are taken out of the file, so it never grows without end
+SIEVE_KEEP = 50
+SIEVE_DAYS = 180
+REJECTED_NOTE = """
+
+=== ODRZUCONE WCZEŚNIEJ ===
+Te propozycje automat odrzucił w poprzednich przebiegach (powód w nawiasie). Nie proponuj ich ponownie
+ani podobnych — trzymaj się zasad z początku polecenia:
+"""
+
+
+def sieve_reason(fact: Fact) -> str:
+    """Why the sieve stops this fact — '' when it passes. The listings always pass."""
+    if fact.layer == "referencyjna":
+        return ""
+    text = fact.text
+    if len(text) > MAX_FACT_LEN:
+        return f"za dlugi: {len(text)} zn. (limit {MAX_FACT_LEN})"
+    m = _TASK_STATE.search(_QUOTED.sub(" ", text))  # a quote is a name: „odłóż na jutro”
+    if m:
+        return f"stan zadania albo termin: '{m.group(0)}'"
+    if fact.layer == "stala" and fact.section in DESCRIBED_SECTIONS:
+        return ""
+    words = text.split()
+    if _ARROW.search(text) or any(w.rstrip(_SIEVE_PUNCT).endswith("ć") for w in words):
+        return ""
+    if _ACTION_WORDS & set(normalize(text).translate(_POLISH).split()):
+        return ""
+    return "brak formy 'sytuacja -> co robic'"
+
+
+_SIEVE_PUNCT = ".,;:!?)]}'\"”»—–-"
+
+
+def sieve(found: list[Fact], known: set[str] | None = None,
+          today: str | None = None) -> tuple[list[Fact], list[tuple[str, Fact]]]:
+    """The facts that pass, and (reason, fact) for the ones stopped. A fact already known (standing
+    in the rules or waiting) always passes: what stands is not the sieve's to judge, and its
+    sighting is what promotes it. A fact whose own date (VALID_UNTIL) is already behind us is
+    stopped as well — it would leave the knowledge on the next run anyway."""
+    known = known_facts() if known is None else known
+    today = today or datetime.now().strftime("%Y-%m-%d")
+    kept, stopped = [], []
+    for fact in found:
+        why = "" if normalize(fact.text) in known else sieve_reason(fact)
+        if not why and fact.until and fact.until < today:
+            why = f"termin waznosci minal: {fact.until}"
+        if why:
+            stopped.append((why, fact))
+        else:
+            kept.append(fact)
+    return kept, stopped
+
+
+def sieve_path() -> Path:
+    return KNOWLEDGE_DIR / SIEVE_NAME
+
+
+def read_rejected(today: str | None = None) -> list[tuple[str, str, str]]:
+    """(day, reason, text) of the recent rejections, the newest last — at most SIEVE_KEEP, none
+    older than SIEVE_DAYS. A file that cannot be read is said aloud and counts as empty."""
+    today = today or datetime.now().strftime("%Y-%m-%d")
+    oldest = _days_back(today, SIEVE_DAYS)
+    try:
+        raw = sieve_path().read_text(encoding="utf-8")
+    except FileNotFoundError:
+        return []
+    except OSError as e:
+        log(f"UWAGA: {SIEVE_NAME} unreadable ({e}) - the model gets no list of earlier rejections")
+        return []
+    out = []
+    for line in raw.splitlines():
+        parts = line.split("\t", 2)
+        if len(parts) == 3 and _is_day(parts[0]) and parts[0] >= oldest:
+            out.append((parts[0], parts[1], parts[2]))
+    return out[-SIEVE_KEEP:]
+
+
+def _is_day(text: str) -> bool:
+    try:
+        datetime.strptime(text, "%Y-%m-%d")
+        return True
+    except ValueError:
+        return False
+
+
+def note_rejected(stopped: list[tuple[str, Fact]], day: str) -> None:
+    """The stopped facts appended to SIEVE_NAME, which is cut back to the last SIEVE_KEEP of the
+    last SIEVE_DAYS on the way. A failure to write is logged — the log already names every one."""
+    if not stopped:
+        return
+    rows = read_rejected(day)
+    rows += [(day, why, " ".join(fact.text.split())) for why, fact in stopped]
+    try:
+        safeio.write_text(sieve_path(), "".join(f"{d}\t{w}\t{t}\n" for d, w, t in rows[-SIEVE_KEEP:]))
+    except OSError as e:
+        log(f"UWAGA: {len(stopped)} facts stopped by the sieve were not written to {SIEVE_NAME}: {e}")
+
+
+def rejected_block(today: str | None = None) -> str:
+    """What goes after the material: the recent rejections, so the model does not propose them again;
+    '' when there are none."""
+    rows = read_rejected(today)
+    if not rows:
+        return ""
+    return REJECTED_NOTE + "\n".join(f"- {text} ({why})" for _, why, text in rows)
 
 
 def file_name(proposed: str) -> str:
@@ -2086,6 +2273,89 @@ def known_facts() -> set[str]:
     return known
 
 
+def known_texts() -> list[str]:
+    """The sentences a new fact may be a near duplicate of, as they stand: the entries of "## Co
+    wiem" in every instruction file, the waiting room and the dormant facts. The exact sentence
+    matters — a sighting is tied to an entry by lore.verify.fact_key of its words."""
+    from . import verify  # here: verify imports this module, so it is complete only at call time
+
+    out = [f.text for f in waiting_facts() if f.layer != "referencyjna"]
+    for path in instruction_paths():
+        out += [e.text for e in verify.entries(_lines(path))]
+    out += [entry[3] for entry in map(dormant_entry, _lines(KNOWLEDGE_DIR / DORMANT_NAME)) if entry]
+    return list(dict.fromkeys(t for t in out if t))
+
+
+# ---------------------------------------------------------------- near duplicates
+
+# A fact said again in other words is the same evidence as one said in the same words: a sighting
+# of the entry already there (it promotes it later), not a new entry next to it. Exact words are
+# matched by known_facts; other words by the vectors of the mmlw model Lore already has on disk.
+#
+# The threshold, measured 2026-10-17 on the real knowledge of the office machine (136 sentences:
+# the rules, "Bieżące", the waiting room): the closest pair of DIFFERENT facts scored 0.901, a
+# different claim on the same topic up to 0.899; eight hand-made rewordings of real facts scored
+# 0.901–0.993, five of them at 0.96 or more. 0.95 takes the clear rewordings and nothing of the 80
+# closest pairs of different facts — a missed repetition only waits for the next one, a false one
+# would confirm a fact nobody said twice.
+#
+# The vectors cannot tell "since 2024" from "since 2025" (0.979 in the same measurement) — so the
+# values must agree as well: the numbers, paths and negations of lore.verify.skeleton. Two versions
+# with different values are a contradiction, and that is lore.verify's "newer wins", not a repetition.
+NEAR_THRESHOLD = 0.95
+NEAR_MODEL = "sdadas/mmlw-retrieval-roberta-base"
+
+
+class NearUnavailable(RuntimeError):
+    """The model is not on this disk (or does not load) — the check is skipped and said aloud."""
+
+
+def _embed_near(texts: list[str]):
+    """Vectors of the mmlw model — only when Lore already downloaded it: the harvest never pulls
+    500 MB on its own (the indexer does that, with its own progress and errors)."""
+    from . import db
+
+    spec = db.model_spec(NEAR_MODEL)
+    folder = db.MODELS_DIR / spec.name.replace("/", "--")
+    missing = [rel for rel, _ in spec.files if not (folder / rel).exists()]
+    if missing:
+        raise NearUnavailable(f"model {spec.name} not downloaded in {folder}")
+    try:
+        return db.embed_passages(texts, model=spec.name)
+    except Exception as e:  # noqa: BLE001 — any failure of the model ends only this check
+        raise NearUnavailable(f"model {spec.name} did not load: {e!r}") from e
+
+
+NEAR_EMBED = _embed_near  # tests put a stand-in here
+
+
+def near_duplicates(fresh: list[Fact], known: list[str]) -> tuple[list[tuple[int, str, float]], str]:
+    """(index in fresh, the known sentence it repeats, score) for every fresh fact that says a known
+    one again in other words; and '' — or why the check could not be done. Listings are not
+    compared (long and dry, the reference layer keeps them in files)."""
+    from . import verify
+
+    asked = [i for i, f in enumerate(fresh) if f.layer != "referencyjna"]
+    if not asked or not known:
+        return [], ""
+    try:
+        vectors = NEAR_EMBED([fresh[i].text for i in asked] + list(known))
+    except NearUnavailable as e:
+        return [], str(e)
+    new, old = vectors[:len(asked)], vectors[len(asked):]
+    out = []
+    for row, i in enumerate(asked):
+        scores = old @ new[row]
+        values = set(verify.skeleton(fresh[i].text)[1])
+        for j in sorted(range(len(known)), key=lambda j: -float(scores[j])):
+            if float(scores[j]) < NEAR_THRESHOLD:
+                break
+            if set(verify.skeleton(known[j])[1]) == values:
+                out.append((i, known[j], float(scores[j])))
+                break
+    return out, ""
+
+
 def note_sources(facts: list[Fact], source: str, day: str, sessions: list[str] | tuple = (),
                  event: str = SIGHTED) -> None:
     """Writes down, for each fact, which conversations it was read out of.
@@ -2107,7 +2377,7 @@ def note_sources(facts: list[Fact], source: str, day: str, sessions: list[str] |
 
 
 def append_facts(facts: list[Fact], day: str | None = None, source: str = "",
-                 sessions: list[str] | tuple = ()) -> list[Fact]:
+                 sessions: list[str] | tuple = (), near: dict | None = None) -> list[Fact]:
     """Appends the facts nobody knows yet, grouped by layer; returns the ones actually written.
 
     Grouped, because the layer is what decides where lore.verify puts the fact afterwards, and
@@ -2115,7 +2385,9 @@ def append_facts(facts: list[Fact], day: str | None = None, source: str = "",
     date sits in every entry — the "biezaca" ones are aged out by it later.
 
     A fact that is already known is not written again, but its sighting goes to the trail: that
-    it came up once more, in which conversations, is exactly what promotes it later.
+    it came up once more, in which conversations, is exactly what promotes it later. The same for
+    a near duplicate (near_duplicates): the sighting goes to the known sentence, in its words.
+    `near`, when given, gets "found": [(new, known, score)] and "unchecked": why it was not checked.
     """
     known = known_facts()
     fresh, again, seen = [], [], set()
@@ -2125,6 +2397,19 @@ def append_facts(facts: list[Fact], day: str | None = None, source: str = "",
             continue  # the model likes to repeat itself inside one answer as well — one sighting
         seen.add(key)
         (again if key in known else fresh).append(fact)
+    found, unchecked = near_duplicates(fresh, known_texts()) if fresh else ([], "")
+    if unchecked:
+        log(f"UWAGA: near duplicates not checked ({unchecked}) - a fact said again in other words"
+            f" is written as a new one in this run")
+    for i, text, score in found:
+        log(f"near duplicate ({score:.3f}) - a sighting of the known fact, not a new entry:"
+            f" {fresh[i].text[:80]}  ~  {text[:80]}")
+        again.append(replace(fresh[i], text=text))
+    gone = {i for i, _, _ in found}
+    if near is not None:
+        near["found"] = [(fresh[i].text, text, score) for i, text, score in found]
+        near["unchecked"] = unchecked
+    fresh = [fact for i, fact in enumerate(fresh) if i not in gone]
     day = day or datetime.now().strftime("%Y-%m-%d")
     note_sources(again, source, day, sessions, event=SIGHTED_AGAIN)
     if not fresh:
@@ -2155,7 +2440,8 @@ def _empty_run() -> dict:
     return {"chunks": 0, "chars": 0, "pending": 0, "runs_left": 0, "in_range": 0, "reviewed": 0,
             "candidates": 0, "reasons": {}, "duplicates": 0, "late": 0, "missing": 0,
             "before_zero": 0, "from": "", "to": "", "facts": [], "added": [],
-            "watched": 0, "watched_left_out": 0, "used": [], "used_missing": False}
+            "watched": 0, "watched_left_out": 0, "used": [], "used_missing": False,
+            "sieved": [], "near": [], "near_unchecked": ""}
 
 
 def run(dry_run: bool = False, ask=ask_harvest, conn: sqlite3.Connection | None = None) -> dict:
@@ -2205,9 +2491,14 @@ def run(dry_run: bool = False, ask=ask_harvest, conn: sqlite3.Connection | None 
         out["model_cli"] = cli.name if cli else ""
         return out
     sent_before = _PASS.sent
-    answer = ask(material.joined() + watched.block())
-    out["facts"] = parse_facts(answer)
-    out["added"] = append_facts(out["facts"], source=material.source(), sessions=material.sessions)
+    today = datetime.now().strftime("%Y-%m-%d")
+    answer = ask(material.joined() + watched.block() + rejected_block(today))
+    out["facts"], out["sieved"] = sieve(parse_facts(answer), today=today)
+    note_rejected(out["sieved"], today)
+    near: dict = {}
+    out["added"] = append_facts(out["facts"], source=material.source(), sessions=material.sessions,
+                                near=near)
+    out["near"], out["near_unchecked"] = near.get("found", []), near.get("unchecked", "")
     if watched.facts:
         used = parse_used(answer, watched.facts)
         out["used"], out["used_missing"] = used or [], used is None
@@ -2299,6 +2590,13 @@ def _report(r: dict) -> None:
             log(f"heard again (only a sighting in {SOURCES_NAME}): {len(again)}")
         for fact in r["added"]:
             log(f"  + ({fact.label()}) {fact.text}")
+        if r["near"]:
+            log(f"near duplicates (a sighting of the known fact, not a new entry): {len(r['near'])}")
+        if r["sieved"]:  # not lost quietly: here, in SIEVE_NAME and in the next prompt
+            log(f"stopped by the sieve (kept in {SIEVE_NAME}, shown to the model next time):"
+                f" {len(r['sieved'])}")
+            for why, fact in r["sieved"]:
+                log(f"  - [{why}] {fact.text[:120]}")
         _report_use(r)
         for fact in r["added"]:
             if fact.layer == "referencyjna" and not fact.file:

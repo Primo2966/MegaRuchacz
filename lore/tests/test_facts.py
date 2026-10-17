@@ -21,6 +21,22 @@ def ago(hours: float) -> str:
     return facts.iso_utc(NOW - timedelta(hours=hours))
 
 
+REAL_SIEVE = facts.sieve_reason
+
+
+@pytest.fixture(autouse=True)
+def sieve_off(monkeypatch):
+    """The sieve after the model (facts.sieve) is off for every test that is not about it: their
+    sample facts ("Użytkownik pracuje na Windowsie.") are dry on purpose — plain material for the
+    axis, the trail and the waiting room. The tests of the sieve switch it back on (real_sieve)."""
+    monkeypatch.setattr(facts, "sieve_reason", lambda fact: "")
+
+
+@pytest.fixture
+def real_sieve(monkeypatch):
+    monkeypatch.setattr(facts, "sieve_reason", REAL_SIEVE)
+
+
 @pytest.fixture
 def selective(tmp_path, monkeypatch, environment):
     """The whole harvest inside tmp_path — the real ~/.claude must not be touched by the tests.
@@ -1886,3 +1902,192 @@ def test_clean_start_flags_are_in_the_model_call():
     assert facts.CLEAN_SYSTEM_PROMPT.isascii()
     assert args[-2:] == ["--json-schema", facts.FACTS_SCHEMA]
     assert "--setting-sources" not in args  # it would drop the user's effort level too
+
+
+# ---------------------------------------------------------------- the sieve after the model (step 1b)
+
+RULE_FACT = "Gdy oferta trafia na FR, cenę liczyć z DE i doliczać różnicę opłat FBA."
+DRY_FACT = "Pliki robocze grafik zajmują około sześciu gigabajtów na dysku."
+
+
+def test_the_sieve_lets_a_rule_through_and_stops_what_the_prompt_forbids(real_sieve):
+    def why(text, layer="stala", section="projekty"):
+        return facts.sieve_reason(facts.Fact(text, layer, section))
+
+    assert why(RULE_FACT) == ""
+    assert why("Tytuły na eBayu mają najwyżej 80 znaków.") == ""
+    assert why("Przy wysyłce do FBA → zawsze numer + FBA w nazwie.") == ""
+    assert why(DRY_FACT).startswith("brak formy")
+    assert why("Gdy trzeba, " + "bardzo długie zdanie " * 30).startswith("za dlugi")
+    assert why("Analiza sprzedaży zrobiona, trzeba jeszcze sprawdzić UK.").startswith("stan zadania")
+    assert why("Jutro trzeba wysłać paczkę do FBA.").startswith("stan zadania")
+    # probes: what looks like the forbidden thing but is a rule stays in
+    assert why("Gotowe komplety A+ wycinać i wklejać do folderu 2_SZABLONY.") == ""
+    assert why("Przypomnienia mają być trwałe i widoczne.") == ""
+    assert why("Gdy zadanie się nie uda, pokazać przycisk „odłóż na jutro”.") == ""
+    # who the user is and what the company does are descriptions by definition
+    assert why("Firma podpisuje korespondencję z Amazonem nazwą JF Investing.", section="firma") == ""
+    assert why("Firma podpisuje korespondencję z Amazonem nazwą JF Investing.").startswith("brak formy")
+    # a listing is long and dry by nature
+    assert why(DRY_FACT + " " + "x" * 500, layer="referencyjna") == ""
+
+
+def test_probe_the_length_rule_is_what_stops_a_long_fact(real_sieve, monkeypatch):
+    long_rule = "Gdy trzeba, " + "rób to porządnie " * 30
+    assert facts.sieve_reason(facts.Fact(long_rule, "stala")).startswith("za dlugi")
+    monkeypatch.setattr(facts, "MAX_FACT_LEN", 10**6)
+    assert facts.sieve_reason(facts.Fact(long_rule, "stala")) == ""
+
+
+def test_a_known_fact_passes_the_sieve_its_sighting_matters(real_sieve):
+    kept, stopped = facts.sieve([facts.Fact(DRY_FACT, "stala")], known={facts.normalize(DRY_FACT)})
+    assert [f.text for f in kept] == [DRY_FACT] and stopped == []
+    kept, stopped = facts.sieve([facts.Fact(DRY_FACT, "stala")], known=set())  # probe
+    assert kept == [] and stopped[0][0].startswith("brak formy")
+
+
+def test_a_stopped_fact_is_kept_logged_and_shown_to_the_model_next_time(one_chunk, real_sieve, capsys):
+    r = facts.run(ask=sorted_answer({"tresc": RULE_FACT, "warstwa": "stala", "podsekcja": "praca"},
+                                    {"tresc": DRY_FACT, "warstwa": "stala", "podsekcja": "projekty"}),
+                  conn=one_chunk.conn)
+    facts._report(r)
+
+    assert entries(facts.CANDIDATES_PATH) == [RULE_FACT]  # the dry one never reaches the waiting room
+    assert [f.text for _, f in r["sieved"]] == [DRY_FACT]
+    rows = facts.sieve_path().read_text(encoding="utf-8").splitlines()
+    assert len(rows) == 1 and rows[0].endswith("\tbrak formy 'sytuacja -> co robic'\t" + DRY_FACT)
+    assert "stopped by the sieve" in capsys.readouterr().err
+    # the next prompt carries it, with the reason
+    add(one_chunk, ago(0.5), "user", "jeszcze cos")
+    seen: list[str] = []
+    facts.run(ask=recorder(seen), conn=one_chunk.conn)
+    assert facts.REJECTED_NOTE.strip() in seen[0]
+    assert f"- {DRY_FACT} (brak formy 'sytuacja -> co robic')" in seen[0]
+
+
+def test_probe_without_the_sieve_the_dry_fact_lands_in_the_waiting_room(one_chunk):
+    facts.run(ask=sorted_answer({"tresc": DRY_FACT, "warstwa": "stala"}), conn=one_chunk.conn)
+    assert entries(facts.CANDIDATES_PATH) == [DRY_FACT]
+    assert not facts.sieve_path().exists()
+
+
+def test_the_list_of_rejections_keeps_the_last_fifty_of_half_a_year(selective):
+    facts.KNOWLEDGE_DIR.mkdir(parents=True, exist_ok=True)
+    old = [f"2026-01-0{n}\tpowod\tstary {n}" for n in range(1, 4)]  # over 180 days before 2026-10-17
+    recent = [f"2026-10-01\tpowod\tfakt {n}" for n in range(60)]
+    facts.sieve_path().write_text("\n".join(old + recent) + "\n", encoding="utf-8")
+
+    rows = facts.read_rejected("2026-10-17")
+
+    assert len(rows) == facts.SIEVE_KEEP == 50 and rows[-1][2] == "fakt 59" and rows[0][2] == "fakt 10"
+    facts.note_rejected([("powod", facts.Fact("nowy", "stala"))], "2026-10-17")
+    lines = facts.sieve_path().read_text(encoding="utf-8").splitlines()
+    assert len(lines) == 50 and lines[-1] == "2026-10-17\tpowod\tnowy" and "stary" not in "".join(lines)
+    assert facts.rejected_block("2026-10-17").count("\n- ") == 50
+    # probe: seen from a day within half a year of them, the old ones count again
+    facts.sieve_path().write_text("\n".join(old) + "\n", encoding="utf-8")
+    assert len(facts.read_rejected("2026-06-01")) == 3 and facts.read_rejected("2026-10-17") == []
+
+
+# ---------------------------------------------------------------- the expiry set when written
+
+def test_a_fact_with_its_own_date_carries_it_in_the_sentence():
+    item = {"tresc": "Do piątku nie zmieniać cen na DE.", "warstwa": "biezaca", "wazne_do": "2026-10-24"}
+    fact = facts._as_fact(item)
+    assert fact.text == "Do piątku nie zmieniać cen na DE. (ważne do 2026-10-24)"
+    assert fact.until == "2026-10-24" and facts.valid_until(fact.text) == "2026-10-24"
+    # probes: a made-up or missing date sets nothing, a date already in the sentence is not doubled
+    assert facts._as_fact({**item, "wazne_do": "2026-02-30"}).text == "Do piątku nie zmieniać cen na DE."
+    assert facts._as_fact({**item, "wazne_do": "piątek"}).until == ""
+    assert facts._as_fact({k: v for k, v in item.items() if k != "wazne_do"}).until == ""
+    assert facts._as_fact({**item, "tresc": fact.text}).text == fact.text
+    plain = json.loads(facts.FACTS_SCHEMA)["properties"]["fakty"]["items"]["anyOf"][0]
+    assert plain["properties"]["wazne_do"] == {"type": "string"} and "wazne_do" not in plain["required"]
+    strict = json.loads(facts.STRICT_FACTS_SCHEMA)["properties"]["fakty"]["items"]["anyOf"][0]
+    assert strict["properties"]["wazne_do"]["type"] == ["string", "null"]
+    assert '"wazne_do"' in facts.PROMPT
+
+
+def test_a_fact_already_past_its_date_is_stopped(real_sieve):
+    fact = facts._as_fact({"tresc": "Nie zmieniać cen na DE do piątku.", "warstwa": "biezaca",
+                           "wazne_do": "2026-10-10"})
+    kept, stopped = facts.sieve([fact], known=set(), today="2026-10-17")
+    assert kept == [] and stopped[0][0] == "termin waznosci minal: 2026-10-10"
+    kept, _ = facts.sieve([fact], known=set(), today="2026-10-10")  # probe: on the day it still holds
+    assert kept == [fact]
+
+
+# ---------------------------------------------------------------- near duplicates
+
+KNOWN_RULE = "Kod kreskowy na naklejce ma być jak największy."
+SAID_AGAIN = "Kody kreskowe na naklejkach mają być maksymalnie duże."
+OTHER_YEAR = "Analizy sprzedaży robić od 2024 roku."
+KNOWN_YEAR = "Analizy sprzedaży robić od 2025 roku."
+NEAR_RULES = PIPELINE_RULES.replace("- Nie jest programistą.\n",
+                                    f"- Nie jest programistą.\n- {KNOWN_RULE}\n- {KNOWN_YEAR}\n")
+
+
+def vectors_by(groups: dict[str, int], dim: int = 4):
+    """Stand-in for the model: the texts of one group get one vector, the others another one."""
+    import numpy as np
+
+    def embed(texts):
+        out = np.zeros((len(texts), dim), dtype=np.float32)
+        for i, t in enumerate(texts):
+            out[i, groups.get(t, dim - 1)] = 1.0
+        return out
+    return embed
+
+
+@pytest.fixture
+def near_known(one_chunk, monkeypatch):
+    facts.RULES_PATH.write_text(NEAR_RULES, encoding="utf-8")
+    monkeypatch.setattr(facts, "NEAR_EMBED", vectors_by({KNOWN_RULE: 0, SAID_AGAIN: 0,
+                                                         KNOWN_YEAR: 1, OTHER_YEAR: 1}))
+    return one_chunk
+
+
+def test_a_fact_said_again_in_other_words_is_a_sighting_not_a_new_entry(near_known):
+    r = facts.run(ask=sorted_answer({"tresc": SAID_AGAIN, "warstwa": "stala"}), conn=near_known.conn)
+
+    assert r["added"] == [] and not facts.CANDIDATES_PATH.exists()
+    assert [(n, k) for n, k, _ in r["near"]] == [(SAID_AGAIN, KNOWN_RULE)]
+    line = trail(facts.KNOWLEDGE_DIR)
+    assert "| wyłowiony ponownie | stala/projekty |" in line and line.rstrip().endswith(KNOWN_RULE)
+    assert SAID_AGAIN not in line  # the sighting is tied to the entry in ITS words
+
+
+def test_probe_under_a_threshold_nothing_reaches_the_rewording_is_a_new_entry(near_known, monkeypatch):
+    monkeypatch.setattr(facts, "NEAR_THRESHOLD", 1.01)
+    r = facts.run(ask=sorted_answer({"tresc": SAID_AGAIN, "warstwa": "stala"}), conn=near_known.conn)
+    assert entries(facts.CANDIDATES_PATH) == [SAID_AGAIN] and r["near"] == []
+
+
+def test_the_same_words_with_another_number_are_not_a_repetition(near_known):
+    """The vectors put 2024 next to 2025 — the values decide: that is the newer version of a fact,
+    for lore.verify's "newer wins", never a sighting that would confirm the old one."""
+    r = facts.run(ask=sorted_answer({"tresc": OTHER_YEAR, "warstwa": "stala"}), conn=near_known.conn)
+    assert entries(facts.CANDIDATES_PATH) == [OTHER_YEAR] and r["near"] == []
+
+
+def test_probe_without_comparing_the_values_the_other_year_would_confirm_the_old_one(near_known,
+                                                                                      monkeypatch):
+    from lore import verify
+    monkeypatch.setattr(verify, "skeleton", lambda text: (text, ()))
+    r = facts.run(ask=sorted_answer({"tresc": OTHER_YEAR, "warstwa": "stala"}), conn=near_known.conn)
+    assert r["added"] == [] and r["near"][0][1] == KNOWN_YEAR
+
+
+def test_without_the_model_on_the_disk_the_check_is_skipped_aloud(one_chunk, monkeypatch, capsys):
+    from lore import db
+    facts.RULES_PATH.write_text(NEAR_RULES, encoding="utf-8")
+
+    def no_download(*args, **kwargs):
+        raise AssertionError("the harvest must never load nor download the model itself")
+    monkeypatch.setattr(db, "embed_passages", no_download)  # the sandbox has no model on its disk
+
+    r = facts.run(ask=sorted_answer({"tresc": SAID_AGAIN, "warstwa": "stala"}), conn=one_chunk.conn)
+
+    assert entries(facts.CANDIDATES_PATH) == [SAID_AGAIN]  # written as new — and said so
+    assert "not downloaded" in r["near_unchecked"]
+    assert "near duplicates not checked" in capsys.readouterr().err

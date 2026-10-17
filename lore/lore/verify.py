@@ -82,7 +82,7 @@ from .db import CLAUDE_HOME, log
 from .facts import (DORMANT_NAME, PENDING_NOTE, REMEMBERED, SESSIONS_FIELD, SIGHTED,
                     SIGHTED_AGAIN, SOURCES_HEADER, SOURCES_NAME, USED, USED_WEAK, describe_file, dormant_entry,
                     file_name, is_technical, name_from_text, normalize, pointers_in,
-                    raw_structure)
+                    raw_structure, valid_until)
 
 KNOWLEDGE_DIR = CLAUDE_HOME / "wiedza"
 CANDIDATES_PATH = KNOWLEDGE_DIR / "kandydaci.md"
@@ -136,6 +136,14 @@ STABLE_LIMIT = 16000
 # them the state of some task; 6 000 keeps ~25 short entries — a few days of bans and conditions,
 # which is all the new PROMPT lets in there. Over it, the oldest unconfirmed entries leave first.
 CURRENT_LIMIT = 6000
+# The ceiling of the whole "## Co wiem" block — the two layers together, the sum of the two ceilings
+# above, counted with its heading and "Dane referencyjne", without the line under it (tail_note).
+# The two ceilings keep each layer under its own (make_room, over_current_limit); this one is the
+# last guard at the writing itself, like raw_leaks: a run that would make the block grow past it
+# writes NOTHING and ends as an error with an ALARM, instead of saving a block nobody budgeted for.
+# The pattern of ai-memory brief_tiers.rs, and "sufit krzyczy" of this project. A block already over
+# it that does not grow (a run that only takes out, or changes nothing) is let through.
+BLOCK_LIMIT = STABLE_LIMIT + CURRENT_LIMIT
 
 # How long an entry of the current layer lives: the same 14 days as $DniWaznosci in
 # narzedzia\koszt-pamieci.ps1 and "Wygasanie" in the global rules. Past that, an entry is taken out
@@ -822,6 +830,16 @@ def stable_chars(lines: list[str]) -> int:
     return len("\n".join([lines[start - 1]] + body))
 
 
+def block_chars(lines: list[str]) -> int:
+    """How many characters the whole "## Co wiem" section takes, with its heading — what BLOCK_LIMIT
+    applies to; the line under it (tail_note) ends the section and is not counted."""
+    bounds = section_bounds(lines)
+    if bounds is None:
+        return 0
+    start, end = bounds
+    return len("\n".join(lines[start - 1:end]).rstrip())
+
+
 def room_for_facts(lines: list[str]) -> int:
     """Characters left before the ceiling; never negative — an already fat file takes nothing new."""
     return max(0, STABLE_LIMIT - stable_chars(lines))
@@ -1357,20 +1375,38 @@ def effective_day(day: str, key, trail: Trail) -> str:
     return max(day or "", trail.revived.get(key, ""))
 
 
+def past_due(text: str, key, trail: Trail, today: str) -> str:
+    """The day an entry said it holds until (lore.facts.VALID_UNTIL_NOTE) when that day is behind
+    us — '' otherwise. An entry the user brought back after that day (an undone exit or sleep) is
+    his: it stays."""
+    until = valid_until(text)
+    if not until or until >= today:
+        return ""
+    kept = max(trail.revived.get(key, ""), trail.confirmed.get(key, ""))
+    return "" if kept > until else until
+
+
 def expiring(current: list[tuple[str, str]], trail: Trail, today: str,
              keep: set) -> tuple[dict, list[str]]:
-    """Entries of the current layer past CURRENT_DAYS: {key: (sentence, date)} of every one that
-    goes, and the sentences of those among them the user wrote himself (counted apart in the
-    report). Since 2026-10-17 those go as well — the user makes no decisions about entries, and an
-    exit has an id that brings the entry back. `keep` and every fact that earned its promotion
-    (Trail.earned) stay, whoever wrote them: nothing confirmed ages out."""
+    """Entries of the current layer past CURRENT_DAYS, or past the day they said they hold until
+    (past_due): {key: (sentence, date, why)} of every one that goes, and the sentences of those
+    among them the user wrote himself (counted apart in the report). Since 2026-10-17 those go as
+    well — the user makes no decisions about entries, and an exit has an id that brings the entry
+    back. `keep` and every fact that earned its promotion (Trail.earned) stay, whoever wrote them:
+    nothing confirmed ages out — but a fact past its own date is no longer true, confirmed or not."""
     leaving, own = {}, []
     for day, text in current:
         key = fact_key(text)
+        due = past_due(text, key, trail, today)
+        if due and key not in keep:
+            leaving[key] = (text, day, f"termin waznosci {due} minal")
+            if key not in trail.written:
+                own.append(text)
+            continue
         age = _age(effective_day(day, key, trail), today)
         if age is None or age <= CURRENT_DAYS or key in keep or trail.earned(key):
             continue
-        leaving[key] = (text, day)
+        leaving[key] = (text, day, f"starszy niz {CURRENT_DAYS} dni")
         if key not in trail.written:
             own.append(text)
     return leaving, own
@@ -2361,6 +2397,11 @@ def _state(r: dict, day: str) -> dict[str, str]:
         # taken out of "Bieżące" over its CURRENT_LIMIT ceiling, the oldest unconfirmed first
         "zdjete_progiem_biezacej": str(len(r.get("trimmed", []))),
         "prog_biezacej": f"{r.get('current_chars', 0)}/{CURRENT_LIMIT}",
+        # the whole "## Co wiem" block after the run; over BLOCK_LIMIT and growing = nothing written
+        "prog_bloku": f"{r.get('block_chars', 0)}/{BLOCK_LIMIT}",
+        "blok_ponad_sufitem": str(len(r.get("block_over", []))),
+        # past the day they said they hold until ("ważne do"): out of "Bieżące" or asleep
+        "po_terminie": str(len(r.get("due", []))),
         # put to sleep to make room in a full durable layer (included in "uspione")
         "uspione_dla_miejsca": str(len(r.get("slept_for_room", []))),
         # the durable layer is full and nothing of the automaton's is left to put to sleep
@@ -2454,6 +2495,8 @@ def _plain_reason(r: dict) -> str:
                     + (f" (w tym {own} wpisanych recznie)" if own else ""))
     if r.get("trimmed"):
         tail.append(f"zdjeto {len(r['trimmed'])} z biezacej ponad prog {CURRENT_LIMIT} znakow")
+    if r.get("due"):
+        tail.append(f"po terminie waznosci {len(r['due'])}")
     if r.get("slept_for_room"):
         tail.append(f"uspiono {len(r['slept_for_room'])} najdawniej uzytych, zeby zrobic miejsce"
                     f" w stalej")
@@ -2517,7 +2560,8 @@ def run(dry_run: bool = False, exists=None, day: str | None = None) -> dict:
            "unnamed": [], "no_room": [], "archived": [], "archive_failed": 0,
            "local_settings": machine_words().problem, "raw_rejected": [], "raw_standing": [],
            "raw_leaked": [], "trimmed": [], "expired_own": [], "slept_for_room": [],
-           "stable_full": "", "current_chars": 0, "current_full": 0, "tail": 0}
+           "stable_full": "", "current_chars": 0, "current_full": 0, "tail": 0, "due": [],
+           "block_chars": 0, "block_over": []}
     files = instruction_files()
     out["files"] = [str(path) for path in files]
     ws = Workspace()
@@ -2579,6 +2623,13 @@ def run(dry_run: bool = False, exists=None, day: str | None = None) -> dict:
         age = _age(last, today) if last else None
         if age is not None and age > SLEEP_DAYS:
             slept.append((e, f"ostatnio użyte albo wspomniane {last}"))
+            continue
+        # past the day it said it holds until — pinned or not, the date is in the sentence itself;
+        # asleep in uspione.md with an id, never woken by a mention (see the wakes below)
+        due = past_due(e.text, e.key, trail, today) if not e.current else ""
+        if due:
+            slept.append((e, f"termin waznosci {due} minal"))
+            out["due"].append(e.text)
     # NOT clamped at 0: a layer already over the ceiling owes characters, and make_room pays that
     # debt before anything new goes in
     left = _room(original, writable, [e for e, _ in slept])
@@ -2617,6 +2668,8 @@ def run(dry_run: bool = False, exists=None, day: str | None = None) -> dict:
         if why:  # it stays asleep, and the run says what lies in uspione.md
             _merge(out["raw_standing"], [(d.text, why)])
             continue
+        if past_due(d.text, d.key, trail, today):
+            continue  # no longer true — a mention does not make it true again
         # heard again OR used again by the agent since it fell asleep. A change the user took back
         # (Trail.blocked) waits for HIS word — the agent's use alone does not overrule an undo.
         sightings = trail.evidence(d.key)
@@ -2630,7 +2683,8 @@ def run(dry_run: bool = False, exists=None, day: str | None = None) -> dict:
                | {fact_key(c.shown) for c in reviewed.pending})
     gone = {e.key for r in replacements for e in [r.target, *r.extra]}
     candidates = ([text for _, text in current] + [c.shown for c in reviewed.approved])
-    candidates = [t for t in candidates if fact_key(t) not in waiting | gone and not raw_structure(t)]
+    candidates = [t for t in candidates if fact_key(t) not in waiting | gone and not raw_structure(t)
+                  and not past_due(t, fact_key(t), trail, today)]
     candidates += [r.new for r in replacements if r.target.current and not r.against]
     chosen = choose_promotions(candidates, trail, durable, left, wakes)
     # a full durable layer makes room: the automaton's entry used the longest ago falls asleep
@@ -2700,7 +2754,8 @@ def run(dry_run: bool = False, exists=None, day: str | None = None) -> dict:
             if changes.commit(c, durable_ops(ws, writable, p.text, p.heading)):
                 out["promoted"].append(p.text)
     # out of the current layer: aged out, then over its ceiling — each with an id that brings it back
-    exits = [(text, day, f"starszy niz {CURRENT_DAYS} dni") for text, day in leaving.values()]
+    exits = list(leaving.values())
+    out["due"] += [text for text, _, why in exits if why.startswith("termin")]
     exits += [(text, day, f"ponad prog biezacej {CURRENT_LIMIT} znakow, najstarszy niepotwierdzony")
               for text, day in trimmed]
     for text, day, why in exits:
@@ -2727,6 +2782,21 @@ def run(dry_run: bool = False, exists=None, day: str | None = None) -> dict:
         out["note"] = (f"ALARM: {len(out['raw_leaked'])} wpisow to surowa struktura z odpowiedzi"
                        f" modelu, nie zdania (np. {first[1][:80]} - {first[2]}) - przebieg niczego"
                        f" nie zapisal, poczekalnia nietknieta")
+        out["powod"] = _reason(out)
+        out["report"] = report_lines(journal, today)
+        if dry_run:
+            return out
+        write_state(out, today)
+        raise RuntimeError(out["note"])
+    # ...and the ceiling of the whole block, at the same place and in the same way (BLOCK_LIMIT)
+    out["block_chars"] = max((block_chars(ws.lines[p]) for p in writable), default=0)
+    out["block_over"] = block_overflow(ws, writable, original)
+    if out["block_over"]:
+        out["status"] = "blad"
+        path, before, after = out["block_over"][0]
+        out["note"] = (f"ALARM: blok '{KNOWLEDGE_HEADING[3:]}' w {Path(path).name} urosłby z {before}"
+                       f" do {after} znakow, ponad sufit {BLOCK_LIMIT} - przebieg niczego nie"
+                       f" zapisal, poczekalnia nietknieta")
         out["powod"] = _reason(out)
         out["report"] = report_lines(journal, today)
         if dry_run:
@@ -2810,6 +2880,17 @@ def raw_leaks(ws: "Workspace", files: list[Path], original: dict) -> list[tuple[
             why = raw_structure(e.text) if e.text not in before else ""
             if why:
                 out.append((str(path), e.text, why))
+    return out
+
+
+def block_overflow(ws: "Workspace", files: list[Path], original: dict) -> list[tuple[str, int, int]]:
+    """(file, characters before, after) for every file whose "## Co wiem" block this run would make
+    grow past BLOCK_LIMIT. A block that does not grow is not counted, however big it is."""
+    out = []
+    for path in files:
+        before, after = block_chars(original[path]), block_chars(ws.lines[path])
+        if after > BLOCK_LIMIT and after > before:
+            out.append((str(path), before, after))
     return out
 
 

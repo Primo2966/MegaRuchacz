@@ -14,7 +14,7 @@ from datetime import datetime, timedelta, timezone
 import pytest
 
 from lore import facts, selection
-from tests.test_facts import ago, answers, recorder, selective  # noqa: F401 — the fixture
+from tests.test_facts import ago, answers, recorder, selective, sieve_off  # noqa: F401 — the fixtures
 
 REPLY = "Ustawiłem ceny FBM tak samo jak FBA, bo to prostsze w utrzymaniu."
 
