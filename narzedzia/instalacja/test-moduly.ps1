@@ -272,6 +272,11 @@ function Srodowisko([string]$dom, [hashtable]$zmiany = @{}) {
 }
 
 function Uruchom([string]$skrypt, [string[]]$argumenty, [hashtable]$srod, [int]$sekundy = 1200) {
+  return (Wynik-Skryptu (Start-Skryptu $skrypt $argumenty $srod) $sekundy)
+}
+
+# Uruchom w dwoch polowach - start bez czekania (np. dwa Instaluj naraz) i odbior wyniku.
+function Start-Skryptu([string]$skrypt, [string[]]$argumenty, [hashtable]$srod) {
   $psi = New-Object System.Diagnostics.ProcessStartInfo
   $psi.FileName = "$env:SystemRoot\System32\WindowsPowerShell\v1.0\powershell.exe"
   $psi.Arguments = (@("-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-File", (Q $skrypt)) + @($argumenty | ForEach-Object { Q $_ })) -join " "
@@ -284,7 +289,11 @@ function Uruchom([string]$skrypt, [string[]]$argumenty, [hashtable]$srod, [int]$
     else { $psi.EnvironmentVariables[$k] = $srod[$k] }
   }
   $p = [System.Diagnostics.Process]::Start($psi)
-  $wy = $p.StandardOutput.ReadToEndAsync(); $bl = $p.StandardError.ReadToEndAsync()
+  return [pscustomobject]@{ P = $p; Wy = $p.StandardOutput.ReadToEndAsync(); Bl = $p.StandardError.ReadToEndAsync() }
+}
+
+function Wynik-Skryptu($h, [int]$sekundy = 1200) {
+  $p = $h.P; $wy = $h.Wy; $bl = $h.Bl
   if (-not $p.WaitForExit($sekundy * 1000)) { & taskkill.exe /T /F /PID $p.Id 2>&1 | Out-Null; return [pscustomobject]@{ Kod = -1; Tekst = "NIE SKONCZYL W $sekundy s"; W = $null; Kroki = @(); Uwagi = @() } }
   $p.WaitForExit()
   $tekst = $wy.Result + $(if ($bl.Result.Trim()) { "`nSTDERR: " + $bl.Result } else { "" })
@@ -298,12 +307,39 @@ function Uruchom([string]$skrypt, [string[]]$argumenty, [hashtable]$srod, [int]$
 }
 
 function Modul([string]$nazwa, [string]$akcja, [string]$dom, [string[]]$dalej = @(), [hashtable]$zmiany = @{}) {
+  return (Modul-Dokoncz (Modul-W-Tle $nazwa $akcja $dom $dalej $zmiany))
+}
+
+# Modul w dwoch polowach: start bez czekania i odbior wyniku (z ta sama kontrola umowy wyjscia).
+function Modul-W-Tle([string]$nazwa, [string]$akcja, [string]$dom, [string[]]$dalej = @(), [hashtable]$zmiany = @{}) {
   $a = @("-Akcja", $akcja, "-KatalogDomowy", $dom, "-Zrodlo", $Repo) + @($dalej | Where-Object { $_ })   # $null z pustej tablicy bylby argumentem ""
-  $r = Uruchom (Join-Path $Repo "narzedzia\instalacja\modul-$nazwa.ps1") $a (Srodowisko $dom $zmiany)
+  $h = Start-Skryptu (Join-Path $Repo "narzedzia\instalacja\modul-$nazwa.ps1") $a (Srodowisko $dom $zmiany)
+  $h | Add-Member -NotePropertyName Nazwa -NotePropertyValue $nazwa
+  $h | Add-Member -NotePropertyName Akcja -NotePropertyValue $akcja
+  $h | Add-Member -NotePropertyName Dalej -NotePropertyValue "$dalej"
+  return $h
+}
+
+function Modul-Dokoncz($h) {
+  $r = Wynik-Skryptu $h
   # umowa wyjscia sprawdzana przy KAZDYM wywolaniu
-  $umowa = ($null -ne $r.W) -and ($r.W.modul -eq $nazwa) -and ($r.W.akcja -eq $akcja) -and (($r.Kod -eq 0) -eq [bool]$r.W.ok) -and ($null -ne $r.W.kroki)
-  if (-not $umowa) { Sprawdz "$nazwa $akcja ${dalej}: umowa wyjscia (WYNIK w ostatniej linii, ok zgodne z kodem $($r.Kod))" $false $r.Tekst }
+  $umowa = ($null -ne $r.W) -and ($r.W.modul -eq $h.Nazwa) -and ($r.W.akcja -eq $h.Akcja) -and (($r.Kod -eq 0) -eq [bool]$r.W.ok) -and ($null -ne $r.W.kroki)
+  if (-not $umowa) { Sprawdz "$($h.Nazwa) $($h.Akcja) $($h.Dalej): umowa wyjscia (WYNIK w ostatniej linii, ok zgodne z kodem $($r.Kod))" $false $r.Tekst }
   return $r
+}
+
+# Zamek, ktorym modul-lore.ps1 pilnuje jednego Instaluj/Usun naraz na katalog zrodlowy (Wez-Blokade-Lore
+# w modul-lore.ps1 - zmiana tam = zmiana tu): md5 sciezki kopii malymi literami, pierwsze 16 znakow.
+function Nazwa-Blokady-Lore {
+  $md5 = [System.Security.Cryptography.MD5]::Create()
+  try { $s = ([System.BitConverter]::ToString($md5.ComputeHash([System.Text.Encoding]::UTF8.GetBytes($Repo.TrimEnd('\').ToLower()))).Replace("-", "")).Substring(0, 16) }
+  finally { $md5.Dispose() }
+  return "Local\MegaRuchacz-lore-$s"
+}
+function Blokada-Lore-Jest {
+  $m = $null
+  try { if ([System.Threading.Mutex]::TryOpenExisting((Nazwa-Blokady-Lore), [ref]$m)) { return $true }; return $false }
+  finally { if ($m) { $m.Dispose() } }
 }
 
 function Dom([string]$nazwa) {
@@ -689,6 +725,32 @@ function Scenariusz-Wiedza {
 }
 
 function Scenariusz-Lore {
+  # Lore obowiazkowe (2026-10-17) - czesc bez modelu, idzie zawsze: Stan przy braku Lore i blokada
+  # Instaluj/Usun (jeden naraz - aktualizacja i okno instalatora nie moga zderzyc sie na jednym srodowisku).
+  $domB = Dom "lore-blokada"
+  New-Item -ItemType Directory -Force -Path (Join-Path $domB ".claude\mr") | Out-Null
+  $plikRej = Join-Path $domB ".claude\mr\instalacja.json"
+  $u8 = New-Object System.Text.UTF8Encoding($false)
+  [System.IO.File]::WriteAllText($plikRej, '{"wersja":1,"moduly":{"wiedza":false,"lore":false,"kierownik":false,"skille":false,"kopia":false},"narzedzia":null,"baza":true}', $u8)
+  $r = Modul "lore" "Stan" $domB
+  Sprawdz "lore: Stan przy lore=false - 'to modul obowiazkowy, doinstaluje go aktualizacja'" (($r.Kod -eq 0) -and ($r.W.zainstalowany -eq $false) -and ($r.W.komunikat -match 'modul obowiazkowy') -and ($r.W.komunikat -match 'doinstaluje go aktualizacja')) $r.Tekst
+  [System.IO.File]::WriteAllText($plikRej, '{"wersja":1,"moduly":{"wiedza":false,"lore":false,"kierownik":false,"skille":false,"kopia":false},"narzedzia":null,"baza":false}', $u8)
+  $r = Modul "lore" "Stan" $domB
+  Sprawdz "lore: Stan po odinstalowaniu (baza=false) nie obiecuje doinstalowania" (($r.Kod -eq 0) -and ($r.W.zainstalowany -eq $false) -and ($r.W.komunikat -match 'odinstalowany') -and ($r.W.komunikat -notmatch 'doinstaluje')) $r.Tekst
+  [System.IO.File]::WriteAllText($plikRej, '{"wersja":1,"moduly":{"wiedza":false,"lore":true,"kierownik":false,"skille":false,"kopia":false},"narzedzia":null,"baza":true}', $u8)
+  $przed = Odcisk-Domu $domB
+  $blok = New-Object System.Threading.Mutex($false, (Nazwa-Blokady-Lore))
+  [void]$blok.WaitOne(0)
+  try {
+    # HF_HUB_OFFLINE: gdyby blokada nie dzialala, Instaluj padnie na modelu od razu, zamiast pobierac 496 MB
+    foreach ($a in @("Instaluj", "Usun")) {
+      $r = Modul "lore" $a $domB @() @{ HF_HUB_OFFLINE = "1" }
+      Sprawdz "lore: blokada trzymana przez inny proces - $a odmawia od razu (kod 1, zajete=true), nic nie zmienione" (($r.Kod -eq 1) -and ($r.W.zajete -eq $true) -and ($r.W.komunikat -match 'inny proces') -and ((Odcisk-Domu $domB) -eq $przed) -and (Rejestr $domB).moduly.lore) $r.Tekst
+    }
+    $r = Modul "lore" "Instaluj" $domB @("-Proba") @{ HF_HUB_OFFLINE = "1" }
+    Sprawdz "lore: -Proba nie bierze blokady (niczego nie zmienia) - przechodzi mimo zajetej" (($r.Kod -eq 0) -and ($r.W.proba -eq $true) -and ($r.W.zajete -ne $true)) $r.Tekst
+  } finally { $blok.ReleaseMutex(); $blok.Dispose() }
+
   if (-not $script:ModelKopia) { Info "lore: pominiete - nie ma prawdziwego modelu do skopiowania (test nie pobiera 496 MB)"; return }
   $dom = Dom "lore"
   Rozmowa $dom "Pytanie do Lore z wektorami: jak liczymy koszt pamieci?"
@@ -705,8 +767,16 @@ function Scenariusz-Lore {
   $b = Py-Baza (Join-Path $dom ".lore\lore.db")
   Sprawdz "lore: baza w trybie 'vectors', kazdy fragment ma wektor" (($b.tryb -eq "vectors") -and ($b.fragmenty -gt 0) -and ($b.wektory -eq $b.fragmenty)) ($b | ConvertTo-Json -Compress)
   $r = Modul "lore" "Stan" $dom
-  Sprawdz "lore: Stan = dziala" (($r.W.zainstalowany -eq $true) -and ($r.W.dziala -eq $true)) ($r.W | ConvertTo-Json -Compress -Depth 5)
-  $r = Modul "lore" "Instaluj" $dom
+  Sprawdz "lore: Stan = dziala" (($r.W.zainstalowany -eq $true) -and ($r.W.dziala -eq $true) -and ($r.W.komunikat -eq "lore dziala")) ($r.W | ConvertTo-Json -Compress -Depth 5)
+  # dwa Instaluj naraz: drugi trafia na blokade pierwszego i odchodzi od razu, pierwszy konczy czysto
+  $h = Modul-W-Tle "lore" "Instaluj" $dom
+  $do = (Get-Date).AddSeconds(60)
+  while ((Get-Date) -lt $do -and -not (Blokada-Lore-Jest) -and -not $h.P.HasExited) { Start-Sleep -Milliseconds 100 }
+  $r2 = Modul "lore" "Instaluj" $dom
+  $pierwszyTrwal = -not $h.P.HasExited
+  $r = Modul-Dokoncz $h
+  # zajete=true samo dowodzi zderzenia: zamek istnieje tylko, dopoki trzyma go dzialajacy modul-lore
+  Sprawdz "lore: dwa Instaluj naraz - drugi odmawia od razu (kod 1, zajete=true)" (($r2.Kod -eq 1) -and ($r2.W.zajete -eq $true) -and ($r2.W.komunikat -match 'inny proces')) ("pierwszy jeszcze trwal po drugim: $pierwszyTrwal; drugi: " + $r2.Tekst)
   $log = Get-Content (Join-Path $dom ".atrapa-claude.log") -Raw
   Sprawdz "lore: drugi Instaluj ok - stary wpis podmieniony (remove + add), dalej jeden" (($r.Kod -eq 0) -and ($log -match "mcp remove lore") -and ([regex]::Matches($log, "mcp add").Count -eq 2) -and (Stub-Mcp $dom "claude")) $r.Tekst
   [void](Czekaj-Na-Tlo)

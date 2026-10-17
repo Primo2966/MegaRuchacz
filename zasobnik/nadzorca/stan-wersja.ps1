@@ -132,7 +132,10 @@ function Opis-Wersji($w) {
 #   sprawdzone    ostatni UDANY kontakt z serwerem - brak sieci zostawia poprzedni
 #   przyczyna     przy bledzie: wynik straznika (bez-sieci, zajete, zablokowane, rozjechane,
 #                 nieudane, kopia, bez-zdalnej, nie-repo, bez-gita) albo krok (brak-zrodla,
-#                 straznik, git, rejestr, nanoszenie, restart, blokada-pomocnika, wywrotka)
+#                 straznik, git, rejestr, nanoszenie, restart, blokada-pomocnika, wywrotka,
+#                 lore - nie doinstalowala sie Pamiec rozmow, lore-zajete - instaluje ja inny proces)
+#   doinstalowano ["lore"], gdy przebieg doinstalowal obowiazkowa Pamiec rozmow (Lore, od 2026-10-17)
+#                 - przy wyniku "zaktualizowano" szary dopisek pod zielona linia
 # Tu jest tylko odczyt tego pliku (Stan-Aktualizacji) i jego ocena po ludzku
 # (Ocena-Aktualizacji) - wspolna dla okna (pasek i karta Stan), listy spraw na
 # Przegladzie i wydruku -Raport. Przycisk (Aktualizuj) tylko uruchamia skrypt w tle
@@ -158,9 +161,12 @@ $OPISY_ETAPOW = @{ sprawdzam = "Sprawdzam, czy jest coś nowego..."; pobieram = 
 #   Wczesniej taki wynik to szara linia bez sprawy: czerwona karta co godzine na laptopie bez
 #   sieci bylaby falszywym alarmem, a ten uczy ignorowac prawdziwe. Prog 3 h liczy sie wtedy
 #   od ostatniej PROBY (koniec), nie od udanego sprawdzenia - lapie martwy zegar, nie brak sieci.
+#   "lore-zajete" (2026-10-17) jest chwilowa z tego samego powodu: obowiazkowa Pamiec rozmow (Lore)
+#   instaluje akurat okno instalatora albo inny proces, a aktualizacja sprobuje sama za godzine -
+#   czerwona karta przy otwartym instalatorze bylaby falszywym alarmem.
 $GODZIN_BEZ_SPRAWDZENIA_AKTUALIZACJI = 3
 $GODZIN_BEZ_UDANEGO_SPRAWDZENIA = 24
-$PRZYCZYNY_CHWILOWE = @("bez-sieci", "zajete")
+$PRZYCZYNY_CHWILOWE = @("bez-sieci", "zajete", "lore-zajete")
 $MINUT_PO_STARCIE_NADZORCY = 15
 $MINUT_BEZ_RUCHU_AKTUALIZACJI = 20
 $SEKUND_NA_START_AKTUALIZACJI = 30
@@ -177,7 +183,7 @@ function Stan-Aktualizacji {
   $plik = Plik-Aktualizacji
   $a = [pscustomobject]@{ Plik = $plik; Jest = $false; Blad = ""; Zapis = $null; Etap = ""; Krok = 0; Krokow = 4
     Opis = ""; Wynik = ""; WersjaPrzed = ""; WersjaPo = ""; Start = $null; Koniec = $null; Sprawdzone = $null
-    Powod = ""; Reczna = $false; Przyczyna = ""; Utworzony = $null }
+    Powod = ""; Reczna = $false; Przyczyna = ""; Utworzony = $null; Doinstalowano = @() }
   $fi = New-Object System.IO.FileInfo($plik)
   if (-not $fi.Exists) { return $a }
   $a.Jest = $true
@@ -213,6 +219,7 @@ function Stan-Aktualizacji {
   $a.Powod = "$($j.powod)".Trim()
   $a.Przyczyna = "$($j.przyczyna)".Trim().ToLower()
   $a.Reczna = (("$($j.reczna)" -eq "True") -or ("$($j.reczna)" -eq "1"))
+  $a.Doinstalowano = @(@($j.doinstalowano) | Where-Object { "$_".Trim() } | ForEach-Object { "$_".Trim().ToLower() })
   return $a
 }
 
@@ -230,13 +237,14 @@ function Kiedy-Krotko($data) {
 # czy nadzorca w ogole chodzi); $klik / $klikPowod = klikniecie przycisku w tym oknie
 # i ewentualny powod, dla ktorego skrypt nie ruszyl. Zwraca:
 #   Trwa, Postep (0..1), Naglowek ("Pobieram nową wersję... (2 z 4)"), Kroki (Napis, Stan:
-#   zrobione/trwa/czeka), Znak, Linia, Waga (dobrze/pilne/uwaga/szary), Dopisek,
+#   zrobione/trwa/czeka), Znak, Linia, Waga (dobrze/pilne/uwaga/szary), Dopisek, DopisekWaga
+#   ("uwaga" - nieswiezy wynik, "szary" - informacja, np. o doinstalowanej Pamieci rozmow),
 #   ZPliku ($false = nic nie wiadomo, okno zostawia stara linie "Wersja MegaRuchacza"),
 #   Problem ($null albo Waga/Tytul/Porada/Pelne), Przycisk (wlaczony), PrzyciskOpis.
 function Ocena-Aktualizacji($a, $teraz, $nadzorcaOd = $null, $klik = $null, [string]$klikPowod = "", [string]$lokalna = "") {
   $przyc = "`„Sprawdź i pobierz nowszą wersję MegaRuchacza`”"
   $o = [pscustomobject]@{ Etykieta = "Aktualizacja MegaRuchacza"; Trwa = $false; Postep = 0.0; Naglowek = ""; Kroki = @()
-    Znak = ""; Linia = ""; Waga = "szary"; Dopisek = ""; ZPliku = $true; Problem = $null; Przycisk = $true; PrzyciskOpis = "" }
+    Znak = ""; Linia = ""; Waga = "szary"; Dopisek = ""; DopisekWaga = "uwaga"; ZPliku = $true; Problem = $null; Przycisk = $true; PrzyciskOpis = "" }
   $poStarcie = ($null -ne $nadzorcaOd) -and (($teraz - $nadzorcaOd).TotalMinutes -ge $MINUT_PO_STARCIE_NADZORCY)
   $zle = {
     param([string]$linia, [string]$tytul, [string]$porada, [string]$pelne)
@@ -315,9 +323,11 @@ function Ocena-Aktualizacji($a, $teraz, $nadzorcaOd = $null, $klik = $null, [str
   $grace = ($null -ne $nadzorcaOd) -and (-not $poStarcie)
   $bladAkt = ($a.Etap -eq "blad") -or ($a.Wynik -eq "blad")
   if ($bladAkt -and ($PRZYCZYNY_CHWILOWE -contains $a.Przyczyna)) {
-    # Brak sieci albo pobieranie zajete przez inny przebieg - szara linia bez sprawy, dopoki
-    # od ostatniego UDANEGO sprawdzenia nie minela doba (prog z uzasadnieniem wyzej).
+    # Brak sieci, pobieranie zajete przez inny przebieg albo Pamiec rozmow (Lore) instalowana przez
+    # inny proces - szara linia bez sprawy, dopoki od ostatniego UDANEGO sprawdzenia nie minela doba
+    # (prog z uzasadnieniem wyzej).
     $bezSieci = ($a.Przyczyna -eq "bez-sieci")
+    $loreZajete = ($a.Przyczyna -eq "lore-zajete")
     $udane = $a.Sprawdzone
     $odKiedy = $udane
     if (-not $odKiedy) { $odKiedy = $a.Utworzony }
@@ -329,6 +339,9 @@ function Ocena-Aktualizacji($a, $teraz, $nadzorcaOd = $null, $klik = $null, [str
       if ($bezSieci) {
         & $zle "Od ponad doby nie mogę sprawdzić aktualizacji - brak połączenia z GitHubem (ostatnio sprawdzone: $ostatnio)." "Od ponad doby nie mogę sprawdzić aktualizacji MegaRuchacza" (
           "Brak połączenia z GitHubem - ostatnie udane sprawdzenie: $ostatnio. Sprawdź internet; aktualizacja próbuje sama co godzinę.") $pelne
+      } elseif ($loreZajete) {
+        & $zle "Od ponad doby nie mogę doinstalować Pamięci rozmów (Lore) - ciągle instaluje ją inny proces (ostatnio sprawdzone: $ostatnio)." "Od ponad doby nie mogę doinstalować Pamięci rozmów (Lore)" (
+          "Pamięć rozmów (Lore) jest obowiązkowa, a od doby instaluje ją inny proces - ostatnie udane sprawdzenie: $ostatnio. Zamknij okno instalatora, jeśli jest otwarte; jeśli to wraca, uruchom komputer ponownie.") $pelne
       } else {
         & $zle "Od ponad doby nie mogę sprawdzić aktualizacji - pobieranie ciągle zajmuje inny proces (ostatnio sprawdzone: $ostatnio)." "Od ponad doby nie mogę sprawdzić aktualizacji MegaRuchacza" (
           "Pobieranie nowej wersji od doby blokuje inny proces - ostatnie udane sprawdzenie: $ostatnio. Uruchom komputer ponownie; jeśli to wraca, przekaż ten opis.") $pelne
@@ -338,6 +351,8 @@ function Ocena-Aktualizacji($a, $teraz, $nadzorcaOd = $null, $klik = $null, [str
     $o.Znak = ""; $o.Waga = "szary"
     if ($bezSieci) {
       $o.Linia = "Nie sprawdziłem aktualizacji - brak internetu. Spróbuję sam za godzinę. Ostatnio sprawdzone: $ostatnio."
+    } elseif ($loreZajete) {
+      $o.Linia = "Pamięć rozmów (Lore) instaluje właśnie inny proces (np. okno instalatora) - sprawdzę za godzinę."
     } else {
       $o.Linia = "Aktualizację właśnie pobiera inny proces - sprawdzę za godzinę."
     }
@@ -345,6 +360,7 @@ function Ocena-Aktualizacji($a, $teraz, $nadzorcaOd = $null, $klik = $null, [str
     if ($proba -and (($teraz - $proba).TotalHours -ge $GODZIN_BEZ_SPRAWDZENIA_AKTUALIZACJI) -and (-not $grace)) {
       $o.Znak = "!"; $o.Waga = "uwaga"
       $o.Dopisek = "Od ponad $GODZIN_BEZ_SPRAWDZENIA_AKTUALIZACJI godzin nie próbowałem sprawdzić, czy jest coś nowszego - powinienem co godzinę."
+      $o.DopisekWaga = "uwaga"
       $o.Problem = [pscustomobject]@{ Waga = "uwaga"; Tytul = "Aktualizacja MegaRuchacza nie próbowała sprawdzać serwera od $(Kiedy-Krotko $proba)"
         Porada = "Sprawdzanie ma iść samo co godzinę, a ostatnia próba była $(Kiedy-Krotko $proba). Kliknij $przyc na dole okna, żeby sprawdzić teraz."
         Pelne = $pelne }
@@ -355,7 +371,14 @@ function Ocena-Aktualizacji($a, $teraz, $nadzorcaOd = $null, $klik = $null, [str
     $pw = $a.Powod
     if (-not $pw) { $pw = "aktualizacja nie podała powodu - to samo w sobie jest usterką. Kliknij $przyc, żeby spróbować jeszcze raz" }
     $pw = $pw.TrimEnd('.', ' ')
-    & $zle "Nie udało się zaktualizować: $pw." "Nie udało się zaktualizować MegaRuchacza" "$(Z-Wielkiej $pw)." "$(Kiedy-Krotko $(if ($a.Koniec) { $a.Koniec } else { $a.Zapis })); plik: $($a.Plik)"
+    $kiedyBlad = "$(Kiedy-Krotko $(if ($a.Koniec) { $a.Koniec } else { $a.Zapis })); plik: $($a.Plik)"
+    if (($a.Przyczyna -eq "lore") -and $a.Powod) {
+      # Powod z doinstalowania Pamieci rozmow (Lore) to pelne zdanie ("Nie udalo sie doinstalowac..."
+      # albo "Nowa wersja jest pobrana, ale...") - bez przedrostka "Nie udalo sie zaktualizowac".
+      & $zle "$(Z-Wielkiej $pw)." "Nie udało się doinstalować Pamięci rozmów (Lore)" "$(Z-Wielkiej $pw)." $kiedyBlad
+      return $o
+    }
+    & $zle "Nie udało się zaktualizować: $pw." "Nie udało się zaktualizować MegaRuchacza" "$(Z-Wielkiej $pw)." $kiedyBlad
     return $o
   }
 
@@ -364,6 +387,11 @@ function Ocena-Aktualizacji($a, $teraz, $nadzorcaOd = $null, $klik = $null, [str
     $kiedy = $a.Koniec; if (-not $kiedy) { $kiedy = $a.Sprawdzone }
     $o.Znak = [string][char]0x2713; $o.Waga = "dobrze"
     $o.Linia = "Zaktualizowano do najnowszej wersji $wersja ($(Kiedy-Krotko $kiedy))"
+    # Ta aktualizacja doinstalowala obowiazkowa Pamiec rozmow (Lore) - informacja, nie sprawa.
+    if (@($a.Doinstalowano) -contains "lore") {
+      $o.Dopisek = "Doinstalowano też Pamięć rozmów (Lore) - jest teraz stałą częścią MegaRuchacza. Czytanie Twoich rozmów trwa w tle. Otwórz okna Claude Code na nowo, żeby zobaczyły wyszukiwanie."
+      $o.DopisekWaga = "szary"
+    }
     if ($a.Sprawdzone -and ((-not $kiedy) -or ($a.Sprawdzone -gt $kiedy))) { $kiedy = $a.Sprawdzone }
   } elseif ($a.Wynik -eq "aktualne") {
     $kiedy = $a.Sprawdzone; if (-not $kiedy) { $kiedy = $a.Koniec }
@@ -381,6 +409,7 @@ function Ocena-Aktualizacji($a, $teraz, $nadzorcaOd = $null, $klik = $null, [str
   if ($kiedy -and (($teraz - $kiedy).TotalHours -ge $GODZIN_BEZ_SPRAWDZENIA_AKTUALIZACJI) -and (-not $grace)) {
     $o.Znak = "!"; $o.Waga = "uwaga"
     $o.Dopisek = "Od ponad $GODZIN_BEZ_SPRAWDZENIA_AKTUALIZACJI godzin nie sprawdziłem, czy jest coś nowszego - powinienem co godzinę."
+    $o.DopisekWaga = "uwaga"
     $o.Problem = [pscustomobject]@{ Waga = "uwaga"; Tytul = "Aktualizacja MegaRuchacza nie sprawdzała serwera od $(Kiedy-Krotko $kiedy)"
       Porada = "Sprawdzanie ma iść samo co godzinę, a ostatnie było $(Kiedy-Krotko $kiedy). Kliknij $przyc na dole okna, żeby sprawdzić teraz."
       Pelne = "ostatnie sprawdzenie: $kiedy; plik: $($a.Plik)" }

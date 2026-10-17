@@ -23,6 +23,9 @@
 #                     role, hooki, znacznik .megaruchacz-global z nowym numerem wersji),
 #                   zawsze - wpisz-zasady.ps1 i straznik-zasad.ps1 -Dopasuj (bloki zasad i hooki
 #                     wedlug rejestru - to samo, co instalator po zmianie modulow),
+#                   brakujaca Pamiec rozmow (Lore) - Doinstaluj-Lore: zaleznosci.ps1 (uv, Python,
+#                     Node.js), potem modul-lore.ps1 Instaluj (ok. 770 MB, pierwsze czytanie rozmow
+#                     w tle); porazka = blad i znacznik naniesienia niezapisany (calosc za godzine),
 #                   skille - skille.ps1 -Tryb instaluj -Wbudowane (brakujace wbudowane skille;
 #                     porazka to uwaga, nie blad: codzienne sprawdzenie skilli sprobuje znowu).
 #   4 restart   - odlaczony pomocnik (ten skrypt z -Restart, proces POZA drzewem nadzorcy) zamyka
@@ -32,6 +35,17 @@
 # commit naniesiony i commit, na ktorym wstal nadzorca), a nie wobec tego, czy pobieral TEN przebieg -
 # wersje pobrana wczesniej przez hook straznika (otwarcie sesji Claude Code, Codex) tez trzeba naniesc.
 # Nic nowego = etap "gotowe", wynik "aktualne", bez krokow 3 i 4.
+#
+# PAMIEC ROZMOW (LORE) JEST OBOWIAZKOWA (decyzja uzytkownika 2026-10-17: nowy uklad pamieci stoi na
+# Lore - CLAUDE.md trzyma tylko staly rdzen, reszte Claude dostaje z Lore). Komputer, na ktorym jej
+# brakuje (Lore-Brakuje: flaga lore w rejestrze nie true albo brak srodowiska lore\.venv), dostaje ja
+# tutaj sam - liczone NIEZALEZNIE od znacznikow naniesienia, bo pierwsza aktualizacja niosaca ten kod
+# wykona sie jeszcze starym skryptem i zostawi znaczniki rowne HEAD. Gdy brak Lore to jedyny powod:
+# krok 2 "Brakuje Pamieci rozmow...", krok 3 samo Doinstaluj-Lore - bez instaluj-globalnie, bez
+# restartu, znaczniki nietkniete - i koniec "zaktualizowano" z polem doinstalowano. Odroczenie (uwaga,
+# nie blad): otwarte okno instalatora (ono samo instaluje Lore; gdy nic innego nie ma do zrobienia -
+# przyczyna lore-zajete, w oknie szara linia) i $MINUT_PO_STARCIE_WINDOWS min po starcie albo
+# wybudzeniu Windows. modul-lore.ps1 ma wlasna blokade - zajety tez konczy sie przyczyna lore-zajete.
 #
 # STAN dla okna i nadzorcy: ~\.claude\mr\aktualizacja.json (UTF-8 bez BOM, zapis atomowy przez
 # zapis-trwaly.ps1: plik tymczasowy + podmiana), pisany na biezaco:
@@ -46,8 +60,10 @@
 #   powod       przy bledzie: co sie stalo i co zrobic, po ludzku
 #   reczna      true = przycisk w oknie
 #   przyczyna   skad blad: wynik straznika (bez-sieci, zablokowane, rozjechane, ...) albo krok
-#               (nanoszenie, restart, blokada-pomocnika, wywrotka)
+#               (nanoszenie, restart, blokada-pomocnika, wywrotka, lore - doinstalowanie Pamieci
+#               rozmow, lore-zajete - Lore instaluje inny proces: lagodna, jak zajete)
 #   uwagi       rzeczy, ktore nie przerwaly aktualizacji, a maja byc widac (np. skille bez sieci)
+#   doinstalowano  ["lore"], gdy ten przebieg doinstalowal Pamiec rozmow (Lore); inaczej []
 #   zrodlo, pid katalog repo i proces, ktory pisze (pomocnik restartu ma inny PID)
 # Dziennik: ~\.claude\mr\aktualizacja.log - kazdy krok z PELNYM wyjsciem tego, co wolal.
 #
@@ -56,6 +72,9 @@
 #     [-Zrodlo <repo>] [-KatalogDomowy <kat>] [-Reczna]
 #     -ZadanieNadzorcy <nazwa>  zadanie Harmonogramu, ktore startuje nadzorce (testy: wlasne MRTEST-)
 #     -Restart -Zdarzenie <nazwa> -Commit <sha>   wewnetrzne: pomocnik restartu
+# Zmienne tylko dla testow (narzedzia\test-aktualizacji.ps1): MR_AKT_TETNO_S (tetno stanu w s),
+# MR_AKT_UPTIME_MIN (minuty od startu Windows zamiast odczytu), MR_AKT_MUTEX_INSTALATORA (nazwa zamka
+# okna instalatora zamiast Local\MegaRuchacz-Instalator).
 # Kod wyjscia: 0 aktualne albo zaktualizowano (gdy jest restart - konczy go pomocnik, wynik w pliku
 # stanu), 1 blad (powod w pliku stanu), 3 inny przebieg wlasnie aktualizuje.
 
@@ -109,6 +128,24 @@ $SEKUNDY_ZYCIA = 5
 # Dziennik: przy jednym przebiegu na godzine bez zmian to ~15 linii na przebieg, czyli kilka dni
 # historii; po aktualizacji pelne wyjscie instalatora (~100 linii) zostaje na pewno do nastepnej.
 $LINII_DZIENNIKA = 3000
+# Pamiec rozmow (Lore), Doinstaluj-Lore. Programy (zaleznosci.ps1: uv i Node.js z wingeta albo paczki
+# zip, Python przez uv) - przy dobrej sieci kilka minut, a winget potrafi stac kilkanascie; 1800 s
+# to zapas. modul-lore.ps1 Instaluj pobiera biblioteki i model, razem ok. 770 MB: przy 10 Mb/s to
+# ok. 10 min, przy ~1 Mb/s ok. 100 min - 5400 s (90 min) to pulap dla bardzo wolnej sieci; po nim
+# cale drzewo procesow ubite (taskkill /T /F) i blad z powodem, nastepna proba za godzine.
+$SEKUNDY_ZALEZNOSCI_LORE = 1800
+$SEKUNDY_LORE = 5400
+# Tetno: w dlugim kroku stan zapisuje sie co 30 s takze bez nowych linii - okno uznaje trwajaca
+# aktualizacje za martwa po 20 min bez zapisu (stan-wersja.ps1 MINUT_BEZ_RUCHU_AKTUALIZACJI), wiec
+# 30 s to 40 zapisow zapasu, a dla dysku jeden maly plik na pol minuty. Test skraca je (MR_AKT_TETNO_S).
+$SEKUNDY_TETNA = 30
+# Wyjscie dlugiego kroku doczytywane co 2 s: krok widac pod paskiem najwyzej 2 s pozniej, a petla
+# prawie nie zajmuje procesora.
+$SEKUNDY_ODCZYTU = 2
+# Duze pobieranie najwczesniej 5 min po starcie albo wybudzeniu Windows - regula uzytkownika z 13.10
+# (najpierw siec i logowanie, potem reszta), ta sama co dla terminow (zasobnik\nadzorca\stan-terminy.ps1).
+# Przebieg przy starcie nadzorcy (~1 min po zalogowaniu) odklada wtedy Lore do nastepnego (za 60 min).
+$MINUT_PO_STARCIE_WINDOWS = 5
 
 $KROKOW = 4
 $DomClaude      = Join-Path $KatalogDomowy ".claude"
@@ -179,7 +216,7 @@ function Nowy-Stan {
   return [ordered]@{
     etap = ""; krok = 0; krokow = $KROKOW; opis = ""; wynik = ""
     wersja_przed = ""; wersja_po = ""; start = ""; koniec = ""; sprawdzone = ""
-    powod = ""; reczna = [bool]$Reczna; przyczyna = ""; uwagi = @(); zrodlo = $Zrodlo; pid = $PID
+    powod = ""; reczna = [bool]$Reczna; przyczyna = ""; uwagi = @(); doinstalowano = @(); zrodlo = $Zrodlo; pid = $PID
   }
 }
 
@@ -191,6 +228,7 @@ function Czytaj-Stan {
     $s = Nowy-Stan
     foreach ($p in $j.PSObject.Properties) { $s[$p.Name] = $p.Value }
     $s.uwagi = @($s.uwagi | Where-Object { $_ })
+    $s.doinstalowano = @($s.doinstalowano | Where-Object { $_ })
     return $s
   } catch {
     Loguj "poprzedni stan $PlikStanu jest nieczytelny ($($_.Exception.Message)) - zaczynam od pustego"
@@ -438,9 +476,302 @@ function Wynik-Straznika($r, [datetime]$od) {
   return $w
 }
 
+# ------------------------------------------------------------------ krok 3: Pamiec rozmow (Lore)
+
+# Czy na tym komputerze brakuje Pamieci rozmow (Lore) - obowiazkowej od 2026-10-17. TEN SAM predykat,
+# co Powod-Braku-Lore w straznik-zasad.ps1 (zmiana tu = zmiana tam). $null = nie brakuje albo niczego
+# nie twierdzimy: rejestr nieczytelny (ma wlasny alarm), MegaRuchacz odinstalowany ("baza": false -
+# nic nie wraca samo), zrodlo bez lore\pyproject.toml (okrojona kopia - nie ma czego instalowac).
+# Inaczej powod jednym zdaniem. Flaga lore w rejestrze znaczy "zainstalowane i dziala" - ustawia ja
+# tylko udany modul-lore Instaluj.
+function Lore-Brakuje($rej) {
+  if ((-not $rej) -or $rej.blad -or ($rej.baza -eq $false)) { return $null }
+  if (-not (Test-Path -LiteralPath (Join-Path $Zrodlo "lore\pyproject.toml"))) { return $null }
+  if ($rej.moduly.lore -ne $true) { return "rejestr modułów nie ma jej jako zainstalowanej" }
+  $py = Join-Path $Zrodlo "lore\.venv\Scripts\python.exe"
+  if (-not (Test-Path -LiteralPath $py)) { return "nie ma jej środowiska Pythona ($py)" }
+  return $null
+}
+
+# Ile minut temu wystartowal albo wybudzil sie Windows. TA SAMA regula, co Start-Systemu w
+# zasobnik\nadzorca\stan-terminy.ps1 (zmiana tam = zmiana tu): najnowsze z dziennika zdarzen System -
+# Kernel-Boot 27 (kazdy rozruch, takze "szybkie uruchamianie", ktore nie zmienia LastBootUpTime),
+# Power-Troubleshooter 1 (wybudzenie ze snu i hibernacji), Kernel-Power 507 (wyjscie z nowoczesnego
+# czuwania); bez nich LastBootUpTime. MR_AKT_UPTIME_MIN podstawia wynik w testach. Minut $null = nie wiadomo.
+function Minut-Od-Startu-Windows {
+  $w = [pscustomobject]@{ Minut = $null; Skad = "" }
+  $test = "$env:MR_AKT_UPTIME_MIN".Trim()
+  if ($test) {
+    $n = 0.0
+    if ([double]::TryParse($test, [System.Globalization.NumberStyles]::Float, [System.Globalization.CultureInfo]::InvariantCulture, [ref]$n)) {
+      $w.Minut = $n; $w.Skad = "MR_AKT_UPTIME_MIN (test)"; return $w
+    }
+    Loguj "MR_AKT_UPTIME_MIN='$test' to nie liczba - licze start Windows naprawde"
+  }
+  $bledy = @()
+  $x = "*[System[(Provider[@Name='Microsoft-Windows-Kernel-Boot'] and EventID=27) or " +
+    "(Provider[@Name='Microsoft-Windows-Power-Troubleshooter'] and EventID=1) or " +
+    "(Provider[@Name='Microsoft-Windows-Kernel-Power'] and EventID=507)]]"
+  try {
+    $e = @(Get-WinEvent -LogName System -FilterXPath $x -MaxEvents 1 -ErrorAction Stop)[0]
+    $w.Minut = ((Get-Date) - $e.TimeCreated).TotalMinutes
+    $w.Skad = "dziennik zdarzen: $($e.ProviderName) $($e.Id)"
+  } catch {
+    # Brak pasujacych zdarzen to nie usterka - wtedy rozstrzyga LastBootUpTime.
+    if ("$($_.FullyQualifiedErrorId)" -notlike "NoMatchingEventsFound*") { $bledy += "dziennik zdarzen: $($_.Exception.Message)" }
+  }
+  if ($null -eq $w.Minut) {
+    try {
+      $b = (Get-CimInstance -ClassName Win32_OperatingSystem -ErrorAction Stop).LastBootUpTime
+      if (-not $b) { throw "pusty LastBootUpTime" }
+      $w.Minut = ((Get-Date) - $b).TotalMinutes
+      $w.Skad = "Win32_OperatingSystem.LastBootUpTime"
+    } catch { $bledy += "LastBootUpTime: $($_.Exception.Message)" }
+  }
+  # Start "w przyszlosci" (przestawiony zegar) to tez "nie wiadomo" - inaczej odkladalby bez konca.
+  if (($null -ne $w.Minut) -and ($w.Minut -lt 0)) { $bledy += "start Windows wypada w przyszlosci ($($w.Skad))"; $w.Minut = $null }
+  if ($bledy.Count -gt 0) { $w.Skad = (@($w.Skad) + $bledy | Where-Object { $_ }) -join "; " }
+  return $w
+}
+
+# Bramki odroczenia doinstalowania - nie bledy, tylko "jeszcze nie teraz" (uwaga w stanie i dziennik):
+#  - otwarte okno instalatora (jego zamek jednej kopii, instalator\okno.ps1): ono samo instaluje Lore,
+#    a nowa instalacja startuje nadzorce PRZED krokiem Lore, kiedy rejestr ma jeszcze lore=false - bez
+#    tej bramki aktualizacja ruszylaby drugi modul-lore Instaluj na tym samym srodowisku i bazie;
+#  - $MINUT_PO_STARCIE_WINDOWS min po starcie albo wybudzeniu Windows (regula uzytkownika).
+# Zwraca $null albo obiekt: Przyczyna ("lore-zajete" przy oknie instalatora, "" po swiezym starcie), Powod.
+function Odroczenie-Lore {
+  $zamek = "Local\MegaRuchacz-Instalator"
+  if ($env:MR_AKT_MUTEX_INSTALATORA) { $zamek = $env:MR_AKT_MUTEX_INSTALATORA }
+  $otwarte = $false
+  $m = $null
+  try { $otwarte = [System.Threading.Mutex]::TryOpenExisting($zamek, [ref]$m) }
+  catch {
+    # Zamek jest, ale nie wolno go otworzyc (np. okno uruchomione jako administrator) - okno jest otwarte.
+    Loguj "zamek okna instalatora $zamek jest, ale nie da sie go otworzyc ($($_.Exception.Message)) - uznaje okno za otwarte"
+    $otwarte = $true
+  } finally { if ($m) { $m.Dispose() } }
+  if ($otwarte) {
+    Loguj "otwarte okno instalatora ($zamek) - Lore instaluje ono, aktualizacja go nie rusza"
+    return [pscustomobject]@{ Przyczyna = "lore-zajete"
+      Powod = "Pamięć rozmów (Lore) instaluje właśnie inny proces (okno instalatora) - sprawdzę za godzinę." }
+  }
+  $s = Minut-Od-Startu-Windows
+  if ($null -eq $s.Minut) { Loguj "nie wiem, kiedy wystartowal Windows ($($s.Skad)) - Lore nie odkladam"; return $null }
+  $min = [int][math]::Floor($s.Minut)
+  Loguj "start Windows: $min min temu ($($s.Skad))"
+  if ($s.Minut -lt $MINUT_PO_STARCIE_WINDOWS) {
+    return [pscustomobject]@{ Przyczyna = ""
+      Powod = "Brakuje Pamięci rozmów (Lore) - doinstaluję ją przy następnej aktualizacji (za godzinę): Windows wystartował $min min temu, a duże pobieranie rusza najwcześniej $MINUT_PO_STARCIE_WINDOWS min po starcie." }
+  }
+  return $null
+}
+
+$script:Utf8Scisly = New-Object System.Text.UTF8Encoding($false, $true)
+
+# Linia z wyjscia skryptu modulu: UTF-8 (wspolne.ps1 przestawia na nie wyjscie), a gdy to nie jest
+# poprawny UTF-8 - strona kodowa konsoli (jak w instalator\wykonanie.ps1).
+function Dekoduj-Linie([byte[]]$b) {
+  if (($null -eq $b) -or ($b.Length -eq 0)) { return "" }
+  $n = $b.Length
+  if ($b[$n - 1] -eq 13) { $n-- }
+  $t = ""
+  try { $t = $script:Utf8Scisly.GetString($b, 0, $n) } catch { $t = (Kodowanie-Konsoli).GetString($b, 0, $n) }
+  return $t.TrimStart([char]0xFEFF)
+}
+
+# Doczytanie tego, co proces dopisal do pliku wyjscia od ostatniego razu (plik otwarty z FileShare -
+# proces dalej do niego pisze). Niepelna ostatnia linia czeka w buforze, a na koncu ($doKonca) idzie
+# jak jest. Zwraca nowe pelne linie.
+function Czytaj-Przyrost([string]$plik, $czytnik, [bool]$doKonca) {
+  $linie = @()
+  if (Test-Path -LiteralPath $plik) {
+    $fs = $null
+    try {
+      $fs = [System.IO.File]::Open($plik, [System.IO.FileMode]::Open, [System.IO.FileAccess]::Read, ([System.IO.FileShare]::ReadWrite -bor [System.IO.FileShare]::Delete))
+      if ($fs.Length -gt $czytnik.Pozycja) {
+        [void]$fs.Seek($czytnik.Pozycja, [System.IO.SeekOrigin]::Begin)
+        $buf = New-Object byte[] ([int]($fs.Length - $czytnik.Pozycja))
+        $ile = $fs.Read($buf, 0, $buf.Length)
+        $czytnik.Pozycja += $ile
+        $od = 0
+        while ($od -lt $ile) {
+          $nl = [Array]::IndexOf($buf, [byte]10, $od, $ile - $od)
+          if ($nl -lt 0) { break }
+          for ($i = $od; $i -lt $nl; $i++) { $czytnik.Bufor.Add($buf[$i]) }
+          $linie += Dekoduj-Linie $czytnik.Bufor.ToArray()
+          $czytnik.Bufor.Clear()
+          $od = $nl + 1
+        }
+        for ($i = $od; $i -lt $ile; $i++) { $czytnik.Bufor.Add($buf[$i]) }
+      }
+    } catch {
+      if (-not $czytnik.BladOdczytu) { $czytnik.BladOdczytu = $true; Loguj "nie doczytalem wyjscia z ${plik}: $($_.Exception.Message)" }
+    } finally { if ($fs) { $fs.Dispose() } }
+  }
+  if ($doKonca -and ($czytnik.Bufor.Count -gt 0)) { $linie += Dekoduj-Linie $czytnik.Bufor.ToArray(); $czytnik.Bufor.Clear() }
+  foreach ($l in $linie) { [void]$czytnik.Linie.Add($l) }
+  return ,$linie
+}
+
+# Calosc pliku, ktory moze trzymac jeszcze inny proces (wyjscie bledow dlugiego kroku).
+function Czytaj-Caly([string]$plik) {
+  if (-not (Test-Path -LiteralPath $plik)) { return "" }
+  $fs = [System.IO.File]::Open($plik, [System.IO.FileMode]::Open, [System.IO.FileAccess]::Read, ([System.IO.FileShare]::ReadWrite -bor [System.IO.FileShare]::Delete))
+  try {
+    $buf = New-Object byte[] ([int]$fs.Length)
+    $ile = $fs.Read($buf, 0, $buf.Length)
+    $t = ""
+    try { $t = $script:Utf8Scisly.GetString($buf, 0, $ile) } catch { $t = (Kodowanie-Konsoli).GetString($buf, 0, $ile) }
+    return $t.TrimStart([char]0xFEFF).Trim()
+  } finally { $fs.Dispose() }
+}
+
+# Opis pod paskiem w czasie doinstalowania: ostatnia linia KROK skryptu i ile to juz trwa (od poczatku
+# Doinstaluj-Lore, zaokraglone w gore - "trwa 1 min" w pierwszej minucie). Bez linii KROK - opis kroku.
+function Opis-Lore {
+  if (-not $script:LoreKrok) { return $script:LoreOpisKroku }
+  $min = [int][math]::Max(1, [math]::Ceiling(((Get-Date) - $script:LoreOd).TotalMinutes))
+  return "Doinstalowuję Pamięć rozmów (Lore): $($script:LoreKrok) (trwa $min min)"
+}
+
+# Dlugi krok (doinstalowanie Lore): skrypt z umowa wyjscia (naglowek narzedzia\instalacja\wspolne.ps1:
+# linie KROK/UWAGA, na koncu WYNIK {json}) w procesie bez okna, z wyjsciem do PLIKU, a nie do rur jak
+# Uruchom-Proces. modul-lore puszcza w tle pierwsze czytanie rozmow (Lore-Indeksuj-W-Tle), a proces
+# w tle dziedziczy uchwyty rodzica - przy rurach odczyt "do konca" czekalby na koniec indeksowania,
+# a z plikiem czekamy tylko na sam skrypt (jak instalator\wykonanie.ps1). Pliki maja stale nazwy
+# w ~\.claude\mr (aktualizacja-<co>.wyjscie.txt / .bledy.txt), nadpisywane co przebieg: skasowac ich
+# sie nie da, dopoki trzyma je proces w tle, a stale nazwy nie zostawiaja smieci w TEMP.
+# Co $SEKUNDY_ODCZYTU s doczytuje przyrost; kazda linia KROK idzie do opisu pod paskiem, a gdy nic nie
+# przychodzi, stan i tak zapisuje sie co $SEKUNDY_TETNA (tetno - okno nie uzna aktualizacji za martwa).
+# Po $sekundy - cale drzewo procesow ubite. Zwraca: Ok (kod 0 i ok:true w WYNIK - jak w instalatorze,
+# sukces "na slowo" sie nie liczy), Kod, Wynik, Zajete, Uwagi, Sedno (zdanie do powodu bledu).
+function Uruchom-Dlugi([string]$co, [string]$skrypt, [string[]]$argumenty, [int]$sekundy) {
+  $w = [pscustomobject]@{ Ok = $false; Kod = -1; Wynik = $null; Zajete = $false; Uwagi = @(); Sedno = "" }
+  $script:LoreKrok = ""
+  $script:LoreOpisKroku = $script:Stan.opis
+  if (-not (Test-Path -LiteralPath $skrypt)) { $w.Sedno = "nie ma pliku $skrypt"; Loguj "${co}: $($w.Sedno)"; return $w }
+  $tetno = $SEKUNDY_TETNA
+  $n = 0
+  if ($env:MR_AKT_TETNO_S) {
+    if ([int]::TryParse("$env:MR_AKT_TETNO_S", [ref]$n) -and ($n -gt 0)) { $tetno = $n; Loguj "tetno stanu co $tetno s (MR_AKT_TETNO_S - test)" }
+    else { Loguj "MR_AKT_TETNO_S='$env:MR_AKT_TETNO_S' to nie liczba dodatnia - tetno co $tetno s" }
+  }
+  $plikWy = Join-Path $DomClaude "mr\aktualizacja-$co.wyjscie.txt"
+  $plikBl = Join-Path $DomClaude "mr\aktualizacja-$co.bledy.txt"
+  $ps = Join-Path $env:SystemRoot "System32\WindowsPowerShell\v1.0\powershell.exe"
+  $linia = (@(@("-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-File", $skrypt) + $argumenty) | ForEach-Object { Cytuj-Argument $_ }) -join " "
+  Loguj "wolam ${co} (limit $sekundy s, wyjscie do $plikWy): $skrypt $($argumenty -join ' ')"
+  $p = $null
+  try {
+    $kat = Split-Path -Parent $plikWy
+    if (-not (Test-Path -LiteralPath $kat)) { New-Item -ItemType Directory -Force -Path $kat | Out-Null }
+    $sp = @{ FilePath = $ps; ArgumentList = $linia; NoNewWindow = $true; PassThru = $true
+             RedirectStandardOutput = $plikWy; RedirectStandardError = $plikBl; ErrorAction = "Stop" }
+    if (Test-Path -LiteralPath $KatalogDomowy) { $sp.WorkingDirectory = $KatalogDomowy }
+    # -NoNewWindow: dziecko dzieli niewidoczna konsole tego procesu (conhost --headless albo
+    # CreateNoWindow) - zadnego okna.
+    $p = Start-Process @sp
+    $null = $p.Handle   # bez dotkniecia uchwytu ExitCode zostaje pusty po zakonczeniu (jak w instalatorze)
+  } catch {
+    $w.Sedno = "nie udało się uruchomić ${co}: $($_.Exception.Message)"
+    Loguj $w.Sedno
+    return $w
+  }
+  $czytnik = [pscustomobject]@{ Pozycja = [long]0; Bufor = New-Object System.Collections.Generic.List[byte]
+                                Linie = New-Object System.Collections.ArrayList; BladOdczytu = $false }
+  $t0 = Get-Date
+  $ostatniZapis = $t0
+  $przerwany = $false
+  while ($true) {
+    $skonczyl = $p.WaitForExit($SEKUNDY_ODCZYTU * 1000)
+    $nowe = Czytaj-Przyrost $plikWy $czytnik $skonczyl
+    $krok = $false
+    foreach ($l in $nowe) { if ($l -match '^\s*KROK:\s*(.+)$') { $script:LoreKrok = $Matches[1].Trim(); $krok = $true } }
+    if ($krok -or (((Get-Date) - $ostatniZapis).TotalSeconds -ge $tetno)) {
+      $script:Stan.opis = Opis-Lore
+      Zapisz-Stan
+      $ostatniZapis = Get-Date
+    }
+    if ($skonczyl) { break }
+    if (((Get-Date) - $t0).TotalSeconds -ge $sekundy) {
+      Loguj "${co} nie skonczyl w $sekundy s - ubijam drzewo procesow (PID $($p.Id))"
+      & taskkill.exe /T /F /PID $p.Id 2>&1 | Out-Null
+      [void]$p.WaitForExit(15000)
+      [void](Czytaj-Przyrost $plikWy $czytnik $true)
+      $przerwany = $true
+      break
+    }
+  }
+  $bledy = ""
+  try { $bledy = Czytaj-Caly $plikBl } catch { Loguj "nie odczytalem wyjscia bledow ${co}: $($_.Exception.Message)" }
+  $kod = $null
+  if (-not $przerwany) {
+    try { $kod = $p.ExitCode } catch { Loguj "kod wyjscia ${co} nieznany: $($_.Exception.Message)" }
+  }
+  $p.Dispose()
+  Loguj ("${co} - kod $(if ($przerwany) { 'przerwany' } else { $kod }):`n" + (@($czytnik.Linie) -join "`n") + $(if ($bledy) { "`n[bledy] $bledy" } else { "" }))
+  if ($przerwany) {
+    $w.Sedno = "przerwane po $([int][math]::Round($sekundy / 60)) min - nie skończyło w tym czasie$(if ($script:LoreKrok) { " (ostatni krok: $($script:LoreKrok))" })"
+    return $w
+  }
+  if ($null -ne $kod) { $w.Kod = $kod }
+  $wyn = $null
+  $ost = @($czytnik.Linie | Where-Object { $_ -match '^\s*WYNIK:' } | Select-Object -Last 1)
+  if ($ost.Count -gt 0) {
+    try { $wyn = ($ost[0] -replace '^\s*WYNIK:\s*', '') | ConvertFrom-Json }
+    catch { $w.Sedno = "oddał wynik, którego nie umiem odczytać ($($_.Exception.Message))"; return $w }
+  }
+  if (-not $wyn) {
+    $w.Sedno = "skończył bez wyniku (kod $kod): $(Sedno ((@($czytnik.Linie) -join "`n") + "`n" + $bledy))"
+    return $w
+  }
+  $w.Wynik = $wyn
+  $w.Uwagi = @($wyn.uwagi | Where-Object { $_ })
+  $w.Zajete = ($wyn.zajete -eq $true)
+  $kom = "$($wyn.komunikat)".Trim()
+  if (($wyn.ok -eq $true) -and ($kod -eq 0)) { $w.Ok = $true; $w.Sedno = $kom; return $w }
+  if ($wyn.ok -eq $true) { $w.Sedno = "napisał, że się udało, ale zakończył się kodem $kod - nie traktuję tego jako sukces ($kom)"; return $w }
+  if (-not $kom) { $kom = "bez opisu (kod $kod)" }
+  $w.Sedno = $kom
+  return $w
+}
+
+# Doinstalowanie Pamieci rozmow (Lore). Te same skrypty i ta sama kolejnosc, co w oknie instalatora:
+# programy (zaleznosci.ps1 - JEDEN napis "uv,python,node": -File podaje go do [string[]] w calosci,
+# a skrypt dzieli go sam), potem modul-lore.ps1 Instaluj (srodowisko, model, MCP w narzedziach AI,
+# zadanie indeksu, hooki i zasady wedlug rejestru, pierwsze czytanie rozmow w tle). $poNowejWersji
+# tylko do zdania o bledzie. Porazka = Blad (przyczyna lore albo lore-zajete) i $false.
+function Doinstaluj-Lore([bool]$poNowejWersji) {
+  $script:LoreOd = Get-Date
+  $zdanie = $(if ($poNowejWersji) { "Nowa wersja jest pobrana, ale nie udało się doinstalować Pamięci rozmów (Lore)" } else { "Nie udało się doinstalować Pamięci rozmów (Lore)" })
+  $ponowie = "Jest obowiązkowa, więc spróbuję znowu za godzinę."
+  Etap "nanosze" 3 "Doinstalowuję Pamięć rozmów (Lore) - sprawdzam programy (uv, Python, Node.js)"
+  $w = Uruchom-Dlugi "zaleznosci-lore" (Join-Path $Zrodlo "narzedzia\instalacja\zaleznosci.ps1") @("-Akcja", "Instaluj", "-Potrzebne", "uv,python,node") $SEKUNDY_ZALEZNOSCI_LORE
+  foreach ($u in $w.Uwagi) { Uwaga "Pamięć rozmów (Lore), programy: $u" }
+  if (-not $w.Ok) {
+    Blad "lore" "${zdanie}: nie stanęły programy, których potrzebuje (uv, Python, Node.js) - $($w.Sedno.TrimEnd('.', ' ')). $ponowie"
+    return $false
+  }
+  Etap "nanosze" 3 "Doinstalowuję Pamięć rozmów (Lore) - pobieram biblioteki i model do wyszukiwania (ok. 770 MB); to potrwa kilkanaście minut, możesz normalnie pracować"
+  $w = Uruchom-Dlugi "lore" (Join-Path $Zrodlo "narzedzia\instalacja\modul-lore.ps1") @("-Akcja", "Instaluj", "-KatalogDomowy", $KatalogDomowy, "-Zrodlo", $Zrodlo) $SEKUNDY_LORE
+  foreach ($u in $w.Uwagi) { Uwaga "Pamięć rozmów (Lore): $u" }
+  if ($w.Zajete) {
+    Blad "lore-zajete" "Pamięć rozmów (Lore) instaluje właśnie inny proces - sprawdzę za godzinę. Szczegóły: $($w.Sedno)"
+    return $false
+  }
+  if (-not $w.Ok) {
+    Blad "lore" "${zdanie}: $($w.Sedno.TrimEnd('.', ' ')). $ponowie"
+    return $false
+  }
+  $script:Stan.doinstalowano = @("lore")
+  Loguj "Pamiec rozmow (Lore) doinstalowana: $($w.Sedno)"
+  return $true
+}
+
 # ------------------------------------------------------------------ krok 3: naniesienie
 
-function Nanies($rej, [string]$narz) {
+function Nanies($rej, [string]$narz, [bool]$doLore = $false) {
   if ($rej.blad) { Uwaga "Rejestr zainstalowanych modułów jest nieczytelny ($($rej.blad)) - nanoszę jak przy pełnej instalacji." }
 
   # Kierownik - tylko przy instalacji globalnej (znacznik .megaruchacz-global). Bez niego tryb
@@ -478,6 +809,11 @@ function Nanies($rej, [string]$narz) {
                        "Spróbuję znowu za godzinę; jeśli to się powtarza, kliknij `„Zmień instalację`” na dole okna MegaRuchacza.")
     return $false
   }
+
+  # Brakujaca Pamiec rozmow (Lore) - PO dopasowaniu hookow i zasad do rejestru (modul-lore po udanej
+  # instalacji sam uklada je jeszcze raz, juz z Lore), PRZED skillami. Porazka przerywa naniesienie:
+  # znacznik naniesienia zostaje niezapisany, wiec za godzine calosc idzie od nowa.
+  if ($doLore -and -not (Doinstaluj-Lore $true)) { return $false }
 
   # Skille - porazka nie przerywa aktualizacji: zrodla skilli leza na GitHubie, a ich brak nie psuje
   # niczego w samym MegaRuchaczu. Codzienne sprawdzenie skilli w nadzorcy dogra je samo.
@@ -717,11 +1053,42 @@ function Aktualizuj {
   $zn = Znacznik-Naniesienia
   if ($zn["naniesione.wersja"]) { $script:Stan.wersja_przed = $zn["naniesione.wersja"] }
   $script:Stan.wersja_po = $po
-  $nanies = ($zn["naniesione"] -ne $head)
-  $restart = $nanies -or ($zn["nadzorca"] -ne $head)
-  Loguj "commit $head; naniesione: $($zn['naniesione']); nadzorca na: $($zn['nadzorca']) -> nanosic: $nanies, restart: $restart"
+  $nowaWersja = ($zn["naniesione"] -ne $head)
+  $restart = $nowaWersja -or ($zn["nadzorca"] -ne $head)
+
+  # Rejestr juz tutaj, przed "nic nowego": brak Pamieci rozmow (Lore) liczy sie NIEZALEZNIE od
+  # znacznikow naniesienia (patrz naglowek). Wyjatek z odczytu w tym miejscu nie jest nowym bledem -
+  # slad w dzienniku, a blad "rejestr" zostaje tam, gdzie byl: przed wgrywaniem czegokolwiek.
+  $rej = $null
+  $bladRejestru = ""
+  try { $rej = Rejestr }
+  catch { $bladRejestru = $_.Exception.Message; Loguj "rejestru modulow nie odczytalem ($bladRejestru) - braku Lore nie licze" }
+  $doLore = $false
+  $odlozone = $null
+  $brakLore = Lore-Brakuje $rej
+  if ($brakLore) {
+    Loguj "brakuje Pamieci rozmow (Lore): $brakLore"
+    $odlozone = Odroczenie-Lore
+    if (-not $odlozone) { $doLore = $true }
+  }
+  $nanies = $nowaWersja -or $doLore
+  Loguj "commit $head; naniesione: $($zn['naniesione']); nadzorca na: $($zn['nadzorca']) -> nowa wersja: $nowaWersja, restart: $restart, doinstalowac Lore: $doLore$(if ($odlozone) { ' (odlozone)' })"
   if (-not $nanies -and -not $restart) {
+    # Lore odlozone przez okno instalatora (albo zajete) i nic wiecej do zrobienia - lagodny blad,
+    # w oknie szara linia "instaluje inny proces"; po swiezym starcie Windows - "aktualne" z uwaga.
+    if ($odlozone -and $odlozone.Przyczyna) { Blad $odlozone.Przyczyna $odlozone.Powod; return 1 }
+    if ($odlozone) { Uwaga $odlozone.Powod }
     Koniec "aktualne" "Masz najnowszą wersję MegaRuchacza ($po)"
+    return 0
+  }
+  if ($odlozone) { Uwaga $odlozone.Powod }
+
+  # Brak Lore to jedyny powod: tylko doinstalowanie - wersja jest juz wgrana i nadzorca na niej chodzi,
+  # wiec bez instaluj-globalnie, bez restartu i bez ruszania znacznikow naniesienia.
+  if ($doLore -and -not $restart) {
+    Etap "pobieram" 2 "Brakuje Pamięci rozmów (Lore) - przygotowuję doinstalowanie"
+    if (-not (Doinstaluj-Lore $false)) { return 1 }
+    Koniec "zaktualizowano" (Opis-Zaktualizowano)
     return 0
   }
 
@@ -732,10 +1099,8 @@ function Aktualizuj {
   }
   Etap "pobieram" 2 $opis
 
-  $rej = $null
-  try { $rej = Rejestr }
-  catch {
-    Blad "rejestr" "Nie odczytałem, które moduły są zainstalowane ($($_.Exception.Message)) - niczego nie wgrywam na ślepo. Spróbuję znowu za godzinę."
+  if (-not $rej) {
+    Blad "rejestr" "Nie odczytałem, które moduły są zainstalowane ($bladRejestru) - niczego nie wgrywam na ślepo. Spróbuję znowu za godzinę."
     return 1
   }
   if ($rej.baza -eq $false) {
@@ -747,7 +1112,7 @@ function Aktualizuj {
 
   if ($nanies) {
     $narz = Nazwy-Narzedzi
-    if (-not (Nanies $rej $narz)) { return 1 }
+    if (-not (Nanies $rej $narz $doLore)) { return 1 }
     Odnotuj-Znacznik ([ordered]@{ "naniesione" = $head; "naniesione.wersja" = $po; "naniesione.data" = (Teraz) })
   }
   return (Zlec-Restart $head)
@@ -755,6 +1120,10 @@ function Aktualizuj {
 
 $script:Stan = Nowy-Stan
 $script:BladDziennika = $false
+# Doinstaluj-Lore / Uruchom-Dlugi: poczatek doinstalowania, ostatnia linia KROK, opis kroku bez niej.
+$script:LoreOd = Get-Date
+$script:LoreKrok = ""
+$script:LoreOpisKroku = ""
 
 if ($Restart) {
   $kod = 1

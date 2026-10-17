@@ -16,6 +16,15 @@
 #   i srodowisko tez znikaja. Baza rozmow zostaje; -UsunDane usuwa ja (gdy wiedza wylaczona)
 #   i stan podpowiedzi "Z ARCHIWUM".
 #
+# LORE JEST OBOWIAZKOWE (decyzja uzytkownika 2026-10-17): komputer bez niego dostaje je sam przy
+# automatycznej aktualizacji (narzedzia\aktualizuj-megaruchacza.ps1 Doinstaluj-Lore, co godzine).
+# Usun poza pelnym odinstalowaniem to konserwacja - aktualizacja przywroci Lore w ciagu godziny.
+# BLOKADA: Instaluj i Usun (bez -Proba) ida jeden naraz na katalog zrodlowy (zamek Local\MegaRuchacz-
+# lore-<16 znakow md5 sciezki zrodla malymi literami>, ta sama regula co blokada aktualizacji - kopia
+# testowa nie zderza sie z prawdziwym repo). Zajety = od razu ok:false, zajete:true, nic nie zmienione:
+# nowa instalacja startuje nadzorce przed krokiem Lore, a jego aktualizacja moglaby ruszyc drugi
+# Instaluj na tym samym srodowisku i bazie.
+#
 # Uzycie (umowa wyjscia - naglowek wspolne.ps1):
 #   powershell -NoProfile -ExecutionPolicy Bypass -File narzedzia\instalacja\modul-lore.ps1
 #     -Akcja Instaluj|Usun|Stan [-KatalogDomowy <kat>] [-Zrodlo <repo>] [-Proba] [-UsunDane]
@@ -37,6 +46,36 @@ $Zrodlo = $s0.Zrodlo; $KatalogDomowy = $s0.KatalogDomowy
 Lore-Przygotuj
 
 $StanArchiwum = Join-Path $KatalogDomowy ".claude\wiedza\.archiwum-stan.json"
+
+# Blokada Instaluj/Usun (patrz naglowek). Porzucona (poprzedni przebieg padl, trzymajac ja) jest juz
+# nasza - wyjatek bywa owiniety w MethodInvocationException, wiec szukamy go w lancuchu.
+$script:BlokadaLore = $null
+function Wez-Blokade-Lore {
+  $md5 = [System.Security.Cryptography.MD5]::Create()
+  try { $skrot = ([System.BitConverter]::ToString($md5.ComputeHash([System.Text.Encoding]::UTF8.GetBytes($Zrodlo.ToLower()))).Replace("-", "")).Substring(0, 16) }
+  finally { $md5.Dispose() }
+  $m = New-Object System.Threading.Mutex($false, ("Local\MegaRuchacz-lore-" + $skrot))
+  $mam = $false
+  try { $mam = $m.WaitOne(0) }
+  catch {
+    $wew = $_.Exception
+    while ($wew -and -not ($wew -is [System.Threading.AbandonedMutexException])) { $wew = $wew.InnerException }
+    if (-not $wew) { $m.Dispose(); throw }
+    Ostrzezenie "poprzednia instalacja albo usuwanie Lore przerwaly sie w polowie - przejmuje ich blokade"
+    $mam = $true
+  }
+  if (-not $mam) {
+    $m.Dispose()
+    Zakoncz $false "Pamiec rozmow (Lore) instaluje albo usuwa inny proces - wroc za kilka minut" @{ zajete = $true }
+  }
+  $script:BlokadaLore = $m
+}
+function Oddaj-Blokade-Lore {
+  if (-not $script:BlokadaLore) { return }
+  try { $script:BlokadaLore.ReleaseMutex() } catch { [Console]::Error.WriteLine("nie oddalem blokady Lore: $($_.Exception.Message)") }
+  $script:BlokadaLore.Dispose()
+  $script:BlokadaLore = $null
+}
 
 function Zbierz-Stan($rej) {
   $zainst = [bool]$rej.moduly.lore
@@ -64,6 +103,9 @@ function Zbierz-Stan($rej) {
 }
 
 try {
+  # Blokada PRZED wszystkim innym (takze przed wykrywaniem narzedzi, ktore wola programy) - zajety
+  # przebieg konczy sie, niczego nie dotykajac. Stan i -Proba niczego nie zmieniaja, wiec bez blokady.
+  if (($Akcja -ne "Stan") -and -not $Proba) { Wez-Blokade-Lore }
   Lore-Wykryj-Narzedzia
 
   if ($Akcja -eq "Stan") {
@@ -71,7 +113,11 @@ try {
     $rej = Czytaj-Instalacje $KatalogDomowy
     if ($rej.blad) { Problem "rejestr modulow: $($rej.blad)" }
     $st = Zbierz-Stan $rej
-    $kom = if ($st.Dziala) { "lore dziala" } elseif ($st.Zainstalowany) { "lore wlaczone, ale: " + (@($script:MR.problemy) -join "; ") } else { "lore nie jest wlaczone" }
+    # Lore obowiazkowe: przy braku komunikat mowi, ze to brak do uzupelnienia (zrobi to aktualizacja) -
+    # poza odinstalowanym MegaRuchaczem ("baza": false), gdzie nic nie wraca samo.
+    $kom = if ($st.Dziala) { "lore dziala" } elseif ($st.Zainstalowany) { "lore wlaczone, ale: " + (@($script:MR.problemy) -join "; ") }
+           elseif ((-not $rej.blad) -and ($rej.baza -eq $false)) { "lore nie jest zainstalowane (MegaRuchacz jest odinstalowany na tym komputerze)" }
+           else { "lore nie jest zainstalowane - to modul obowiazkowy, doinstaluje go aktualizacja" }
     Zakoncz (-not $rej.blad) $kom @{ zainstalowany = $st.Zainstalowany; dziala = $st.Dziala; szczegoly = $st.Szczegoly; rejestr = (Rejestr-Do-Wyniku $rej $KatalogDomowy) }
   }
 
@@ -150,4 +196,7 @@ try {
   Zakoncz $ok $kom @{ zainstalowany = $false; dziala = $false; rejestr = (Rejestr-Do-Wyniku (Czytaj-Instalacje $KatalogDomowy) $KatalogDomowy) }
 } catch {
   Zakoncz $false ("nieoczekiwany blad: " + $_.Exception.Message + " (" + $_.InvocationInfo.PositionMessage.Split("`n")[0].Trim() + ")")
+} finally {
+  # Zakoncz konczy skrypt przez exit - PowerShell i tak przechodzi wtedy przez finally.
+  Oddaj-Blokade-Lore
 }

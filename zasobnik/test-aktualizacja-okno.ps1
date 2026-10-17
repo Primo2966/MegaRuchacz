@@ -2,6 +2,8 @@
 # Stan, linia wyniku, sprawa na Przegladzie przy bledzie, nieswiezy wynik i przycisk, ktory
 # uruchamia aktualizacje w tle i nie czeka. Brak sieci / pobieranie zajete: szara linia bez
 # sprawy do doby od udanego sprawdzenia, z sabotazami na kopii stan-wersja.ps1.
+# Pamiec rozmow (Lore) obowiazkowa (2026-10-17): doinstalowanie w toku (swiezy zapis = pasek,
+# 21 min bez zapisu = czerwone), dopisek po "zaktualizowano" z doinstalowano, lore-zajete = szaro.
 #   powershell -ExecutionPolicy Bypass -File zasobnik\test-aktualizacja-okno.ps1 [-Zasobnik <kat zasobnik>] [-Zrodlo <repo>] [-Zrzuty <kat>] [-BezOkna]
 # Wszystko na sztucznym katalogu domowym (atrapa ~\.claude\mr\aktualizacja.json w kazdym etapie)
 # i na atrapie narzedzia\aktualizuj-megaruchacza.ps1 w sztucznym zrodle - prawdziwego domu,
@@ -176,6 +178,45 @@ function Proba-BezSieciMartwyZegar {
   $ok = ($o.Problem.Waga -eq "uwaga") -and ($o.Problem.Tytul -match 'nie próbowała sprawdzać serwera od') -and ($o.Dopisek -match 'Od ponad 3 godzin') -and ((Uwagi) -eq 1)
   return [pscustomobject]@{ Ok = $ok; Opis = "$($o.Problem.Tytul) | $($o.Dopisek)" }
 }
+# Pamiec rozmow (Lore) obowiazkowa (2026-10-17): instaluje ja okno instalatora albo inny proces ->
+# szara linia bez sprawy (aktualizacja sprobuje sama za godzine), jak przy "zajete".
+$LINIA_LORE_ZAJETE = "Pamięć rozmów (Lore) instaluje właśnie inny proces (np. okno instalatora) - sprawdzę za godzinę."
+function Proba-LoreZajete {
+  Atrapa @{ etap = "blad"; wynik = "blad"; przyczyna = "lore-zajete"; koniec = (Iso (Get-Date).AddMinutes(-1)); sprawdzone = (Iso (Get-Date).AddMinutes(-1)); powod = "Pamięć rozmów (Lore) instaluje właśnie inny proces (okno instalatora) - sprawdzę za godzinę." }
+  $o = O (Get-Date).AddHours(-5)
+  $p = Przod
+  $ok = (-not $o.Problem) -and ($o.Waga -eq "szary") -and (-not $o.Znak) -and ($o.Linia -eq $LINIA_LORE_ZAJETE) -and ((Uwagi) -eq 0) -and
+        ($p -match 'Wszystko gra') -and ($p -notmatch '\(czerwony napis\)')
+  return [pscustomobject]@{ Ok = $ok; Opis = "$($o.Znak) $($o.Linia) [$($o.Waga)] uwagi=$(Uwagi) sprawa=$($o.Problem.Tytul)" }
+}
+# Wynik "zaktualizowano" z doinstalowana Lore: zielona linia jak zawsze + szary dopisek; bez pola
+# (i z pustym polem) - bez dopisku.
+$DOPISEK_LORE = "Doinstalowano też Pamięć rozmów (Lore) - jest teraz stałą częścią MegaRuchacza. Czytanie Twoich rozmów trwa w tle. Otwórz okna Claude Code na nowo, żeby zobaczyły wyszukiwanie."
+function Proba-Doinstalowano {
+  $kon = (Get-Date).AddMinutes(-2)
+  Atrapa @{ etap = "gotowe"; wynik = "zaktualizowano"; wersja_po = "0.37.0"; koniec = (Iso $kon); sprawdzone = (Iso $kon); doinstalowano = @("lore") }
+  $o = O (Get-Date).AddHours(-1)
+  $ok = ($o.Waga -eq "dobrze") -and ($o.Znak -eq $ZNAKOK) -and ($o.Linia -eq "Zaktualizowano do najnowszej wersji 0.37.0 (dziś $(Godz $kon))") -and
+        ($o.Dopisek -eq $DOPISEK_LORE) -and ($o.DopisekWaga -eq "szary") -and (-not $o.Problem) -and ((Uwagi) -eq 0)
+  return [pscustomobject]@{ Ok = $ok; Opis = "$($o.Znak) $($o.Linia) [$($o.Waga)] | dopisek [$($o.DopisekWaga)]: $($o.Dopisek) | sprawa=$($o.Problem.Tytul)" }
+}
+function Proba-BezDoinstalowano {
+  $kon = (Get-Date).AddMinutes(-2)
+  Atrapa @{ etap = "gotowe"; wynik = "zaktualizowano"; wersja_po = "0.37.0"; koniec = (Iso $kon); sprawdzone = (Iso $kon) }
+  $o1 = O (Get-Date).AddHours(-1)
+  Atrapa @{ etap = "gotowe"; wynik = "zaktualizowano"; wersja_po = "0.37.0"; koniec = (Iso $kon); sprawdzone = (Iso $kon); doinstalowano = @() }
+  $o2 = O (Get-Date).AddHours(-1)
+  $ok = (-not $o1.Dopisek) -and (-not $o2.Dopisek) -and ($o1.Waga -eq "dobrze") -and ($o2.Waga -eq "dobrze")
+  return [pscustomobject]@{ Ok = $ok; Opis = "bez pola: '$($o1.Dopisek)' | puste pole: '$($o2.Dopisek)'" }
+}
+function Proba-LoreBlad {
+  $pw = "Nie udało się doinstalować Pamięci rozmów (Lore): model wektorow nie pobral sie. Jest obowiązkowa, więc spróbuję znowu za godzinę."
+  Atrapa @{ etap = "blad"; wynik = "blad"; przyczyna = "lore"; koniec = (Iso (Get-Date).AddMinutes(-1)); sprawdzone = (Iso (Get-Date).AddMinutes(-1)); powod = $pw }
+  $o = O (Get-Date).AddHours(-5)
+  $ok = ($o.Waga -eq "pilne") -and ($o.Znak -eq $ZNAKZLE) -and ($o.Linia -eq $pw) -and ($o.Problem.Waga -eq "pilne") -and
+        ($o.Problem.Tytul -eq "Nie udało się doinstalować Pamięci rozmów (Lore)") -and ((Uwagi) -eq 1)
+  return [pscustomobject]@{ Ok = $ok; Opis = "$($o.Znak) $($o.Linia) [$($o.Waga)] | $($o.Problem.Tytul)" }
+}
 function Proba-InnaPrzyczynaCzerwona {
   Atrapa @{ etap = "blad"; wynik = "blad"; przyczyna = "nanoszenie"; koniec = (Iso (Get-Date).AddMinutes(-1)); sprawdzone = (Iso (Get-Date).AddMinutes(-2)); powod = "Nowa wersja jest pobrana, ale nie udało się jej wgrać." }
   $o = O (Get-Date).AddHours(-5)
@@ -191,6 +232,10 @@ $PROBY_SIECI = [ordered]@{
   "negatywna: bez-sieci, nigdy udane, pierwsza proba 25 h temu -> czerwona sprawa" = "Proba-BezSieciNigdyDoba"
   "negatywna: bez-sieci, ale ostatnia proba 4 h temu (martwy zegar) -> zolta sprawa" = "Proba-BezSieciMartwyZegar"
   "negatywna: blad z inna przyczyna (nanoszenie) -> dalej czerwono" = "Proba-InnaPrzyczynaCzerwona"
+  "lore-zajete -> szara linia 'Pamięć rozmów (Lore) instaluje właśnie inny proces', bez sprawy" = "Proba-LoreZajete"
+  "zaktualizowano z doinstalowano=['lore'] -> zielona linia i szary dopisek o Pamięci rozmów" = "Proba-Doinstalowano"
+  "negatywna: zaktualizowano bez pola doinstalowano (i z pustym) -> bez dopisku" = "Proba-BezDoinstalowano"
+  "negatywna: blad z przyczyna lore -> czerwona linia z pelnym zdaniem (bez 'Nie udało się zaktualizować:'), sprawa pilna" = "Proba-LoreBlad"
 }
 foreach ($nazwa in $PROBY_SIECI.Keys) {
   $w = & $PROBY_SIECI[$nazwa]
@@ -208,9 +253,13 @@ $sabotaze = @(
   @{ Nazwa = "kazda przyczyna uznana za chwilowa"; Proba = "Proba-InnaPrzyczynaCzerwona"
      Kotwica = '($PRZYCZYNY_CHWILOWE -contains $a.Przyczyna)'; Zamiana = '$true' },
   @{ Nazwa = "bez-sieci znowu czerwone co godzine"; Proba = "Proba-BezSieciSwieza"
-     Kotwica = '$PRZYCZYNY_CHWILOWE = @("bez-sieci", "zajete")'; Zamiana = '$PRZYCZYNY_CHWILOWE = @()' },
+     Kotwica = '$PRZYCZYNY_CHWILOWE = @("bez-sieci", "zajete", "lore-zajete")'; Zamiana = '$PRZYCZYNY_CHWILOWE = @()' },
   @{ Nazwa = "martwy zegar przy bez-sieci niewidoczny"; Proba = "Proba-BezSieciMartwyZegar"
-     Kotwica = '(($teraz - $proba).TotalHours -ge $GODZIN_BEZ_SPRAWDZENIA_AKTUALIZACJI)'; Zamiana = '$false' })
+     Kotwica = '(($teraz - $proba).TotalHours -ge $GODZIN_BEZ_SPRAWDZENIA_AKTUALIZACJI)'; Zamiana = '$false' },
+  @{ Nazwa = "lore-zajete nie jest chwilowa (czerwona karta przy otwartym instalatorze)"; Proba = "Proba-LoreZajete"
+     Kotwica = '$PRZYCZYNY_CHWILOWE = @("bez-sieci", "zajete", "lore-zajete")'; Zamiana = '$PRZYCZYNY_CHWILOWE = @("bez-sieci", "zajete")' },
+  @{ Nazwa = "dopisek o doinstalowanej Pamieci rozmow wylaczony"; Proba = "Proba-Doinstalowano"
+     Kotwica = '(@($a.Doinstalowano) -contains "lore")'; Zamiana = '($false)' })
 $kopiaSabotazu = Join-Path $tmp "stan-wersja-sabotaz.ps1"
 foreach ($s in $sabotaze) {
   if (-not $oryginal.Contains($s.Kotwica)) { Wynik "sabotaz '$($s.Nazwa)' wylapany" $false "kotwicy nie ma w ${plikWersji}: $($s.Kotwica)"; continue }
@@ -243,6 +292,19 @@ Atrapa @{ etap = "pobieram"; krok = 2; start = (Iso $teraz.AddMinutes(-40)) }
 [System.IO.File]::SetLastWriteTime($plikAkt, $teraz.AddMinutes(-30))
 $o = O
 Wynik "negatywna: pobieranie bez zapisu od 30 min -> czerwone 'stanęła', nie wieczny pasek" ((-not $o.Trwa) -and ($o.Waga -eq "pilne") -and ($o.Linia -match 'stanęła na kroku 2 z 4') -and ($o.Problem.Waga -eq "pilne")) $o.Linia
+# Doinstalowanie Pamieci rozmow (Lore) trwa kilkanascie minut, a aktualizacja trwa od startu przebiegu:
+# pasek zyje dzieki tetnu (swiezy zapis pliku), a bez zapisu od ponad 20 min dalej jest czerwone
+# "stanela" - prog 20 min zostaje (19 min = jeszcze w toku).
+$OPIS_LORE = "Doinstalowuję Pamięć rozmów (Lore): srodowisko Pythona gotowe (trwa 14 min)"
+Atrapa @{ etap = "nanosze"; krok = 3; opis = $OPIS_LORE; start = (Iso $teraz.AddMinutes(-40)) }
+$o = O
+Wynik "Lore w toku: start 40 min temu, swiezy zapis (tetno) -> pasek '... (3 z 4)', bez sprawy" ($o.Trwa -and ($o.Naglowek -eq "$OPIS_LORE (3 z 4)") -and ((Kroki $o) -eq "zrobione,zrobione,trwa,czeka") -and (-not $o.Problem)) "$($o.Naglowek) kroki=$(Kroki $o)"
+[System.IO.File]::SetLastWriteTime($plikAkt, (Get-Date).AddMinutes(-19))
+$o = O
+Wynik "Lore w toku: ostatni zapis 19 min temu -> dalej pasek (prog 20 min bez zmian)" ($o.Trwa -and (-not $o.Problem)) "$($o.Naglowek) | $($o.Linia)"
+[System.IO.File]::SetLastWriteTime($plikAkt, (Get-Date).AddMinutes(-21))
+$o = O
+Wynik "negatywna: Lore bez zapisu od 21 min -> czerwone 'stanęła na kroku 3 z 4', nie wieczny pasek" ((-not $o.Trwa) -and ($o.Waga -eq "pilne") -and ($o.Linia -match 'stanęła na kroku 3 z 4') -and ($o.Problem.Waga -eq "pilne")) $o.Linia
 [System.IO.File]::WriteAllText($plikAkt, '{"etap": "pobi', (New-Object System.Text.UTF8Encoding($false)))
 $o = O
 Wynik "negatywna: nieczytelny plik -> zolta linia i sprawa" (($o.Waga -eq "uwaga") -and ($o.Problem.Tytul -match 'Nie umiem odczytać') -and $o.ZPliku) "$($o.Problem.Tytul) | $($o.Problem.Pelne)"
@@ -422,6 +484,13 @@ public class OknoTestoweAktualizacji : System.Windows.Forms.Form {
     Wynik "okno: po udanej aktualizacji liczby licza sie od nowa (raz)" ($script:PrzeliczenPoAktualizacji -eq 1) "przeliczen: $($script:PrzeliczenPoAktualizacji)"
     Wynik "zrzut po aktualizacji" $true (Zrzut "2-zaktualizowano")
 
+    Atrapa @{ etap = "gotowe"; wynik = "zaktualizowano"; wersja_po = "0.37.0"; koniec = (Iso $kon); sprawdzone = (Iso $kon); doinstalowano = @("lore") }
+    Krok-Okna
+    $t = (Teksty $script:PanelStan) -join " | "
+    Wynik "okno: doinstalowana Pamięć rozmów -> zielona linia i dopisek pod nią, bez paska" (($t -match "$ZNAKOK Zaktualizowano do najnowszej wersji 0\.37\.0") -and
+      ($t -match 'Doinstalowano też Pamięć rozmów \(Lore\)') -and ((Paski $script:PanelStan) -eq 0) -and (-not $script:PanelProblemy.Visible)) $t
+    [void](Zrzut "2b-doinstalowano-lore")
+
     Atrapa @{ etap = "gotowe"; wynik = "aktualne"; koniec = (Iso $kon); sprawdzone = (Iso $kon) }
     Krok-Okna
     $t = (Teksty $script:PanelStan) -join " | "
@@ -445,6 +514,14 @@ public class OknoTestoweAktualizacji : System.Windows.Forms.Form {
     foreach ($c in $script:PanelStan.Controls) { foreach ($x in $c.Controls) { foreach ($y in $x.Controls) { if (("$($y.Text)" -like "Nie sprawdziłem aktualizacji*") -and ($y.ForeColor.ToArgb() -eq $script:KolSzary.ToArgb())) { $szara = $true } } } }
     Wynik "okno: bez-sieci -> szara linia, bez karty spraw, 'Wszystko gra'" ($szara -and ($t -match 'brak internetu') -and ($t -match 'Wszystko gra') -and (-not $script:PanelProblemy.Visible)) $t
     [void](Zrzut "4b-bez-sieci")
+
+    Atrapa @{ etap = "blad"; wynik = "blad"; przyczyna = "lore-zajete"; koniec = (Iso $kon); sprawdzone = (Iso $kon); powod = "Pamięć rozmów (Lore) instaluje właśnie inny proces (okno instalatora) - sprawdzę za godzinę." }
+    Krok-Okna
+    $t = (Teksty $script:PanelStan) -join " | "
+    $szara = $false
+    foreach ($c in $script:PanelStan.Controls) { foreach ($x in $c.Controls) { foreach ($y in $x.Controls) { if (("$($y.Text)" -eq $LINIA_LORE_ZAJETE) -and ($y.ForeColor.ToArgb() -eq $script:KolSzary.ToArgb())) { $szara = $true } } } }
+    Wynik "okno: lore-zajete -> szara linia 'instaluje inny proces', bez karty spraw, 'Wszystko gra'" ($szara -and ($t -match 'Wszystko gra') -and (-not $script:PanelProblemy.Visible)) $t
+    [void](Zrzut "4c-lore-zajete")
 
     $st = (Get-Date).AddHours(-4)
     Atrapa @{ etap = "gotowe"; wynik = "aktualne"; koniec = (Iso $st); sprawdzone = (Iso $st) }

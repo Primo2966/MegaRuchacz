@@ -19,13 +19,22 @@
 #   8  alarm Alarm-Aktualizacji (slady zegara w nadzorcy): obie sprawy po obu stronach progu, brak
 #      falszywych alarmow i brak drugiej karty dla tego, co pokazuje karta Stan (Ocena-Aktualizacji)
 #   9  zegar w dozorze: odpala po zadanym czasie, zostawia slady; bez skryptu - wywrotka, bez sladu
+#  10  Pamiec rozmow (Lore) obowiazkowa (2026-10-17): brak Lore przy znacznikach = HEAD -> samo
+#      doinstalowanie (programy, potem modul-lore; pasek 3 z 4 z opisem, linia KROK pod paskiem), bez
+#      restartu, z doinstalowano; porazka -> blad lore, znacznik nietkniety, nastepny przebieg probuje
+#      znowu; nowa wersja + porazka -> naniesienie przerwane przed skillami, potem calosc z restartem;
+#      tetno stanu w ciszy modulu (i kontrola bez tetna); okno instalatora otwarte i modul zajety ->
+#      lore-zajete (szaro w karcie Stan); swiezy start Windows -> odlozone; Lore jest / baza=false /
+#      rejestr nieczytelny -> nic; lore=true bez srodowiska -> doinstalowane
 #
 # BEZPIECZENSTWO (wzor: instalator\test-calosci.ps1):
 #  - repo: git clone tego repo + pliki tej zmiany z dysku (i z -Nakladka); "origin" kopii to
 #    zamrozony goly klon, do ktorego "nowe wersje" wypycha osobny klon-pisarz - straznik nigdy nie
 #    siega do prawdziwego serwera;
 #  - zasobnik\nadzorca.ps1 w kopii to zaslepka (nie pokazuje ikony, czeka na plik stopu),
-#    narzedzia\skille.ps1 - zaslepka zapisujaca wywolanie (bez GitHuba);
+#    narzedzia\skille.ps1 - zaslepka zapisujaca wywolanie (bez GitHuba), narzedzia\instalacja\
+#    zaleznosci.ps1 i modul-lore.ps1 - atrapy (bez pobierania programow i 770 MB Lore); zamek okna
+#    instalatora i minuty od startu Windows - podstawione (MR_AKT_*), zeby prawdziwe okno nie mieszalo;
 #  - restart idzie na WLASNE zadanie Harmonogramu MRTEST-AKT-<stempel> (bez wyzwalaczy, ukryte),
 #    zdejmowane na koncu; zamykane sa tylko procesy z katalogu testu;
 #  - procesy testu: USERPROFILE/HOME/APPDATA/TEMP w katalogu testu, bez CLAUDE*/CODEX_*/ORCA_*/LORE_*;
@@ -55,13 +64,18 @@ $Dom = Join-Path $T 'dom'
 $Bin = Join-Path $T 'bin'
 $Tmp = Join-Path $T 'tmp'
 $Zadanie = "MRTEST-AKT-$Stempel"
+# Zamek "okna instalatora" dla procesow testu (MR_AKT_MUTEX_INSTALATORA) - wlasny, wiec prawdziwe
+# otwarte okno instalatora nie odklada doinstalowania Lore w scenariuszach, ktore go oczekuja.
+$MutexInstalatora = "Local\MRTEST-AKT-Instalator-$Stempel"
 $Utf8 = New-Object System.Text.UTF8Encoding($false)
 $script:Zle = 0
 $script:Ok = 0
 
 # Pliki tej zmiany - kopia bierze je z dysku (sa niezapisane albo swiezo zapisane), reszta z HEAD.
+# modul-lore.ps1 zastepuje w kopii atrapa - tu jest dla sprawdzenia kodowania.
 $MOJE = @('narzedzia\aktualizuj-megaruchacza.ps1', 'narzedzia\straznik-zasad.ps1', 'narzedzia\test-aktualizacji.ps1',
-          'zasobnik\nadzorca\dozor.ps1', 'zasobnik\nadzorca\stan-zbieranie.ps1')
+          'zasobnik\nadzorca\dozor.ps1', 'zasobnik\nadzorca\stan-zbieranie.ps1', 'zasobnik\nadzorca\stan-wersja.ps1',
+          'narzedzia\instalacja\modul-lore.ps1')
 
 function Sprawdz([string]$co, [bool]$ok, [string]$szczegol = '') {
   $linia = $(if ($ok) { 'OK    ' } else { 'BLAD  ' }) + $co
@@ -133,8 +147,82 @@ $k = Join-Path $t 'skille-kod.txt'
 if (Test-Path -LiteralPath $k) { exit ([int](Get-Content -LiteralPath $k -Raw).Trim()) }
 exit 0
 '@, $Utf8)
+  # Atrapy doinstalowania Pamieci rozmow (Lore, sekcja 10): zaleznosci.ps1 i modul-lore.ps1 zapisuja
+  # wywolanie (atrapy.log), robia zdjecie pliku stanu aktualizacji (jaki etap i opis widac w trakcie)
+  # i oddaja linie umowy (KROK/UWAGA/WYNIK). Zachowanie z plikow w katalogu testu: zaleznosci-kod.txt
+  # i lore-kod.txt (kod wyjscia), lore-zajete.txt (WYNIK z zajete), lore-opoznienie.txt (sekundy ciszy),
+  # lore-tetno.txt (cisza bez linii KROK, kazda zmiana daty zapisu pliku stanu idzie do tetno.log).
+  # Udana atrapa Lore ustawia lore=true w rejestrze i zaklada atrape srodowiska - jak prawdziwa instalacja.
+  [System.IO.File]::WriteAllText((Join-Path $Repo 'narzedzia\instalacja\zaleznosci.ps1'), @'
+param([string]$Akcja = "", [string[]]$Potrzebne = @(), [switch]$Proba)
+$t = Split-Path -Parent (Split-Path -Parent (Split-Path -Parent $PSScriptRoot))
+$u8 = New-Object System.Text.UTF8Encoding($false)
+[System.IO.File]::AppendAllText((Join-Path $t 'atrapy.log'), ("zaleznosci|-Akcja $Akcja -Potrzebne " + ($Potrzebne -join ' ') + "`r`n"), $u8)
+$stan = Join-Path $env:USERPROFILE '.claude\mr\aktualizacja.json'
+if (Test-Path -LiteralPath $stan) { Copy-Item -LiteralPath $stan -Destination (Join-Path $t 'stan-zaleznosci.json') -Force }
+function L([string]$x) { [Console]::Out.WriteLine($x); [Console]::Out.Flush() }
+L 'KROK: atrapa zaleznosci - programy sa'
+$kod = 0
+$p = Join-Path $t 'zaleznosci-kod.txt'
+if (Test-Path -LiteralPath $p) { $kod = [int]([System.IO.File]::ReadAllText($p).Trim()) }
+if ($kod -ne 0) {
+  L 'WYNIK: {"modul":"zaleznosci","akcja":"Instaluj","ok":false,"komunikat":"atrapa: nie udalo sie zainstalowac uv (test)","uwagi":[]}'
+  exit $kod
+}
+L 'WYNIK: {"modul":"zaleznosci","akcja":"Instaluj","ok":true,"komunikat":"wszystkie programy sa (atrapa)","uwagi":[]}'
+exit 0
+'@, $Utf8)
+  [System.IO.File]::WriteAllText((Join-Path $Repo 'narzedzia\instalacja\modul-lore.ps1'), @'
+param([string]$Akcja = "", [string]$KatalogDomowy = "", [string]$Zrodlo = "", [switch]$Proba, [switch]$UsunDane)
+$t = Split-Path -Parent (Split-Path -Parent (Split-Path -Parent $PSScriptRoot))
+$u8 = New-Object System.Text.UTF8Encoding($false)
+[System.IO.File]::AppendAllText((Join-Path $t 'atrapy.log'), ("modul-lore|-Akcja $Akcja -KatalogDomowy $KatalogDomowy -Zrodlo $Zrodlo`r`n"), $u8)
+$stan = Join-Path $KatalogDomowy '.claude\mr\aktualizacja.json'
+function Zdjecie([string]$n) { if (Test-Path -LiteralPath $stan) { Copy-Item -LiteralPath $stan -Destination (Join-Path $t $n) -Force } }
+function L([string]$x) { [Console]::Out.WriteLine($x); [Console]::Out.Flush() }
+function Liczba([string]$n, [int]$dom) { $p = Join-Path $t $n; if (Test-Path -LiteralPath $p) { return [int]([System.IO.File]::ReadAllText($p).Trim()) }; return $dom }
+Zdjecie 'stan-lore-start.json'
+if (Test-Path -LiteralPath (Join-Path $t 'lore-zajete.txt')) {
+  L 'WYNIK: {"modul":"lore","akcja":"Instaluj","ok":false,"komunikat":"Pamiec rozmow (Lore) instaluje albo usuwa inny proces - wroc za kilka minut","uwagi":[],"zajete":true}'
+  exit 1
+}
+$tetno = Test-Path -LiteralPath (Join-Path $t 'lore-tetno.txt')
+if (-not $tetno) { L 'KROK: atrapa lore - krok testowy' }
+$opoz = Liczba 'lore-opoznienie.txt' 4
+$t0 = Get-Date; $ost = $null; $zapisy = @()
+while (((Get-Date) - $t0).TotalSeconds -lt $opoz) {
+  Start-Sleep -Milliseconds 500
+  if ($tetno -and (Test-Path -LiteralPath $stan)) {
+    $z = (Get-Item -LiteralPath $stan).LastWriteTimeUtc.Ticks
+    if (($null -ne $ost) -and ($z -ne $ost)) { $zapisy += ("{0:N1}|{1}" -f ((Get-Date) - $t0).TotalSeconds, $z) }
+    $ost = $z
+  }
+}
+if ($tetno) { [System.IO.File]::WriteAllText((Join-Path $t 'tetno.log'), ($zapisy -join "`r`n"), $u8) }
+Zdjecie 'stan-lore-po-kroku.json'
+$kod = Liczba 'lore-kod.txt' 0
+if ($kod -ne 0) {
+  L 'UWAGA: atrapa - uwaga przy porazce'
+  L 'WYNIK: {"modul":"lore","akcja":"Instaluj","ok":false,"komunikat":"atrapa: model wektorow nie pobral sie (test)","uwagi":["atrapa - uwaga przy porazce"]}'
+  exit $kod
+}
+$rp = Join-Path $KatalogDomowy '.claude\mr\instalacja.json'
+$j = [System.IO.File]::ReadAllText($rp) | ConvertFrom-Json
+$j.moduly.lore = $true
+[System.IO.File]::WriteAllText($rp, ($j | ConvertTo-Json -Depth 5), $u8)
+$py = Join-Path $Zrodlo 'lore\.venv\Scripts\python.exe'
+New-Item -ItemType Directory -Force -Path (Split-Path -Parent $py) | Out-Null
+[System.IO.File]::WriteAllText($py, '', $u8)
+L 'UWAGA: atrapa - uwaga testowa'
+L 'WYNIK: {"modul":"lore","akcja":"Instaluj","ok":true,"komunikat":"lore zainstalowane (atrapa)","uwagi":["atrapa - uwaga testowa"]}'
+exit 0
+'@, $Utf8)
   [void](Git-Cicho @('-C', $Repo, '-c', 'user.name=MRTEST', '-c', 'user.email=mrtest@example.invalid', 'add', '-A'))
   [void](Git-Cicho @('-C', $Repo, '-c', 'user.name=MRTEST', '-c', 'user.email=mrtest@example.invalid', 'commit', '--quiet', '--allow-empty', '-m', 'MRTEST: stan roboczy i zaslepki'))
+  # Atrapa srodowiska Lore (lore\.venv jest w .gitignore): domyslnie Lore jest, wiec sekcje 1-9 niczego nie doinstalowuja.
+  $py = Join-Path $Repo 'lore\.venv\Scripts\python.exe'
+  New-Item -ItemType Directory -Force -Path (Split-Path -Parent $py) | Out-Null
+  [System.IO.File]::WriteAllText($py, '', $Utf8)
   [void](Git-Cicho @('clone', '--quiet', '--bare', $Repo, $Origin))
   [void](Git-Cicho @('-C', $Repo, 'remote', 'set-url', 'origin', $Origin))
   [void](Git-Cicho @('-C', $Repo, 'fetch', '--quiet', 'origin'))
@@ -173,9 +261,11 @@ exit 0
   Register-ScheduledTask -TaskName $Zadanie -Xml $xml -Force -ErrorAction Stop | Out-Null
 }
 
-function Ustaw-Rejestr([bool]$skille) {
-  $j = [ordered]@{ wersja = 1; moduly = [ordered]@{ wiedza = $false; lore = $false; kierownik = $true; skille = $skille; kopia = $false }
-                   kopia = $null; narzedzia = [ordered]@{ claude = $true; codex = $false; opencode = $false }; baza = $true; data = '2026-10-07 10:00:00' }
+# Domyslnie Lore jest (obowiazkowe od 2026-10-17; atrapa srodowiska w Przygotuj) - inaczej kazda sekcja
+# doinstalowywalaby je przy okazji. lore=$false / baza=$false - scenariusze sekcji 10.
+function Ustaw-Rejestr([bool]$skille, [bool]$lore = $true, [bool]$baza = $true) {
+  $j = [ordered]@{ wersja = 1; moduly = [ordered]@{ wiedza = $false; lore = $lore; kierownik = $true; skille = $skille; kopia = $false }
+                   kopia = $null; narzedzia = [ordered]@{ claude = $true; codex = $false; opencode = $false }; baza = $baza; data = '2026-10-07 10:00:00' }
   [System.IO.File]::WriteAllText((Join-Path $Dom '.claude\mr\instalacja.json'), ($j | ConvertTo-Json -Depth 4), $Utf8)
 }
 
@@ -186,9 +276,11 @@ $KatGit = Split-Path -Parent ((Get-Command git -CommandType Application | Select
 # git z samego mingw64\bin pada przy fetch (0xC0000005, sprawdzone 2026-10-07) - potrzebuje tez
 # usr\bin (jak $KatBash w instalator\test-calosci.ps1)
 $KatGitUsr = @((Join-Path (Split-Path -Parent (Split-Path -Parent $KatGit)) 'usr\bin'), (Join-Path (Split-Path -Parent $KatGit) 'usr\bin')) | Where-Object { Test-Path -LiteralPath $_ } | Select-Object -First 1
-$ZmienneZakazane = '^(LORE_|CLAUDE|CODEX_|ANTHROPIC_|OPENAI_|ORCA_|HF_|VIRTUAL_ENV$|PYTHONPATH$)'
+$ZmienneZakazane = '^(LORE_|CLAUDE|CODEX_|ANTHROPIC_|OPENAI_|ORCA_|HF_|MR_AKT_|VIRTUAL_ENV$|PYTHONPATH$)'
 
-function Nowe-Psi([string]$plik, [string[]]$argumenty, [string]$dom = $Dom) {
+# $zmienne - dodatkowe zmienne procesu (wartosc $null = zmienna zdjeta). Domyslnie wlasny zamek okna
+# instalatora i 600 min od startu Windows (sekcja 10 odklada doinstalowanie tylko tam, gdzie chce).
+function Nowe-Psi([string]$plik, [string[]]$argumenty, [string]$dom = $Dom, [hashtable]$zmienne = @{}) {
   $psi = New-Object System.Diagnostics.ProcessStartInfo
   $psi.FileName = "$env:SystemRoot\System32\WindowsPowerShell\v1.0\powershell.exe"
   $q = { param($a) if ($a -eq '') { '""' } elseif ($a -notmatch '[\s"]') { $a } else { '"' + ($a -replace '(\\*)"', '$1$1\"' -replace '(\\+)$', '$1$1') + '"' } }
@@ -201,13 +293,18 @@ function Nowe-Psi([string]$plik, [string[]]$argumenty, [string]$dom = $Dom) {
   foreach ($k in @($psi.EnvironmentVariables.Keys)) { if ($k -match $ZmienneZakazane) { $psi.EnvironmentVariables.Remove($k) } }
   $s = @{ USERPROFILE = $dom; HOME = $dom; HOMEDRIVE = $dom.Substring(0, 2); HOMEPATH = $dom.Substring(2)
           LOCALAPPDATA = (Join-Path $dom 'AppData\Local'); APPDATA = (Join-Path $dom 'AppData\Roaming'); TEMP = $Tmp; TMP = $Tmp
-          PATH = (@($Bin, $KatGit, $KatGitUsr, $Systemowe) | Where-Object { $_ }) -join ';' }
-  foreach ($k in $s.Keys) { $psi.EnvironmentVariables[$k] = $s[$k] }
+          PATH = (@($Bin, $KatGit, $KatGitUsr, $Systemowe) | Where-Object { $_ }) -join ';'
+          MR_AKT_MUTEX_INSTALATORA = $MutexInstalatora; MR_AKT_UPTIME_MIN = '600' }
+  foreach ($k in $zmienne.Keys) { $s[$k] = $zmienne[$k] }
+  foreach ($k in $s.Keys) {
+    if ($null -eq $s[$k]) { if ($psi.EnvironmentVariables.ContainsKey($k)) { $psi.EnvironmentVariables.Remove($k) } }
+    else { $psi.EnvironmentVariables[$k] = $s[$k] }
+  }
   return $psi
 }
 
-function Odpal([string]$plik, [string[]]$argumenty, [int]$sekundy = 900, [string]$dom = $Dom) {
-  $p = [System.Diagnostics.Process]::Start((Nowe-Psi $plik $argumenty $dom))
+function Odpal([string]$plik, [string[]]$argumenty, [int]$sekundy = 900, [string]$dom = $Dom, [hashtable]$zmienne = @{}) {
+  $p = [System.Diagnostics.Process]::Start((Nowe-Psi $plik $argumenty $dom $zmienne))
   $wy = $p.StandardOutput.ReadToEndAsync(); $bl = $p.StandardError.ReadToEndAsync()
   if (-not $p.WaitForExit($sekundy * 1000)) { & taskkill.exe /T /F /PID $p.Id 2>&1 | Out-Null; return [pscustomobject]@{ Kod = -1; Tekst = "nie skonczyl w $sekundy s" } }
   $p.WaitForExit()
@@ -219,8 +316,8 @@ $PlikStanu = Join-Path $Dom '.claude\mr\aktualizacja.json'
 $PlikZnacznika = Join-Path $Dom '.claude\mr\aktualizacja-naniesione.txt'
 $PlikLogu = Join-Path $Dom '.claude\mr\aktualizacja.log'
 
-function Aktualizuj([string[]]$extra = @(), [string]$zadanie = $Zadanie) {
-  return (Odpal $Akt (@('-Zrodlo', $Repo, '-KatalogDomowy', $Dom, '-ZadanieNadzorcy', $zadanie) + $extra))
+function Aktualizuj([string[]]$extra = @(), [string]$zadanie = $Zadanie, [hashtable]$zmienne = @{}) {
+  return (Odpal $Akt (@('-Zrodlo', $Repo, '-KatalogDomowy', $Dom, '-ZadanieNadzorcy', $zadanie) + $extra) 900 $Dom $zmienne)
 }
 function Stan { $t = Czytaj $PlikStanu; if (-not $t) { return $null }; return ($t | ConvertFrom-Json) }
 # Po restarcie stan konczy pomocnik (osobny proces) - czekamy na etap koncowy.
@@ -267,9 +364,10 @@ try {
   Przygotuj
   Info "katalog testu: $T"
 
-  # --- kodowanie plikow tej zmiany
+  # --- kodowanie plikow tej zmiany - z dysku, skad poszly do kopii (czesc z nich zastepuje tam atrapa)
   foreach ($w in $MOJE) {
-    $p = Join-Path $Repo $w
+    $p = Join-Path $RepoPrawdziwe $w
+    if ($Nakladka -and (Test-Path -LiteralPath (Join-Path $Nakladka $w))) { $p = Join-Path $Nakladka $w }
     if (-not (Test-Path -LiteralPath $p)) { continue }
     $b = [System.IO.File]::ReadAllBytes($p)
     $bom = $b.Length -ge 3 -and $b[0] -eq 0xEF -and $b[1] -eq 0xBB -and $b[2] -eq 0xBF
@@ -529,6 +627,190 @@ $s = Czytaj-Klucze $script:NadzPlikStanu
   New-Item -ItemType Directory -Force -Path (Join-Path $DomZ2 '.claude\mr') | Out-Null
   $wy = Odpal $skryptZ @('-Zr', $Repo, '-ZrAkt', $ZrBez, '-Dom', $DomZ2, '-Czekaj', '10') 120 $DomZ2
   Sprawdz "9: bez skryptu aktualizacji - wywrotka zanotowana, slad zlecona NIE powstaje" (($wy.Tekst -match 'WYWROTKI=.*start aktualizacji automatycznej.*nie ma') -and ($wy.Tekst -match '(?m)^ZLECONA=\s*$')) $wy.Tekst
+
+  # --- 10. Pamiec rozmow (Lore) obowiazkowa (2026-10-17): doinstalowanie przez aktualizacje
+  $AtrapyLog = Join-Path $T 'atrapy.log'
+  function Wolania([string]$kto) { if (-not (Test-Path -LiteralPath $AtrapyLog)) { return @() }; return @([System.IO.File]::ReadAllLines($AtrapyLog, $Utf8) | Where-Object { $_ -like "$kto|*" }) }
+  function Ile-Wolan { return (@(Wolania 'zaleznosci').Count + @(Wolania 'modul-lore').Count) }
+  function Plik-Testu([string]$n, [string]$tresc) { [System.IO.File]::WriteAllText((Join-Path $T $n), $tresc, $Utf8) }
+  function Bez-Pliku-Testu([string]$n) { Remove-Item -LiteralPath (Join-Path $T $n) -Force -ErrorAction SilentlyContinue }
+  function Json-Testu([string]$n) { $t = Czytaj (Join-Path $T $n); if (-not $t) { return $null }; return ($t | ConvertFrom-Json) }
+  function Uwagi-Stanu($s) { return (@($s.uwagi) -join ' ') }
+  $PlikRejestru = Join-Path $Dom '.claude\mr\instalacja.json'
+  function Lore-W-Rejestrze { return [bool]((Czytaj $PlikRejestru) | ConvertFrom-Json).moduly.lore }
+  # polskie litery w wyrazeniach skladane z kodow znakow - ten plik jest w ASCII
+  $zE = [string][char]0x0119; $zC = [string][char]0x0107; $zO = [string][char]0x00F3; $zL = [string][char]0x0142
+  $PAMIEC = "Pami${zE}${zC} rozm${zO}w \(Lore\)"
+  $PAMIECI = "Pami${zE}ci rozm${zO}w \(Lore\)"
+  $Venv = Join-Path $Repo 'lore\.venv\Scripts\python.exe'
+  # Ocena karty Stan (stan-wersja.ps1 z kopii) dla pliku stanu, ktory zostawil skrypt - w osobnym
+  # procesie, jak alarm w sekcji 8; tekst bez polskich liter (rura w stronie kodowej konsoli).
+  $skryptO = Join-Path $T 'ocena.ps1'
+  [System.IO.File]::WriteAllText($skryptO, @'
+param([string]$Zr, [string]$Dom)
+$ErrorActionPreference = "Stop"
+. (Join-Path $Zr "zasobnik\stan-nadzorcy.ps1")
+Ustaw-Nadzorce $Zr $Dom $true
+$o = Ocena-Aktualizacji (Stan-Aktualizacji) (Get-Date) ((Get-Date).AddHours(-2)) $null "" ""
+$ascii = { param($s) -join ("$s".ToCharArray() | ForEach-Object { if ([int]$_ -gt 127) { '?' } else { $_ } }) }
+"OCENA|$($o.Waga)|$(if ($o.Problem) { 1 } else { 0 })|$(& $ascii $o.Linia)|$(& $ascii $o.Dopisek)|$($o.DopisekWaga)"
+'@, $Utf8)
+  function Ocena-Okna {
+    $wy = Odpal $skryptO @('-Zr', $Repo, '-Dom', $Dom) 120
+    $l = @(($wy.Tekst -split '\r?\n') | Where-Object { $_ -like 'OCENA|*' } | Select-Object -Last 1)
+    if ($l.Count -eq 0) { return [pscustomobject]@{ Waga = '?'; Problem = '?'; Linia = "$($wy.Tekst)"; Dopisek = ''; DopisekWaga = '' } }
+    $c = $l[0].Split('|')
+    return [pscustomobject]@{ Waga = $c[1]; Problem = $c[2]; Linia = $c[3]; Dopisek = $c[4]; DopisekWaga = $c[5] }
+  }
+
+  # (f) Lore jest (rejestr lore=true + srodowisko): w sekcjach 1-9 doinstalowanie ani razu nie ruszylo
+  Sprawdz "10f: Lore jest (rejestr + srodowisko) - w sekcjach 1-9 atrapy programow i Lore ani razu niewolane" ((Ile-Wolan) -eq 0) (Czytaj $AtrapyLog)
+
+  # (a) lore=false przy znacznikach = HEAD (pierwsza aktualizacja z tym kodem poszla jeszcze starym skryptem)
+  Ustaw-Rejestr $true $false
+  $znPrzed = Skrot-Pliku $PlikZnacznika
+  $stubPrzed = @(Stuby)
+  $od = Linii-Logu
+  $r = Aktualizuj
+  $s = Stan
+  $dl = Log-Od $od
+  $wz = @(Wolania 'zaleznosci'); $wl = @(Wolania 'modul-lore')
+  $kolej = (@([System.IO.File]::ReadAllLines($AtrapyLog, $Utf8) | Where-Object { $_ } | ForEach-Object { $_.Split('|')[0] })) -join ','
+  Sprawdz "10a: brak Lore przy znacznikach = HEAD - kod 0, gotowe / zaktualizowano, doinstalowano = lore" (($r.Kod -eq 0) -and ($s.etap -eq 'gotowe') -and ($s.wynik -eq 'zaktualizowano') -and (@($s.doinstalowano) -contains 'lore')) "$($r.Tekst) || $($s | ConvertTo-Json -Compress)"
+  Sprawdz "10a: po kolei programy (zaleznosci -Akcja Instaluj -Potrzebne uv,python,node jednym napisem), potem modul-lore Instaluj" (($kolej -eq 'zaleznosci,modul-lore') -and ($wz[0] -eq 'zaleznosci|-Akcja Instaluj -Potrzebne uv,python,node') -and ($wl[0] -eq "modul-lore|-Akcja Instaluj -KatalogDomowy $Dom -Zrodlo $Repo")) (Czytaj $AtrapyLog)
+  $sz = Json-Testu 'stan-zaleznosci.json'; $sl = Json-Testu 'stan-lore-start.json'; $sk = Json-Testu 'stan-lore-po-kroku.json'
+  Sprawdz "10a: w trakcie pasek 'nanosze' 3 z 4 z opisem o Pamieci rozmow (programy, potem pobieranie)" (($sz.etap -eq 'nanosze') -and ($sz.krok -eq 3) -and ($sz.krokow -eq 4) -and ("$($sz.opis)" -match "^Doinstalowuj${zE} $PAMIEC - sprawdzam programy") -and
+    ($sl.etap -eq 'nanosze') -and ($sl.krok -eq 3) -and ("$($sl.opis)" -match "^Doinstalowuj${zE} $PAMIEC - pobieram biblioteki i model")) "$($sz | ConvertTo-Json -Compress) || $($sl | ConvertTo-Json -Compress)"
+  Sprawdz "10a: linia KROK skryptu trafia pod pasek razem z czasem trwania" ("$($sk.opis)" -match "^Doinstalowuj${zE} ${PAMIEC}: atrapa lore - krok testowy \(trwa \d+ min\)$") "$($sk.opis)"
+  Sprawdz "10a: uwaga z wyniku modulu trafia do uwag stanu" ((Uwagi-Stanu $s) -match 'atrapa - uwaga testowa') (Uwagi-Stanu $s)
+  Sprawdz "10a: bez instaluj-globalnie i bez restartu, znacznik naniesienia nietkniety, wersja_przed = wersja_po" ((-not $dl.Contains('wolam instaluj-globalnie')) -and (-not $dl.Contains('pomocnik')) -and ((@(Stuby) -join ',') -eq ($stubPrzed -join ',')) -and
+    ((Skrot-Pliku $PlikZnacznika) -eq $znPrzed) -and $s.wersja_po -and ($s.wersja_przed -eq $s.wersja_po)) $dl
+  $o = Ocena-Okna
+  Sprawdz "10a: karta Stan - zielona linia i szary dopisek o doinstalowanej Pamieci rozmow, bez sprawy" (($o.Waga -eq 'dobrze') -and ($o.Problem -eq '0') -and ($o.Dopisek -match 'Doinstalowano te. Pami.. rozm.w \(Lore\)') -and ($o.DopisekWaga -eq 'szary')) "$($o | ConvertTo-Json -Compress)"
+  $r = Aktualizuj
+  $s = Stan
+  Sprawdz "10f: po doinstalowaniu (atrapa: lore=true + srodowisko) nastepny przebieg - aktualne, atrapy niewolane" (($r.Kod -eq 0) -and ($s.wynik -eq 'aktualne') -and ((Ile-Wolan) -eq 2)) "$($s | ConvertTo-Json -Compress) || $(Czytaj $AtrapyLog)"
+
+  # (b) modul-lore zawodzi: blad z powodem o Lore, znacznik nietkniety, nastepny przebieg probuje znowu
+  Ustaw-Rejestr $true $false
+  Plik-Testu 'lore-kod.txt' '1'
+  $n0 = @(Wolania 'modul-lore').Count
+  $znPrzed = Skrot-Pliku $PlikZnacznika
+  $r = Aktualizuj
+  $s = Stan
+  Sprawdz "10b: modul-lore z kodem 1 - kod 1, etap blad, przyczyna lore, powod: co sie stalo i ze sprobuje za godzine" (($r.Kod -eq 1) -and ($s.etap -eq 'blad') -and ($s.przyczyna -eq 'lore') -and
+    ("$($s.powod)" -match "^Nie uda${zL}o si${zE} doinstalowa${zC} ${PAMIECI}: ") -and ("$($s.powod)" -match 'atrapa: model wektorow nie pobral sie') -and ("$($s.powod)" -match "za godzin${zE}")) ($s | ConvertTo-Json -Compress)
+  Sprawdz "10b: znacznik naniesienia nietkniety, w rejestrze dalej lore=false" (((Skrot-Pliku $PlikZnacznika) -eq $znPrzed) -and -not (Lore-W-Rejestrze)) (Czytaj $PlikRejestru)
+  $r = Aktualizuj
+  $s = Stan
+  Sprawdz "10b: nastepny przebieg znowu doinstalowuje (atrapa wolana drugi raz) i znowu melduje blad" ((@(Wolania 'modul-lore').Count -eq ($n0 + 2)) -and ($s.przyczyna -eq 'lore')) (Czytaj $AtrapyLog)
+  Bez-Pliku-Testu 'lore-kod.txt'
+  # programy (zaleznosci) zawodza: blad lore o programach, modul-lore nawet nie wolany
+  Plik-Testu 'zaleznosci-kod.txt' '1'
+  $n0 = @(Wolania 'modul-lore').Count
+  $r = Aktualizuj
+  $s = Stan
+  Sprawdz "10b: programy (zaleznosci) z kodem 1 - blad lore o programach, modul-lore NIE wolany" (($r.Kod -eq 1) -and ($s.przyczyna -eq 'lore') -and ("$($s.powod)" -match 'programy') -and
+    ("$($s.powod)" -match 'atrapa: nie udalo sie zainstalowac uv') -and (@(Wolania 'modul-lore').Count -eq $n0)) ($s | ConvertTo-Json -Compress)
+  Bez-Pliku-Testu 'zaleznosci-kod.txt'
+
+  # (h) nowa wersja + brak Lore: doinstalowanie w naniesieniu (po -Dopasuj, przed skillami). Porazka
+  # przerywa naniesienie - znacznik stary, bez restartu i bez skilli; po naprawie calosc z restartem.
+  Ustaw-Rejestr $true $false
+  Plik-Testu 'lore-kod.txt' '1'
+  Wypchnij-Wersje '99.3.0'
+  $znStary = (Znacznik)['naniesione']
+  $plikSkilli = Join-Path $T 'skille-wolania.log'
+  $skPrzed = @(Get-Content -LiteralPath $plikSkilli -ErrorAction SilentlyContinue).Count
+  $stubPrzed = @(Stuby)
+  $od = Linii-Logu
+  $r = Aktualizuj
+  $s = Stan
+  $dl = Log-Od $od
+  $iD = $dl.IndexOf('wolam straznik -Dopasuj'); $iL = $dl.IndexOf('wolam lore (')
+  Sprawdz "10h: nowa wersja + porazka Lore - blad 'Nowa wersja jest pobrana, ale... Pamieci rozmow', znacznik stary, bez restartu i bez skilli" (($r.Kod -eq 1) -and ($s.przyczyna -eq 'lore') -and
+    ("$($s.powod)" -match "^Nowa wersja jest pobrana, ale nie uda${zL}o si${zE} doinstalowa${zC} $PAMIECI") -and ((Znacznik)['naniesione'] -eq $znStary) -and ((@(Stuby) -join ',') -eq ($stubPrzed -join ',')) -and
+    ($iD -ge 0) -and ($iL -gt $iD) -and (@(Get-Content -LiteralPath $plikSkilli -ErrorAction SilentlyContinue).Count -eq $skPrzed)) "$($s | ConvertTo-Json -Compress) || $dl"
+  Bez-Pliku-Testu 'lore-kod.txt'
+  $od = Linii-Logu
+  $r = Aktualizuj
+  $s = Czekaj-Na-Koniec
+  $dl = Log-Od $od
+  $headN = Git-Cicho @('-C', $Repo, 'rev-parse', 'HEAD')
+  $iD = $dl.IndexOf('wolam straznik -Dopasuj'); $iZ = $dl.IndexOf('wolam zaleznosci-lore ('); $iL = $dl.IndexOf('wolam lore ('); $iS = $dl.IndexOf('wolam skille')
+  Sprawdz "10h: po naprawie - zaktualizowano 99.3.0 z doinstalowano lore i restartem; kolejnosc: -Dopasuj, programy, Lore, skille" (($s.wynik -eq 'zaktualizowano') -and ($s.wersja_po -eq '99.3.0') -and (@($s.doinstalowano) -contains 'lore') -and
+    ((Znacznik)['naniesione'] -eq $headN) -and ((Znacznik)['nadzorca'] -eq $headN) -and ($iD -ge 0) -and ($iZ -gt $iD) -and ($iL -gt $iZ) -and ($iS -gt $iL)) "$($s | ConvertTo-Json -Compress) || $dl"
+
+  # (c) tetno: modul milczy 25 s (bez linii KROK) - stan i tak zapisuje sie co MR_AKT_TETNO_S; kontrola:
+  # przy tetnie co 3600 s plik w ciszy sie nie zmienia (czyli to tetno odswieza plik, a nie co innego)
+  Ustaw-Rejestr $true $false
+  Plik-Testu 'lore-tetno.txt' 'x'; Plik-Testu 'lore-opoznienie.txt' '25'; Bez-Pliku-Testu 'tetno.log'
+  $r = Aktualizuj @() $Zadanie @{ MR_AKT_TETNO_S = '5' }
+  $s = Stan
+  $zapisy = @(("" + (Czytaj (Join-Path $T 'tetno.log'))) -split '\r?\n' | Where-Object { $_ })
+  Sprawdz "10c: tetno co 5 s - w 25 s ciszy modulu plik stanu zapisany co najmniej 3 razy, wynik zaktualizowano" (($zapisy.Count -ge 3) -and ($s.wynik -eq 'zaktualizowano')) "zapisy (s od poczatku ciszy|data): $($zapisy -join '; ') || $($s | ConvertTo-Json -Compress)"
+  Ustaw-Rejestr $true $false
+  Plik-Testu 'lore-opoznienie.txt' '12'; Bez-Pliku-Testu 'tetno.log'
+  $r = Aktualizuj @() $Zadanie @{ MR_AKT_TETNO_S = '3600' }
+  $zapisy = @(("" + (Czytaj (Join-Path $T 'tetno.log'))) -split '\r?\n' | Where-Object { $_ })
+  Sprawdz "10c: kontrola - tetno co 3600 s: w 12 s ciszy plik stanu ani razu nie zapisany" ((Test-Path -LiteralPath (Join-Path $T 'tetno.log')) -and ($zapisy.Count -eq 0)) "zapisy: $($zapisy -join '; ')"
+  Bez-Pliku-Testu 'lore-tetno.txt'; Bez-Pliku-Testu 'lore-opoznienie.txt'
+
+  # (d) otwarte okno instalatora (jego zamek trzyma test): aktualizacja Lore nie rusza - przyczyna
+  # lore-zajete, a karta Stan pokazuje to szara linia bez sprawy (dla czlowieka to nie blad)
+  Ustaw-Rejestr $true $false
+  $n0 = Ile-Wolan
+  $mi = New-Object System.Threading.Mutex($true, $MutexInstalatora)
+  try { $r = Aktualizuj; $s = Stan } finally { $mi.ReleaseMutex(); $mi.Dispose() }
+  Sprawdz "10d: okno instalatora otwarte - atrapy niewolane, przyczyna lore-zajete, powod o innym procesie" (((Ile-Wolan) -eq $n0) -and ($s.przyczyna -eq 'lore-zajete') -and ("$($s.powod)" -match 'inny proces')) ($s | ConvertTo-Json -Compress)
+  $o = Ocena-Okna
+  Sprawdz "10d: karta Stan - szara linia 'instaluje inny proces', bez sprawy" (($o.Waga -eq 'szary') -and ($o.Problem -eq '0') -and ($o.Linia -match 'inny proces')) "$($o | ConvertTo-Json -Compress)"
+  # modul-lore sam melduje zajete (jego blokada) - ta sama lagodna przyczyna, znacznik nietkniety
+  Plik-Testu 'lore-zajete.txt' 'x'
+  $n0 = @(Wolania 'modul-lore').Count
+  $znPrzed = Skrot-Pliku $PlikZnacznika
+  $r = Aktualizuj
+  $s = Stan
+  Sprawdz "10d: modul-lore zajety (zajete w WYNIK) - przyczyna lore-zajete, znacznik nietkniety" ((@(Wolania 'modul-lore').Count -eq ($n0 + 1)) -and ($s.przyczyna -eq 'lore-zajete') -and ((Skrot-Pliku $PlikZnacznika) -eq $znPrzed)) ($s | ConvertTo-Json -Compress)
+  Bez-Pliku-Testu 'lore-zajete.txt'
+
+  # (e) 1 min po starcie Windows: odlozone do nastepnego przebiegu - aktualne z uwaga, nie blad
+  $n0 = Ile-Wolan
+  $r = Aktualizuj @() $Zadanie @{ MR_AKT_UPTIME_MIN = '1' }
+  $s = Stan
+  Sprawdz "10e: 1 min po starcie Windows - odlozone: kod 0, aktualne, uwaga o starcie Windows, atrapy niewolane" (($r.Kod -eq 0) -and ($s.wynik -eq 'aktualne') -and ((Uwagi-Stanu $s) -match "Windows wystartowa${zL} 1 min temu") -and ((Ile-Wolan) -eq $n0)) ($s | ConvertTo-Json -Compress)
+  # bez podstawienia: start Windows liczony naprawde, a decyzja zgodna z progiem 5 min
+  $n0 = @(Wolania 'modul-lore').Count
+  $od = Linii-Logu
+  $r = Aktualizuj @() $Zadanie @{ MR_AKT_UPTIME_MIN = $null }
+  $s = Stan
+  $dl = Log-Od $od
+  $m = [regex]::Match($dl, 'start Windows: (\d+) min temu \(([^)]*)')
+  $minS = -1; $skad = ''
+  if ($m.Success) { $minS = [int]$m.Groups[1].Value; $skad = $m.Groups[2].Value }
+  $doinst = (@(Wolania 'modul-lore').Count -gt $n0)
+  Sprawdz "10e: bez podstawienia start Windows liczony naprawde (dziennik zdarzen albo LastBootUpTime), decyzja zgodna z progiem 5 min" ($m.Success -and ($skad -match 'dziennik zdarzen|LastBootUpTime') -and
+    ((($minS -ge 5) -and $doinst -and ($s.wynik -eq 'zaktualizowano')) -or (($minS -lt 5) -and (-not $doinst) -and ($s.wynik -eq 'aktualne')))) "start: $minS min ($skad); doinstalowane: $doinst; $($s | ConvertTo-Json -Compress)"
+
+  # (f) rejestr mowi lore=true, ale srodowiska Lore nie ma - doinstalowane (predykat patrzy na oba)
+  Ustaw-Rejestr $true $true
+  Remove-Item -LiteralPath $Venv -Force -ErrorAction SilentlyContinue
+  $n0 = @(Wolania 'modul-lore').Count
+  $r = Aktualizuj
+  $s = Stan
+  Sprawdz "10f: lore=true w rejestrze, ale bez srodowiska Lore - doinstalowane (atrapa wolana, srodowisko jest)" (($s.wynik -eq 'zaktualizowano') -and (@($s.doinstalowano) -contains 'lore') -and (@(Wolania 'modul-lore').Count -eq ($n0 + 1)) -and (Test-Path -LiteralPath $Venv)) ($s | ConvertTo-Json -Compress)
+
+  # (g) MegaRuchacz odinstalowany (baza=false) albo rejestr nieczytelny - nic nie doinstalowujemy
+  Ustaw-Rejestr $true $false $false
+  $n0 = Ile-Wolan
+  $r = Aktualizuj
+  $s = Stan
+  Sprawdz "10g: baza=false (MegaRuchacz odinstalowany) - nic: aktualne, atrapy niewolane, ani slowa o Lore" (($r.Kod -eq 0) -and ($s.wynik -eq 'aktualne') -and ((Ile-Wolan) -eq $n0) -and ((Uwagi-Stanu $s) -notmatch 'Lore')) ($s | ConvertTo-Json -Compress)
+  [System.IO.File]::WriteAllBytes($PlikRejestru, [byte[]](0, 0, 0, 0, 0, 0, 0, 0))
+  $r = Aktualizuj
+  $s = Stan
+  Sprawdz "10g: rejestr nieczytelny - doinstalowania nie ma (nic nie twierdzimy), aktualne" (($r.Kod -eq 0) -and ($s.wynik -eq 'aktualne') -and ((Ile-Wolan) -eq $n0)) ($s | ConvertTo-Json -Compress)
+  Ustaw-Rejestr $true $true
 
 } catch {
   Sprawdz "przebieg testu bez wywrotki" $false "$($_.Exception.Message) @ $($_.InvocationInfo.PositionMessage)"
