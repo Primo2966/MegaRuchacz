@@ -4,6 +4,16 @@ Każda zmiana wypychana na gita dostaje tu wpis. Numer rośnie wg zasady:
 pierwsza cyfra — przebudowa łamiąca zgodność, druga — nowa funkcja,
 trzecia — poprawka.
 
+## 0.36.0 — 2026-10-17
+
+- **Podpowiedź z archiwum (Lore) bez czekania** — zapytanie idzie do stale działającego procesu Lore zamiast
+  uruchamiać Pythona przy każdej wiadomości: część Lore w hooku 122–234 ms → 8–53 ms (pod obciążeniem
+  203–243 → 40–62 ms), koniec gubienia podpowiedzi na limicie 650 ms. Proces stawia sam hook w tle, bez okna
+  (działa też po restarcie i na innych komputerach bez zmian w instalatorze); po aktualizacji wymienia się sam;
+  po 2 h bezczynności odchodzi (~120 MB pamięci, póki żyje). Pierwsza wiadomość po dłuższej przerwie idzie starą drogą.
+- **Wiedza firmy nie pyta przy krótkich wiadomościach** („b”, „ok”, „tak zrób tak”) — ta sama reguła co w Lore,
+  koniec przypadkowych doklejek.
+
 ## 0.35.2 — 2026-10-16
 
 - **Kropka 🟣 Lore / 🟠 jfwiedza znaczy „odpowiedź wykorzystała dane z pamięci”** — nie „szukał” ani „doklejono”.

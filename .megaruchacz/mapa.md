@@ -174,6 +174,19 @@ inwentarz warstw z 25.09, budowa okna sprzed podzialu, pomiary P23/P30 w calosci
   Transkryptu hook nie czyta (od P43). Inaczej dokleja: linie cyklu
   z `~\.claude\wiedza\.cykl-postep`, 1-2 fragmenty "Z ARCHIWUM" (`lore\lore\recall.py`, FTS5; stan
   `.archiwum-stan.json`), alarm awarii Lore; sufit doklejki 1500 znakow.
+- "Z ARCHIWUM" od 0.36.0 najpierw z serwera `lore\lore\recall_serwer.py` (127.0.0.1 + token; adres
+  `<dom Lore>\lore-podpowiedz.json`, stan `lore-podpowiedz-stan.json` z historia 50 czasow, zamek `.lock`), limit 300 ms;
+  brak serwera -> ta wiadomosc stara droga (`python -I -m lore.recall`, prawdziwy python bez launchera venv, limit 650 ms)
+  + start serwera w tle (pythonw, odlaczony, bez okna, max raz na 60 s). Serwer: po aktualizacji kodu odpowiada raz
+  i odchodzi; po 2 h bezczynnosci odchodzi; ~120 MB. `.archiwum-stan.json`: `droga` (`serwer`/`zapasowa`), `serwer`{...}.
+  Zmienne testowe: `MR_LORE_SERWER=0`, `MR_LORE_WERSJA_KODU`, `MR_LORE_SERWER_BEZCZYNNOSC_S`, `MR_LORE_SERWER_ROZGRZEWKA_S`.
+  Testy: `lore\tests\test_recall_serwer.py` + `pomoc_serwera.py`. Pomiar: czesc Lore w hooku 122-234 ms -> 8-53 ms.
+- PULAPKA pamieci dysku: na biurowej system gubi strony lore.db (425 MB, 68k kawalkow) w minutach - swieze polaczenie
+  0,6-1,5 s. Serwer trzyma wlasna pamiec stron (do 160 MB) i rozgrzewa ja w ciszy i po kazdym zapisie indeksera
+  (SQLite czysci ja przy cudzym commicie, `PRAGMA data_version`). Pierwsza wiadomosc bez serwera (rano / po 2 h)
+  idzie stara droga i na zimnej bazie potrafi przekroczyc 650 ms. Póki serwer zyje, Windows nie da usunac lore.db.
+- Wiedza firmy w hooku: krotkie wiadomosci -> `pominieto-krotka` bez zapytania (regula skopiowana z recall.py:
+  STOP, MIN_PROMPT_CHARS, MIN_MATCHED; test zgodnosci w `lore\tests\test_wiedza_firmy_hook.py`).
 - Rejestr: `~\.claude\megaruchacz-mr-log.js` (SubagentStart/Stop, globalny) dopisuje START/KONIEC do
   `.megaruchacz\worklog.md` i rejestr okien `<rodzic-repo>\.mr-okna\<ID>.json`; `.claude\mr-log.js`
   repo to szablon wdrozen per projekt.
