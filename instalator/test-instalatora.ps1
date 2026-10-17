@@ -10,6 +10,8 @@
 #    kodowej OEM) oraz atrapy zlamanej umowy (brak WYNIK, ok:true z kodem 1, smieci zamiast JSON);
 #    scenariusz 'bezbasha' bierze PRAWDZIWY zaleznosci.ps1 w srodowisku bez gita i basha, z atrapa
 #    instalatora Git for Windows bez basha - okno ma stanac z bledem "Nie ma Git Bash";
+#  - Pamiec rozmow obowiazkowa (17.10.2026): 'lorezawsze' (rejestr z lore = false -> "dodam" i doinstalowanie,
+#    proby zdjecia Lore z wyboru), 'bezai' (bez zadnego narzedzia AI pole Claude Code zablokowane);
 #  - kazdy scenariusz to osobny katalog domowy w katalogu roboczym (nigdy prawdziwy ~) i okno
 #    z -PozaEkranem (-5000, 0, bez paska zadan, bez aktywacji) i -Scenariusz: scenariusz klika,
 #    robi zrzuty (DrawToBitmap) i sprawdza, czy nic nie wystaje poza karte ani nie jest uciete;
@@ -516,7 +518,27 @@ $script:TestKroki = @(
   [void](Ocen-Raport 'okno rozciagane' $sc $r)
 }
 
+# --- A6. komputer bez zadnego narzedzia AI: Claude Code obowiazkowe (17.10.2026) ------------
+# Obowiazkowa Pamiec rozmow rejestruje serwer wyszukiwania w narzedziu AI (modul-lore.ps1 bez narzedzia
+# odmawia). Wykrycie podmienione w scenariuszu (wszystko "nie ma"): pole Claude Code stoi zaznaczone
+# i wylaczone, z powodem. Proba negatywna: wybor ustawiony recznie na "bez Claude Code" - plan i tak ma
+# krok Claude Code. Kontrola (falszywy alarm): z samym Codeksem pole znow da sie odznaczyc.
+if (Chce 'bezai') {
+  $dom = Nowy-Dom 'bezai'
+  $sc = Zapisz-Scenariusz 'bezai' @'
+$script:TestKroki = @(
+  @{ N = 'komputer bez narzedzi AI (wykrycie podmienione)'; Czekaj = { $script:Ekran -eq 'powitanie' }; Zrob = { foreach ($n in @($script:Narzedzia)) { $n.Jest = $false; $n.Slady = '' }; $script:BWybierzSam.PerformClick() } },
+  @{ N = 'Claude Code zaznaczone i zablokowane, z powodem'; Czekaj = { $script:Ekran -eq 'wybor' }; Zrzut = '38-bez-ai-wybor'; Sprawdz = { $t = (@(Test-Teksty $script:CbClaude.Parent)) -join ' | '; Tak ($script:CbClaude.Checked -and (-not $script:CbClaude.Enabled) -and $script:Wybor.Claude -and ($t -like '*bez niego Pamięć rozmów (Lore) nie ma się gdzie zarejestrować*')) "zaznaczone $($script:CbClaude.Checked), wlaczone $($script:CbClaude.Enabled); wiersz: $t" } },
+  @{ N = 'proba negatywna: wybor recznie bez Claude Code, potem Zbuduj-Plan'; Zrob = { $script:Wybor.Claude = $false; $script:TestPlan = Zbuduj-Plan }; Sprawdz = { $ids = @($script:TestPlan | ForEach-Object { $_.Id }) -join ','; Tak (($ids -like '*,programy-claude,*') -and $script:Wybor.Claude) "plan: $ids" } },
+  @{ N = 'kontrola: z samym Codeksem pole wolne'; Zrob = { foreach ($n in @($script:Narzedzia)) { if ($n.Id -eq 'codex') { $n.Jest = $true } }; Pokaz-Ekran 'wybor'; $script:CbClaude.Checked = $false; $script:TestPlan = Zbuduj-Plan }; Sprawdz = { $ids = @($script:TestPlan | ForEach-Object { $_.Id }) -join ','; $t = (@(Test-Teksty $script:CbClaude.Parent)) -join ' | '; Tak ($script:CbClaude.Enabled -and (-not $script:Wybor.Claude) -and ($ids -notlike '*programy-claude*') -and ($t -like '*zainstaluję go, jeśli go nie ma*')) "wlaczone $($script:CbClaude.Enabled), wybor Claude $($script:Wybor.Claude), plan: $ids" } }
+)
+'@
+  $r = Uruchom-Ps $Okno (Argumenty-Okna $dom $sc.Plik $Atrapy) 120
+  [void](Ocen-Raport 'bez narzedzi AI - Claude Code obowiazkowe' $sc $r)
+}
+
 # --- B. tryb zmiany --------------------------------------------------------------
+# Od 17.10.2026 Pamiec rozmow jest obowiazkowa (bez pola wyboru) - usuwana jest tu Wiedza o Tobie.
 if (Chce 'zmiana') {
   $dom = Nowy-Dom 'zmiana'
   Dom-Z-Baza $dom
@@ -525,16 +547,16 @@ if (Chce 'zmiana') {
   $kopie = Join-Path $Robocze 'kopie-zmiana'
   $sc = Zapisz-Scenariusz 'zmiana' (@'
 $script:TestKroki = @(
-  @{ N = 'wybor z obecnym stanem'; Czekaj = { $script:Ekran -eq 'wybor' }; Zrzut = '6-zmiana-wybor'; Sprawdz = { Tak (($script:Tryb -eq 'zmiana') -and (-not $script:BDalej.Enabled) -and ($script:LStopka.Text -eq 'Nic nie zmieniłeś.') -and ($script:BDalej.Text -eq 'Zastosuj zmiany') -and ($script:TagiModulow.lore.Text -eq 'jest') -and -not $script:Wybor.Moduly.kopia) "przycisk $($script:BDalej.Text) wylaczony: $($script:LStopka.Text)" } },
-  @{ N = 'odznacz lore'; Zrob = { $script:CheckboxyModulow.lore.Checked = $false } },
-  @{ N = 'pytanie o usuniecie'; Czekaj = { $script:Nakladka.Visible }; Zrzut = '7-zmiana-pytanie'; Sprawdz = { $t = $script:Nakladka.Controls[0].Controls[0].Text; Tak ((-not $script:PolePytania.Checked) -and (-not $script:BDalej.Enabled) -and ($t -eq ('Usunąć ' + [char]0x201E + 'Pamięć rozmów (Lore)' + [char]0x201D + '?'))) "tytul '$t', pole 'usun dane' domyslnie odznaczone, przyciski okna zablokowane" } },
-  @{ N = 'usun z danymi'; Zrob = { $script:PolePytania.Checked = $true; $script:PrzyciskiPytania[0].PerformClick() }; Sprawdz = { Tak ((-not $script:Nakladka.Visible) -and ($script:TagiModulow.lore.Text -eq 'usunę z danymi') -and $script:Wybor.UsunDane.lore -and $script:BDalej.Enabled) "znaczek: $($script:TagiModulow.lore.Text)" } },
+  @{ N = 'wybor z obecnym stanem'; Czekaj = { $script:Ekran -eq 'wybor' }; Zrzut = '6-zmiana-wybor'; Sprawdz = { Tak (($script:Tryb -eq 'zmiana') -and (-not $script:BDalej.Enabled) -and ($script:LStopka.Text -eq 'Nic nie zmieniłeś.') -and ($script:BDalej.Text -eq 'Zastosuj zmiany') -and ($script:TagiModulow.lore.Text -eq 'jest') -and (-not $script:CheckboxyModulow.ContainsKey('lore')) -and -not $script:Wybor.Moduly.kopia) "przycisk $($script:BDalej.Text) wylaczony: $($script:LStopka.Text); Lore bez pola wyboru, znaczek '$($script:TagiModulow.lore.Text)'" } },
+  @{ N = 'odznacz wiedze'; Zrob = { $script:CheckboxyModulow.wiedza.Checked = $false } },
+  @{ N = 'pytanie o usuniecie'; Czekaj = { $script:Nakladka.Visible }; Zrzut = '7-zmiana-pytanie'; Sprawdz = { $t = $script:Nakladka.Controls[0].Controls[0].Text; Tak ((-not $script:PolePytania.Checked) -and (-not $script:BDalej.Enabled) -and ($t -eq ('Usunąć ' + [char]0x201E + 'Wiedza o Tobie' + [char]0x201D + '?'))) "tytul '$t', pole 'usun dane' domyslnie odznaczone, przyciski okna zablokowane" } },
+  @{ N = 'usun z danymi'; Zrob = { $script:PolePytania.Checked = $true; $script:PrzyciskiPytania[0].PerformClick() }; Sprawdz = { Tak ((-not $script:Nakladka.Visible) -and ($script:TagiModulow.wiedza.Text -eq 'usunę z danymi') -and $script:Wybor.UsunDane.wiedza -and $script:BDalej.Enabled -and $script:Wybor.Moduly.lore -and ($script:TagiModulow.lore.Text -eq 'jest')) "znaczek: $($script:TagiModulow.wiedza.Text), Lore: $($script:TagiModulow.lore.Text)" } },
   @{ N = 'odznacz skille'; Zrob = { $script:CheckboxyModulow.skille.Checked = $false } },
   @{ N = 'zostaw skille'; Czekaj = { $script:Nakladka.Visible }; Zrob = { $script:PrzyciskiPytania[1].PerformClick() }; Sprawdz = { Tak ($script:CheckboxyModulow.skille.Checked -and $script:Wybor.Moduly.skille -and ($script:TagiModulow.skille.Text -eq 'jest')) "Zostaw przywrocil zaznaczenie" } },
   @{ N = 'dodaj kopie'; Zrob = { $script:CheckboxyModulow.kopia.Checked = $true; $script:PoleCelu.Text = '__KOPIE__' } },
   @{ N = 'wybor po zmianach'; Czekaj = { $script:PanelKopii.Visible }; Zrzut = '8-zmiana-wybor-po'; Sprawdz = { Tak (($script:TagiModulow.kopia.Text -eq 'dodam') -and $script:BDalej.Enabled) "kopia: $($script:TagiModulow.kopia.Text)" } },
   @{ N = 'zastosuj zmiany'; Zrob = { $script:BDalej.PerformClick() } },
-  @{ N = 'podsumowanie zmian'; Czekaj = { ($script:Ekran -eq 'podsumowanie') -and $script:Sprawdzenie -and ($script:Sprawdzenie.Zadanie.Stan -ne 'trwa') }; Zrzut = '9-zmiana-podsumowanie'; Sprawdz = { $ids = @($script:PlanDoWykonania | ForEach-Object { $_.Id }) -join ','; Tak ($ids -eq 'zapamietaj,lore-Usun,zaleznosci-Instaluj,kopia-Instaluj,zasady') "plan: $ids" } },
+  @{ N = 'podsumowanie zmian'; Czekaj = { ($script:Ekran -eq 'podsumowanie') -and $script:Sprawdzenie -and ($script:Sprawdzenie.Zadanie.Stan -ne 'trwa') }; Zrzut = '9-zmiana-podsumowanie'; Sprawdz = { $ids = @($script:PlanDoWykonania | ForEach-Object { $_.Id }) -join ','; Tak ($ids -eq 'zapamietaj,wiedza-Usun,zaleznosci-Instaluj,kopia-Instaluj,zasady') "plan: $ids" } },
   @{ N = 'tak, zastosuj'; Zrob = { $script:BDalej.PerformClick() } },
   @{ N = 'zmiany w toku'; Czekaj = { ($script:Ekran -eq 'postep') -and (@($script:Plan | Where-Object { ($_.Stan -eq 'trwa') -and ($_.Kroki.Count -gt 0) }).Count -gt 0) }; Zrzut = '9b-zmiana-postep' },
   @{ N = 'gotowe po zmianach'; Czekaj = { $script:Ekran -eq 'gotowe' }; Limit = 90; Zrzut = '10-zmiana-gotowe' }
@@ -545,13 +567,62 @@ $script:TestKroki = @(
   [void](Ocen-Raport 'tryb zmiany' $sc $r)
   $w = Wszystkie-Wywolania
   $kol = Kolejnosc $w
-  $ocz = 'zaleznosci:Sprawdz > modul-lore:Usun > zaleznosci:Instaluj > modul-kopia:Instaluj > wpisz-zasady:Proba=False'
+  $ocz = 'zaleznosci:Sprawdz > modul-wiedza:Usun > zaleznosci:Instaluj > modul-kopia:Instaluj > wpisz-zasady:Proba=False'
   Wynik 'tryb zmiany - kolejnosc skryptow' ($kol -eq $ocz) $kol
-  $us = @($w | Where-Object { $_ -like '*|modul-lore|Usun|*' })
+  $us = @($w | Where-Object { $_ -like '*|modul-wiedza|Usun|*' })
   Wynik 'tryb zmiany - usuniecie z danymi' (($us.Count -eq 1) -and ($us[0] -like '*UsunDane=True*')) "$($us -join ' ')"
   $rej = Czytaj-Rejestr $dom
-  $ok = $rej -and $rej.moduly.wiedza -and (-not $rej.moduly.lore) -and $rej.moduly.kierownik -and $rej.moduly.skille -and $rej.moduly.kopia -and ($rej.kopia.cel -eq $kopie)
+  $ok = $rej -and (-not $rej.moduly.wiedza) -and $rej.moduly.lore -and $rej.moduly.kierownik -and $rej.moduly.skille -and $rej.moduly.kopia -and ($rej.kopia.cel -eq $kopie)
   Wynik 'tryb zmiany - rejestr' $ok ($(if ($rej) { $rej | ConvertTo-Json -Compress -Depth 5 } else { 'brak pliku' }))
+}
+
+# --- B1. Pamiec rozmow obowiazkowa (17.10.2026) - proby negatywne -----------------------
+# Rejestr z lore = false (Lore zdjete starszym instalatorem albo jego instalacja padla): okno samo ma Lore
+# w wyborze - bez pola wyboru, znaczek "dodam", "Zastosuj zmiany" wlaczone, plan z lore-Instaluj, a zaden
+# krok nie usuwa Lore. Proby zlamania: przywrocenie wlasnego wyboru z lore = false (Wybierz-Zestaw),
+# cofniecie usuwania calosci (wraca stan z dysku, gdzie Lore nie ma) i wybor ustawiony recznie na
+# lore = false tuz przed Zbuduj-Plan - za kazdym razem Lore wraca, a dziennik okna ma po tym slad.
+if (Chce 'lorezawsze') {
+  $dom = Nowy-Dom 'lorezawsze'
+  Dom-Z-Baza $dom
+  [System.IO.File]::WriteAllText((Join-Path $dom 'atrapa-lore-raz.txt'), 'bez bledu lore')
+  New-Item -ItemType Directory -Force -Path (Join-Path $dom '.claude\mr') | Out-Null
+  [System.IO.File]::WriteAllText((Join-Path $dom '.claude\mr\instalacja.json'), '{"wersja":1,"moduly":{"wiedza":true,"lore":false,"kierownik":true,"skille":true,"kopia":false},"kopia":null,"narzedzia":{"claude":true,"codex":false,"opencode":false},"data":"2026-10-01 10:00:00"}', $Utf8)
+  $sc = Zapisz-Scenariusz 'lorezawsze' @'
+$script:TestKroki = @(
+  @{ N = 'start: Lore dodam, bez pola wyboru, Zastosuj wlaczone'; Czekaj = { $script:Ekran -eq 'wybor' }; Zrzut = '60-lore-zawsze-wybor'; Sprawdz = {
+      $wiersz = $script:TagiModulow.lore.Parent; $t = (@(Test-Teksty $wiersz)) -join ' | '
+      $pola = @($wiersz.Controls | Where-Object { $_ -is [System.Windows.Forms.CheckBox] }).Count
+      Tak (($script:Tryb -eq 'zmiana') -and (-not $script:Obecne.lore) -and $script:Wybor.Moduly.lore -and ($script:TagiModulow.lore.Text -eq 'dodam') -and (-not $script:CheckboxyModulow.ContainsKey('lore')) -and ($pola -eq 0) -and $script:BDalej.Enabled -and ($script:BDalej.Text -eq 'Zastosuj zmiany') -and (-not $script:LStopka.Text) -and ($t -like 'Pamięć rozmów (Lore) | *dlatego jest zawsze*')) "znaczek '$($script:TagiModulow.lore.Text)', pol wyboru w wierszu: $pola, Zastosuj wlaczone: $($script:BDalej.Enabled), wiersz: $t" } },
+  @{ N = 'proba negatywna: Wszystko, potem wlasny wybor z lore = false'; Zrob = { $script:BWszystko.PerformClick(); $script:Wybor.Wlasny.Moduly['lore'] = $false; $script:BWlasny.PerformClick() }; Sprawdz = { Tak ($script:Wybor.Moduly.lore -and ($script:TagiModulow.lore.Text -eq 'dodam') -and ($script:Wybor.Zestaw -eq 'wlasny')) "lore w wyborze: $($script:Wybor.Moduly.lore), znaczek '$($script:TagiModulow.lore.Text)'" } },
+  @{ N = 'Usun MegaRuchacza'; Zrob = { $script:BUsunWszystko.PerformClick() } },
+  @{ N = 'usuwanie calosci odznacza Lore'; Czekaj = { $script:Nakladka.Visible }; Zrob = { $script:PrzyciskiPytania[0].PerformClick() }; Sprawdz = { Tak ($script:Wybor.UsunWszystko -and (-not $script:Wybor.Moduly.lore)) "UsunWszystko $($script:Wybor.UsunWszystko), lore w wyborze: $($script:Wybor.Moduly.lore)" } },
+  @{ N = 'proba negatywna: Zostaw MegaRuchacza (na dysku Lore nie ma)'; Zrob = { $script:BUsunWszystko.PerformClick() }; Sprawdz = { Tak ((-not $script:Wybor.UsunWszystko) -and $script:Wybor.Moduly.lore -and ($script:TagiModulow.lore.Text -eq 'dodam') -and $script:BDalej.Enabled) "lore w wyborze: $($script:Wybor.Moduly.lore), znaczek '$($script:TagiModulow.lore.Text)'" } },
+  @{ N = 'zastosuj'; Zrob = { $script:BDalej.PerformClick() } },
+  @{ N = 'podsumowanie: Dodam Pamiec rozmow (zawsze)'; Czekaj = { ($script:Ekran -eq 'podsumowanie') -and $script:Sprawdzenie -and ($script:Sprawdzenie.Zadanie.Stan -ne 'trwa') }; Zrzut = '61-lore-zawsze-podsumowanie'; Sprawdz = { $ids = @($script:PlanDoWykonania | ForEach-Object { $_.Id }) -join ','; $t = (@(Test-Teksty $script:Tresc)) -join ' | '; Tak (($ids -eq 'zapamietaj,zaleznosci-Instaluj,lore-Instaluj,zasady') -and ($t -like '*Dodam*Pamięć rozmów (Lore) (zawsze)*')) "plan: $ids; tresc: $t" } },
+  @{ N = 'proba negatywna: wybor recznie bez Lore, potem Zbuduj-Plan'; Zrob = { $script:Wybor.Moduly['lore'] = $false; $script:Wybor.UsunDane['lore'] = $true; $script:TestPlan = Zbuduj-Plan }; Sprawdz = {
+      $ids = @($script:TestPlan | ForEach-Object { $_.Id }) -join ','
+      $slad = ([System.IO.File]::ReadAllText($script:Dziennik)) -match 'wybor bez czesci obowiazkowej lore'
+      Tak (($ids -eq 'zapamietaj,zaleznosci-Instaluj,lore-Instaluj,zasady') -and $script:Wybor.Moduly.lore -and (-not $script:Wybor.UsunDane.ContainsKey('lore')) -and $slad) "plan: $ids; lore w wyborze: $($script:Wybor.Moduly.lore); slad w dzienniku: $slad" } },
+  @{ N = 'tak, zastosuj'; Zrob = { $script:BDalej.PerformClick() } },
+  @{ N = 'gotowe'; Czekaj = { $script:Ekran -eq 'gotowe' }; Limit = 90; Zrzut = '62-lore-zawsze-gotowe' }
+)
+'@
+  Wyczysc-Wywolania
+  $r = Uruchom-Ps $Okno (Argumenty-Okna $dom $sc.Plik $Atrapy) 180
+  [void](Ocen-Raport 'Pamiec rozmow obowiazkowa' $sc $r)
+  $w = Wszystkie-Wywolania
+  $kol = Kolejnosc $w
+  Wynik 'Pamiec rozmow obowiazkowa - kolejnosc skryptow: doinstalowanie Lore' ($kol -eq 'zaleznosci:Sprawdz > zaleznosci:Instaluj > modul-lore:Instaluj > wpisz-zasady:Proba=False') $kol
+  $usLore = @($w | Where-Object { $_ -like '*|modul-lore|Usun|*' })
+  Wynik 'Pamiec rozmow obowiazkowa - zaden krok nie usunal Lore' ($usLore.Count -eq 0) "$($usLore -join ' ')"
+  $pot = @($w | Where-Object { $_ -like '*|zaleznosci|Instaluj|*' })
+  Wynik 'Pamiec rozmow obowiazkowa - programy Lore (Node.js, uv, Python)' (($pot.Count -eq 1) -and ($pot[0] -like '*Potrzebne=node,uv,python|*')) "$($pot -join ' ')"
+  $rej = Czytaj-Rejestr $dom
+  Wynik 'Pamiec rozmow obowiazkowa - rejestr: lore = true, reszta bez zmian' ($rej -and ($rej.moduly.lore -eq $true) -and $rej.moduly.wiedza -and $rej.moduly.kierownik -and $rej.moduly.skille -and (-not $rej.moduly.kopia)) ($(if ($rej) { $rej.moduly | ConvertTo-Json -Compress } else { 'brak pliku' }))
+  $dz = Join-Path $dom 'AppData\Local\MegaRuchacz\instalator.log'
+  $tdz = ''; if (Test-Path -LiteralPath $dz) { $tdz = [System.IO.File]::ReadAllText($dz) }
+  Wynik 'Pamiec rozmow obowiazkowa - dziennik okna mowi, ze Lore brakowalo (nie po cichu)' ($tdz -match 'czesc obowiazkowa lore nie jest zainstalowana') $dz
 }
 
 # --- B2. usuniecie calego MegaRuchacza (P64) -----------------------------------------
@@ -570,12 +641,12 @@ $script:TestKroki = @(
   @{ N = 'zostaw w pytaniu'; Zrob = { $script:PrzyciskiPytania[1].PerformClick() }; Sprawdz = { Tak ((-not $script:Wybor.UsunWszystko) -and $script:Wybor.Moduly.wiedza -and ($script:LStopka.Text -eq 'Nic nie zmieniłeś.')) "Zostaw = nic sie nie zmienia" } },
   @{ N = 'Usun MegaRuchacza z danymi'; Zrob = { $script:BUsunWszystko.PerformClick() } },
   @{ N = 'pytanie 2'; Czekaj = { $script:Nakladka.Visible } },
-  @{ N = 'usun wszystko z danymi'; Zrob = { $script:PolePytania.Checked = $true; $script:PrzyciskiPytania[0].PerformClick() }; Zrzut = '22-usun-wybor'; Sprawdz = { $m = $script:Wybor.Moduly; Tak ($script:Wybor.UsunWszystko -and $script:Wybor.UsunDaneWszystko -and -not ($m.wiedza -or $m.lore -or $m.kierownik) -and ($script:ZnaczekZawsze.Text -eq 'usunę z danymi') -and ($script:BUsunWszystko.Text -eq 'Zostaw MegaRuchacza') -and $script:BDalej.Enabled) "znaczek bazy: $($script:ZnaczekZawsze.Text), przycisk: $($script:BUsunWszystko.Text)" } },
+  @{ N = 'usun wszystko z danymi'; Zrob = { $script:PolePytania.Checked = $true; $script:PrzyciskiPytania[0].PerformClick() }; Zrzut = '22-usun-wybor'; Sprawdz = { $m = $script:Wybor.Moduly; Tak ($script:Wybor.UsunWszystko -and $script:Wybor.UsunDaneWszystko -and -not ($m.wiedza -or $m.lore -or $m.kierownik) -and ($script:ZnaczekZawsze.Text -eq 'usunę z danymi') -and ($script:TagiModulow.lore.Text -eq 'usunę z danymi') -and ($script:BUsunWszystko.Text -eq 'Zostaw MegaRuchacza') -and $script:BDalej.Enabled) "znaczek bazy: $($script:ZnaczekZawsze.Text), Lore (obowiazkowe - tylko z calym MegaRuchaczem): $($script:TagiModulow.lore.Text), przycisk: $($script:BUsunWszystko.Text)" } },
   @{ N = 'Zostaw MegaRuchacza cofa'; Zrob = { $script:BUsunWszystko.PerformClick() }; Sprawdz = { $m = $script:Wybor.Moduly; Tak ((-not $script:Wybor.UsunWszystko) -and $m.wiedza -and $m.lore -and $m.kierownik -and ($script:ZnaczekZawsze.Text -eq 'jest')) 'stan jak na starcie' } },
   @{ N = 'jeszcze raz usun'; Zrob = { $script:BUsunWszystko.PerformClick() } },
   @{ N = 'pytanie 3'; Czekaj = { $script:Nakladka.Visible } },
   @{ N = 'usun z danymi'; Zrob = { $script:PolePytania.Checked = $true; $script:PrzyciskiPytania[0].PerformClick() } },
-  @{ N = 'zaznaczenie czesci odwoluje usuwanie calosci'; Zrob = { $script:CheckboxyModulow.skille.Checked = $true }; Sprawdz = { Tak ((-not $script:Wybor.UsunWszystko) -and ($script:ZnaczekZawsze.Text -eq 'jest')) "UsunWszystko: $($script:Wybor.UsunWszystko)" } },
+  @{ N = 'zaznaczenie czesci odwoluje usuwanie calosci (i wraca Lore)'; Zrob = { $script:CheckboxyModulow.skille.Checked = $true }; Sprawdz = { Tak ((-not $script:Wybor.UsunWszystko) -and ($script:ZnaczekZawsze.Text -eq 'jest') -and $script:Wybor.Moduly.lore -and ($script:TagiModulow.lore.Text -eq 'jest') -and (-not $script:Wybor.UsunDane.ContainsKey('lore'))) "UsunWszystko: $($script:Wybor.UsunWszystko), lore w wyborze: $($script:Wybor.Moduly.lore), znaczek Lore '$($script:TagiModulow.lore.Text)'" } },
   @{ N = 'odznacz skille'; Zrob = { $script:CheckboxyModulow.skille.Checked = $false } },
   @{ N = 'usun calosc na koniec'; Zrob = { $script:BUsunWszystko.PerformClick() } },
   @{ N = 'pytanie 4'; Czekaj = { $script:Nakladka.Visible } },
@@ -600,16 +671,19 @@ $script:TestKroki = @(
 }
 
 # --- B3. tryb zmiany bez bazy (P64): zapis instalacji jest, hooka straznika nie ma ----------
+# Od 17.10.2026 okno po usunieciu calosci otwiera sie z Pamiecia rozmow (obowiazkowa) "dodam" i z baza
+# "dodam" - "Zastosuj zmiany" jest od razu wlaczone (powrot jednym kliknieciem).
 if (Chce 'bezbazy') {
   $dom = Nowy-Dom 'bezbazy'
+  [System.IO.File]::WriteAllText((Join-Path $dom 'atrapa-lore-raz.txt'), 'bez bledu lore')
   New-Item -ItemType Directory -Force -Path (Join-Path $dom '.claude\mr') | Out-Null
   [System.IO.File]::WriteAllText((Join-Path $dom '.claude\mr\instalacja.json'), '{"wersja":1,"moduly":{"wiedza":false,"lore":false,"kierownik":false,"skille":false,"kopia":false},"kopia":null,"narzedzia":null,"baza":false,"data":"2026-10-01 10:00:00"}', $Utf8)
   $sc = Zapisz-Scenariusz 'bezbazy' @'
 $script:TestKroki = @(
-  @{ N = 'wybor po usunieciu'; Czekaj = { $script:Ekran -eq 'wybor' }; Zrzut = '25-bez-bazy-wybor'; Sprawdz = { Tak (($script:Tryb -eq 'zmiana') -and (-not $script:BazaJest) -and ($script:ZnaczekZawsze.Text -eq '') -and (-not $script:BDalej.Enabled) -and ($script:BUsunWszystko.Text -eq 'Posprzątaj resztki…')) "baza $($script:BazaJest), znaczek '$($script:ZnaczekZawsze.Text)', przycisk '$($script:BUsunWszystko.Text)', stopka: $($script:LStopka.Text)" } },
+  @{ N = 'wybor po usunieciu: Lore i baza dodam, Zastosuj wlaczone'; Czekaj = { $script:Ekran -eq 'wybor' }; Zrzut = '25-bez-bazy-wybor'; Sprawdz = { $t = (@(Test-Teksty $script:Tresc)) -join ' | '; Tak (($script:Tryb -eq 'zmiana') -and (-not $script:BazaJest) -and ($script:ZnaczekZawsze.Text -eq 'dodam') -and ($script:TagiModulow.lore.Text -eq 'dodam') -and $script:Wybor.Moduly.lore -and $script:BDalej.Enabled -and ($script:BUsunWszystko.Text -eq 'Posprzątaj resztki…') -and ($t -like '*MegaRuchacza nie ma teraz na tym komputerze*Pamięcią rozmów (Lore)*')) "baza $($script:BazaJest), znaczek bazy '$($script:ZnaczekZawsze.Text)', Lore '$($script:TagiModulow.lore.Text)', Zastosuj wlaczone: $($script:BDalej.Enabled), przycisk '$($script:BUsunWszystko.Text)', stopka: $($script:LStopka.Text)" } },
   @{ N = 'zaznacz kierownika'; Zrob = { $script:CheckboxyModulow.kierownik.Checked = $true }; Sprawdz = { Tak (($script:ZnaczekZawsze.Text -eq 'dodam') -and $script:BDalej.Enabled) "znaczek bazy: $($script:ZnaczekZawsze.Text)" } },
   @{ N = 'zastosuj'; Zrob = { $script:BDalej.PerformClick() } },
-  @{ N = 'podsumowanie z baza'; Czekaj = { ($script:Ekran -eq 'podsumowanie') -and $script:Sprawdzenie -and ($script:Sprawdzenie.Zadanie.Stan -ne 'trwa') }; Zrzut = '26-bez-bazy-podsumowanie'; Sprawdz = { $ids = @($script:PlanDoWykonania | ForEach-Object { $_.Id }) -join ','; Tak ($ids -eq 'zapamietaj,zaleznosci-Instaluj,baza-Instaluj,kierownik-Instaluj,zasady') "plan: $ids" } },
+  @{ N = 'podsumowanie z baza i Lore'; Czekaj = { ($script:Ekran -eq 'podsumowanie') -and $script:Sprawdzenie -and ($script:Sprawdzenie.Zadanie.Stan -ne 'trwa') }; Zrzut = '26-bez-bazy-podsumowanie'; Sprawdz = { $ids = @($script:PlanDoWykonania | ForEach-Object { $_.Id }) -join ','; Tak ($ids -eq 'zapamietaj,zaleznosci-Instaluj,baza-Instaluj,lore-Instaluj,kierownik-Instaluj,zasady') "plan: $ids" } },
   @{ N = 'tak, zastosuj'; Zrob = { $script:BDalej.PerformClick() } },
   @{ N = 'gotowe'; Czekaj = { $script:Ekran -eq 'gotowe' }; Limit = 90 }
 )
@@ -619,7 +693,10 @@ $script:TestKroki = @(
   [void](Ocen-Raport 'tryb zmiany bez bazy' $sc $r)
   $w = Wszystkie-Wywolania
   $pot = @($w | Where-Object { $_ -like '*|zaleznosci|Instaluj|*' })
-  Wynik 'tryb zmiany bez bazy - git wsrod programow (baza go wymaga)' (($pot.Count -eq 1) -and ($pot[0] -like '*Potrzebne=git,node|*')) "$($pot -join ' ')"
+  # kolejnosc programow = kolejnosc $PROGRAMY w dane.ps1 (git, bash, node, uv, python, claude)
+  Wynik 'tryb zmiany bez bazy - git wsrod programow (baza go wymaga) i programy Lore' (($pot.Count -eq 1) -and ($pot[0] -like '*Potrzebne=git,node,uv,python|*')) "$($pot -join ' ')"
+  $rej = Czytaj-Rejestr $dom
+  Wynik 'tryb zmiany bez bazy - rejestr: lore i kierownik wlaczone' ($rej -and ($rej.moduly.lore -eq $true) -and ($rej.moduly.kierownik -eq $true) -and (-not $rej.moduly.wiedza)) ($(if ($rej) { $rej.moduly | ConvertTo-Json -Compress } else { 'brak pliku' }))
 }
 
 # --- C. zmiana bez rejestru (instalacja sprzed rejestru) -----------------------------
@@ -822,14 +899,23 @@ public static class AtrapaInstalatoraGita {
 '@
   $la = Join-Path $Robocze 'bez-basha-localappdata'; $pf = Join-Path $Robocze 'bez-basha-programfiles'
   New-Item -ItemType Directory -Force -Path $la, $pf | Out-Null
+  # Prawdziwy skrypt dostaje TYLKO gita (i basha): obowiazkowa Pamiec rozmow (17.10.2026) dociaga do listy
+  # Node.js, uv i Pythona, a prawdziwy zaleznosci.ps1 w srodowisku bez nich pobieralby je naprawde.
+  # Grupa bez gita (krok Node.js / Python / Claude Code) dostaje odpowiedz "wszystko jest" jak zwykla atrapa.
   $nakladka = @'
 # ATRAPA zaleznosci.ps1 BEZ BASHA (test instalatora): prawdziwy zaleznosci.ps1 w srodowisku bez gita i basha.
 param([string]$Akcja = '', [string[]]$Potrzebne = @(), [switch]$Proba)
 [System.IO.File]::AppendAllText((Join-Path $PSScriptRoot 'wywolania.log'), ("{0}|zaleznosci|{1}|Potrzebne={2}|Proba={3}`r`n" -f (Get-Date -Format 'HH:mm:ss.fff'), $Akcja, ($Potrzebne -join '#'), [bool]$Proba), (New-Object System.Text.UTF8Encoding($false)))
+$lista = @($Potrzebne | ForEach-Object { "$_" -split ',' } | Where-Object { $_ })
+$moje = @($lista | Where-Object { @('git', 'bash') -contains $_ })
+if ($moje.Count -eq 0) {
+  Write-Output ('WYNIK: ' + (ConvertTo-Json -InputObject ([ordered]@{ ok = $true; komunikat = 'wszystko jest: ' + ($lista -join ', '); kroki = [string[]]@(); brakuje = [string[]]@() }) -Compress))
+  exit 0
+}
 $env:PATH = "$env:SystemRoot\System32;$env:SystemRoot;$env:SystemRoot\System32\WindowsPowerShell\v1.0"
 $env:LOCALAPPDATA = '__LA__'; $env:ProgramFiles = '__PF__'; ${env:ProgramFiles(x86)} = '__PF__'; $env:ProgramW6432 = '__PF__'
 Remove-Item -LiteralPath Env:CLAUDE_CODE_GIT_BASH_PATH -ErrorAction SilentlyContinue
-$a = @('-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-File', '__ZAL__', '-Akcja', $Akcja, '-Potrzebne', ($Potrzebne -join ','), '-BezWinget', '-BezZmianyPath', '-KatalogProgramow', '__KP__', '-InstalatorGita', '__INST__')
+$a = @('-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-File', '__ZAL__', '-Akcja', $Akcja, '-Potrzebne', ($moje -join ','), '-BezWinget', '-BezZmianyPath', '-KatalogProgramow', '__KP__', '-InstalatorGita', '__INST__')
 & (Join-Path $PSHOME 'powershell.exe') @a
 exit $LASTEXITCODE
 '@
@@ -838,9 +924,9 @@ exit $LASTEXITCODE
   $sc = Zapisz-Scenariusz 'bezbasha' @'
 $script:TestKroki = @(
   @{ N = 'chce wybrac sam'; Czekaj = { $script:Ekran -eq 'powitanie' }; Zrob = { $script:BWybierzSam.PerformClick() } },
-  @{ N = 'tylko skille (git), bez Claude Code'; Czekaj = { $script:Ekran -eq 'wybor' }; Zrob = { foreach ($m in @('wiedza', 'lore', 'kierownik', 'wiedzafirmy')) { $script:CheckboxyModulow.$m.Checked = $false }; $script:CheckboxyModulow.skille.Checked = $true; if ($script:CbClaude.Enabled) { $script:CbClaude.Checked = $false } } },
+  @{ N = 'skille (git) i Pamiec rozmow (zawsze), bez Claude Code'; Czekaj = { $script:Ekran -eq 'wybor' }; Zrob = { foreach ($m in @('wiedza', 'kierownik', 'wiedzafirmy')) { $script:CheckboxyModulow.$m.Checked = $false }; $script:CheckboxyModulow.skille.Checked = $true; if ($script:CbClaude.Enabled) { $script:CbClaude.Checked = $false } }; Sprawdz = { Tak ($script:Wybor.Moduly.lore -and (-not $script:CheckboxyModulow.ContainsKey('lore'))) "Lore zostaje w wyborze: $($script:Wybor.Moduly.lore)" } },
   @{ N = 'do podsumowania'; Zrob = { $script:BDalej.PerformClick() } },
-  @{ N = 'podsumowanie - brakuje Git i Git Bash'; Czekaj = { ($script:Ekran -eq 'podsumowanie') -and $script:Sprawdzenie -and ($script:Sprawdzenie.Zadanie.Stan -ne 'trwa') }; Limit = 120; Zrzut = '27-bez-basha-podsumowanie'; Sprawdz = { $ids = @($script:PlanDoWykonania | ForEach-Object { $_.Id }) -join ','; $ocz = 'zapamietaj,programy-git,baza-Instaluj,skille-Instaluj,zasady'; if ($script:Wybor.Claude) { $ocz = 'zapamietaj,programy-git,programy-claude,baza-Instaluj,skille-Instaluj,zasady' }; Tak (($ids -eq $ocz) -and ($script:LProgramy.Text -like 'Brakuje: Git, Git Bash*')) "plan: $ids; programy: $($script:LProgramy.Text)" } },
+  @{ N = 'podsumowanie - brakuje Git i Git Bash'; Czekaj = { ($script:Ekran -eq 'podsumowanie') -and $script:Sprawdzenie -and ($script:Sprawdzenie.Zadanie.Stan -ne 'trwa') }; Limit = 120; Zrzut = '27-bez-basha-podsumowanie'; Sprawdz = { $ids = @($script:PlanDoWykonania | ForEach-Object { $_.Id }) -join ','; $ocz = 'zapamietaj,programy-git,programy-node,programy-python,baza-Instaluj,lore-Instaluj,skille-Instaluj,zasady'; if ($script:Wybor.Claude) { $ocz = 'zapamietaj,programy-git,programy-node,programy-python,programy-claude,baza-Instaluj,lore-Instaluj,skille-Instaluj,zasady' }; Tak (($ids -eq $ocz) -and ($script:LProgramy.Text -like 'Brakuje: Git, Git Bash*')) "plan: $ids; programy: $($script:LProgramy.Text)" } },
   @{ N = 'zainstaluj'; Zrob = { $script:BDalej.PerformClick() } },
   @{ N = 'blad w oknie, nie sukces'; Czekaj = { @('blad', 'gotowe') -contains $script:PlanStan }; Limit = 180; Zrzut = '28-bez-basha-blad'; Sprawdz = { $z = $script:Plan[$script:PlanIndeks]; $b = @($script:Plan | Where-Object { $_.Id -eq 'baza-Instaluj' })[0]; Tak (($script:PlanStan -eq 'blad') -and ($z.Id -eq 'programy-git') -and ($z.Napis -eq 'Git i Git Bash') -and $script:KartaBledu.Visible -and ($script:LBleduTresc.Text -like 'Nie ma Git Bash*') -and ($b.Stan -eq 'czeka') -and ($script:Ekran -ne 'gotowe')) "plan $($script:PlanStan), krok $($z.Id) ($($z.Napis)), baza: $($b.Stan); $($script:LBleduTresc.Text)" } }
 )
@@ -1139,9 +1225,8 @@ if (Chce 'wfnowa') {
 $script:TestKroki = @(
   @{ N = 'powitanie'; Czekaj = { $script:Ekran -eq 'powitanie' }; Zrob = { $script:BWybierzSam.PerformClick() } },
   @{ N = 'wybor - Wiedza firmy w zestawie domyslnym'; Czekaj = { $script:Ekran -eq 'wybor' }; Zrzut = '50-wf-wybor'; Sprawdz = { $cb = $script:CheckboxyModulow['wiedzafirmy']; $opis = (@(Test-Teksty $cb.Parent) -join ' | '); Tak ($cb -and $cb.Checked -and ($cb.Text -eq 'Wiedza firmy') -and $script:Wybor.Moduly.wiedzafirmy -and (-not $script:Wybor.Moduly.kopia) -and ($opis -like '*trafiają do wspólnej bazy firmy*') -and $script:BDalej.Enabled) "pole: $($cb.Text) $($cb.Checked); opis: $opis" } },
-  @{ N = 'odznacz Wiedze o Tobie i Lore'; Zrob = { $script:CheckboxyModulow.wiedza.Checked = $false; $script:CheckboxyModulow.lore.Checked = $false } },
-  @{ N = 'proba negatywna: Wiedza firmy bez rdzenia Lore blokuje Dalej'; Czekaj = { -not $script:BDalej.Enabled }; Zrzut = '51-wf-bez-rdzenia'; Sprawdz = { Tak ((-not $script:BDalej.Enabled) -and ($script:LStopka.Text -like 'Wiedza firmy potrzebuje Wiedzy o Tobie albo Pamięci rozmów*')) "stopka: $($script:LStopka.Text)" } },
-  @{ N = 'zaznacz Lore'; Zrob = { $script:CheckboxyModulow.lore.Checked = $true }; Sprawdz = { Tak ($script:BDalej.Enabled -and (-not $script:LStopka.Text)) "Dalej wlaczone, stopka '$($script:LStopka.Text)'" } },
+  @{ N = 'odznacz Wiedze o Tobie (Lore zostaje - obowiazkowe)'; Zrob = { $script:CheckboxyModulow.wiedza.Checked = $false } },
+  @{ N = 'Wiedza firmy bez Wiedzy o Tobie dozwolona (srodowisko Lore jest zawsze)'; Zrzut = '51-wf-bez-wiedzy'; Sprawdz = { Tak ($script:BDalej.Enabled -and (-not $script:LStopka.Text) -and $script:Wybor.Moduly.lore -and $script:Wybor.Moduly.wiedzafirmy -and (-not $script:Wybor.Moduly.wiedza)) "Dalej wlaczone: $($script:BDalej.Enabled), stopka '$($script:LStopka.Text)', lore $($script:Wybor.Moduly.lore)" } },
   @{ N = 'wstecz'; Zrob = { $script:BWstecz.PerformClick() } },
   @{ N = 'zainstaluj'; Czekaj = { $script:Ekran -eq 'powitanie' }; Zrob = { $script:BZainstaluj.PerformClick() } },
   @{ N = 'plan z Wiedza firmy na koncu'; Czekaj = { $script:Ekran -eq 'postep' }; Sprawdz = { $ids = @($script:Plan | ForEach-Object { $_.Id }) -join ','; Tak ($ids -eq 'zapamietaj,programy-git,programy-node,programy-python,programy-claude,baza-Instaluj,lore-Instaluj,wiedza-Instaluj,kierownik-Instaluj,skille-Instaluj,wiedzafirmy-Instaluj,zasady') "plan: $ids" } },

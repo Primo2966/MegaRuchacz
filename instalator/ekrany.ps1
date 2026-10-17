@@ -792,7 +792,7 @@ function Ekran-Wybor($root) {
     $kb = Nowa-Karta $script:SzerKarty $script:TloUwaga
     $kb.Padding = New-Object System.Windows.Forms.Padding(22, 12, 22, 12)
     $kb.Controls.Add((Etykieta-Zawijana 'MegaRuchacza nie ma teraz na tym komputerze' $script:CzZwyklaGruba $script:KolUwaga $script:SzerWnetrza))
-    $lb = Etykieta-Zawijana 'Został usunięty wcześniej. Zaznacz, co chcesz mieć z powrotem - zainstaluję to razem z aplikacją przy zegarze i automatycznymi aktualizacjami. Jeśli przy usuwaniu dane zostały na dysku, wrócą.' $script:CzZwykla $script:KolTekst $script:SzerWnetrza
+    $lb = Etykieta-Zawijana 'Został usunięty wcześniej. Zaznacz, co chcesz mieć z powrotem - zainstaluję to razem z aplikacją przy zegarze, automatycznymi aktualizacjami i Pamięcią rozmów (Lore). Jeśli przy usuwaniu dane zostały na dysku, wrócą.' $script:CzZwykla $script:KolTekst $script:SzerWnetrza
     $lb.Margin = New-Object System.Windows.Forms.Padding(0, 2, 0, 0)
     $kb.Controls.Add($lb)
     $root.Controls.Add($kb)
@@ -823,10 +823,13 @@ function Ekran-Wybor($root) {
   $g.Controls.Add($prz)
   $k.Controls.Add($g)
   $k.Controls.Add((Wiersz-Zawsze))
+  $script:CheckboxyModulow = @{}; $script:TagiModulow = @{}; $script:PanelKopii = $null
+  # Czesci obowiazkowe (dane.ps1 pole Zawsze - Pamiec rozmow) zaraz pod baza, bez pola wyboru.
+  foreach ($id in $script:MODULY.Keys) { if ($script:MODULY[$id].Zawsze) { $k.Controls.Add((Wiersz-Modulu-Zawsze $id)) } }
   $script:CbClaude = $null
   if (-not $zmiana) { $k.Controls.Add((Wiersz-Claude)) }
-  $script:CheckboxyModulow = @{}; $script:TagiModulow = @{}; $script:PanelKopii = $null
   foreach ($id in $script:MODULY.Keys) {
+    if ($script:MODULY[$id].Zawsze) { continue }
     $k.Controls.Add((Wiersz-Modulu $id))
     if ($id -eq 'kopia') {
       $script:PanelKopii = Panel-Kopii
@@ -945,8 +948,28 @@ function Wiersz-Zawsze {
   return $t
 }
 
+# Czesc obowiazkowa (dane.ps1 pole Zawsze; od 17.10.2026 Pamiec rozmow - decyzja uzytkownika, nowy
+# uklad pamieci stoi na Lore): wiersz na wzor "Zawsze:" - nazwa bez pola wyboru, opis i znaczek stanu
+# w TagiModulow (Odswiez-Wybor: "jest", "dodam", gdy na komputerze jej brakuje, "usunę" tylko razem
+# z calym MegaRuchaczem). CheckboxyModulow tej czesci nie ma.
+function Wiersz-Modulu-Zawsze([string]$id) {
+  $m = $script:MODULY[$id]
+  $kol = Kolumny-Wyboru
+  $t = Nowy-Wiersz-Wyboru
+  $n = Etykieta $m.Nazwa $script:CzZwyklaGruba $script:KolTekst
+  $n.Margin = New-Object System.Windows.Forms.Padding(18, 2, 0, 0)
+  $d = Etykieta-Zawijana $m.Opis $script:CzZwykla $script:KolSzary ($kol[1] - 10)
+  $d.Margin = New-Object System.Windows.Forms.Padding(0, 2, 10, 0)
+  $s = Znaczek-Stanu
+  $t.Controls.Add($n, 0, 0); $t.Controls.Add($d, 1, 0); $t.Controls.Add($s, 2, 0)
+  $script:TagiModulow[$id] = $s
+  return $t
+}
+
 # Claude Code na ekranie wyboru (tylko nowa instalacja; zlecenie IN1): domyslnie zaznaczone. Gdy juz
 # jest na komputerze, pole stoi zaznaczone i wylaczone - krok na liscie postepu pokaze "już jest".
+# Tak samo, gdy na komputerze nie ma ZADNEGO narzedzia AI (dane.ps1 Brak-Narzedzia-AI): obowiazkowa
+# Pamiec rozmow nie mialaby sie gdzie zarejestrowac (modul-lore.ps1 odmawia bez narzedzia).
 function Wiersz-Claude {
   $kol = Kolumny-Wyboru
   $t = Nowy-Wiersz-Wyboru
@@ -958,10 +981,13 @@ function Wiersz-Claude {
   $cb.UseMnemonic = $false
   $cb.Margin = New-Object System.Windows.Forms.Padding(0, 0, 8, 0)
   $jest = @($script:Narzedzia | Where-Object { ($_.Id -eq 'claude') -and $_.Jest }).Count -gt 0
+  $potrzebne = (-not $jest) -and (Brak-Narzedzia-AI)
   $opis = 'program, w którym rozmawiasz z AI - zainstaluję go, jeśli go nie ma'
   if ($jest) { $opis = 'program, w którym rozmawiasz z AI - już jest na tym komputerze'; $script:Wybor.Claude = $true }
+  elseif ($potrzebne) { $opis = 'program, w którym rozmawiasz z AI - potrzebny, bo bez niego Pamięć rozmów (Lore) nie ma się gdzie zarejestrować'; $script:Wybor.Claude = $true }
   $cb.Checked = [bool]$script:Wybor.Claude
-  $cb.Enabled = -not $jest
+  $wolno = -not ($jest -or $potrzebne)
+  $cb.Enabled = $wolno
   $cb.Add_CheckedChanged({
     param($nadawca, $e)
     try {
@@ -973,7 +999,7 @@ function Wiersz-Claude {
   })
   $d = Etykieta-Zawijana $opis $script:CzZwykla $script:KolSzary ($kol[1] - 10)
   $d.Margin = New-Object System.Windows.Forms.Padding(0, 2, 10, 0)
-  if (-not $jest) {
+  if ($wolno) {
     $d.Tag = $cb
     $d.Cursor = [System.Windows.Forms.Cursors]::Hand
     $d.Add_Click({ param($nadawca, $e) try { $nadawca.Tag.Checked = -not $nadawca.Tag.Checked } catch { Zanotuj-Wywrotke "klikniecie opisu Claude Code" $_ } })
@@ -1017,16 +1043,18 @@ function Odswiez-Usuwanie-Calosci {
     Ustaw-Tekst $script:LUsunWszystko 'Zdejmie to, co mogło zostać po MegaRuchaczu, a jeśli zechcesz - także Twoje dane.' $script:KolSzary
   } else {
     $script:BUsunWszystko.Text = 'Usuń MegaRuchacza…'
-    Ustaw-Tekst $script:LUsunWszystko 'Usuwa z tego komputera wszystko, co MegaRuchacz zainstalował - także aplikację przy zegarze i automatyczne aktualizacje.' $script:KolSzary
+    Ustaw-Tekst $script:LUsunWszystko 'Usuwa z tego komputera wszystko, co MegaRuchacz zainstalował - także aplikację przy zegarze, automatyczne aktualizacje i Pamięć rozmów (Lore).' $script:KolSzary
   }
 }
 
 # Pierwsze klikniecie pyta (z polem "usun tez moje dane"), drugie - gdy usuwanie juz wybrane - je cofa.
+# Cofniecie wraca do stanu z dysku, a czesc obowiazkowa, ktorej na nim nie ma, i tak zostaje w wyborze.
 function Przelacz-Usuwanie-Calosci {
   if ($script:Wybor.UsunWszystko) {
     $script:Wybor.UsunWszystko = $false; $script:Wybor.UsunDaneWszystko = $false
     foreach ($id in @($script:MODULY.Keys)) { $script:Wybor.Moduly[$id] = [bool]$script:Obecne[$id] }
     $script:Wybor.UsunDane = @{}
+    Wymus-Obowiazkowe
     $script:Wybor.Zestaw = 'wlasny'; $script:Wybor.Wlasny = $null
     Odswiez-Wybor
     return
@@ -1037,7 +1065,7 @@ function Przelacz-Usuwanie-Calosci {
   }
   $tytul = 'Usunąć MegaRuchacza z tego komputera?'
   $linie = @(
-    'Zniknie aplikacja przy zegarze, automatyczne aktualizacje i wszystkie części MegaRuchacza: zasady w plikach Twoich narzędzi AI, pomocnicy, przypomnienia i zadania w tle.',
+    'Zniknie aplikacja przy zegarze, automatyczne aktualizacje, Pamięć rozmów (Lore) i wszystkie pozostałe części MegaRuchacza: zasady w plikach Twoich narzędzi AI, pomocnicy, przypomnienia i zadania w tle.',
     'Usunę to dopiero po kliknięciu „Zastosuj zmiany” - do tego czasu możesz to cofnąć.',
     "Folder z MegaRuchaczem ($($script:Zrodlo)) zostanie - możesz go potem skasować sam.")
   if ((-not $script:BazaJest) -and (@($script:MODULY.Keys | Where-Object { $script:Obecne[$_] }).Count -eq 0)) {
@@ -1242,13 +1270,13 @@ function Odswiez-Kopie {
   Odswiez-Przycisk-Wyboru
 }
 
+# Regula "Wiedza firmy potrzebuje Wiedzy o Tobie albo Pamieci rozmow" odpadla 17.10.2026: srodowisko
+# Lore, w ktorym chodzi Wiedza firmy, stawia obowiazkowa Pamiec rozmow (dane.ps1 pole Zawsze).
 function Odswiez-Przycisk-Wyboru {
   if ($script:Ekran -ne 'wybor') { return }
   $pow = ''
   if ($script:Instalacja.blad) { $pow = 'Najpierw odłóż uszkodzony zapis instalacji (czerwona karta wyżej).' }
   elseif ($script:Wybor.Moduly['kopia'] -and (Blad-Kopii)) { $pow = 'Popraw ustawienia kopii zapasowej.' }
-  # Wiedza firmy chodzi w srodowisku Lore, ktore stawia Wiedza o Tobie albo Pamiec rozmow (dane.ps1).
-  elseif ($script:Wybor.Moduly['wiedzafirmy'] -and -not ($script:Wybor.Moduly['wiedza'] -or $script:Wybor.Moduly['lore'])) { $pow = "Wiedza firmy potrzebuje Wiedzy o Tobie albo Pamięci rozmów - zaznacz jedną z nich." }
   elseif (($script:Tryb -eq 'zmiana') -and ($script:Instalacja.zrodlo -eq 'plik') -and -not (Policz-Zmiany).Cokolwiek) { $pow = 'Nic nie zmieniłeś.' }
   Ustaw-Wlaczony $script:BDalej (-not $pow)
   $script:LStopka.Text = $pow
@@ -1313,6 +1341,8 @@ function Wybierz-Zestaw([string]$zestaw) {
     }
     $script:Wybor.Zestaw = 'wlasny'
   }
+  # Przywrocony wlasny wybor nie moze zdjac czesci obowiazkowej (poza usuwaniem calego MegaRuchacza).
+  Wymus-Obowiazkowe
   Odswiez-Wybor
 }
 
@@ -1352,8 +1382,10 @@ function Po-Zmianie-Modulu($cb) {
   }
   $script:Wybor.Moduly[$id] = [bool]$cb.Checked
   if ($cb.Checked) { $script:Wybor.UsunDane.Remove($id) }
-  # Zaznaczona czesc potrzebuje bazy - usuwanie calego MegaRuchacza przestaje obowiazywac.
+  # Zaznaczona czesc potrzebuje bazy - usuwanie calego MegaRuchacza przestaje obowiazywac, a z nim
+  # wraca czesc obowiazkowa (Pamiec rozmow), ktora usuwanie calosci odznaczylo.
   if ($cb.Checked -and $script:Wybor.UsunWszystko) { $script:Wybor.UsunWszystko = $false; $script:Wybor.UsunDaneWszystko = $false }
+  Wymus-Obowiazkowe
   $script:Wybor.Zestaw = 'wlasny'; $script:Wybor.Wlasny = $null
   Odswiez-Wybor
 }
@@ -1373,8 +1405,10 @@ function Opis-Kopii {
   return "$t)"
 }
 
+# Czesc obowiazkowa (dane.ps1 pole Zawsze) z dopiskiem "(zawsze)" - jak aplikacja przy zegarze.
 function Opis-W-Podsumowaniu([string]$id) {
   $n = Nazwa-Modulu $id
+  if ($script:MODULY.Contains($id) -and $script:MODULY[$id].Zawsze) { return "$n (zawsze)" }
   if ($id -eq 'wiedza') { return "$n - codziennie ok. 40 tys. tokenów z Twojego planu na czytanie rozmów" }
   if ($id -eq 'kopia') { return "$n - $(Opis-Kopii)" }
   return $n

@@ -3,7 +3,9 @@
 #
 # Kolejne kroki stoja na poprzednim (jeden dom przez cala probe):
 #   a  nowa instalacja "Wszystko" z kopia zapasowa do folderu tymczasowego
-#   b  zmiana: bez Pamieci rozmow (Wiedza przechodzi na indeks "tylko tekst"), potem Lore z powrotem
+#   b  rejestr z Pamiecia rozmow wylaczona (lore = false; od 17.10.2026 Lore jest obowiazkowe): okno samo
+#      ma ja w wyborze ("dodam"), "Zastosuj zmiany" doinstalowuje ja prawdziwym skryptem; potem zmiana:
+#      bez Wiedzy o Tobie (Lore zostaje), Wiedza z powrotem
 #   c  zmiana: bez Trybu kierownika
 #   d  "Usun MegaRuchacza" bez danych ->
 #      ponowna instalacja "Wszystko" -> "Usun MegaRuchacza" z danymi
@@ -661,24 +663,36 @@ $script:TestKroki = @(
 )
 '@
 
-$ScenariuszBezLore = @'
+# Rejestr z lore = false (Pamiec rozmow obowiazkowa od 17.10.2026): bez zadnego klikniecia Lore jest
+# w wyborze ze znaczkiem "dodam", bez pola wyboru, a "Zastosuj zmiany" jest wlaczone.
+$ScenariuszLoreZawsze = @'
 $script:TestKroki = @(
-  @{ N = 'wybor z obecnym stanem'; Czekaj = { $script:Ekran -eq 'wybor' }; Sprawdz = { $m = $script:Wybor.Moduly; Tak (($script:Tryb -eq 'zmiana') -and $script:BazaJest -and $m.wiedza -and $m.lore -and $m.kierownik -and $m.skille -and $m.kopia -and (-not $script:BDalej.Enabled)) "tryb $($script:Tryb), baza $($script:BazaJest)" } },
-  @{ N = 'odznacz Pamiec rozmow'; Zrob = { $script:CheckboxyModulow.lore.Checked = $false } },
-  @{ N = 'pytanie - zostaw dane'; Czekaj = { $script:Nakladka.Visible }; Zrzut = '__ETAP__-pytanie'; Zrob = { $script:PrzyciskiPytania[0].PerformClick() }; Sprawdz = { Tak ((-not $script:Wybor.Moduly.lore) -and (-not $script:Wybor.UsunDane.lore) -and $script:BDalej.Enabled) "znaczek: $($script:TagiModulow.lore.Text)" } },
+  @{ N = 'wybor: Lore dodam bez klikania'; Czekaj = { $script:Ekran -eq 'wybor' }; Zrzut = '__ETAP__-wybor'; Sprawdz = { Tak (($script:Tryb -eq 'zmiana') -and $script:BazaJest -and (-not $script:Obecne.lore) -and $script:Wybor.Moduly.lore -and ($script:TagiModulow.lore.Text -eq 'dodam') -and (-not $script:CheckboxyModulow.ContainsKey('lore')) -and $script:BDalej.Enabled) "Lore: '$($script:TagiModulow.lore.Text)', Zastosuj wlaczone: $($script:BDalej.Enabled)" } },
   @{ N = 'zastosuj'; Zrob = { $script:BDalej.PerformClick() } },
-  @{ N = 'podsumowanie'; Czekaj = { $script:Ekran -eq 'podsumowanie' }; Zrzut = '__ETAP__-podsumowanie'; Sprawdz = { $ids = @($script:PlanDoWykonania | ForEach-Object { $_.Id }) -join ','; Tak ($ids -eq 'zapamietaj,lore-Usun,zasady') "plan: $ids" } },
+  @{ N = 'podsumowanie'; Czekaj = { ($script:Ekran -eq 'podsumowanie') -and $script:Sprawdzenie -and ($script:Sprawdzenie.Zadanie.Stan -ne 'trwa') }; Limit = 180; Zrzut = '__ETAP__-podsumowanie'; Sprawdz = { $ids = @($script:PlanDoWykonania | ForEach-Object { $_.Id }) -join ','; Tak ($ids -eq 'zapamietaj,zaleznosci-Instaluj,lore-Instaluj,zasady') "plan: $ids" } },
   @{ N = 'tak, zastosuj'; Zrob = { $script:BDalej.PerformClick() } },
   __KONIEC__
 )
 '@
 
-$ScenariuszZLore = @'
+$ScenariuszBezWiedzy = @'
 $script:TestKroki = @(
-  @{ N = 'wybor bez Lore'; Czekaj = { $script:Ekran -eq 'wybor' }; Sprawdz = { Tak (($script:Tryb -eq 'zmiana') -and (-not $script:Wybor.Moduly.lore) -and $script:Wybor.Moduly.wiedza) "lore $($script:Wybor.Moduly.lore)" } },
-  @{ N = 'zaznacz Pamiec rozmow'; Zrob = { $script:CheckboxyModulow.lore.Checked = $true }; Sprawdz = { Tak (($script:TagiModulow.lore.Text -eq 'dodam') -and $script:BDalej.Enabled) "znaczek: $($script:TagiModulow.lore.Text)" } },
+  @{ N = 'wybor z obecnym stanem'; Czekaj = { $script:Ekran -eq 'wybor' }; Sprawdz = { $m = $script:Wybor.Moduly; Tak (($script:Tryb -eq 'zmiana') -and $script:BazaJest -and $m.wiedza -and $m.lore -and $m.kierownik -and $m.skille -and $m.kopia -and (-not $script:BDalej.Enabled) -and ($script:TagiModulow.lore.Text -eq 'jest')) "tryb $($script:Tryb), baza $($script:BazaJest), Lore '$($script:TagiModulow.lore.Text)'" } },
+  @{ N = 'odznacz Wiedze o Tobie'; Zrob = { $script:CheckboxyModulow.wiedza.Checked = $false } },
+  @{ N = 'pytanie - zostaw dane'; Czekaj = { $script:Nakladka.Visible }; Zrzut = '__ETAP__-pytanie'; Zrob = { $script:PrzyciskiPytania[0].PerformClick() }; Sprawdz = { Tak ((-not $script:Wybor.Moduly.wiedza) -and (-not $script:Wybor.UsunDane.wiedza) -and $script:Wybor.Moduly.lore -and $script:BDalej.Enabled) "znaczek: $($script:TagiModulow.wiedza.Text)" } },
   @{ N = 'zastosuj'; Zrob = { $script:BDalej.PerformClick() } },
-  @{ N = 'podsumowanie'; Czekaj = { ($script:Ekran -eq 'podsumowanie') -and $script:Sprawdzenie -and ($script:Sprawdzenie.Zadanie.Stan -ne 'trwa') }; Limit = 180; Sprawdz = { $ids = @($script:PlanDoWykonania | ForEach-Object { $_.Id }) -join ','; Tak ($ids -eq 'zapamietaj,zaleznosci-Instaluj,lore-Instaluj,zasady') "plan: $ids" } },
+  @{ N = 'podsumowanie'; Czekaj = { $script:Ekran -eq 'podsumowanie' }; Zrzut = '__ETAP__-podsumowanie'; Sprawdz = { $ids = @($script:PlanDoWykonania | ForEach-Object { $_.Id }) -join ','; Tak ($ids -eq 'zapamietaj,wiedza-Usun,zasady') "plan: $ids" } },
+  @{ N = 'tak, zastosuj'; Zrob = { $script:BDalej.PerformClick() } },
+  __KONIEC__
+)
+'@
+
+$ScenariuszZWiedza = @'
+$script:TestKroki = @(
+  @{ N = 'wybor bez Wiedzy'; Czekaj = { $script:Ekran -eq 'wybor' }; Sprawdz = { Tak (($script:Tryb -eq 'zmiana') -and (-not $script:Wybor.Moduly.wiedza) -and $script:Wybor.Moduly.lore -and ($script:TagiModulow.lore.Text -eq 'jest')) "wiedza $($script:Wybor.Moduly.wiedza), lore $($script:Wybor.Moduly.lore)" } },
+  @{ N = 'zaznacz Wiedze o Tobie'; Zrob = { $script:CheckboxyModulow.wiedza.Checked = $true }; Sprawdz = { Tak (($script:TagiModulow.wiedza.Text -eq 'dodam') -and $script:BDalej.Enabled) "znaczek: $($script:TagiModulow.wiedza.Text)" } },
+  @{ N = 'zastosuj'; Zrob = { $script:BDalej.PerformClick() } },
+  @{ N = 'podsumowanie'; Czekaj = { ($script:Ekran -eq 'podsumowanie') -and $script:Sprawdzenie -and ($script:Sprawdzenie.Zadanie.Stan -ne 'trwa') }; Limit = 180; Sprawdz = { $ids = @($script:PlanDoWykonania | ForEach-Object { $_.Id }) -join ','; Tak ($ids -eq 'zapamietaj,zaleznosci-Instaluj,wiedza-Instaluj,zasady') "plan: $ids" } },
   @{ N = 'tak, zastosuj'; Zrob = { $script:BDalej.PerformClick() } },
   __KONIEC__
 )
@@ -713,7 +727,7 @@ $script:TestKroki = @(
 
 $ScenariuszPonownie = @'
 $script:TestKroki = @(
-  @{ N = 'wybor po odinstalowaniu'; Czekaj = { $script:Ekran -eq 'wybor' }; Zrzut = '__ETAP__-wybor'; Sprawdz = { $m = $script:Wybor.Moduly; Tak (($script:Tryb -eq 'zmiana') -and (-not $script:BazaJest) -and (-not ($m.wiedza -or $m.lore -or $m.kierownik -or $m.skille -or $m.kopia)) -and ($script:ZnaczekZawsze.Text -eq '')) "tryb $($script:Tryb), baza $($script:BazaJest), znaczek bazy '$($script:ZnaczekZawsze.Text)'" } },
+  @{ N = 'wybor po odinstalowaniu (Lore obowiazkowe: dodam)'; Czekaj = { $script:Ekran -eq 'wybor' }; Zrzut = '__ETAP__-wybor'; Sprawdz = { $m = $script:Wybor.Moduly; Tak (($script:Tryb -eq 'zmiana') -and (-not $script:BazaJest) -and $m.lore -and (-not ($m.wiedza -or $m.kierownik -or $m.skille -or $m.kopia)) -and ($script:ZnaczekZawsze.Text -eq 'dodam') -and ($script:TagiModulow.lore.Text -eq 'dodam') -and $script:BDalej.Enabled) "tryb $($script:Tryb), baza $($script:BazaJest), znaczek bazy '$($script:ZnaczekZawsze.Text)', Lore '$($script:TagiModulow.lore.Text)'" } },
   @{ N = 'Wszystko'; Zrob = { $script:BWszystko.PerformClick() }; Sprawdz = { Tak (($script:ZnaczekZawsze.Text -eq 'dodam') -and $script:Wybor.Moduly.kopia) "znaczek bazy: $($script:ZnaczekZawsze.Text)" } },
   @{ N = 'kopia: ten sam folder'; Zrob = { $script:PoleCelu.Text = '__KOPIE__'; foreach ($p in @($script:ListaZrodel.Controls)) { $cb = $p.Controls[0]; if ($cb.Tag.Sciezka -notlike '__DOM__*') { $cb.Checked = $false } } } },
   @{ N = 'zastosuj'; Czekaj = { $script:BDalej.Enabled }; Zrob = { $script:BDalej.PerformClick() } },
@@ -763,16 +777,26 @@ try {
   [void](Straznik-Jak-Hook 'a-nowa' $true)
 
   if (-not (Chce 'b')) { throw 'STOP-DOKROKU' }
-  # --- b. bez Lore, potem Lore z powrotem
-  [void](Okno 'b1-bez-lore' $ScenariuszBezLore)
+  # --- b0. rejestr z lore = false (Lore zdjete starszym instalatorem): okno ma Lore w wyborze, "Zastosuj"
+  #     doinstalowuje je prawdziwym modul-lore.ps1, a rejestr wraca do lore = true
+  $rejB0 = Rejestr
+  $rejB0.moduly.lore = $false
+  [System.IO.File]::WriteAllText((Join-Path $Dom '.claude\mr\instalacja.json'), ($rejB0 | ConvertTo-Json -Depth 6), $Utf8)
+  Sprawdz 'b0-lore-brak-w-rejestrze: rejestr ustawiony na lore = false, reszta wlaczona' (((Rejestr).moduly.lore -eq $false) -and (Rejestr).moduly.wiedza -and (Rejestr).moduly.kierownik) ((Rejestr).moduly | ConvertTo-Json -Compress)
+  $tx = @(Okno 'b0-lore-brak-w-rejestrze' $ScenariuszLoreZawsze)
+  Sprawdz 'b0-lore-brak-w-rejestrze: krok lore-Instaluj (prawdziwy skrypt) skonczony bez bledu' (@($tx | Where-Object { $_ -match '^KROK lore-Instaluj = (ok|uwaga) ' }).Count -eq 1) (($tx | Where-Object { $_ -like 'KROK *' }) -join ' | ')
   [void](Czekaj-Na-Tlo)
-  [void](Przeglad 'b1-bez-lore' @{ wiedza = $true; lore = $false; kierownik = $true; skille = $true; kopia = $true; wiedzafirmy = $true; baza = $true; dane = $true; coWiem = $CoWiem })
-  [void](Straznik-Jak-Hook 'b1-bez-lore' $true)
-  Zasiej-Model   # Lore Usun zdjal model; ponowne pobranie 496 MB zastepuje kopia
-  [void](Okno 'b2-z-lore' $ScenariuszZLore)
+  [void](Przeglad 'b0-lore-brak-w-rejestrze' @{ wiedza = $true; lore = $true; kierownik = $true; skille = $true; kopia = $true; wiedzafirmy = $true; baza = $true; dane = $true; coWiem = $CoWiem })
+  [void](Straznik-Jak-Hook 'b0-lore-brak-w-rejestrze' $true)
+  # --- b1/b2. bez Wiedzy o Tobie (Lore zostaje - jego rdzen trzyma srodowisko i indeks z wektorami), potem Wiedza z powrotem
+  [void](Okno 'b1-bez-wiedzy' $ScenariuszBezWiedzy)
   [void](Czekaj-Na-Tlo)
-  [void](Przeglad 'b2-z-lore' @{ wiedza = $true; lore = $true; kierownik = $true; skille = $true; kopia = $true; wiedzafirmy = $true; baza = $true; dane = $true; coWiem = $CoWiem })
-  [void](Straznik-Jak-Hook 'b2-z-lore' $true)
+  [void](Przeglad 'b1-bez-wiedzy' @{ wiedza = $false; lore = $true; kierownik = $true; skille = $true; kopia = $true; wiedzafirmy = $true; baza = $true; dane = $true; coWiem = $CoWiem })
+  [void](Straznik-Jak-Hook 'b1-bez-wiedzy' $false)
+  [void](Okno 'b2-z-wiedza' $ScenariuszZWiedza)
+  [void](Czekaj-Na-Tlo)
+  [void](Przeglad 'b2-z-wiedza' @{ wiedza = $true; lore = $true; kierownik = $true; skille = $true; kopia = $true; wiedzafirmy = $true; baza = $true; dane = $true; coWiem = $CoWiem })
+  [void](Straznik-Jak-Hook 'b2-z-wiedza' $true)
 
   if (-not (Chce 'c')) { throw 'STOP-DOKROKU' }
   # --- c. bez kierownika

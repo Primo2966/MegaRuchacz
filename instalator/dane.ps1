@@ -14,47 +14,51 @@
 # Przestanie / Dane: zdania do pytania o usuniecie - Dane opisuje to, co modul kasuje z -UsunDane
 # (wg naglowkow modul-*.ps1 P59b; kierownik danych w domu nie trzyma - pytanie bez pola).
 # Opis-Danych dokleja zaleznosc wiedza <-> lore (baze rozmow kasuje tylko ostatni z nich).
+# Zawsze: czesc obowiazkowa - bez pola wyboru, w wyborze zawsze (Wymus-Obowiazkowe), zdejmuje ja tylko
+# usuniecie calego MegaRuchacza. Od 17.10.2026 Pamiec rozmow (decyzja uzytkownika: nowy uklad pamieci
+# stoi na Lore - CLAUDE.md trzyma sam rdzen wiedzy, reszte Claude dostaje z Lore).
 $script:MODULY = [ordered]@{
   wiedza = [pscustomobject]@{
-    Id = 'wiedza'; Nazwa = 'Wiedza o Tobie'
+    Id = 'wiedza'; Nazwa = 'Wiedza o Tobie'; Zawsze = $false
     Opis = 'pliki z wiedzą + codzienne czytanie rozmów i poprawianie tych plików (ok. 40 tys. tokenów dziennie)'
     Programy = @('uv', 'python', 'node')
     Przestanie = 'uczyć się o Tobie z rozmów i poprawiać pliki z wiedzą'
     Dane = 'pliki z wiedzą o Tobie (folder wiedza, sekcję „Co wiem” i kopie dzienne)'
   }
   lore = [pscustomobject]@{
-    Id = 'lore'; Nazwa = 'Pamięć rozmów (Lore)'
-    Opis = 'wyszukiwanie we wszystkich dawnych rozmowach + podpowiedzi „Z ARCHIWUM”'
+    Id = 'lore'; Nazwa = 'Pamięć rozmów (Lore)'; Zawsze = $true
+    Opis = 'Claude przeszukuje wszystkie Twoje dawne rozmowy i podsuwa pasujące fragmenty („Z ARCHIWUM”). Na tym opiera się reszta pamięci, dlatego jest zawsze. Jednorazowo pobiera ok. 500 MB.'
     Programy = @('uv', 'python', 'node')
     Przestanie = 'przeszukiwać dawne rozmowy i podpowiadać „Z ARCHIWUM”'
     Dane = 'bazę do przeszukiwania dawnych rozmów i stan podpowiedzi „Z ARCHIWUM” (same rozmowy zostają)'
   }
   kierownik = [pscustomobject]@{
-    Id = 'kierownik'; Nazwa = 'Tryb kierownika'
+    Id = 'kierownik'; Nazwa = 'Tryb kierownika'; Zawsze = $false
     Opis = 'zasady MegaRuchacza, pomocnicy (workerzy), rejestr i mapa'
     Programy = @('node')
     Przestanie = 'pracować w trybie kierownika z pomocnikami'
     Dane = ''
   }
   skille = [pscustomobject]@{
-    Id = 'skille'; Nazwa = 'Polecane skille'
+    Id = 'skille'; Nazwa = 'Polecane skille'; Zawsze = $false
     Opis = 'gotowe umiejętności, same się aktualizują'
     Programy = @('git')
     Przestanie = 'instalować i aktualizować polecane skille'
     Dane = 'zapis opieki nad skillami (kopie źródeł, kopie zapasowe, dziennik) - same skille zostają w Twoim folderze'
   }
   kopia = [pscustomobject]@{
-    Id = 'kopia'; Nazwa = 'Kopia zapasowa'
+    Id = 'kopia'; Nazwa = 'Kopia zapasowa'; Zawsze = $false
     Opis = 'codzienna kopia do wybranego folderu'
     Programy = @('uv', 'python')
     Przestanie = 'robić codzienną kopię zapasową'
     Dane = 'zapis postępu kopii (same kopie w wybranym folderze zostają nietknięte)'
   }
   # 2026-10-14 (Wiedza firmy, krok 3, zadanie Z3): nazwa i opis ze zlecenia - jedno proste zdanie
-  # i jedno o tym, ze ustalenia z rozmow ida do wspolnej bazy firmy. Chodzi w srodowisku Lore, wiec
-  # potrzebuje Wiedzy o Tobie albo Pamieci rozmow (Odswiez-Przycisk-Wyboru w ekrany.ps1).
+  # i jedno o tym, ze ustalenia z rozmow ida do wspolnej bazy firmy. Chodzi w srodowisku Lore - od
+  # 17.10.2026 jest ono zawsze (Pamiec rozmow obowiazkowa), wiec regula "potrzebuje Wiedzy o Tobie albo
+  # Pamieci rozmow" z Odswiez-Przycisk-Wyboru (ekrany.ps1) odpadla.
   wiedzafirmy = [pscustomobject]@{
-    Id = 'wiedzafirmy'; Nazwa = 'Wiedza firmy'
+    Id = 'wiedzafirmy'; Nazwa = 'Wiedza firmy'; Zawsze = $false
     # w "..." a nie '...': apostrof ’ PowerShell bierze za koniec napisu w apostrofach
     Opis = "Claude zna to, co ustaliła cała firma, i korzysta z tego w rozmowach. Ustalenia z Twoich rozmów z Claude’em trafiają do wspólnej bazy firmy."
     Programy = @('uv', 'python')
@@ -169,6 +173,13 @@ function Wykryj-Narzedzia {
     $wynik += [pscustomobject]@{ Id = $n.Id; Nazwa = $n.Nazwa; Jest = ($slady.Count -gt 0); Slady = ($slady -join ', ') }
   }
   return $wynik
+}
+
+# Zadnego narzedzia AI na komputerze (ani Claude Code, ani Codeksa, ani OpenCode) - Pamiec rozmow nie
+# ma wtedy gdzie zarejestrowac serwera wyszukiwania (modul-lore.ps1 odmawia), wiec przy nowej
+# instalacji Claude Code staje sie obowiazkowe (Wymus-Obowiazkowe, ekrany.ps1 Wiersz-Claude).
+function Brak-Narzedzia-AI {
+  return (@($script:Narzedzia | Where-Object { $_ -and $_.Jest }).Count -eq 0)
 }
 
 # Czy stoi baza (aplikacja przy zegarze + aktualizacje): hook straznika w ~\.claude\settings.json.
@@ -371,9 +382,30 @@ function Blad-Kopii {
 
 # --- roznica i plan ------------------------------------------------------------
 
+# Czesci obowiazkowe (pole Zawsze w $MODULY) sa w wyborze zawsze - poza usuwaniem calego MegaRuchacza
+# (UsunWszystko), jedyna droga ich zdjecia. Obecne zostaje prawdziwe: czesci, ktorej na komputerze
+# brakuje (rejestr: lore = false), okno pokazuje "dodam", a plan ma jej krok Instaluj. Wolane przy
+# kazdej zmianie wyboru w oknie (ekrany.ps1) i - druga linia obrony - na poczatku Policz-Zmiany
+# i Zbuduj-Plan. Kazde nadpisanie idzie do dziennika: cos probowalo zdjac czesc obowiazkowa.
+function Wymus-Obowiazkowe {
+  if (-not $script:Wybor) { return }
+  if ($script:Wybor.UsunWszystko) { return }
+  foreach ($id in @($script:MODULY.Keys)) {
+    if (-not $script:MODULY[$id].Zawsze) { continue }
+    if (-not $script:Wybor.Moduly[$id]) { Zapisz-Dziennik "wybor bez czesci obowiazkowej $id - wlaczam ja z powrotem (zdejmuje ja tylko usuniecie calego MegaRuchacza)" }
+    $script:Wybor.Moduly[$id] = $true
+    if ($script:Wybor.UsunDane.ContainsKey($id)) { $script:Wybor.UsunDane.Remove($id) }
+  }
+  if (($script:Tryb -eq 'nowy') -and (-not $script:Wybor.Claude) -and (Brak-Narzedzia-AI)) {
+    Zapisz-Dziennik 'wybor bez Claude Code na komputerze bez zadnego narzedzia AI - wlaczam je z powrotem (Pamiec rozmow nie mialaby sie gdzie zarejestrowac)'
+    $script:Wybor.Claude = $true
+  }
+}
+
 # Co sie zmieni: Dodaj / Usun / Zostaje / Nie (nie ma i nie bedzie), KopiaZmieniona (kopia zostaje,
 # ale z innymi ustawieniami - modul-kopia jeszcze raz).
 function Policz-Zmiany {
+  Wymus-Obowiazkowe
   $dodaj = @(); $usun = @(); $zostaje = @(); $nie = @()
   foreach ($id in $script:MODULY.Keys) {
     $teraz = [bool]$script:Obecne[$id]; $chce = [bool]$script:Wybor.Moduly[$id]
@@ -506,7 +538,9 @@ function Juz-Bylo($z) {
 # KOLEJNOSC (umowa P59b, raport P59b sekcja 1): zaleznosci PRZED baza - baza wymaga gita, a do P64
 # okno wolalo baze przed zaleznosci.ps1, wiec na komputerze bez gita krok bazy padal zawsze, takze
 # po "Sprobuj ponownie". Usuniecia ida przed doinstalowaniem programow (nie potrzebuja ich).
+# Czesci obowiazkowe (Wymus-Obowiazkowe): Usun Pamieci rozmow jest w planie tylko przy UsunWszystko.
 function Zbuduj-Plan {
+  Wymus-Obowiazkowe
   $zm = Policz-Zmiany
   $script:ZmianyPlanu = $zm
   $plan = New-Object System.Collections.ArrayList

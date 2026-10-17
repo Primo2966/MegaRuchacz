@@ -17,6 +17,8 @@
 #   zmiana     - jest rejestr ~\.claude\mr\instalacja.json albo slady starej instalacji: wybor
 #                z obecnym stanem -> podsumowanie -> zmiany -> gotowe. Odznaczenie zainstalowanej
 #                czesci pyta w oknie, z polem "usun tez moje dane" (domyslnie odznaczonym).
+#   W obu trybach Pamiec rozmow (Lore) jest obowiazkowa (od 17.10.2026): bez pola wyboru, zawsze
+#   w wyborze (dane.ps1 pole Zawsze, Wymus-Obowiazkowe) - zdejmuje ja tylko "Usuń MegaRuchacza…".
 #
 # KOLEJNOSC (umowa P59c z P59b, od P64): usuniecia -> zaleznosci.ps1 -> baza (nowa instalacja albo tryb
 #   zmiany bez bazy) -> wybrane moduly -> wpisz-zasady.ps1. "Usuń MegaRuchacza…": Usun kazdego modulu -> baza Usun.
@@ -255,6 +257,14 @@ function Ustal-Stan-Poczatkowy {
     # Makieta uzgodniona z uzytkownikiem: cztery czesci zaznaczone, kopia zapasowa nie.
     foreach ($id in $script:MODULY.Keys) { $mod[$id] = $true }
     $mod['kopia'] = $false
+  }
+  # Czesci obowiazkowe (dane.ps1 pole Zawsze - od 17.10.2026 Pamiec rozmow) sa w wyborze w obu trybach,
+  # takze gdy rejestr mowi, ze ich nie ma: Obecne zostaje prawdziwe, wiec okno pokazuje "dodam",
+  # a "Zastosuj zmiany" je doinstaluje.
+  foreach ($id in $script:MODULY.Keys) {
+    if (-not $script:MODULY[$id].Zawsze) { continue }
+    $mod[$id] = $true
+    if (($script:Tryb -eq 'zmiana') -and -not $script:Obecne[$id]) { Zapisz-Dziennik "czesc obowiazkowa $id nie jest zainstalowana - jest w wyborze, doinstaluje ja ""Zastosuj zmiany""" }
   }
   $zestaw = 'wlasny'
   if (@($mod.Values | Where-Object { -not $_ }).Count -eq 0) { $zestaw = 'wszystko' }

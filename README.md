@@ -167,16 +167,26 @@ z wyszukiwaniem, sama aktualizacja z GitHuba i aplikacja w zasobniku.
 
 ### Co wybierasz w instalatorze
 
-Zawsze dostajesz **aplikację przy zegarze** i **automatyczne aktualizacje**. Resztę
-zaznaczasz sam:
+Zawsze dostajesz **aplikację przy zegarze**, **automatyczne aktualizacje** i **Pamięć
+rozmów (Lore)**. Resztę zaznaczasz sam:
 
 | Część | Co daje |
 |---|---|
-| **Wiedza o Tobie** | „Co wiem” w `CLAUDE.md` i folder `wiedza`; raz dziennie MegaRuchacz sam dopisuje fakty z Twoich rozmów (opis wyżej). Działa także bez Pamięci rozmów. |
-| **Pamięć rozmów (Lore)** | Claude przeszukuje wszystkie Twoje dawne rozmowy, a do wiadomości dokleja pasujące fragmenty. Jednorazowo pobiera ok. 500 MB. |
+| **Wiedza o Tobie** | „Co wiem” w `CLAUDE.md` i folder `wiedza`; raz dziennie MegaRuchacz sam dopisuje fakty z Twoich rozmów (opis wyżej). |
 | **Tryb kierownika** | Claude rozdaje zadania workerom (opis na samej górze). |
 | **Polecane skille** | Zestaw skilli z opisami po polsku; aplikacja sama pilnuje ich nowych wersji. |
 | **Kopia zapasowa** | Codzienna kopia do folderu, który wskażesz (patrz „Ochrona przed utratą”). |
+
+**Pamięć rozmów (Lore)** — Claude przeszukuje wszystkie Twoje dawne rozmowy, a do
+wiadomości dokleja pasujące fragmenty („Z ARCHIWUM”). Na niej opiera się reszta pamięci:
+w `CLAUDE.md` zostaje sam stały rdzeń wiedzy, a resztę Claude dostaje z Lore. Dlatego od
+17.10.2026 jest obowiązkowa — w oknie instalatora nie ma przy niej pola do odznaczenia,
+a usunąć ją można tylko razem z całym MegaRuchaczem („Usuń MegaRuchacza…”). Jednorazowo
+pobiera ok. 500 MB.
+
+Komputer, na którym brakuje Lore (bo np. odznaczono je w starszej wersji instalatora),
+dostaje je sam w ciągu godziny od aktualizacji: ten sam pasek i komunikat co przy
+zwykłej aktualizacji, pierwsze czytanie rozmów idzie w tle, żadnych okien.
 
 Zdanie możesz zmienić w każdej chwili przyciskiem **„Zmień instalację”** w aplikacji
 przy zegarze. Gdy coś usuwasz, Twoje dane zostają, chyba że sam zaznaczysz „usuń też
@@ -307,8 +317,8 @@ głównie przy instalacji ręcznej.
   i opencode pamięć działa w całości, a tryb workerów w wersji okrojonej — co
   dokładnie odpada, mówi tabela „Na maszynie z samym Codeksem" (pod opencode jest
   tak samo, tylko nic nie trzeba zatwierdzać).
-- **Python 3.12 + `uv`** — tylko jeśli chcesz Pamięć rozmów (Lore) albo Wiedzę
-  o Tobie.
+- **Python 3.12 + `uv`** — zawsze: chodzi na nich Pamięć rozmów (Lore), która jest
+  obowiązkowa (Wiedza o Tobie korzysta z tego samego środowiska).
 
 ## Instalacja
 
@@ -355,8 +365,8 @@ dodaj `-WymusProjektowo`.
 
 Instalator **przed zrobieniem czegokolwiek mówi, co zamierza**: jakie pliki zapisze
 i gdzie, że dopisze hooki uruchamiane przy starcie sesji, i że wpisze zasady do
-Twoich plików instrukcji. O każdy moduł pyta osobno — odmowa `pamiec` nie blokuje
-reszty.
+Twoich plików instrukcji. O każdy moduł pyta osobno — poza `pamiec` (Lore), który
+jest obowiązkowy i wchodzi zawsze.
 
 **Na koniec sam sprawdza, czy to naprawdę działa** i wypisuje wynik punkt po
 punkcie. Jeśli coś nie wyszło, mówi wprost co i kończy błędem, zamiast udawać
@@ -412,9 +422,9 @@ Dalej poprawki wchodzą do projektu według wersji:
 
 **Czego strażnik nie zrobi za Ciebie:** nie włączy nowej funkcji (drugiej cyfry)
 ani przebudowy (pierwszej) — od tego jest `wdroz.ps1`, a strażnik podaje gotową
-komendę. Nie zaktualizuje też modułu `pamiec` (Lore): ten aktualizuje się
-wyłącznie własnym instalatorem, bo potrafi kosztować pobieranie i zadanie
-w harmonogramie.
+komendę. Modułu `pamiec` (Lore) nie musisz pilnować: aktualizuje się razem
+z całym MegaRuchaczem, a gdy na komputerze go brakuje, doinstaluje go automatyczna
+aktualizacja z aplikacji przy zegarze.
 
 Odmowa nowej funkcji jest zapamiętywana — nie będzie o nią pytać przy każdym
 oknie. **Twoje pliki robocze** (rejestr zadań, mapa projektu) nigdy nie są
@@ -438,14 +448,14 @@ limitu**; ucinałby to, co narzędzie przepuszcza. Codex tnie i milczy, więc za
 są wyłącznie po jego stronie. To jest pomiar, nie ostrożne założenie — nie ma
 czego „poprawiać na wszelki wypadek".
 
-## Dwa moduły — bierzesz jeden albo oba
+## Dwa moduły — jeden obowiązkowy
 
-Narzędzie nie jest jedną całością. Składa się z **dwóch niezależnych modułów**
-i każdy instaluje się osobno. Możesz wziąć sam tryb pracy, samą pamięć, albo obydwa.
+Narzędzie składa się z **dwóch modułów**. Tryb pracy (`workerzy`) bierzesz albo nie,
+a pamięć (`pamiec`, czyli Lore) jest **obowiązkowa** — stoi na niej cała reszta pamięci.
 
 Instalator z oknem dzieli to drobniej (patrz „Co wybierasz w instalatorze”): moduł
 `workerzy` to tam **Tryb kierownika**, a `pamiec` rozpada się na **Pamięć rozmów
-(Lore)** i **Wiedzę o Tobie** — tę drugą można mieć bez pierwszej.
+(Lore)** — zawsze — i **Wiedzę o Tobie**, którą zaznaczasz sam.
 
 ### Moduł `workerzy` — rozdawanie roboty
 
@@ -469,9 +479,9 @@ starcie — jak, mówi „Lore — pamięć rozmów".
 
 **Co kosztuje:** ~500 MB jednorazowego pobrania (model), miejsce na bazę (u autora
 170 MB po roku), wymaga Pythona, raz dziennie wywołanie modelu na naukę,
-i — najważniejsze — **daje agentowi dostęp do
-treści wszystkich Twoich rozmów na tej maszynie**. Instalator pyta o to osobno
-i wprost. Nic nie wychodzi poza Twój komputer.
+i — najważniejsze — **Lore jest obowiązkowe: daje agentowi dostęp do
+treści wszystkich Twoich rozmów na tej maszynie**. Nic nie wychodzi poza Twój
+komputer.
 
 ## Gdzie to działa — uczciwie
 
