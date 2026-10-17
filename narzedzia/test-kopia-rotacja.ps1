@@ -10,6 +10,8 @@
 #      usuniety przy zachowanym indeksie = nowa pelna kopia (nie dziurawy przyrost)
 #   M. brak miejsca = stan=BLAD, przyczyna=BRAK_MIEJSCA, linia ALARM, nic nie skopiowane;
 #      brak folderu nad celem = przyczyna=BRAK_CELU; okno nadzorcy: brak miejsca to sprawa pilna
+#   W. wykluczenie z rejestru instalacji (jak C:\dev\Afiniti): nie idzie, znika z indeksu,
+#      po zdjeciu wykluczenia wraca do kopii
 #   S. proby negatywne: sabotaze na kopii skryptu kopii - kazdy MUSI byc zlapany.
 # Wszystko w %TEMP% (sztuczny dom, sztuczny cel) - prawdziwy G:\ ani dom nie sa ruszane.
 #   powershell -NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File narzedzia\test-kopia-rotacja.ps1 [-Zostaw]
@@ -163,6 +165,40 @@ function Scen-Miejsce([string]$skrypt, [string]$kat) {
   return [pscustomobject]@{ Proby = $p; Dom = $H; StanBrakMiejsca = $s }
 }
 
+# ---------------------------------------------------------------- W. wykluczenie z rejestru instalacji
+# Jak C:\dev\Afiniti 17.10.2026: wykluczenie w ~\.claude\mr\instalacja.json (kopia.wykluczenia) -
+# przetrwa aktualizacje repo. Kopia bez -Zrodla/-Cel, ustawienia tylko z rejestru.
+function Rejestr([string]$H, [string]$proj, [string]$cel, [bool]$zWykluczeniem) {
+  $w = @(); if ($zWykluczeniem) { $w = @(@{ sciezka = "$proj\grafiki"; powod = "pliki robocze grafik (test)"; katalog = $true }) }
+  $j = @{ wersja = 1; moduly = @{ kopia = $true }; kopia = @{ zrodla = @($proj); cel = $cel; wykluczenia = $w } } | ConvertTo-Json -Depth 6
+  Tekst "$H\.claude\mr\instalacja.json" $j
+}
+function Scen-Wykluczenie([string]$skrypt, [string]$kat) {
+  $H = Join-Path $kat "dom"; $cel = Join-Path $kat "cel"; $proj = Join-Path $H "proj"
+  New-Item -ItemType Directory -Force -Path $cel | Out-Null
+  Tekst "$proj\a.txt" "zwykly plik"
+  Tekst "$proj\grafiki\duza.afdesign" "grafika robocza" ([datetime]"2026-09-30")
+  $wsp = @("-KatalogDomowy", $H)
+  $p = [ordered]@{}
+  Rejestr $H $proj $cel $false
+  $r1 = Odpal $skrypt ($wsp + @("-Data", "2026-10-01"))
+  Rejestr $H $proj $cel $true
+  Tekst "$proj\a.txt" "zwykly plik, zmieniony" ([datetime]"2026-10-02")
+  Tekst "$proj\grafiki\duza.afdesign" "grafika robocza, zmieniona" ([datetime]"2026-10-02")   # bez wykluczenia poszlaby do zmiany\
+  $r2 = Odpal $skrypt ($wsp + @("-Data", "2026-10-02"))
+  $z2 = "$cel\zmiany\2026-10-02"
+  $idx = Czytaj "$H\.claude\mr\kopia-indeks.tsv"
+  $p["wykluczenie z rejestru: grafiki nie ida, reszta tak, ustawienia z rejestru"] = @((($r1.Kod -eq 0) -and ($r2.Kod -eq 0) -and (Test-Path -LiteralPath (W-Kopii $z2 "$proj\a.txt")) -and
+    -not (Test-Path -LiteralPath (W-Kopii $z2 "$proj\grafiki")) -and ((Czytaj "$H\.claude\mr\kopia-stan.txt") -match '(?m)^ustawienia=rejestr instalacji')), "kody $($r1.Kod)/$($r2.Kod): $($r2.Tekst)")
+  $p["wykluczony plik znika z indeksu (nie udaje, ze jest w kopii)"] = @((($idx -match 'a\.txt') -and -not ($idx -match 'duza\.afdesign')), "indeks: $idx")
+  # grafika wraca do stanu z 1. przebiegu (ten sam rozmiar i czas co w indeksie z 01.10)
+  Tekst "$proj\grafiki\duza.afdesign" "grafika robocza" ([datetime]"2026-09-30")
+  Rejestr $H $proj $cel $false
+  $r3 = Odpal $skrypt ($wsp + @("-Data", "2026-10-03"))
+  $p["po zdjeciu wykluczenia grafiki wracaja do kopii (przyrost ich nie gubi)"] = @((($r3.Kod -eq 0) -and (Test-Path -LiteralPath (W-Kopii "$cel\zmiany\2026-10-03" "$proj\grafiki\duza.afdesign"))), "kod $($r3.Kod): $($r3.Tekst)")
+  return $p
+}
+
 $kopia = Join-Path $Zrodlo "narzedzia\kopia-zapasowa.ps1"
 try {
   New-Item -ItemType Directory -Force -Path $T | Out-Null
@@ -175,6 +211,9 @@ try {
   Write-Host "--- M. brak miejsca i brak celu"
   $M = Scen-Miejsce $kopia (Join-Path $T "m")
   foreach ($n in $M.Proby.Keys) { Sprawdz $n $M.Proby[$n][0] $M.Proby[$n][1] }
+  Write-Host "--- W. wykluczenie z rejestru instalacji"
+  $PW = Scen-Wykluczenie $kopia (Join-Path $T "w")
+  foreach ($n in $PW.Keys) { Sprawdz $n $PW[$n][0] $PW[$n][1] }
 
   # okno nadzorcy (zasobnik\nadzorca\stan-kopia.ps1) na stanie "brak miejsca" - sprawa pilna od razu
   . (Join-Path $Zrodlo "zasobnik\stan-nadzorcy.ps1")
@@ -207,15 +246,19 @@ try {
     @{ Nazwa = "pusty folder kopii = zwykly przyrost (dziurawa kopia)"; Scen = "R"; Proba = "folder kopii pusty, indeks jest: robi PELNA ze wszystkimi plikami, nie przyrost"
        Kotwica = 'if (-not $Pelna -and $indeksJest -and $pelne.Count -eq 0) {'; Zamiana = 'if ($false) {' },
     @{ Nazwa = "sprawdzenie wolnego miejsca usuniete"; Scen = "M"; Proba = "brak miejsca: kod 1, stan=BLAD, przyczyna=BRAK_MIEJSCA, linia ALARM, blad="
-       Kotwica = 'if ($wolne -ge 0 -and $wolne -lt $potrzeba) {'; Zamiana = 'if ($false) {' })
+       Kotwica = 'if ($wolne -ge 0 -and $wolne -lt $potrzeba) {'; Zamiana = 'if ($false) {' },
+    @{ Nazwa = "wykluczenia z rejestru ignorowane"; Scen = "W"; Proba = "wykluczenie z rejestru: grafiki nie ida, reszta tak, ustawienia z rejestru"
+       Kotwica = 'foreach ($w in $Ustawienia.Wykluczenia) {'; Zamiana = 'foreach ($w in @()) {' },
+    @{ Nazwa = "indeks trzyma wpisy wykluczonych plikow"; Scen = "W"; Proba = "po zdjeciu wykluczenia grafiki wracaja do kopii (przyrost ich nie gubi)"
+       Kotwica = 'if ($widziane.Contains($kv.Key)) {'; Zamiana = 'if ($true) {' })
   $nr = 0
   foreach ($s in $sabotaze) {
     $nr++
     if (-not $oryg.Contains($s.Kotwica)) { Sprawdz "sabotaz '$($s.Nazwa)' zlapany" $false "kotwicy nie ma w ${kopia}: $($s.Kotwica)"; continue }
     [System.IO.File]::WriteAllText($skryptSab, $oryg.Replace($s.Kotwica, $s.Zamiana), $bezBom)
     $kat = Join-Path $T "s$nr"
-    $wyn = switch ($s.Scen) { "B" { Scen-Blokady $skryptSab $kat } "R" { Scen-Rotacja $skryptSab $kat } "M" { (Scen-Miejsce $skryptSab $kat).Proby } }
-    $wzor = switch ($s.Scen) { "B" { $PB } "R" { $PR } "M" { $M.Proby } }
+    $wyn = switch ($s.Scen) { "B" { Scen-Blokady $skryptSab $kat } "R" { Scen-Rotacja $skryptSab $kat } "M" { (Scen-Miejsce $skryptSab $kat).Proby } "W" { Scen-Wykluczenie $skryptSab $kat } }
+    $wzor = switch ($s.Scen) { "B" { $PB } "R" { $PR } "M" { $M.Proby } "W" { $PW } }
     $proba = $wyn[$s.Proba]
     Sprawdz "sabotaz '$($s.Nazwa)' zlapany przez probe '$($s.Proba)'" ((-not $proba[0]) -and $wzor[$s.Proba][0]) "proba z sabotazem przeszla: $($proba[1])"
   }

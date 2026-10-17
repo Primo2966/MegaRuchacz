@@ -1142,9 +1142,15 @@ try {
     exit 0
   }
 
-  # indeks - zapis przez plik obok i podmiane, zeby przerwany zapis nie zostawil kadlubka
+  # indeks - zapis przez plik obok i podmiane, zeby przerwany zapis nie zostawil kadlubka.
+  # Zostaja tylko pliki widziane w tym przebiegu (od 17.10.2026): wpis po pliku wykluczonym albo
+  # usunietym udawalby, ze plik jest w kopii - po zdjeciu wykluczenia (albo usunieciu go z kopii
+  # recznie, jak grafiki C:\dev\Afiniti z pelna-2026-10-17) przyrost by go pominal bez slowa.
+  # Koszt pomylki w druga strone (zrodlo chwilowo niedostepne) to tylko ponowne skopiowanie.
+  $widziane = New-Object 'System.Collections.Generic.HashSet[string]' ([StringComparer]::OrdinalIgnoreCase)
+  foreach ($f in $Pliki) { [void]$widziane.Add($f.Sciezka) }
   $sb = New-Object Text.StringBuilder
-  foreach ($kv in $Indeks.GetEnumerator()) { [void]$sb.Append($kv.Key).Append("`t").Append($kv.Value).Append("`r`n") }
+  foreach ($kv in $Indeks.GetEnumerator()) { if ($widziane.Contains($kv.Key)) { [void]$sb.Append($kv.Key).Append("`t").Append($kv.Value).Append("`r`n") } }
   $nowy = "$PlikIndeksu.nowy"
   [IO.File]::WriteAllText($nowy, $sb.ToString(), (New-Object Text.UTF8Encoding($false)))
   Move-Item -LiteralPath $nowy -Destination $PlikIndeksu -Force
