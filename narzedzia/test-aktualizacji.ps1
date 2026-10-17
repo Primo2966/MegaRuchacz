@@ -675,7 +675,8 @@ $ascii = { param($s) -join ("$s".ToCharArray() | ForEach-Object { if ([int]$_ -g
   $s = Stan
   $dl = Log-Od $od
   $wz = @(Wolania 'zaleznosci'); $wl = @(Wolania 'modul-lore')
-  $kolej = (@([System.IO.File]::ReadAllLines($AtrapyLog, $Utf8) | Where-Object { $_ } | ForEach-Object { $_.Split('|')[0] })) -join ','
+  $kolej = ''
+  if (Test-Path -LiteralPath $AtrapyLog) { $kolej = (@([System.IO.File]::ReadAllLines($AtrapyLog, $Utf8) | Where-Object { $_ } | ForEach-Object { $_.Split('|')[0] })) -join ',' }
   Sprawdz "10a: brak Lore przy znacznikach = HEAD - kod 0, gotowe / zaktualizowano, doinstalowano = lore" (($r.Kod -eq 0) -and ($s.etap -eq 'gotowe') -and ($s.wynik -eq 'zaktualizowano') -and (@($s.doinstalowano) -contains 'lore')) "$($r.Tekst) || $($s | ConvertTo-Json -Compress)"
   Sprawdz "10a: po kolei programy (zaleznosci -Akcja Instaluj -Potrzebne uv,python,node jednym napisem), potem modul-lore Instaluj" (($kolej -eq 'zaleznosci,modul-lore') -and ($wz[0] -eq 'zaleznosci|-Akcja Instaluj -Potrzebne uv,python,node') -and ($wl[0] -eq "modul-lore|-Akcja Instaluj -KatalogDomowy $Dom -Zrodlo $Repo")) (Czytaj $AtrapyLog)
   $sz = Json-Testu 'stan-zaleznosci.json'; $sl = Json-Testu 'stan-lore-start.json'; $sk = Json-Testu 'stan-lore-po-kroku.json'
