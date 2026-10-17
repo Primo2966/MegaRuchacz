@@ -18,8 +18,10 @@
 # Do tego werdykt i Pomiar-Startu okna: liczby Codeksa nazwane Codeksem, nie Claude'em.
 # Liczby w rozmowach sa dobrane tak, zeby wynik dalo sie policzyc na kartce: dzis przyrosty
 # 20 500 + 0 (zdarzenie powtorzone) + 25 400 = 45 900; 3 dni temu 30 000, czyli srednio
-# 30 000 / 7 = 4 286 dziennie; otwarcie dzis 20 000 - 11 znakow wiadomosci / 3 (4) = 19 996,
-# 3 dni temu 29 000 - 1 = 28 999, mediana z dwoch rozmow (19 996 + 28 999) / 2 = 24 498.
+# 30 000 / 7 = 4 286 dziennie; otwarcie dzis 20 000 - ceil(11 znakow wiadomosci / miernik),
+# 3 dni temu 29 000 - ceil(3 / miernik), mediana z dwoch rozmow ($KartkaOtwCx nizej; przy mierniku
+# 2,26: 19 995 i 28 998 -> 24 496). Miernik znakow na token NIE jest tu przepisany - test
+# czyta $ZnakiNaToken z narzedzia\koszt-pamieci.ps1, jedynego miejsca, gdzie stoi.
 
 param(
   [string]$Zrodlo = (Split-Path -Parent $PSScriptRoot),
@@ -47,6 +49,18 @@ function Odpal([string]$skrypt, [string[]]$argumenty) {
   $wy = & powershell.exe -NoProfile -NonInteractive -ExecutionPolicy Bypass -WindowStyle Hidden -File $skrypt @argumenty 2>&1
   return [pscustomobject]@{ Kod = $LASTEXITCODE; Tekst = (($wy | ForEach-Object { "$_" }) -join "`n") }
 }
+
+# Miernik z jednego miejsca: $ZnakiNaToken w narzedzia\koszt-pamieci.ps1 (17.10.2026 zmiana
+# z 3 na 2,26). Liczby "na kartce" ida za nim same - kopia liczby w tescie rozjechalaby sie
+# z modulem przy nastepnym pomiarze.
+$mm = [regex]::Match([System.IO.File]::ReadAllText((Join-Path $Zrodlo "narzedzia\koszt-pamieci.ps1")), '(?m)^\$ZnakiNaToken\s*=\s*([0-9]+(?:\.[0-9]+)?)')
+if (-not $mm.Success) { Write-Host "BLAD  nie ma `$ZnakiNaToken w narzedzia\koszt-pamieci.ps1 - nie mam czym liczyc tokenow na kartce"; exit 1 }
+$ZnT = [double]::Parse($mm.Groups[1].Value, [System.Globalization.CultureInfo]::InvariantCulture)
+function ZnTok([int]$znaki) { return [int][math]::Ceiling($znaki / $ZnT) }
+# Mediana dwoch liczb tak jak w module (otwarcie.ps1, Mediana-Liczb: [math]::Round, do parzystej).
+function Med2([long]$a, [long]$b) { return [long][math]::Round(([double]$a + [double]$b) / 2) }
+$KartkaOtwCx = Med2 (20000 - (ZnTok 11)) (29000 - (ZnTok 3))
+$KartkaOtwPr = Med2 (28000 - (ZnTok 10)) (32000 - (ZnTok 12))
 
 function Klucze([string]$tekst) {
   $k = @{}
@@ -89,8 +103,9 @@ function Wiadomosc($kiedy, [string]$tekst) {
 # subagent_history_start_ordinal.
 # Liczby: dzis - rozmowa 57 400 (dwa zdarzenia, przyrost 28 200 + 29 200) + podagent
 # 30 100 (kopia rodzica z 5 000 000 nie liczy sie) = 87 500; 2 dni temu rozmowa
-# "codex exec" 32 145 -> srednio 32 145 / 7 = 4 592. Otwarcie: 28 000 - 10 znakow / 3 (4) =
-# 27 996 i 32 000 - 12 / 3 (4) = 31 996 -> mediana 29 996; podagent nie jest otwarciem okna.
+# "codex exec" 32 145 -> srednio 32 145 / 7 = 4 592. Otwarcie: 28 000 - ceil(10 znakow / miernik)
+# i 32 000 - ceil(12 / miernik) -> mediana $KartkaOtwPr (przy 2,26: 27 995 i 31 994 -> 29 994);
+# podagent nie jest otwarciem okna.
 function ZapisO($kiedy, [int]$nr, [string]$typ, $payload) {
   return ([ordered]@{ timestamp = $kiedy.ToUniversalTime().ToString("yyyy-MM-ddTHH:mm:ss.fffZ"); ordinal = $nr; type = $typ; payload = $payload } | ConvertTo-Json -Compress -Depth 10)
 }
@@ -175,13 +190,14 @@ function DomPrawdziwy([string]$nazwa) {
 
 # Rachunek MegaRuchacza w Codeksie (od 06.10.2026) - tak jak u Claude Code i OpenCode: z
 # ~\.codex\AGENTS.md tylko bloki MegaRuchacza i "Co wiem", bez Twoich wlasnych instrukcji.
-# Dom "codex-wlasne": "Co wiem" (stala 21 + Biezace 14 tokenow), blok kierownika (6 000
+# Dom "codex-wlasne": "Co wiem" (stala 61 + Biezace 42 znaki), blok kierownika (6 000
 # znakow tresci) i wlasne instrukcje obok (10 000 znakow - poza rachunkiem). Start na
-# kartce = ceil(dlugosc bloku / 3) + 21 + 14; caly plik bylby o ~3 300 tokenow wiekszy.
+# kartce = ceil(dlugosc bloku / miernik) + ceil(61 / miernik) + ceil(42 / miernik); caly
+# plik bylby o ~4 400 tokenow wiekszy (przy 2,26).
 $BlokK = "<!-- MegaRuchacz:kierownik:start -->`n# MegaRuchacz - kierownik projektu (opencode / Codex CLI)`n`n" +
          ("Rozdaj zadania workerom. " * 240) + "`n<!-- MegaRuchacz:kierownik:koniec -->"
 $Wlasne = "## Moje instrukcje`n`n" + ("Pisz krotko i po polsku. " * 400) + "`n"
-$StartCx = [int][math]::Ceiling($BlokK.Length / 3.0) + 21 + 14
+$StartCx = (ZnTok $BlokK.Length) + (ZnTok 61) + (ZnTok 42)
 
 function Dom([string]$nazwa, [bool]$zCoWiem, [bool]$zTokenami, [string]$dopisek = "") {
   $dom = Join-Path $T $nazwa
@@ -258,9 +274,9 @@ try {
     Sprawdz "-Dane: Codex uzywany, jedyny" (($k["narz.$ix.uzywane"] -eq "1") -and ($k["narzedzia.uzywane"] -eq "Codex")) "uzywane=$($k["narz.$ix.uzywane"]) narzedzia.uzywane=$($k['narzedzia.uzywane'])"
     Sprawdz "-Dane: tokeny Codeksa dzis = 45 900 (zdarzenie powtorzone liczone raz)" ($k["narz.$ix.dzis"] -eq "45900") "dzis=$($k["narz.$ix.dzis"]) powod=$($k["narz.$ix.zuzycie_powod"])"
     Sprawdz "-Dane: tokeny Codeksa srednio dziennie = 30 000 / 7 = 4 286" ($k["narz.$ix.srednia"] -eq "4286") "srednia=$($k["narz.$ix.srednia"])"
-    Sprawdz "-Dane: otwarcie okna rozmowy Codeksa = 24 498 (mediana z 2 rozmow)" (($k["narz.$ix.otwarcie"] -eq "24498") -and ($k["narz.$ix.otwarcie_sesji"] -eq "2") -and -not $k["narz.$ix.otwarcie_powod"]) "otwarcie=$($k["narz.$ix.otwarcie"]) powod=$($k["narz.$ix.otwarcie_powod"])"
+    Sprawdz "-Dane: otwarcie okna rozmowy Codeksa = $KartkaOtwCx (mediana z 2 rozmow)" (($k["narz.$ix.otwarcie"] -eq "$KartkaOtwCx") -and ($k["narz.$ix.otwarcie_sesji"] -eq "2") -and -not $k["narz.$ix.otwarcie_powod"]) "otwarcie=$($k["narz.$ix.otwarcie"]) powod=$($k["narz.$ix.otwarcie_powod"])"
     Sprawdz "-Dane: 'Co wiem' znaleziona w AGENTS.md" ($k["cowiem.gdzie"] -eq $agentsCx) "cowiem.gdzie=$($k['cowiem.gdzie'])"
-    Sprawdz "-Dane: rachunek domyslny = Codex, z procentem otwarcia" (($k["narzedzie"] -eq "Codex") -and ($k["udzial.calosc"] -eq "24498")) "narzedzie=$($k['narzedzie']) calosc=$($k['udzial.calosc']) powod=$($k['udzial.powod'])"
+    Sprawdz "-Dane: rachunek domyslny = Codex, z procentem otwarcia" (($k["narzedzie"] -eq "Codex") -and ($k["udzial.calosc"] -eq "$KartkaOtwCx")) "narzedzie=$($k['narzedzie']) calosc=$($k['udzial.calosc']) powod=$($k['udzial.powod'])"
   }
 
   # ------------------------------------------------------------- -Start
@@ -269,7 +285,7 @@ try {
   try { $js = $r.Tekst | ConvertFrom-Json } catch { }
   Sprawdz "-Start: JSON w samym ASCII" (($null -ne $js) -and ($r.Tekst -notmatch '[^\x00-\x7F]')) $r.Tekst
   if ($js) {
-    Sprawdz "-Start: glowne narzedzie Codex, mediana 24 498 z 2 rozmow" (($js.Narzedzie -eq "Codex") -and ($js.Sesje.Narzedzie -eq "Codex") -and ($js.Sesje.Mediana -eq 24498) -and ($js.Sesje.Liczba -eq 2)) ($js | ConvertTo-Json -Depth 3 -Compress)
+    Sprawdz "-Start: glowne narzedzie Codex, mediana $KartkaOtwCx z 2 rozmow" (($js.Narzedzie -eq "Codex") -and ($js.Sesje.Narzedzie -eq "Codex") -and ($js.Sesje.Mediana -eq $KartkaOtwCx) -and ($js.Sesje.Liczba -eq 2)) ($js | ConvertTo-Json -Depth 3 -Compress)
     Sprawdz "-Start: czesc MegaRuchacza Codeksa = start + wiadomosc" (($null -ne $js.MegaRuchaczSesja) -and ($js.MegaRuchaczSesja -eq ($js.MegaRuchaczStart + $js.MegaRuchaczWiadomosc)) -and -not $js.Powod) "sesja $($js.MegaRuchaczSesja), powod '$($js.Powod)'"
   }
 
@@ -285,7 +301,7 @@ try {
   for ($i = 1; $i -le 6; $i++) { if ($k["narz.$i.klucz"] -eq "codex") { $iw = $i } }
   Sprawdz "rachunek Codeksa: start = blok kierownika + 'Co wiem' = $StartCx (na kartce)" (($k["narzedzie"] -eq "Codex") -and ($k["udzial.start"] -eq "$StartCx")) "narzedzie=$($k['narzedzie']) start=$($k['udzial.start']) powod=$($k['udzial.powod'])"
   Sprawdz "rachunek Codeksa: czesc MegaRuchacza w Codeksie (narz.mr_start) = $StartCx" ($iw -and ($k["narz.$iw.mr_start"] -eq "$StartCx")) "mr_start=$($k["narz.$iw.mr_start"])"
-  Sprawdz "negatywna rachunek Codeksa: Twoje wlasne instrukcje (~3 300 tokenow) nie licza sie jako MegaRuchacz" ([int]$k["udzial.start"] -lt ($StartCx + 100)) "start=$($k['udzial.start']) (gdyby liczyl caly plik: ~$([int][math]::Ceiling($calyWl.Length / 3.0)))"
+  Sprawdz "negatywna rachunek Codeksa: Twoje wlasne instrukcje (~$(ZnTok $Wlasne.Length) tokenow) nie licza sie jako MegaRuchacz" ([int]$k["udzial.start"] -lt ($StartCx + 100)) "start=$($k['udzial.start']) (gdyby liczyl caly plik: ~$(ZnTok $calyWl.Length))"
   # AGENTS.md z samymi wlasnymi instrukcjami (dom codex-bez): MegaRuchacz nie doklada nic.
   # Do 06.10.2026 rachunek liczyl tu caly plik.
   $r = Odpal $koszt @("-KatalogDomowy", $dBez, "-Zrodlo", $Zrodlo, "-Dane", "-Zwykly")
@@ -386,7 +402,7 @@ function D($klucze) {
     "narz.1.klucz" = "claude"; "narz.1.nazwa" = "Claude Code"; "narz.1.uzywane" = "0"; "narz.1.zuzycie_w_oknie" = "1"
     "narz.1.otwarcie_powod" = "nie ma katalogu z transkryptami Claude Code"
     "narz.2.klucz" = "codex"; "narz.2.nazwa" = "Codex"; "narz.2.uzywane" = "1"; "narz.2.zuzycie_w_oknie" = "0"
-    "narz.2.otwarcie" = "24498"; "narz.2.dzis" = "45900"; "narz.2.srednia" = "4286"
+    "narz.2.otwarcie" = "__OTWARCIE__"; "narz.2.dzis" = "45900"; "narz.2.srednia" = "4286"
     "cowiem.gdzie" = "C:\dom\.codex\AGENTS.md"; "cowiem.sprawdzone" = "C:\dom\.claude\CLAUDE.md; C:\dom\.codex\AGENTS.md"; "cowiem.wiedza_wylaczona" = "0" }
   foreach ($x in $klucze.Keys) { $k[$x] = $klucze[$x] }
   return [pscustomobject]@{ Rachunek = [pscustomobject]@{ Klucze = $k; Linia = "x" }; Cykl = [pscustomobject]@{ Pracuje = $false }
@@ -410,7 +426,7 @@ $wynik.otwarcie  = ($lo -join " / ")
 foreach ($x in $wynik.Keys) { Write-Output "${x}: $($wynik[$x])" }
 '@
   $plikSpraw = Join-Path $T "sprawy.ps1"
-  [System.IO.File]::WriteAllText($plikSpraw, $kodSpraw, (New-Object System.Text.UTF8Encoding($true)))
+  [System.IO.File]::WriteAllText($plikSpraw, $kodSpraw.Replace("__OTWARCIE__", "$KartkaOtwCx"), (New-Object System.Text.UTF8Encoding($true)))
   $r = Odpal $plikSpraw @($Zrodlo, $dCx)
   $ks = Klucze $r.Tekst
   Sprawdz "sprawy: sekcja 'Co wiem' jest -> 0 spraw (czyli 'Wszystko gra')" ($ks["jest"] -eq "0") $r.Tekst
@@ -436,7 +452,7 @@ $script:ModulyOkna = @{}
 $k = [ordered]@{}
 foreach ($l in [System.IO.File]::ReadAllLines($plikDanych)) { $m = [regex]::Match($l, '^\s*([a-zA-Z_][a-zA-Z0-9_.]*)\s*:\s*(.*?)\s*$'); if ($m.Success) { $k[$m.Groups[1].Value] = $m.Groups[2].Value } }
 $script:Dane = [pscustomobject]@{ Rachunek = [pscustomobject]@{ Klucze = $k } }
-$script:Start = [pscustomobject]@{ Sesje = [pscustomobject]@{ Narzedzie = "Codex"; Mediana = 24498; Liczba = 2 }; MrSesja = 242; Powod = ""; DniWstecz = 14 }
+$script:Start = [pscustomobject]@{ Sesje = [pscustomobject]@{ Narzedzie = "Codex"; Mediana = __OTWARCIE__; Liczba = 2 }; MrSesja = 242; Powod = ""; DniWstecz = 14 }
 $dw = [System.IO.File]::ReadAllText($plikJson) | ConvertFrom-Json
 $w = @{}; foreach ($x in @($dw.Warstwy)) { $w["$($x.Id)"] = $x }
 Write-Output ("zdanie: " + (Zdanie-Warstw $dw))
@@ -448,7 +464,7 @@ Write-Output ("procent_codex: " + (Rozmiar-Opisowy $w["codex-globalny"]))
 Write-Output ("modul_codex_stala: " + ((Moduly-Warstwy $w["codex-globalny-stala"]) -join ","))
 '@
   $plikW = Join-Path $T "warstwy-okna.ps1"
-  [System.IO.File]::WriteAllText($plikW, $kodWarstw, (New-Object System.Text.UTF8Encoding($true)))
+  [System.IO.File]::WriteAllText($plikW, $kodWarstw.Replace("__OTWARCIE__", "$KartkaOtwCx"), (New-Object System.Text.UTF8Encoding($true)))
   $plikJson = Join-Path $T "warstwy.json"
   [System.IO.File]::WriteAllText($plikJson, (Odpal $koszt @("-KatalogDomowy", $dCx, "-Zrodlo", $Zrodlo, "-Warstwy")).Tekst, $bezBom)
   $plikDanych = Join-Path $T "dane.txt"
@@ -477,7 +493,7 @@ Write-Output ("modul_codex_stala: " + ((Moduly-Warstwy $w["codex-globalny-stala"
   if ($ip) {
     Sprawdz "prawdziwy zapis: dzis = 87 500 (token_usage_record i kopia rodzica u podagenta nie liczone)" ($kp["narz.$ip.dzis"] -eq "87500") "dzis=$($kp["narz.$ip.dzis"]) powod=$($kp["narz.$ip.zuzycie_powod"])"
     Sprawdz "prawdziwy zapis: srednio = 32 145 / 7 = 4 592 (rozmowa codex exec)" ($kp["narz.$ip.srednia"] -eq "4592") "srednia=$($kp["narz.$ip.srednia"])"
-    Sprawdz "prawdziwy zapis: otwarcie = 29 996 z 2 rozmow (podagent pominiety, obrazek nie liczy sie do wiadomosci)" (($kp["narz.$ip.otwarcie"] -eq "29996") -and ($kp["narz.$ip.otwarcie_sesji"] -eq "2")) "otwarcie=$($kp["narz.$ip.otwarcie"]) z $($kp["narz.$ip.otwarcie_sesji"]) powod=$($kp["narz.$ip.otwarcie_powod"])"
+    Sprawdz "prawdziwy zapis: otwarcie = $KartkaOtwPr z 2 rozmow (podagent pominiety, obrazek nie liczy sie do wiadomosci)" (($kp["narz.$ip.otwarcie"] -eq "$KartkaOtwPr") -and ($kp["narz.$ip.otwarcie_sesji"] -eq "2")) "otwarcie=$($kp["narz.$ip.otwarcie"]) z $($kp["narz.$ip.otwarcie_sesji"]) powod=$($kp["narz.$ip.otwarcie_powod"])"
   }
   $r = Odpal $koszt @("-KatalogDomowy", $dPr, "-Zrodlo", $Zrodlo, "-Warstwy")
   $jp = $null

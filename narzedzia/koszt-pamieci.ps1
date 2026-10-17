@@ -134,8 +134,11 @@ $ZnacznikKoniec = "<!-- MegaRuchacz:koniec -->"
 $NazwaZadania   = "LoreKoszt"
 $GodzinaZadania = "08:15"
 
-# ~3 znaki na token to przyblizenie dla polszczyzny - patrz adnotacja w raporcie
-$ZnakiNaToken   = 3
+# 2,26 znaku na token - ZMIERZONE, nie zgadniete (17.10.2026): regresja liczby tokenow
+# z message.usage na dlugosci bloku CLAUDE.md w 100 pierwszych wywolaniach workerow
+# (~0,4415 tokenu na znak, rms 407 tokenow), potwierdzona na 17 sesjach kierownika
+# (0,445). Do tego dnia stalo tu 3 - rachunek zanizal koszt o ~25-33%.
+$ZnakiNaToken   = 2.26
 $DniWaznosci    = 14
 # pomiar kosztu cyklu starszy niz tyle dni znaczy, ze cykl przestal chodzic -
 # ta sama liczba, co w straznik-zasad.ps1 przy meldunku o cyklu
@@ -174,10 +177,14 @@ $ProgWzrostu    = 20
 #
 # $AlarmCzesciOtwarcia - LICZBA TOKENOW, ktora MegaRuchacz (start sesji +
 #   przypomnienie przy pierwszej wiadomosci) dokleja do KAZDEGO otwarcia sesji
-#   swojego narzedzia - ta sama czesc, ktora liczy ten rachunek (znaki / 3).
+#   swojego narzedzia - ta sama czesc, ktora liczy ten rachunek (znaki / $ZnakiNaToken).
 #   30.09.2026: Claude Code ~9 100 (start 8 968 + przypomnienie 115), Codex ~5 100.
 #   Prog 15 000 = dzisiejsza czesc Claude Code plus ~65%: dopisana wiedza i drobne
 #   zmiany zasad sie zmieszcza, rozrost, przy ktorym skracanie ma sens - juz nie.
+#   17.10.2026 miernik zmienil sie z 3 na 2,26 znaku na token (przy $ZnakiNaToken):
+#   te same znaki daja ~33% wiecej tokenow, wiec prog przeliczony na nowy miernik
+#   tak, zeby stal przy TEJ SAMEJ liczbie znakow (15 000 * 3 / 2,26 = ~19 900 ->
+#   20 000). Sama zmiana miary nie ma prawa zapalic alarmu - MegaRuchacz nie urosl.
 #   DLACZEGO TOKENY, A NIE PROCENT (decyzja uzytkownika 30.09.2026). Do tego dnia
 #   progiem byl procent calego otwarcia sesji (10%). Ale procent zalezy od wagi
 #   dodatkow - opisow narzedzi z serwerow MCP, ktore dokleja Claude Code - a te
@@ -235,7 +242,7 @@ $ProgWzrostu    = 20
 #   trend, a nie przypadek. Dni nadrabiania sie tu nie licza, bo sa jednorazowe.
 # $DniStatystyki - ile ostatnich dni pokazuje statystyka w oknie nadzorcy: tyle,
 #   ile dluzsze okno podsumowania w lore\lore\facts.py (WINDOWS = (7, 30)).
-$AlarmCzesciOtwarcia  = 15000
+$AlarmCzesciOtwarcia  = 20000
 $AlarmUdzialu         = 70
 $MinPozycjiDoUdzialu  = 3
 $AlarmCyklu           = 350000

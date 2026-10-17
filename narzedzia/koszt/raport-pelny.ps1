@@ -319,7 +319,7 @@ function Raport-Pelny {
     Wypisz-Porownanie $rOc
   }
   Linia "  To wchodzi do kontekstu raz i siedzi w nim do konca sesji - nie jest wysylane ponownie przy kazdej wiadomosci."
-  Linia "  Tokeny to SZACUNEK, nie pomiar: przyjete ~$ZnakiNaToken znaki na token dla polszczyzny."
+  Linia "  Tokeny to SZACUNEK, nie pomiar: przyjete ~$ZnakiNaToken znaku na token (zmierzone 17.10.2026 na transkryptach)."
 
   Linia ""
   Linia "4. RAZ NA DOBE - cykl wiedzy (jedyne prawdziwe wolanie modelu)"

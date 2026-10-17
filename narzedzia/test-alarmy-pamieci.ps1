@@ -2,12 +2,13 @@
 #   1. Rachunek (koszt-pamieci.ps1 -Dane): warstwa stala / biezaca "Co wiem" ponad sufit + 5% daje
 #      alarm pamiec-stala / pamiec-biezaca i kod 1; ponad sufit, ale w zapasie 5% - cisza (falszywy alarm
 #      jest gorszy niz brak); modul Wiedza wylaczony w rejestrze - cisza (automatu nie ma).
-#   2. Pelny raport i -Rozbicie przy przeterminowanych wpisach i pelnej poczekalni NIE prosza
+#   2. Miernik 2,26 znaku na token: tokeny warstw w -Warstwy = ceil(znaki / 2,26), nie / 3.
+#   3. Pelny raport i -Rozbicie przy przeterminowanych wpisach i pelnej poczekalni NIE prosza
 #      uzytkownika o przejrzenie, kasowanie, zatwierdzanie ani odswiezanie daty.
-#   3. Okno nadzorcy (stan-po-ludzku.ps1): alarm z .wiedza-stan.txt (alarm / alarm_N /
+#   4. Okno nadzorcy (stan-po-ludzku.ps1): alarm z .wiedza-stan.txt (alarm / alarm_N /
 #      wstrzymane_progiem > 0) trafia do linii o pamieci ("meldunek") na czerwono - takze przy
 #      "bez zmian" i przy pliku bez meldunku; wstrzymane_progiem: 0 - cisza.
-#   4. Teksty zrodlowe: straznik bez Zglos-Kandydatow, blok Wiedza bez zdan o proponowaniu zapisu,
+#   5. Teksty zrodlowe: straznik bez Zglos-Kandydatow, blok Wiedza bez zdan o proponowaniu zapisu,
 #      pytaniu o reczne wpisy, przenoszeniu zestawien i "raz dziennie".
 # Kazda regula ma probe negatywna (-Sabotaz): kopia zrodla z wycofana zmiana MUSI dac BLAD.
 # Wszystko w %TEMP% (katalogi domowe i kopia zrodla); prawdziwe ~\.claude nie jest czytane ani ruszane.
@@ -118,8 +119,16 @@ function Proby([string]$Z) {
   $tem = Tematy-Alarmow (Klucze $o.Tekst)
   Sprawdz "rachunek: modul Wiedza wylaczony -> bez alarmu pamieci" (-not ($tem -contains "pamiec-stala")) ("tematy: " + ($tem -join ","))
 
+  # 2. miernik 2,26
+  $dom = Nowy-Dom "miernik" 5000 1000
+  $o = Odpal $koszt @("-KatalogDomowy", $dom, "-Zrodlo", $Z, "-Warstwy")
+  $j = $null
+  try { $j = $o.Tekst | ConvertFrom-Json } catch { $j = $null }
+  $st = @(@($j.Warstwy) + @($j) | Where-Object { $_ -and $_.Id -eq "claude-globalny-stala" }) | Select-Object -First 1
+  $okMiernik = $st -and ($st.Znaki -gt 0) -and ([int]$st.Tokeny -eq [int][math]::Ceiling([double]$st.Znaki / 2.26))
+  Sprawdz "miernik: tokeny stalej = ceil(znaki / 2,26)" $okMiernik $(if ($st) { "znaki $($st.Znaki), tokeny $($st.Tokeny)" } else { $o.Tekst.Substring(0, [Math]::Min(300, $o.Tekst.Length)) })
 
-  # 2. raport i rozbicie bez prosb do uzytkownika (wpisy sprzed miesiaca + pelna poczekalnia)
+  # 3. raport i rozbicie bez prosb do uzytkownika (wpisy sprzed miesiaca + pelna poczekalnia)
   $dom = Nowy-Dom "stare" 3000 1500 ((Get-Date).AddDays(-40).ToString("yyyy-MM-dd"))
   $kand = "# Kandydaci`n`n" + ((1..15 | ForEach-Object { "- [ ] fakt $_" }) -join "`n") + "`n"
   Zapisz (Join-Path $dom ".claude\wiedza\kandydaci.md") $kand
@@ -131,7 +140,7 @@ function Proby([string]$Z) {
   $m = [regex]::Match($r.Tekst, $prosby)
   Sprawdz "rozbicie: zadnej prosby o przejrzenie / odswiezenie daty / kasowanie" ((-not $m.Success) -and ($r.Tekst -match 'automat zdejmie')) $(if ($m.Success) { "znalezione: " + $r.Tekst.Substring([Math]::Max(0, $m.Index - 80), [Math]::Min(200, $r.Tekst.Length - [Math]::Max(0, $m.Index - 80))) } else { $r.Tekst.Substring(0, [Math]::Min(300, $r.Tekst.Length)) })
 
-  # 3. okno nadzorcy - linia o pamieci (w osobnym procesie, zeby modul z kopii nie mieszal sie z tym testem)
+  # 4. okno nadzorcy - linia o pamieci (w osobnym procesie, zeby modul z kopii nie mieszal sie z tym testem)
   $kat = Join-Path $T "okno"
   New-Item -ItemType Directory -Force -Path $kat | Out-Null
   $sk = Join-Path $T "okno.ps1"
@@ -178,7 +187,7 @@ foreach ($n in $przypadki.Keys) {
   Sprawdz "okno: nieczytelna liczba wstrzymanych -> zdanie 'nie umiem odczytac', nie cisza" (
     $x -and $x.Uwaga -and ($x.Linia -match 'nie umiem odczyta')) $(if ($x) { $x.Linia } else { $w.Tekst })
 
-  # 4. teksty zrodlowe
+  # 5. teksty zrodlowe
   $stTekst = [System.IO.File]::ReadAllText((Join-Path $Z "narzedzia\straznik-zasad.ps1"))
   $bledy = $null
   $ast = [System.Management.Automation.Language.Parser]::ParseInput($stTekst, [ref]$null, [ref]$bledy)
@@ -210,6 +219,9 @@ $SABOTAZE = @(
   @{ Nazwa = "alarm mimo wylaczonego modulu Wiedza"; Plik = "narzedzia\koszt\alarmy.ps1"
      Z = 'if ($w.Jest -and (-not $script:WiedzaWylaczona)) {'; Na = 'if ($w.Jest) {'
      Oczekiwany = "rachunek: modul Wiedza wylaczony -> bez alarmu pamieci" },
+  @{ Nazwa = "stary miernik 3 znaki na token"; Plik = "narzedzia\koszt-pamieci.ps1"
+     Z = '$ZnakiNaToken   = 2.26'; Na = '$ZnakiNaToken   = 3'
+     Oczekiwany = "miernik: tokeny stalej = ceil(znaki / 2,26)" },
   @{ Nazwa = "stara prosba w rozbiciu"; Plik = "narzedzia\koszt\tryb-rozbicie.ps1"
      Z = '"Starsze niz $DniWaznosci dni: $(Ile-Wpisow $wpisyStare.Count) - automat zdejmie je sam przy najblizszym przebiegu (przebiegi nie sa codzienne)."'
      Na = '"Do zrobienia: $(Ile-Wpisow $wpisyStare.Count) starsze niz $DniWaznosci dni - przejrzyj albo odswiez date."'

@@ -28,8 +28,10 @@
 #   rozwidlonej, kopie sie nie licza) + 15 100 (podagent) = 87 600; cykl wiedzy (50 000)
 #   i rozmowa sprzed 20 dni (99 999) - nie.
 #   srednio: 26 000 (sprzed 3 dni, total = 25 000 + 1 000) / 7 = 3 714.
-#   otwarcie: dzis 20 000 - 30 znakow / 3 (10) = 19 990, sprzed 3 dni 25 000 - 12 / 3 (4) =
-#   24 996; mediana (19 990 + 24 996) / 2 = 22 493. Rozwidlona, podagent i cykl - pominiete.
+#   otwarcie: dzis 20 000 - ceil(30 znakow / miernik), sprzed 3 dni 25 000 - ceil(12 / miernik);
+#   mediana z tych dwoch = $KartkaOtwOc (przy 2,26: 19 986 i 24 994 -> 22 490). Rozwidlona, podagent
+#   i cykl - pominiete. Miernik znakow na token test czyta z narzedzia\koszt-pamieci.ps1
+#   ($ZnakiNaToken) - nie ma tu jego kopii.
 
 param(
   [string]$Zrodlo = (Split-Path -Parent $PSScriptRoot),
@@ -55,6 +57,19 @@ function Odpal([string]$skrypt, [string[]]$argumenty) {
   $wy = & powershell.exe -NoProfile -NonInteractive -ExecutionPolicy Bypass -WindowStyle Hidden -File $skrypt @argumenty 2>&1
   return [pscustomobject]@{ Kod = $LASTEXITCODE; Tekst = (($wy | ForEach-Object { "$_" }) -join "`n") }
 }
+
+# Miernik z jednego miejsca: $ZnakiNaToken w narzedzia\koszt-pamieci.ps1 (17.10.2026 zmiana
+# z 3 na 2,26). Liczby "na kartce" ida za nim same - kopia liczby w tescie rozjechalaby sie
+# z modulem przy nastepnym pomiarze.
+$mm = [regex]::Match([System.IO.File]::ReadAllText((Join-Path $Zrodlo "narzedzia\koszt-pamieci.ps1")), '(?m)^\$ZnakiNaToken\s*=\s*([0-9]+(?:\.[0-9]+)?)')
+if (-not $mm.Success) { Write-Host "BLAD  nie ma `$ZnakiNaToken w narzedzia\koszt-pamieci.ps1 - nie mam czym liczyc tokenow na kartce"; exit 1 }
+$ZnT = [double]::Parse($mm.Groups[1].Value, [System.Globalization.CultureInfo]::InvariantCulture)
+function ZnTok([int]$znaki) { return [int][math]::Ceiling($znaki / $ZnT) }
+# Mediana dwoch liczb tak jak w module (otwarcie.ps1, Mediana-Liczb: [math]::Round, do parzystej).
+function Med2([long]$a, [long]$b) { return [long][math]::Round(([double]$a + [double]$b) / 2) }
+# Liczba po ludzku w oknie: ~ do setek, spacja co trzy cyfry (jak Okolo w stan-po-ludzku.ps1).
+function Okolo100([long]$n) { return ([long]([math]::Round([double]$n / 100.0) * 100)).ToString("#,0", [Globalization.CultureInfo]::InvariantCulture).Replace(',', ' ') }
+$KartkaOtwOc = Med2 (20000 - (ZnTok 30)) (25000 - (ZnTok 12))
 
 function Klucze([string]$tekst) {
   $k = @{}
@@ -129,12 +144,13 @@ function Tok($we, $wy, $roz, $odc, $zap, [bool]$zTotal = $true) {
 
 # Rachunek MegaRuchacza w OpenCode (od 06.10.2026): blok kierownika w AGENTS.md OpenCode
 # (6 000 znakow tresci) i Twoje wlasne instrukcje obok (10 000 znakow - poza rachunkiem).
-# Start = ceil(dlugosc bloku / 3) + 21 (Co wiem, stala) + 14 (Biezace) - na kartce.
+# Start = ceil(dlugosc bloku / miernik) + ceil(61 / miernik) (Co wiem, stala: 61 znakow)
+# + ceil(42 / miernik) (Biezace: 42 znaki) - na kartce.
 $BlokK = "<!-- MegaRuchacz:kierownik:start -->`n# MegaRuchacz - kierownik projektu (opencode / Codex CLI)`n`n" +
          ("Rozdaj zadania workerom. " * 240) + "`n<!-- MegaRuchacz:kierownik:koniec -->"
 $Wlasne = "## Moje instrukcje`n`n" + ("Pisz krotko i po polsku. " * 400) + "`n"
-$StartOc = [int][math]::Ceiling($BlokK.Length / 3.0) + 21 + 14
-# Ponad prog ($AlarmCzesciOtwarcia = 15 000 tokenow): blok 50 000 znakow, ~16 700 tokenow.
+$StartOc = (ZnTok $BlokK.Length) + (ZnTok 61) + (ZnTok 42)
+# Ponad prog ($AlarmCzesciOtwarcia = 20 000 tokenow): blok 50 000 znakow, ~22 100 tokenow (przy 2,26).
 $BlokDuzy = "<!-- MegaRuchacz:kierownik:start -->`n# MegaRuchacz - kierownik projektu (opencode / Codex CLI)`n`n" +
             ("Rozdaj zadania workerom. " * 2000) + "`n<!-- MegaRuchacz:kierownik:koniec -->"
 
@@ -232,15 +248,15 @@ try {
     Sprawdz "-Dane: OpenCode uzywany (ostatnia rozmowa z bazy, bez cyklu wiedzy), jedyny" (($k["narz.$ix.uzywane"] -eq "1") -and ($k["narzedzia.uzywane"] -eq "OpenCode")) "uzywane=$($k["narz.$ix.uzywane"]) narzedzia.uzywane=$($k['narzedzia.uzywane']) ostatnio=$($k["narz.$ix.ostatnio"])"
     Sprawdz "-Dane: tokeny OpenCode dzis = 87 600 (kopie w rozwidlonej, cykl i stara rozmowa poza)" ($k["narz.$ix.dzis"] -eq "87600") "dzis=$($k["narz.$ix.dzis"]) powod=$($k["narz.$ix.zuzycie_powod"])"
     Sprawdz "-Dane: tokeny OpenCode srednio dziennie = 26 000 / 7 = 3 714 (stary zapis bez total)" ($k["narz.$ix.srednia"] -eq "3714") "srednia=$($k["narz.$ix.srednia"])"
-    Sprawdz "-Dane: otwarcie okna rozmowy OpenCode = 22 493 (mediana z 2 rozmow, bez podagenta, rozwidlonej i cyklu)" (($k["narz.$ix.otwarcie"] -eq "22493") -and ($k["narz.$ix.otwarcie_sesji"] -eq "2") -and -not $k["narz.$ix.otwarcie_powod"]) "otwarcie=$($k["narz.$ix.otwarcie"]) z $($k["narz.$ix.otwarcie_sesji"]) powod=$($k["narz.$ix.otwarcie_powod"])"
+    Sprawdz "-Dane: otwarcie okna rozmowy OpenCode = $KartkaOtwOc (mediana z 2 rozmow, bez podagenta, rozwidlonej i cyklu)" (($k["narz.$ix.otwarcie"] -eq "$KartkaOtwOc") -and ($k["narz.$ix.otwarcie_sesji"] -eq "2") -and -not $k["narz.$ix.otwarcie_powod"]) "otwarcie=$($k["narz.$ix.otwarcie"]) z $($k["narz.$ix.otwarcie_sesji"]) powod=$($k["narz.$ix.otwarcie_powod"])"
     Sprawdz "-Dane: 'Co wiem' znaleziona w AGENTS.md OpenCode" (($k["narz.$ix.cowiem"] -eq "1") -and ($k["cowiem.gdzie"] -eq (Join-Path $dOc ".config\opencode\AGENTS.md"))) "cowiem.gdzie=$($k['cowiem.gdzie'])"
     Sprawdz "-Dane: czesc MegaRuchacza w OpenCode z jego rachunku (narz.mr = udzial.mr = $StartOc)" (($k["narz.$ix.mr"] -eq "$StartOc") -and ($k["narz.$ix.mr_start"] -eq "$StartOc") -and ($k["narz.$ix.mr_wiadomosc"] -eq "0")) "mr=$($k["narz.$ix.mr"]) start=$($k["narz.$ix.mr_start"]) wiadomosc=$($k["narz.$ix.mr_wiadomosc"])"
   }
   # Rachunek OpenCode: domyslne narzedzie na komputerze z samym OpenCode, start = blok
   # kierownika + "Co wiem" (na kartce $StartOc), procent od zmierzonego otwarcia OpenCode.
-  Sprawdz "-Dane: rachunek domyslny = OpenCode, start $StartOc, wiadomosc 0, calosc 22 493" (($k["narzedzie"] -eq "OpenCode") -and ($k["udzial.start"] -eq "$StartOc") -and
-    ($k["udzial.wiadomosc"] -eq "0") -and ($k["udzial.mr"] -eq "$StartOc") -and ($k["udzial.calosc"] -eq "22493") -and -not $k["udzial.powod"]) "narzedzie=$($k['narzedzie']) start=$($k['udzial.start']) wiadomosc=$($k['udzial.wiadomosc']) calosc=$($k['udzial.calosc']) powod=$($k['udzial.powod'])"
-  Sprawdz "negatywna -Dane: Twoje wlasne instrukcje w AGENTS.md (~3 300 tokenow) nie licza sie jako MegaRuchacz" ([int]$k["udzial.start"] -lt ($StartOc + 100)) "start=$($k['udzial.start']) (gdyby liczyl caly plik: ~$([int](($BlokK.Length + $Wlasne.Length) / 3)))"
+  Sprawdz "-Dane: rachunek domyslny = OpenCode, start $StartOc, wiadomosc 0, calosc $KartkaOtwOc" (($k["narzedzie"] -eq "OpenCode") -and ($k["udzial.start"] -eq "$StartOc") -and
+    ($k["udzial.wiadomosc"] -eq "0") -and ($k["udzial.mr"] -eq "$StartOc") -and ($k["udzial.calosc"] -eq "$KartkaOtwOc") -and -not $k["udzial.powod"]) "narzedzie=$($k['narzedzie']) start=$($k['udzial.start']) wiadomosc=$($k['udzial.wiadomosc']) calosc=$($k['udzial.calosc']) powod=$($k['udzial.powod'])"
+  Sprawdz "negatywna -Dane: Twoje wlasne instrukcje w AGENTS.md (~$(ZnTok $Wlasne.Length) tokenow) nie licza sie jako MegaRuchacz" ([int]$k["udzial.start"] -lt ($StartOc + 100)) "start=$($k['udzial.start']) (gdyby liczyl caly plik: ~$(ZnTok ($BlokK.Length + $Wlasne.Length)))"
   Sprawdz "-Dane: linia rachunku mowi o OpenCode i 'do wiadomosci nic nie dokleja', bez Claude Code" (($k["linia"] -match '^pamiec OpenCode: ') -and ($k["linia"] -match 'do wiadomosci nic nie dokleja') -and ($k["linia"] -notmatch 'Claude')) $k["linia"]
   # tylko odczyt: baza bajt w bajt ta sama, zadnych plikow obok
   $skrotPo = (Get-FileHash -LiteralPath $bazaOc -Algorithm SHA256).Hash
@@ -254,8 +270,8 @@ try {
   Sprawdz "-Start: JSON w samym ASCII" (($null -ne $js) -and ($r.Tekst -notmatch '[^\x00-\x7F]')) $r.Tekst
   if ($js) {
     $po = @($js.Narzedzia | Where-Object { $_.Klucz -eq "opencode" })[0]
-    Sprawdz "-Start: OpenCode w Narzedzia z mediana 22 493 i czescia MegaRuchacza $StartOc" (($po.Otwarcie.Mediana -eq 22493) -and ($po.MegaRuchacz -eq $StartOc) -and $po.Uzywane) ($po | ConvertTo-Json -Depth 4 -Compress)
-    Sprawdz "-Start: glowne narzedzie OpenCode - na wierzchu jego mediana i jego czesc MegaRuchacza" (($js.Narzedzie -eq "OpenCode") -and ($js.Sesje.Narzedzie -eq "OpenCode") -and ($js.Sesje.Mediana -eq 22493) -and
+    Sprawdz "-Start: OpenCode w Narzedzia z mediana $KartkaOtwOc i czescia MegaRuchacza $StartOc" (($po.Otwarcie.Mediana -eq $KartkaOtwOc) -and ($po.MegaRuchacz -eq $StartOc) -and $po.Uzywane) ($po | ConvertTo-Json -Depth 4 -Compress)
+    Sprawdz "-Start: glowne narzedzie OpenCode - na wierzchu jego mediana i jego czesc MegaRuchacza" (($js.Narzedzie -eq "OpenCode") -and ($js.Sesje.Narzedzie -eq "OpenCode") -and ($js.Sesje.Mediana -eq $KartkaOtwOc) -and
       ($js.MegaRuchaczSesja -eq $StartOc) -and ($js.MegaRuchaczStart -eq $StartOc) -and ($js.MegaRuchaczWiadomosc -eq 0) -and -not $js.Powod) "narzedzie=$($js.Narzedzie) sesja=$($js.MegaRuchaczSesja) powod=$($js.Powod)"
   }
 
@@ -313,7 +329,7 @@ try {
   $otw = ([regex]::Match($przod, '(?s)OTWARCIE OKNA ROZMOWY .*?\n\n')).Value
   $rach = ([regex]::Match($r.Tekst, '(?s)== RACHUNEK ZA PAMI.*?== NAUKA')).Value
   Sprawdz "okno: werdykt o OpenCode ('mało', 'co OpenCode wczytuje'), bez słowa 'Claude'" (($werdykt -match '\[malo\]') -and ($werdykt -match 'co OpenCode wczytuje') -and ($werdykt -match 'otwarciu okna w OpenCode') -and ($werdykt -cnotmatch 'Claude')) $werdykt
-  Sprawdz "okno: karta otwarcia - OpenCode z częścią MegaRuchacza, przy wiadomości 'nic', bez 'Claude'" (($otw -match 'Otwarcie okna rozmowy \(OpenCode\): ~22 500') -and ($otw -match 'Z tego MegaRuchacz: 2 100 \(9%\)') -and
+  Sprawdz "okno: karta otwarcia - OpenCode z częścią MegaRuchacza, przy wiadomości 'nic', bez 'Claude'" (($otw -match "Otwarcie okna rozmowy \(OpenCode\): ~$(Okolo100 $KartkaOtwOc)") -and ($otw -match "Z tego MegaRuchacz: $(Okolo100 $StartOc) \($([math]::Round(100.0 * $StartOc / $KartkaOtwOc))%\)") -and
     ($otw -match 'przy każdej Twojej wiadomości: przypomnienie zasad: nic') -and ($otw -cnotmatch 'Claude')) $otw
   Sprawdz "okno Szczegóły: rachunek pozycja po pozycji - OpenCode, bez kubełków Claude Code" (($rach -match 'OpenCode - raz') -and ($rach -match 'zasady kierownika') -and ($rach -cnotmatch 'Claude Code')) $rach
 
