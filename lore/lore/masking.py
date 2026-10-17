@@ -13,13 +13,32 @@ _KEYS = (
 )
 
 _PATTERNS: list[tuple[re.Pattern, str]] = [
+    # password in an address: postgres://user:pass@host (a port has no "@" after it)
+    (
+        re.compile(r"(?i)\b([a-z][a-z0-9+.\-]*://[^\s:/@]*:)([^\s@/]+)(@)"),
+        rf"\1{MASK}\3",
+    ),
+    # "hasło: x" / "haslo=x" / "password - x": any value after an explicit separator
+    (
+        re.compile(r"(?i)\b(has[lł]o|password)(\s*[:=]\s*|\s+-\s+)([^\s\"',;]{3,})"),
+        rf"\1\2{MASK}",
+    ),
+    # "hasło to Abc123" / "password is x9": only a value with a digit or a symbol,
+    # so "hasło to podstawa" stays an ordinary sentence
+    (
+        re.compile(
+            r"(?i)\b(has[lł]o\s+(?:to|jest|brzmi)|password\s+is)(\s+)"
+            r"(?=\S*[0-9!@#$%^&*_+=?~])([^\s\"',;]{3,})"
+        ),
+        rf"\1\2{MASK}",
+    ),
     # Bearer <token>
     (re.compile(r"(?i)\bBearer\s+[A-Za-z0-9\-._~+/=]{8,}"), f"Bearer {MASK}"),
     # key: value / key=value / "key": "value"
     # (no leading \b — POSTGRES_PASSWORD=, WA_API_KEY= have to be masked too)
     (
         re.compile(
-            rf'(?i)({_KEYS})\b(\s*["\']?\s*[:=]\s*["\']?)([^\s"\',;}}\]]{{6,}})'
+            rf'(?i)({_KEYS})\b(\s*["\']?\s*[:=]\s*["\']?)(?!\[MASKED\])([^\s"\',;}}\]]{{6,}})'
         ),
         rf"\1\2{MASK}",
     ),
