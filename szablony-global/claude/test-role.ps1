@@ -19,6 +19,8 @@ $rdzen = [ordered]@{
   "nic na produkcji"              = 'na produkcji z'
   "commit bez Co-Authored-By"     = 'bez linii `Co-Authored-By`'
   "git add tylko wlasnych"        = 'nigdy `-A`'
+  "lore_search na starcie"        = 'wyszukanie `lore_search`'
+  "znalezisko to trop"            = 'trop, nie dow'
 }
 
 $znalezione = @(Get-ChildItem (Join-Path $Katalog "agents\*.md") | ForEach-Object { $_.BaseName })
@@ -31,6 +33,8 @@ foreach ($r in $role) {
   if ($t -notmatch '(?s)^---\n(.*?)\n---\n(.*)$') { Blad "$r - brak frontmattera"; continue }
   $fm = $Matches[1]; $tresc = $Matches[2]
   if ($fm -notmatch '(?m)^omitClaudeMd: true$') { Blad "$r - frontmatter bez 'omitClaudeMd: true'" }
+  # Rola z lista tools dostaje TYLKO wymienione narzedzia - bez lore_search punkt rdzenia bylby martwy.
+  if ($fm -notmatch '(?m)^tools: .*\bmcp__lore__lore_search\b') { Blad "$r - tools bez mcp__lore__lore_search (punkt o lore_search martwy)" }
   foreach ($k in $rdzen.Keys) {
     if (-not $tresc.Contains($rdzen[$k])) { Blad "$r - brak w rdzeniu: $k" }
   }
