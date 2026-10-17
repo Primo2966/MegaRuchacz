@@ -14,6 +14,7 @@ from pathlib import Path
 import pytest
 
 from lore import db, recall
+from pomoc_serwera import sprzatnij, stan_hooka_pidy
 
 NOW = datetime(2026, 9, 24, 12, 0, tzinfo=timezone.utc)
 LORE_DIR = Path(__file__).resolve().parents[1]
@@ -38,6 +39,13 @@ def add(environment, text: str, session: str = "old-session", role: str = "assis
     ).lastrowid
     conn.execute("INSERT INTO chunks_fts(rowid, text) VALUES (?,?)", (cid, text))
     return cid
+
+
+@pytest.fixture(autouse=True)
+def _no_server_left(tmp_path):
+    """Since 2026-10-17 the hook starts the recall server in the background - none may outlive a test."""
+    yield
+    sprzatnij(tmp_path, *stan_hooka_pidy(tmp_path / "state.json"))
 
 
 @pytest.fixture
@@ -172,7 +180,7 @@ def _hook(tmp_path: Path, payload, **env) -> tuple[str, dict]:
     # not depend on the modules chosen on the machine it runs on: no registry = everything on.
     full_env = dict(os.environ, MR_ARCHIWUM_STAN=str(state), MR_LORE_PYTHON=sys.executable, LORE_HOME=str(tmp_path),
                     MR_INSTALACJA=str(tmp_path / "no-registry.json"),
-                    MR_INSTALACJA_ALARM=str(tmp_path / "registry-alarm.json"))
+                    MR_INSTALACJA_ALARM=str(tmp_path / "registry-alarm.json"), MR_LORE_SERWER_BEZCZYNNOSC_S="60")
     full_env.update(env)
     r = subprocess.run([node, str(HOOK), str(reminder), str(tmp_path / "no-progress")],
                        input=payload if isinstance(payload, str) else json.dumps(payload),

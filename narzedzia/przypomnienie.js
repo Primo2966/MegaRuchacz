@@ -41,13 +41,17 @@
 // nie wypisuje nic. Zmienne do testow: MR_INSTALACJA (plik rejestru), MR_INSTALACJA_ALARM (stan
 // alarmu o nieczytelnym rejestrze).
 //
+// Od 2026-10-17 zapytanie do Lore idzie najpierw do stale dzialajacego serwera (lore\lore\recall_serwer.py),
+// stary spawnSync zostaje jako droga zapasowa - sekcja "serwer podpowiedzi" nizej.
+//
 // Od 2026-10-16 za archiwum idzie tez "Z WIEDZY FIRMY" - wpisy ze wspolnej wiedzy firmy (serwer
 // jfwiedza), przy module wiedzafirmy. Szczegoly i uzasadnienia progow: sekcja "wiedza firmy" nizej.
 
 const fs = require("fs");
 const os = require("os");
 const path = require("path");
-const { spawnSync } = require("child_process");
+const net = require("net");
+const { spawn, spawnSync } = require("child_process");
 
 // Sufit ladunku (additionalContextLimit) ucina KONIEC tresci i nie mowi o tym ani
 // slowa - dlatego linia o cyklu idzie na POCZATEK, tak samo jak alarmy w straznik-zasad.ps1.
@@ -191,13 +195,221 @@ function czytajStan(plik) {
   }
 }
 
+// ---------------------------------------------------------------- serwer podpowiedzi (Lore)
+
+// Od 2026-10-17 zapytanie idzie najpierw do stale dzialajacego procesu Lore (lore\lore\recall_serwer.py:
+// cieply Python, otwarta baza, ta sama funkcja recall.recall), a nie do nowego Pythona przy kazdej
+// wiadomosci. Zmierzone 2026-10-17: start Pythona z venv to launcher + drugi proces (~83 + ~55 ms
+// + ~35 ms importow), samo cieple zapytanie 12-65 ms; pod obciazeniem 8 na 101 wiadomosci przekroczylo
+// CZAS_PYTHONA_MS i stracilo podpowiedz. Serwera nie zaklada instalator ani Harmonogram - zaklada go ten
+// hook, leniwie: gdy serwer nie odpowiada, ta jedna wiadomosc idzie stara droga (spawnSync recall.py,
+// "zapasowa"), a serwer rusza w tle (odlaczony, bez okna). Dlatego dziala po restarcie, na drugiej
+// maszynie i u Eli bez zadnych zmian. Szczegoly serwera (zamek, token, wersja kodu, bezczynnosc):
+// naglowek recall_serwer.py. Plik adresu i stan serwera leza obok lore.db (domLore).
+// Zmienne do testow: MR_LORE_SERWER=0 (tylko stara droga), MR_LORE_WERSJA_KODU (udawana aktualizacja;
+// serwer czyta ja tez).
+
+// Limit na odpowiedz serwera. Zmierzone 2026-10-17 na prawdziwej bazie (425 MB, 68 tys. fragmentow):
+// rozgrzany serwer odpowiada w 11-34 ms, cala czesc Lore w hooku (adres, polaczenie, zapis stanu) to
+// 7-53 ms, pod obciazeniem (2 rownolegle PowerShelle) 40-56 ms - limit to ~5x najgorszy wynik. Wolniej
+// bywa tylko na zimnych stronach bazy (tuz po starcie serwera, przed rozgrzewka): 300-900 ms - tego nie
+// ratowal tez stary limit 650 ms z nowym Pythonem; ratuje to rozgrzewka serwera, nie dluzsze czekanie.
+// Przekroczenie = awaria jak dotad (stan + linia w rytmie alarmow), bez drogi zapasowej: serwer zyje,
+// tylko jest wolny - nowy Python trafilby na te same zimne strony, a wiadomosc czekalaby drugi raz.
+const CZAS_SERWERA_MS = 300;
+// Nowy serwer najwyzej raz na tyle sekund: start, ktory nie wychodzi, nie moze kosztowac procesu
+// w tle przy kazdym enterze. Wyjatek: serwer ze starym kodem (po aktualizacji) - ten wymieniamy od razu.
+const SEKUND_MIEDZY_STARTAMI = 60;
+// Tyle startow z rzedu bez zadnej odpowiedzi serwera = linia alarmu (w rytmie GODZIN_MIEDZY_ALARMAMI).
+// Przy przerwie SEKUND_MIEDZY_STARTAMI to co najmniej 2 minuty, w ktorych serwer powinien byl wstac
+// trzy razy (start trwa ~0,2 s); pojedynczy nieudany start (np. dwa okna naraz) nie krzyczy.
+// Podpowiedz idzie wtedy dalej - stara, wolniejsza droga - wiec to ostrzezenie, nie awaria.
+const PROG_STARTOW = 3;
+const ADRES_SERWERA = "lore-podpowiedz.json";
+const STAN_SERWERA = "lore-podpowiedz-stan.json";
+const PLIK_RECALL = path.join(__dirname, "..", "lore", "lore", "recall.py");
+const PLIK_SERWERA = path.join(__dirname, "..", "lore", "lore", "recall_serwer.py");
+const MAX_ODPOWIEDZI = 1024 * 1024;
+
+// Katalog danych Lore - DOKLADNIE jak recall.data_home (i db._data_home): tam serwer trzyma adres.
+function domLore() {
+  const wybrany = process.env.LORE_HOME || process.env.CLAUDE_HISTORIA_HOME;
+  if (wybrany) return wybrany;
+  const poprzedni = path.join(os.homedir(), ".claude");
+  if (["lore.db", "historia.db"].some((n) => fs.existsSync(path.join(poprzedni, n)))) return poprzedni;
+  return path.join(os.homedir(), ".lore");
+}
+
+// python.exe z .venv na Windows to launcher, ktory odpala prawdziwego Pythona jako DRUGI proces
+// (~83 ms samego launchera). recall.py i serwer to sama biblioteka standardowa, wiec wolamy wprost
+// interpreter, z ktorego venv powstal (pyvenv.cfg: home), z -I. Okienkowy = pythonw.exe (bez konsoli).
+function prawdziwyPython(py, okienkowy) {
+  if (process.platform !== "win32") return py;
+  const nazwa = okienkowy ? "pythonw.exe" : "python.exe";
+  const cfg = czytaj(path.join(path.dirname(py), "..", "pyvenv.cfg"));
+  const m = cfg && /^\s*home\s*=\s*(.+?)\s*$/m.exec(cfg);
+  if (m && fs.existsSync(path.join(m[1], nazwa))) return path.join(m[1], nazwa);
+  const obok = path.join(path.dirname(py), nazwa);
+  return fs.existsSync(obok) ? obok : py;
+}
+
+// Skrot kodu, ktory odpowiada (recall.py + serwer) - serwer liczy to samo przy starcie (code_version).
+function wersjaKodu() {
+  if (process.env.MR_LORE_WERSJA_KODU) return process.env.MR_LORE_WERSJA_KODU;
+  const h = require("crypto").createHash("sha1");
+  for (const f of [PLIK_RECALL, PLIK_SERWERA]) { h.update(fs.readFileSync(f)); h.update(Buffer.from([0])); }
+  return h.digest("hex").slice(0, 16);
+}
+
+function czytajAdres(plik) {
+  const t = czytaj(plik);
+  if (t === null) return { brak: "brak pliku adresu serwera" };
+  let a = null;
+  try { a = JSON.parse(t); } catch (e) { return { brak: "plik adresu serwera nieczytelny: " + e.message }; }
+  if (!a || !Number.isInteger(a.pid) || !Number.isInteger(a.port) || typeof a.token !== "string") {
+    return { brak: "plik adresu serwera bez pid/port/token" };
+  }
+  return a;
+}
+
+// Czy proces o tym PID jeszcze jest. Serwer zabity (nie zdazyl sprzatnac adresu) - pytanie go
+// byloby strata czasu; EPERM = jest, tylko cudzy.
+function pidZyje(pid) {
+  try { process.kill(pid, 0); return true; }
+  catch (e) { return !!(e && e.code === "EPERM"); }
+}
+
+// Jedno zapytanie do serwera. { odp } albo { blad, rodzaj }: rodzaj "czas" = serwer zyje i milczy;
+// "wylaczony" = nie ma czego pytac ani czego uruchamiac; reszta ("brak", "siec", "smieci", "obcy",
+// "stary") = idziemy droga zapasowa i stawiamy nowy serwer. Serwer ze starym kodem (po aktualizacji)
+// odpowiada jeszcze na to jedno pytanie i odchodzi: { odp, stary: true } - odpowiedz bierzemy (jego
+// pamiec jest ciepla; nowy Python po aktualizacji trafial na zimne strony i przekraczal 650 ms),
+// a nowy serwer stawiamy od razu.
+function zapytajSerwer(dom, zadanie) {
+  if (process.env.MR_LORE_SERWER === "0") return Promise.resolve({ blad: "serwer wylaczony (MR_LORE_SERWER=0)", rodzaj: "wylaczony" });
+  let wersja;
+  try { wersja = wersjaKodu(); }
+  catch (e) { return Promise.resolve({ blad: "nie umiem odczytac kodu serwera: " + (e && e.message || e), rodzaj: "wylaczony" }); }
+  const a = czytajAdres(path.join(dom, ADRES_SERWERA));
+  if (a.brak) return Promise.resolve({ blad: a.brak, rodzaj: "brak" });
+  if (!pidZyje(a.pid)) return Promise.resolve({ blad: "serwer z pliku adresu (PID " + a.pid + ") nie zyje", rodzaj: "brak" });
+  return new Promise((gotowe) => {
+    let dane = "";
+    let koniec = false;
+    let zegar = null;
+    let gniazdo = null;
+    const skoncz = (w) => {
+      if (koniec) return;
+      koniec = true;
+      clearTimeout(zegar);
+      if (gniazdo) gniazdo.destroy();
+      gotowe(w);
+    };
+    zegar = setTimeout(() => skoncz({ blad: "serwer Lore (PID " + a.pid + ") nie odpowiedzial w " + CZAS_SERWERA_MS + " ms", rodzaj: "czas" }), CZAS_SERWERA_MS);
+    gniazdo = net.connect({ host: "127.0.0.1", port: a.port });
+    gniazdo.setNoDelay(true);
+    gniazdo.setEncoding("utf8");
+    gniazdo.on("connect", () => gniazdo.write(JSON.stringify(Object.assign({ token: a.token, wersja, limit_ms: CZAS_SERWERA_MS }, zadanie)) + "\n"));
+    gniazdo.on("data", (k) => {
+      dane += k;
+      const nl = dane.indexOf("\n");
+      if (nl < 0) {
+        if (dane.length > MAX_ODPOWIEDZI) skoncz({ blad: "serwer Lore przyslal ponad " + MAX_ODPOWIEDZI + " znakow bez konca linii", rodzaj: "smieci" });
+        return;
+      }
+      let odp = null;
+      try { odp = JSON.parse(dane.slice(0, nl)); } catch (e) { odp = null; }
+      if (!odp || typeof odp !== "object" || typeof odp.status !== "string") {
+        skoncz({ blad: "serwer Lore zwrocil smieci: " + dane.slice(0, 80).replace(/\s+/g, " "), rodzaj: "smieci" });
+      } else if (odp.status === "stale") {
+        // serwer sprzed 2026-10-17 07:10 (odchodzil bez odpowiedzi) - tylko na czas pierwszej wymiany
+        skoncz({ blad: "serwer Lore ma stary kod - wymieniam (" + String(odp.reason || "") + ")", rodzaj: "stary" });
+      } else if (odp.status === "obcy") {
+        skoncz({ blad: "serwer pod adresem z pliku nie przyjal tokenu: " + String(odp.reason || ""), rodzaj: "obcy" });
+      } else if (odp.stary_kod) {
+        skoncz({ odp, stary: true, blad: "serwer Lore (PID " + a.pid + ") mial stary kod - odpowiedzial i odszedl, stawiam nowy" });
+      } else {
+        skoncz({ odp });
+      }
+    });
+    gniazdo.on("end", () => skoncz({ blad: "serwer Lore zamknal polaczenie bez odpowiedzi", rodzaj: "smieci" }));
+    gniazdo.on("error", (e) => skoncz({ blad: "polaczenie z serwerem Lore: " + (e && (e.code || e.message)), rodzaj: "siec" }));
+  });
+}
+
+// Serwer w tle: odlaczony (przezywa hook i okno, z ktorego wyszedl), bez okna i bez konsoli
+// (pythonw + windowsHide), bez naszych stdin/stdout - inaczej narzedzie AI czekaloby na koniec
+// wyjscia hooka do konca zycia serwera. Blad spawn() przychodzi asynchronicznie - w w.blad.
+function odpalSerwer(py, dom) {
+  const w = { pid: null, blad: null };
+  try {
+    const d = spawn(prawdziwyPython(py, true), ["-I", "-X", "utf8", PLIK_SERWERA, "--dom", dom],
+      { cwd: dom, detached: true, stdio: "ignore", windowsHide: true });
+    w.pid = d.pid || null;
+    d.on("error", (e) => { w.blad = "nie da sie uruchomic serwera Lore: " + (e && (e.code || e.message)); });
+    d.unref();
+  } catch (e) {
+    w.blad = "nie da sie uruchomic serwera Lore: " + (e && e.message || e);
+  }
+  return w;
+}
+
+// Start w tle i slad w stanie. liczyc = start, po ktorym serwer ma odpowiedziec (do PROG_STARTOW).
+function postawSerwer(py, dom, serw, liczyc) {
+  const nowy = odpalSerwer(py, dom);
+  serw.start = new Date().toISOString();
+  if (liczyc) serw.starty_bez_odpowiedzi = (Number(serw.starty_bez_odpowiedzi) || 0) + 1;
+  return nowy;
+}
+
+// Linia "serwer nie wstaje" - liczona ze stanu SPRZED tej wiadomosci, bo zabiera miejsce pod sufitem
+// i blok archiwum musi o tym wiedziec, zanim powstanie. "" = nic do pokazania.
+function alarmSerwera(serw, plikStanu, dom) {
+  const n = Number(serw.starty_bez_odpowiedzi) || 0;
+  if (n < PROG_STARTOW) return "";
+  const ostatni = Date.parse(serw.alarm);
+  if (!isNaN(ostatni) && (Date.now() - ostatni) / 3600000 < GODZIN_MIEDZY_ALARMAMI) return "";
+  let l = "UWAGA: serwer podpowiedzi Lore nie wstaje (" + n + " startow bez odpowiedzi) - podpowiedz idzie stara, " +
+    "wolniejsza droga. Szczegoly: " + plikStanu.replace(os.homedir(), "~") + ", " +
+    path.join(dom, STAN_SERWERA).replace(os.homedir(), "~");
+  if (l.length > MAX_STAN) l = l.slice(0, MAX_STAN - 3) + "...";
+  return l;
+}
+
+// Stara droga: nowy Python z recall.py (jak przed serwerem, tylko bez launchera venv). { odp } albo { blad }.
+function zapytajPythona(py, zadanie) {
+  const r = spawnSync(prawdziwyPython(py, false), ["-I", "-X", "utf8", PLIK_RECALL], {
+    cwd: path.join(__dirname, "..", "lore"),
+    input: JSON.stringify(zadanie),
+    encoding: "utf8",
+    timeout: CZAS_PYTHONA_MS,
+    windowsHide: true,
+    env: Object.assign({}, process.env, { PYTHONIOENCODING: "utf-8", PYTHONUTF8: "1" }),
+  });
+  if (r.error && r.error.code === "ETIMEDOUT") return { blad: "Lore nie odpowiedzialo w " + CZAS_PYTHONA_MS + " ms" };
+  if (r.error) return { blad: "nie da sie uruchomic Lore: " + r.error.message };
+  let odp = null;
+  try { odp = JSON.parse((r.stdout || "").trim().split(/\r?\n/).pop()); } catch (e) { odp = null; }
+  if (!odp) {
+    const blad = (r.stderr || "").trim().split(/\r?\n/).pop() || ("kod wyjscia " + r.status);
+    return { blad: "Lore zwrocilo smieci: " + blad };
+  }
+  return { odp };
+}
+
 // Sama podpowiedz. Zwraca { blok, alarm } i ZAWSZE zapisuje stan ("bylem tu" + wynik),
 // takze wtedy, gdy nic nie doklejono - brak wpisu nie moze znaczyc "wszystko gra".
-function archiwum(wejscie, budzet, plikStanu) {
+// miejsce = ile znakow zostaje pod sufitem ladunku za zasadami (budzet to juz min(MAX_ARCHIWUM, miejsce)).
+async function archiwum(wejscie, budzet, plikStanu, miejsce) {
   const start = Date.now();
   const stan = czytajStan(plikStanu);
   const sesje = stan.sesje && typeof stan.sesje === "object" ? stan.sesje : {};
+  const serw = stan.serwer && typeof stan.serwer === "object" ? stan.serwer : {};
   let wynik = { blok: "", alarm: "", status: "", powod: "", awaria: false };
+  let droga = "";
+  const dom = domLore();
+  let liniaSerwera = alarmSerwera(serw, plikStanu, dom);
+  if (liniaSerwera) budzet = Math.min(budzet, (miejsce === undefined ? budzet : miejsce) - liniaSerwera.length - 1);
 
   const awaria = (powod) => { wynik = { blok: "", alarm: "", status: "awaria", powod, awaria: true }; };
   let prosba = null;
@@ -226,25 +438,49 @@ function archiwum(wejscie, budzet, plikStanu) {
       awaria("brak srodowiska Lore (" + py + ") - uruchom narzedzia\\instaluj-lore.ps1");
     } else {
       const juz = (sesje[prosba.sesja] && Array.isArray(sesje[prosba.sesja].ids)) ? sesje[prosba.sesja].ids : [];
-      const r = spawnSync(py, ["-m", "lore.recall"], {
-        cwd: path.join(__dirname, "..", "lore"),
-        input: JSON.stringify({ prompt: prosba.prompt, session: prosba.sesja, budget: budzet, exclude: juz }),
-        encoding: "utf8",
-        timeout: CZAS_PYTHONA_MS,
-        windowsHide: true,
-        env: Object.assign({}, process.env, { PYTHONIOENCODING: "utf-8", PYTHONUTF8: "1" }),
-      });
+      const zadanie = { prompt: prosba.prompt, session: prosba.sesja, budget: budzet, exclude: juz };
       let odp = null;
-      if (r.error && r.error.code === "ETIMEDOUT") {
-        awaria("Lore nie odpowiedzialo w " + CZAS_PYTHONA_MS + " ms");
-      } else if (r.error) {
-        awaria("nie da sie uruchomic Lore: " + r.error.message);
+      let nowy = null;
+      const s = await zapytajSerwer(dom, zadanie);
+      if (s.odp) {
+        odp = s.odp;
+        droga = "serwer";
+        serw.pid = odp.pid;
+        serw.starty_bez_odpowiedzi = 0;
+        delete serw.problem;
+        // problem serwera, ktory nie przerwal mu pracy (np. nie zapisal swojego stanu) - tu zostaje slad
+        if (odp.uwaga) serw.uwaga = { czas: new Date().toISOString(), opis: String(odp.uwaga).slice(0, 200) };
+        liniaSerwera = "";
+        if (s.stary) {
+          // stary serwer wlasnie odchodzi - nowy od razu (czeka do 3 s na jego zamek)
+          serw.problem = s.blad;
+          nowy = postawSerwer(py, dom, serw, true);
+        }
       } else {
-        try { odp = JSON.parse((r.stdout || "").trim().split(/\r?\n/).pop()); } catch (e) { odp = null; }
-        if (!odp) {
-          const blad = (r.stderr || "").trim().split(/\r?\n/).pop() || ("kod wyjscia " + r.status);
-          awaria("Lore zwrocilo smieci: " + blad);
-        } else if (odp.status === "error") {
+        serw.problem = s.blad;
+        if (s.rodzaj !== "wylaczony" && fs.existsSync(path.join(dom, "lore.db"))) {
+          const ostatni = Date.parse(serw.start);
+          if (s.rodzaj === "stary" || isNaN(ostatni) || (Date.now() - ostatni) / 1000 >= SEKUND_MIEDZY_STARTAMI) {
+            // milczacy, ale zywy serwer to nie "nie wstaje" - nowy i tak odpadnie na zamku
+            nowy = postawSerwer(py, dom, serw, s.rodzaj !== "czas");
+          }
+        }
+        if (s.rodzaj === "czas") {
+          droga = "serwer";
+          awaria(s.blad);
+        } else {
+          droga = "zapasowa";
+          const p = zapytajPythona(py, zadanie);
+          if (p.blad) awaria(p.blad); else odp = p.odp;
+        }
+      }
+      if (nowy) {
+        await new Promise((g) => setImmediate(g));   // blad spawn() przychodzi w nastepnym obrocie petli
+        if (nowy.blad) serw.blad_startu = { czas: new Date().toISOString(), opis: nowy.blad };
+        else { delete serw.blad_startu; serw.pid_startu = nowy.pid; }
+      }
+      if (odp) {
+        if (odp.status === "error") {
           awaria(String(odp.reason || "nieznany blad"));
         } else {
           wynik.status = odp.status;
@@ -287,6 +523,10 @@ function archiwum(wejscie, budzet, plikStanu) {
     delete stan.awaria;
     delete stan.alarm;
   }
+  if (liniaSerwera) {
+    serw.alarm = teraz.toISOString();
+    wynik.alarm = liniaSerwera + (wynik.alarm ? "\n" + wynik.alarm : "");
+  }
 
   // Najstarsze rozmowy wypadaja z pamieci powtorek.
   const klucze = Object.keys(sesje).sort((a, b) => String(sesje[b].czas).localeCompare(String(sesje[a].czas)));
@@ -297,8 +537,10 @@ function archiwum(wejscie, budzet, plikStanu) {
   stan.powod = wynik.powod;
   stan.ms = Date.now() - start;
   if (wynik.python_ms !== undefined) stan.python_ms = wynik.python_ms; else delete stan.python_ms;
+  if (droga) stan.droga = droga; else delete stan.droga;
   stan.doklejono_znakow = wynik.blok.length;
   stan.sesje = sesje;
+  if (Object.keys(serw).length) stan.serwer = serw; else delete stan.serwer;
   try {
     fs.mkdirSync(path.dirname(plikStanu), { recursive: true });
     fs.writeFileSync(plikStanu, JSON.stringify(stan, null, 1), "utf8");
@@ -847,7 +1089,7 @@ async function glowna() {
   if (mod.lore) {
     try {
       const budzet = Math.min(MAX_ARCHIWUM, SUFIT_LADUNKU - zasady.length - 2);
-      const w = archiwum(wejscie, budzet, plikStanu);
+      const w = await archiwum(wejscie, budzet, plikStanu, SUFIT_LADUNKU - zasady.length - 2);
       let calosc = zasady;
       if (w.alarm) calosc = w.alarm + (calosc ? "\n" + calosc : "");
       if (w.blok) calosc = calosc ? calosc + "\n\n" + w.blok : w.blok;
