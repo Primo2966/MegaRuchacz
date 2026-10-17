@@ -29,11 +29,15 @@
 # kierownika (Pilnuj-Kierownika), hooki globalne (Pilnuj-Hookow-Globalnych),
 # cykl wiedzy (Ruszaj-Cykl). Brak rejestru = jak przed nim (wszystko poza kopia wlaczone).
 # Rejestr nieczytelny = wszystko wlaczone, jedna linia alarmu i ZADNEGO zdejmowania.
+# Od 17.10.2026 Lore jest obowiazkowe (decyzja uzytkownika): flaga "lore" dalej znaczy "zainstalowane
+# i dziala", wiec bez niej blok i hook Lore dalej znikaja - ale brak Lore to stan przejsciowy, o ktorym
+# straznik mowi glosno przy kazdym starcie sesji (Zglos-Brak-Lore), a -Odrzuc pamiec odmawia.
 #
 # Uzycie:
 #   powershell -NoProfile -File narzedzia\straznik-zasad.ps1 [-Zrodlo <repo>] [-Projekt <katalog>]
 #   powershell -NoProfile -File narzedzia\straznik-zasad.ps1 -Odrzuc <modul>
-#       zapamietuje, ze modul (albo nowa funkcja w nim) ma zostac niewlaczony
+#       zapamietuje, ze modul (albo nowa funkcja w nim) ma zostac niewlaczony;
+#       pamiec (Lore) jest obowiazkowa - odmowa bez zapisu
 #   powershell -NoProfile -File narzedzia\straznik-zasad.ps1 -Moduly
 #       wypisuje rejestr modulow w JSON-ie; z tego korzysta wdroz.ps1
 #   powershell -NoProfile -File narzedzia\straznik-zasad.ps1 -Tlo
@@ -105,6 +109,8 @@ if (-not $Projekt) { $Projekt = (Get-Location).Path }
 #   instalator   - skrypt w repo; puste = robi to wprost wdroz.ps1
 #   aktualizacja - "pliki" (straznik nanosi sam) albo "instalator"
 #                  (straznik tylko mowi, jaka komenda to zrobi - moze kosztowac)
+# Pamiec (Lore) od 17.10.2026 jest obowiazkowa (decyzja uzytkownika): pytaj = $false, Pilnuj-Wersji
+# jej nie proponuje, a -Odrzuc pamiec odmawia - przychodzi z instalacja i z aktualizacja automatyczna.
 function Rejestr-Modulow {
   return @(
     [ordered]@{
@@ -117,9 +123,9 @@ function Rejestr-Modulow {
     },
     [ordered]@{
       nazwa        = "pamiec"
-      opis         = "Lore - przeszukiwalna pamiec wszystkich rozmow odbytych na tej maszynie"
+      opis         = "Lore - przeszukiwalna pamiec wszystkich rozmow (obowiazkowa)"
       koszt        = "okolo 496 MB pobrania i Python, lokalna baza z trescia rozmow, dostep agenta do tych tresci, zadanie w harmonogramie co 10 minut i nadzorca w zasobniku (drugie zadanie, przy logowaniu); na istniejacej bazie - przeliczenie archiwum na nowy model w tle, ~2-4 h z obnizonym priorytetem"
-      pytaj        = $true
+      pytaj        = $false
       instalator   = "narzedzia\instaluj-lore.ps1"
       aktualizacja = "instalator"
     }
@@ -677,6 +683,33 @@ function Zglos-Rejestr {
   if (-not $script:Instalacja.blad) { return }
   Mow ("MegaRuchacz: ALARM - $($script:Instalacja.blad). Do czasu naprawy pilnuje wszystkich modulow jak dotad " +
        "i niczego nie zdejmuje; rejestr zapisze od nowa ponowne uruchomienie instalatora (instaluj.bat).")
+}
+
+# Lore jest obowiazkowe (decyzja uzytkownika 17.10.2026): CLAUDE.md trzyma tylko staly rdzen wiedzy, reszte
+# Claude dostaje z Lore ("Z ARCHIWUM", lore_search) - bez niego ta wiedza jest niedostepna. Flaga "lore"
+# w rejestrze dalej znaczy "zainstalowane i dziala" (ustawia ja tylko udany modul-lore Instaluj), wiec
+# Pilnuj-Zasad i hooki dalej zdejmuja blok i hook Lore, gdy jej nie ma - a tu jedna linia przy kazdym
+# starcie sesji, dopoki aktualizacja (Doinstaluj-Lore) albo instalator go nie doinstaluje.
+# Predykat ten sam co Lore-Brakuje w aktualizuj-megaruchacza.ps1: rejestr czytelny, "baza" nie false,
+# (flaga lore nie true albo brak <Zrodlo>\lore\.venv\Scripts\python.exe) i kod Lore w zrodle jest.
+# Niczego nie twierdzimy przy rejestrze nieczytelnym (ma wlasny alarm - Zglos-Rejestr), po usunieciu
+# calego MegaRuchacza ("baza": false - tam brak Lore jest zamierzony) ani w zrodle bez lore\pyproject.toml
+# (okrojona kopia narzedzia - nie ma czego doinstalowac). Zwraca powod (jedno zdanie) albo "".
+function Powod-Braku-Lore {
+  if ($script:Instalacja.blad) { return "" }
+  if ($script:Instalacja.baza -eq $false) { return "" }
+  if (-not (Test-Path -LiteralPath (Join-Path $Zrodlo "lore\pyproject.toml"))) { return "" }
+  if ($script:Instalacja.moduly.lore -ne $true) { return "rejestr instalacji nie ma jej jako zainstalowanej" }
+  $python = Join-Path $Zrodlo "lore\.venv\Scripts\python.exe"
+  if (-not (Test-Path -LiteralPath $python)) { return "nie ma srodowiska $python" }
+  return ""
+}
+
+function Zglos-Brak-Lore {
+  $powod = Powod-Braku-Lore
+  if (-not $powod) { return }
+  Mow ("MegaRuchacz: Pamiec rozmow (Lore) jest obowiazkowa, a na tym komputerze jej brak ($powod). " +
+       "Doinstaluje ja aktualizacja z ikony przy zegarze (sprawdza co godzine); od razu: instaluj.bat.")
 }
 
 # Nadpisuje plik nalezacy do narzedzia, ale tylko gdy faktycznie sie rozni.
@@ -2590,12 +2623,16 @@ function Pilnuj-Wersji {
   foreach ($m in (Rejestr-Modulow)) {
     $k = "modul." + $m.nazwa
     $wdrozona = $stan["$k.wersja"]
-    # Lore odznaczone w instalatorze (rejestr instalacji) - nie proponujemy go i nie zapowiadamy
-    # jego aktualizacji przy kazdej nowej wersji; wroci, gdy uzytkownik zaznaczy je sam.
+    # Lore bez flagi w rejestrze instalacji - od 17.10.2026 to stan przejsciowy (Lore jest obowiazkowe,
+    # doinstaluje je aktualizacja), o ktorym mowi Zglos-Brak-Lore; tu nie zapowiadamy aktualizacji
+    # modulu, ktorego na tej maszynie nie ma.
     if (($m.nazwa -eq "pamiec") -and (Modul-Wylaczony "lore")) { continue }
 
     # Modul jeszcze niezainstalowany - proponujemy raz, z kosztem, i tyle.
     if (-not $wdrozona) {
+      # Pamiec (Lore) jest obowiazkowa - nie ma czego proponowac ani odrzucac: przychodzi z instalacja
+      # globalna i z aktualizacja automatyczna. Aktualizacja juz wdrozonego modulu (nizej) zostaje.
+      if ($m.nazwa -eq "pamiec") { continue }
       if ($stan["$k.status"] -eq "odrzucony") { continue }
       if ($stan["$k.zaproponowany"] -eq $wZrodla) { continue }
       $stan["$k.zaproponowany"] = $wZrodla
@@ -3406,7 +3443,9 @@ try {
 
   # Odmowa jest zapamietywana per modul - o to samo nie pytamy drugi raz.
   # Wrocic do tego mozna instalatorem, kiedy uzytkownik sam zechce.
+  # Wyjatek: pamiec (Lore) jest obowiazkowa (17.10.2026) - odmowy nie zapisujemy w zadnym projekcie.
   if ($Odrzuc) {
+    if ($Odrzuc -eq "pamiec") { Write-Host "MegaRuchacz: Lore jest obowiazkowe - nie mozna go odrzucic (nic nie zapisalem)."; exit 0 }
     if (-not (Test-Path $plikWersji)) { Write-Host "MegaRuchacz: nie ma $plikWersji - to nie jest wdrozony projekt."; exit 0 }
     $nazwy = @(Rejestr-Modulow | ForEach-Object { $_.nazwa })
     if (-not ($nazwy -contains $Odrzuc)) {
@@ -3624,6 +3663,7 @@ try {
   # Zera najpierw: alarm o nich ma byc pierwsza linia, a reszta ma wiedziec, czego nie ruszac.
   try { Sprawdz-Zera }     catch { Zanotuj-Wywrotke "sprawdzanie zer w plikach pamieci" $_ }
   try { Zglos-Rejestr }    catch { Zanotuj-Wywrotke "odczyt rejestru instalacji" $_ }
+  try { Zglos-Brak-Lore }  catch { Zanotuj-Wywrotke "meldunek o braku Lore" $_ }
   try { Odswiez-Zrodlo }   catch { Zanotuj-Wywrotke "odswiezanie zrodla" $_ }
   if ($script:Wyzerowane.Count -eq 0) {
     try { Pilnuj-Zasad }     catch { Zanotuj-Wywrotke "pilnowanie zasad" $_ }

@@ -174,8 +174,9 @@ function pythonLore() {
 }
 
 // Czy Lore w ogole jest na tej maszynie - ta sama kolejnosc co db._data_home w Pythonie.
-// Brak i srodowiska, i bazy to "nie zainstalowane", nie awaria: meldowanie tego co kilka
-// godzin na maszynie bez Lore byloby falszywym alarmem.
+// Brak i srodowiska, i bazy to "nie zainstalowane". Do 17.10.2026 to byla cisza (Lore bylo do wyboru);
+// od tej daty Lore jest obowiazkowe (decyzja uzytkownika - bez niego Claude nie dostaje wiedzy spoza
+// stalego rdzenia CLAUDE.md), wiec to awaria w rytmie alarmow. Czy w ogole pytamy, decyduje mod.lore.
 function jestBazaLore() {
   const dom = process.env.LORE_HOME || process.env.CLAUDE_HISTORIA_HOME;
   const kandydaci = dom ? [dom] : [path.join(os.homedir(), ".claude"), path.join(os.homedir(), ".lore")];
@@ -432,8 +433,7 @@ async function archiwum(wejscie, budzet, plikStanu, miejsce) {
   if (prosba) {
     const py = pythonLore();
     if (!fs.existsSync(py) && !jestBazaLore()) {
-      wynik.status = "brak-lore";
-      wynik.powod = "Lore nie jest zainstalowane na tej maszynie";
+      awaria("Lore nie jest zainstalowane na tej maszynie - doinstaluje je aktualizacja z ikony przy zegarze albo instaluj.bat");
     } else if (!fs.existsSync(py)) {
       awaria("brak srodowiska Lore (" + py + ") - uruchom narzedzia\\instaluj-lore.ps1");
     } else {

@@ -33,6 +33,19 @@
 # znaczy tu "wlaczony" - stara instalacja nie moze dostac takiego modulu po cichu; zamiast tego
 # nadzorca raz dziennie pyta (zasobnik\nadzorca\pytanie-wiedza-firmy.ps1). Przy nieczytelnym pliku
 # Modul-Wlaczony zwraca dla niego $true (nic nie wolno odinstalowac), ale nikt o niego nie pyta.
+#
+# LORE OBOWIAZKOWE (decyzja uzytkownika 17.10.2026): CLAUDE.md trzyma tylko staly rdzen wiedzy, reszte
+# Claude dostaje z Lore ("Z ARCHIWUM", lore_search) - bez Lore ta wiedza jest niedostepna. Znaczenie
+# flagi "lore" sie NIE zmienia: true = "zainstalowane i dziala" (ustawia ja tylko udany
+# modul-lore.ps1 -Akcja Instaluj), false = stan przejsciowy do doinstalowania. Dlatego konsumenci flagi
+# (bloki zasad, hooki Lore) dalej zdejmuja to, co bez Lore nie dziala - a obowiazek egzekwuja:
+#   - instalator (instalator\dane.ps1, pole Zawsze): Lore nie da sie odznaczyc poza usunieciem calosci;
+#   - aktualizacja (narzedzia\aktualizuj-megaruchacza.ps1, Doinstaluj-Lore): doinstalowuje sama;
+#   - straznik (narzedzia\straznik-zasad.ps1, Zglos-Brak-Lore): linia przy kazdym starcie sesji;
+#   - hook przypomnienia (narzedzia\przypomnienie.js, brak-lore): przy wlaczonym lore brak srodowiska
+#     i bazy to awaria - linia UWAGA w rytmie alarmow.
+# Wspolny predykat braku (straznik i aktualizacja): rejestr czytelny, "baza" nie false, (lore nie true
+# albo brak <Zrodlo>\lore\.venv\Scripts\python.exe) i jest <Zrodlo>\lore\pyproject.toml.
 
 # Lista modulow jako funkcja zwracajaca stala, NIE zmienna $script: - zakres $script: w PowerShellu
 # jest dynamiczny (skrypt aktualnie wykonywany), wiec funkcja wolana z innego skryptu widziala

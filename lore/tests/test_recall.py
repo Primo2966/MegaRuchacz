@@ -215,6 +215,9 @@ def test_hook_glues_the_hit_after_the_rules(archive, tmp_path):
     ("no python", {"session_id": "s", "prompt": "tytul oferty ebay limit znakow"}, {"MR_LORE_PYTHON": "__missing__"}),
     ("empty input", "", {}),
     ("input without prompt", {"session_id": "s"}, {}),
+    # Lore is mandatory since 2026-10-17: no environment and no database = a failure, not silence
+    ("no lore at all", {"session_id": "s", "prompt": "tytul oferty ebay limit znakow"},
+     {"MR_LORE_PYTHON": "__missing__", "LORE_HOME": "__missing__"}),
 ])
 def test_hook_keeps_the_rules_whole_and_leaves_a_trace(archive, tmp_path, case, payload, env):
     env = {k: (str(tmp_path / "missing" / "x") if v == "__missing__" else v) for k, v in env.items()}
@@ -222,6 +225,8 @@ def test_hook_keeps_the_rules_whole_and_leaves_a_trace(archive, tmp_path, case, 
     assert RULES in ctx, case
     assert ctx.startswith("UWAGA: podpowiedz z archiwum (Lore) nie dziala"), case
     assert state["wynik"] == "awaria" and state["awaria"]["ile"] == 1, case
+    if case == "no lore at all":
+        assert "Lore nie jest zainstalowane" in ctx.splitlines()[0] and "aktualizacja" in ctx.splitlines()[0], ctx
     # the same failure again: still in the state, but not shouted at every message
     ctx2, state2 = _hook(tmp_path, payload, **env)
     assert ctx2 == RULES and state2["awaria"]["ile"] == 2, case

@@ -4,6 +4,9 @@
 # Do tego: straznik dwa razy z rzedu nic nie zmienia, migracja starego bloku na dwa z "Co wiem" co do
 # bajtu, wylaczenie modulu zdejmuje jego blok i hook, wlaczenie przywraca, a rejestr nieczytelny
 # (proba negatywna) nie zdejmuje niczego i daje alarm.
+# Lore obowiazkowe (17.10.2026): wiersze bez Lore maja linie straznika o jego braku i pilny wiersz
+# w Szczegolach nadzorcy (Opis-Instalacji); rejestr nieczytelny i slad po odinstalowaniu ("baza": false)
+# - proby negatywne - nie maja; -Odrzuc pamiec nic nie zapisuje, -Moduly daje pamiec bez pytania.
 # Wszystko dzieje sie w kopii: katalogi domowe, projekt i katalog zrodlowy (bez .git - straznik nie
 # siegnie do sieci ani do prawdziwego repo) w %TEMP%. Cykl wiedzy i kolejka faktow to w kopii zaslepki,
 # ktore tylko zostawiaja slad - prawdziwy cykl nie rusza. Prawdziwe pliki nie sa ruszane.
@@ -109,7 +112,7 @@ function Przypomnij([string]$dom, [string]$prompt = "Jak dziala robot do zamowie
   return [pscustomobject]@{ Kod = $p.ExitCode; Wyjscie = $wy; Kontekst = "$kontekst" }
 }
 
-function Rejestr([string]$dom, $moduly) {
+function Rejestr([string]$dom, $moduly, $baza = $null) {
   $kat = Join-Path $dom ".claude\mr"
   New-Item -ItemType Directory -Force -Path $kat | Out-Null
   $p = Join-Path $kat "instalacja.json"
@@ -117,6 +120,7 @@ function Rejestr([string]$dom, $moduly) {
   if ($moduly -is [string]) { Zapisz $p $moduly; return }
   if ($moduly -is [byte[]]) { [System.IO.File]::WriteAllBytes($p, $moduly); return }
   $j = [ordered]@{ wersja = 1; moduly = $moduly; kopia = $null; narzedzia = $null; data = "2026-10-02 10:00:00" }
+  if ($null -ne $baza) { $j["baza"] = [bool]$baza }   # "baza": false = slad po usunieciu calego MegaRuchacza (P64)
   Zapisz $p ($j | ConvertTo-Json -Depth 4)
 }
 
@@ -130,6 +134,10 @@ foreach ($f in @("zasady-lore.md", "zasady-wiedza.md", "ZMIANY.md", ".claude\orc
 }
 # lore\pyproject.toml - straznik uznaje po nim, ze kod cyklu jest (Ruszaj-Cykl); sam cykl i kolejka to zaslepki
 Zapisz (Join-Path $Z "lore\pyproject.toml") "[project]`r`nname = ""lore-zaslepka""`r`n"
+# lore\.venv\Scripts\python.exe - pusta atrapa: po niej i po pyproject.toml straznik (Zglos-Brak-Lore) uznaje,
+# ze Lore przy fladze lore = true stoi. Nikt jej nie uruchamia - przypomnienie dostaje MR_LORE_PYTHON w proznie.
+New-Item -ItemType Directory -Force -Path (Join-Path $Z "lore\.venv\Scripts") | Out-Null
+Zapisz (Join-Path $Z "lore\.venv\Scripts\python.exe") ""
 Zapisz (Join-Path $Z "narzedzia\wyciagnij-fakty.ps1") ("param([string]`$Zrodlo, [switch]`$Kolejka)`r`n" +
   "Write-Output ""kolejka.kawalki: 3""`r`nWrite-Output ""kolejka.przebiegi: 1""`r`nexit 0`r`n")
 Zapisz (Join-Path $Z "narzedzia\cykl-dzienny.ps1") ("param([string]`$Zrodlo, [string]`$KatalogDomowy)`r`n" +
@@ -138,6 +146,14 @@ Zapisz (Join-Path $Z "narzedzia\cykl-dzienny.ps1") ("param([string]`$Zrodlo, [st
   "[IO.File]::WriteAllText((Join-Path `$w "".cykl-ruszyl-test""), (Get-Date -Format o))`r`n")
 
 . (Join-Path $Z "narzedzia\kierownik-cele.ps1")
+# Szczegoly nadzorcy (Opis-Instalacji) czytaja ten sam rejestr - modul nadzorcy wprost ze zrodla, bez okna;
+# Wiersz jak w zasobnik\nadzorca\stan-wersja.ps1, katalog domowy ustawia kazde sprawdzenie (NadzDom).
+function Wiersz([string]$etykieta, [string]$wartosc, [string]$waga = "") { return [pscustomobject]@{ Etykieta = $etykieta; Wartosc = $wartosc; Waga = $waga } }
+$script:NadzModuly = @{}
+$script:NadzZrodlo = $Z
+$script:NadzDom = $T
+. (Join-Path $Zrodlo "zasobnik\nadzorca\stan-instalacja.ps1")
+$LINIA_LORE = "Pamiec rozmow \(Lore\) jest obowiazkowa"   # linia straznika o braku Lore (Zglos-Brak-Lore)
 $kierClaude   = (Czytaj (Join-Path $Z "szablony-global\claude\zasady-kierownika.md")).Trim() -replace "`r`n", "`n"
 $kierOpencode = (Czytaj (Join-Path $Z "szablony-opencode\zasady-kierownika.md")).Trim() -replace "`r`n", "`n"
 $zrodloUkosniki = $Z.Replace("\", "/")
@@ -264,13 +280,15 @@ function Sprawdz-Dom([string]$co, [string]$dom, $ocz, [bool]$migracja) {
 try {
   # ------------------------------------------------------------ macierz rejestrow
   $WSZYSTKO = [ordered]@{ wiedza = $true;  lore = $true;  kierownik = $true;  skille = $true;  kopia = $false }
+  # lorebrak = Lore obowiazkowe, a rejestr (czytelny) mowi, ze go nie ma: linia straznika i pilny wiersz nadzorcy.
+  # Rejestr nieczytelny (plik wyzerowany) ma tylko wlasny alarm - o Lore nic nie twierdzimy.
   $macierz = @(
     @{ nazwa = "brak pliku";      rej = $null; ocz = @{ lore = $true;  wiedza = $true;  kierownik = $true  } },
     @{ nazwa = "wszystko";        rej = $WSZYSTKO;    ocz = @{ lore = $true;  wiedza = $true;  kierownik = $true  } },
-    @{ nazwa = "tylko wiedza";    rej = [ordered]@{ wiedza = $true;  lore = $false; kierownik = $false; skille = $false; kopia = $false }; ocz = @{ lore = $false; wiedza = $true;  kierownik = $false } },
+    @{ nazwa = "tylko wiedza";    rej = [ordered]@{ wiedza = $true;  lore = $false; kierownik = $false; skille = $false; kopia = $false }; ocz = @{ lore = $false; wiedza = $true;  kierownik = $false }; lorebrak = $true },
     @{ nazwa = "tylko lore";      rej = [ordered]@{ wiedza = $false; lore = $true;  kierownik = $false; skille = $false; kopia = $false }; ocz = @{ lore = $true;  wiedza = $false; kierownik = $false } },
-    @{ nazwa = "tylko kierownik"; rej = [ordered]@{ wiedza = $false; lore = $false; kierownik = $true;  skille = $false; kopia = $false }; ocz = @{ lore = $false; wiedza = $false; kierownik = $true  } },
-    @{ nazwa = "sama baza";       rej = [ordered]@{ wiedza = $false; lore = $false; kierownik = $false; skille = $false; kopia = $false }; ocz = @{ lore = $false; wiedza = $false; kierownik = $false } },
+    @{ nazwa = "tylko kierownik"; rej = [ordered]@{ wiedza = $false; lore = $false; kierownik = $true;  skille = $false; kopia = $false }; ocz = @{ lore = $false; wiedza = $false; kierownik = $true  }; lorebrak = $true },
+    @{ nazwa = "sama baza";       rej = [ordered]@{ wiedza = $false; lore = $false; kierownik = $false; skille = $false; kopia = $false }; ocz = @{ lore = $false; wiedza = $false; kierownik = $false }; lorebrak = $true },
     @{ nazwa = "plik wyzerowany"; rej = (New-Object byte[] 64); ocz = @{ lore = $true;  wiedza = $true;  kierownik = $true  }; alarm = $true }
   )
   $domy = @{}
@@ -283,6 +301,19 @@ try {
     $alarm = ($s.Tekst -match "ALARM - nie umiem odczytac rejestru instalacji")
     Sprawdz "${n}: alarm o rejestrze $(if ($m.alarm) { 'jest' } else { 'go nie ma' })" ($alarm -eq [bool]$m.alarm) $s.Tekst
     Sprawdz "${n}: bez wywrotek i nieudanych napraw" (($s.Tekst -notmatch "wywrocil|nie wyszla|nie udalo sie") -and ((Czytaj (Join-Path $dom ".claude\.megaruchacz-straznik.txt")) -notmatch "blad\.\d")) $s.Tekst
+    $ileLore = [regex]::Matches($s.Tekst, $LINIA_LORE).Count
+    Sprawdz "${n}: linia o braku Lore (obowiazkowe) $(if ($m.lorebrak) { 'jest, jedna' } else { 'jej nie ma' })" ($ileLore -eq $(if ($m.lorebrak) { 1 } else { 0 })) $s.Tekst
+
+    # Szczegoly nadzorcy: Lore nie stoi na listach modulow, tylko w "zawsze"; brak = pilny wiersz
+    $script:NadzDom = $dom
+    $opis = Opis-Instalacji (Stan-Instalacji)   # bez @(): funkcja oddaje tablice jednym obiektem (,$w)
+    $wMod = @($opis | Where-Object { $_.Etykieta -eq "Moduły" })
+    $wLore = @($opis | Where-Object { $_.Etykieta -eq "Pamięć rozmów (Lore)" })
+    $listy = (@($wMod | ForEach-Object { ($_.Wartosc -split ' - i zawsze')[0] }) + @($opis | Where-Object { $_.Etykieta -eq "Niezainstalowane" } | ForEach-Object { $_.Wartosc })) -join ", "
+    $opisTekst = (@($opis | ForEach-Object { "$($_.Etykieta) [$($_.Waga)]: $($_.Wartosc)" })) -join " | "
+    Sprawdz "${n}: nadzorca - Lore w 'zawsze', nie na listach modulow" (($wMod.Count -eq 1) -and $wMod[0].Wartosc.EndsWith("- i zawsze: aplikacja przy zegarze z aktualizacjami oraz Pamięć rozmów (Lore)") -and ($listy -notmatch '\bLore\b')) $opisTekst
+    $okLore = $(if ($m.lorebrak) { ($wLore.Count -eq 1) -and ($wLore[0].Waga -eq "pilne") -and $wLore[0].Wartosc.StartsWith("BRAKUJE - jest obowiązkowa") } else { $wLore.Count -eq 0 })
+    Sprawdz "${n}: nadzorca - pilny wiersz o braku Lore $(if ($m.lorebrak) { 'jest' } else { 'go nie ma' })" $okLore $opisTekst
     Sprawdz-Dom $n $dom $m.ocz $true
 
     # cykl wiedzy: zaslepka zostawia slad, gdy straznik ja wystartowal
@@ -304,6 +335,9 @@ try {
     Sprawdz "${n}: linia cyklu $(if ($m.ocz.wiedza) { 'jest' } else { 'jej nie ma' })" ((Ma $r.Kontekst "CYKL-TESTOWY") -eq [bool]$m.ocz.wiedza) $r.Kontekst
     $arch = Test-Path -LiteralPath (Join-Path $dom "archiwum-stan.json")
     Sprawdz "${n}: podpowiedz z archiwum $(if ($m.ocz.lore) { 'szukana' } else { 'nieruszana' })" ($arch -eq [bool]$m.ocz.lore)
+    # Lore w proznie (MR_LORE_PYTHON, LORE_HOME): przy wlaczonym lore to awaria z linia UWAGA (Lore obowiazkowe);
+    # przy wylaczonym hook o Lore nie pyta - o braku mowi straznik (linia wyzej)
+    Sprawdz "${n}: przypomnienie - brak Lore $(if ($m.ocz.lore) { 'glosno (UWAGA)' } else { 'nie jego sprawa (mowi straznik)' })" ((Ma $r.Kontekst "Lore nie jest zainstalowane na tej maszynie") -eq [bool]$m.ocz.lore) $r.Kontekst
     if (-not $m.ocz.wiedza) {
       Sprawdz "${n}: plik postepu cyklu nietkniety" (Test-Path -LiteralPath (Join-Path $dom ".claude\wiedza\.cykl-postep"))
     }
@@ -378,6 +412,53 @@ try {
   Sprawdz "wpisz -Usun: oba bloki zdjete, kierownik zostaje" (($w.Kod -eq 0) -and -not (Ma $cm "lore:start") -and -not (Ma $cm "wiedza:start") -and (Ma $cm $KCM)) $w.Tekst
   $w = Wpisz $dom @("-Blok", "cos")
   Sprawdz "wpisz -Blok z nieznana nazwa: kod 1" ($w.Kod -eq 1) $w.Tekst
+
+  # ------------------------------------------------------------ Lore obowiazkowe (17.10.2026)
+  # Predykat braku Lore poza macierza. Proba negatywna: slad po usunieciu calego MegaRuchacza ("baza": false)
+  # - brak Lore jest tam zamierzony i krzyczec nie wolno.
+  $dom = Nowy-Dom "odinstalowany" $null
+  Rejestr $dom ([ordered]@{ wiedza = $false; lore = $false; kierownik = $false; skille = $false; kopia = $false }) $false
+  $s = Straznik $dom
+  Sprawdz "po odinstalowaniu (baza: false): straznik konczy sie zerem, bez wywrotek" (($s.Kod -eq 0) -and ($s.Tekst -notmatch "wywrocil|nie wyszla|nie udalo sie")) $s.Tekst
+  Sprawdz "po odinstalowaniu (baza: false): bez linii o braku Lore" ($s.Tekst -notmatch $LINIA_LORE) $s.Tekst
+  # flaga lore = true, ale srodowiska nie ma - tez brak (druga polowa predykatu)
+  $dom = Nowy-Dom "lore-bez-srodowiska" ([ordered]@{ wiedza = $false; lore = $true; kierownik = $false; skille = $false; kopia = $false })
+  $atrapa = Join-Path $Z "lore\.venv\Scripts\python.exe"
+  Remove-Item -LiteralPath $atrapa -Force
+  try { $s = Straznik $dom } finally { Zapisz $atrapa "" }
+  Sprawdz "lore wlaczone bez srodowiska: linia o braku Lore z powodem" (($s.Tekst -match $LINIA_LORE) -and ($s.Tekst -match "nie ma srodowiska")) $s.Tekst
+  # zrodlo bez kodu Lore (okrojona kopia narzedzia) - nie ma czego doinstalowac, wiec i o czym mowic
+  $pyproject = Join-Path $Z "lore\pyproject.toml"
+  Move-Item -LiteralPath $pyproject "$pyproject.odlozony" -Force
+  try { $s = Straznik $domy["sama baza"] } finally { Move-Item -LiteralPath "$pyproject.odlozony" $pyproject -Force }
+  Sprawdz "zrodlo bez lore\pyproject.toml: bez linii o braku Lore (przy lore = false)" (($s.Kod -eq 0) -and ($s.Tekst -notmatch $LINIA_LORE)) $s.Tekst
+
+  # Wdrozony projekt (plik wersji) - pamieci nikt nie proponuje ani nie pozwala odrzucic.
+  $wersja = $null
+  foreach ($mw in [regex]::Matches((Czytaj (Join-Path $Z "ZMIANY.md")), '(?m)^##\s+(\d+\.\d+\.\d+)')) {
+    $v = [version]$mw.Groups[1].Value
+    if ($null -eq $wersja -or $v -gt $wersja) { $wersja = $v }
+  }
+  $PW = Join-Path $T "projekt-wdrozony"
+  New-Item -ItemType Directory -Force -Path (Join-Path $PW ".claude") | Out-Null
+  $plikW = Join-Path $PW ".claude\megaruchacz-wersja.txt"
+  Zapisz $plikW "modul.workerzy.wersja: $wersja`r`nmodul.workerzy.data: 2026-10-17 10:00`r`n"
+  $dom = Nowy-Dom "wdrozony" $WSZYSTKO
+  $skryptStraznika = Join-Path $Z "narzedzia\straznik-zasad.ps1"
+  $s = Odpal $skryptStraznika @("-Zrodlo", $Z, "-Projekt", $PW, "-KatalogDomowy", $dom)
+  Sprawdz "Pilnuj-Wersji: pamiec (Lore) nieproponowana w projekcie bez niej" (($s.Kod -eq 0) -and ($s.Tekst -notmatch "modul \[pamiec\]") -and ((Czytaj $plikW) -notmatch "modul\.pamiec\.")) ($s.Tekst + " | plik wersji: " + (Czytaj $plikW))
+  $przedW = Skrot $plikW
+  $o = Odpal $skryptStraznika @("-Zrodlo", $Z, "-Projekt", $PW, "-KatalogDomowy", $dom, "-Odrzuc", "pamiec")
+  Sprawdz "-Odrzuc pamiec: odmowa (Lore obowiazkowe), kod 0" (($o.Kod -eq 0) -and ($o.Tekst -match "Lore jest obowiazkowe - nie mozna go odrzucic")) $o.Tekst
+  Sprawdz "-Odrzuc pamiec: plik wersji nietkniety (bez modul.pamiec.status: odrzucony)" (((Skrot $plikW) -eq $przedW) -and ((Czytaj $plikW) -notmatch "modul\.pamiec\.")) (Czytaj $plikW)
+  # kontrola: ten sam sprawdzian widzi zapis - odmowa innego modulu zapisuje sie jak dotad
+  $o = Odpal $skryptStraznika @("-Zrodlo", $Z, "-Projekt", $PW, "-KatalogDomowy", $dom, "-Odrzuc", "workerzy")
+  Sprawdz "-Odrzuc workerzy (kontrola): odmowa zapisana jak dotad" (($o.Kod -eq 0) -and ((Skrot $plikW) -ne $przedW) -and ((Czytaj $plikW) -match "modul\.workerzy\.odrzucone")) ($o.Tekst + " | plik wersji: " + (Czytaj $plikW))
+  $mj = Odpal $skryptStraznika @("-Moduly")
+  $listaModulow = $null
+  try { $listaModulow = $mj.Tekst | ConvertFrom-Json } catch { $listaModulow = $null }
+  $pam = @($listaModulow | Where-Object { $_ -and $_.nazwa -eq "pamiec" })
+  Sprawdz "-Moduly: pamiec (Lore) bez pytania (pytaj = false, opis: obowiazkowa)" (($pam.Count -eq 1) -and ($pam[0].pytaj -eq $false) -and ($pam[0].opis -match "obowiazkowa")) $mj.Tekst
 
   # ------------------------------------------------------------ rachunek za pamiec rozumie nowe bloki
   $dom = $domy["brak pliku"]

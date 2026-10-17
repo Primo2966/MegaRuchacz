@@ -8,9 +8,10 @@ nagłówka i bez tej ramki) do globalnych plików instrukcji narzędzi AI użytk
 
 Wklejane w oznaczonym bloku, między `<!-- MegaRuchacz:lore:start -->`
 i `<!-- MegaRuchacz:lore:koniec -->`, żeby dało się to podmienić i usunąć bez
-niszczenia własnych zapisków użytkownika. Blok stoi tylko przy włączonym module
-`lore` (rejestr instalacji `~/.claude/mr/instalacja.json`); przy wyłączonym
-strażnik go zdejmuje.
+niszczenia własnych zapisków użytkownika. Blok stoi, gdy Lore jest zainstalowane
+(flaga `lore` w rejestrze instalacji `~/.claude/mr/instalacja.json`); bez flagi
+strażnik go zdejmuje. Lore jest obowiązkowe — brak flagi to stan przejściowy do
+doinstalowania przez aktualizację.
 
 Blok jest SAMOWYSTARCZALNY: nie zakłada sekcji „Co wiem" ani modułu `wiedza`
 (ten ma własny blok ze źródła `zasady-wiedza.md`).

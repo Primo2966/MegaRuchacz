@@ -105,15 +105,24 @@ function Moduly-Rowne($a, $b) {
 }
 
 # Wiersze do Szczegolow (sekcja "Nadzorca i gdzie co leży").
+# Lore jest obowiazkowe (decyzja uzytkownika 17.10.2026) - nie stoi na listach zainstalowanych
+# i niezainstalowanych, tylko w "zawsze". Gdy czytelny rejestr mowi, ze go nie ma (flaga lore =
+# "zainstalowane i dziala", umowa stan.ps1), to brak do doinstalowania - pilny wiersz.
 function Opis-Instalacji($inst) {
   $w = @()
   if (-not $inst) {
     $w += Wiersz "Moduły" "nie wiem - odczyt rejestru instalacji się wywrócił; pokazuję wszystko jak przy pełnej instalacji" "uwaga"
     return ,$w
   }
+  # przypisanie przed potokiem: Nazwy-Modulow oddaje tablice jednym obiektem (,$l)
   $jest = Nazwy-Modulow $inst $true
+  $jest = @($jest | Where-Object { $_ -ne $NAZWY_MODULOW["lore"] })
   $nie = Nazwy-Modulow $inst $false
-  $w += Wiersz "Moduły" ("$(if ($jest.Count -gt 0) { $jest -join ', ' } else { 'żaden' }) - i zawsze aplikacja przy zegarze z aktualizacjami") $(if ($inst.Blad) { "uwaga" } else { "" })
+  $nie = @($nie | Where-Object { $_ -ne $NAZWY_MODULOW["lore"] })
+  $w += Wiersz "Moduły" ("$(if ($jest.Count -gt 0) { $jest -join ', ' } else { 'żaden' }) - i zawsze: aplikacja przy zegarze z aktualizacjami oraz Pamięć rozmów (Lore)") $(if ($inst.Blad) { "uwaga" } else { "" })
+  if ((-not $inst.Blad) -and -not (Modul-Jest $inst "lore")) {
+    $w += Wiersz "Pamięć rozmów (Lore)" 'BRAKUJE - jest obowiązkowa; doinstaluje ją aktualizacja (co godzinę) albo „Zmień instalację”' "pilne"
+  }
   if ($nie.Count -gt 0) { $w += Wiersz "Niezainstalowane" ($nie -join ", ") "szary" }
   switch ("$($inst.Zrodlo)") {
     "plik"     { $w += Wiersz "Rejestr instalacji" "$($inst.Plik)$(if ($inst.Data) { ' (zapisany ' + $inst.Data + ')' })" "szary" }
