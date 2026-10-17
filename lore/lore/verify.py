@@ -917,8 +917,10 @@ def insert_entry(body: list[str], entry: list[str], heading: str) -> list[str]:
     if idx is None:
         tail = body + ([] if body and not body[-1].strip() else [""])
         return tail + [heading, ""] + entry + [""]
+    # The subsection ends at the next heading of ANY level - also '####': a fact for '### Jak
+    # pracuje' goes above its '#### Robot Alibaby', not under it.
     end = idx + 1
-    while end < len(body) and not body[end].strip().startswith(("### ", "## ")):
+    while end < len(body) and not body[end].strip().startswith(("#### ", "### ", "## ")):
         end += 1
     kept = [line for line in body[idx + 1:end] if line.strip() != EMPTY_MARKER]
     while kept and not kept[-1].strip():

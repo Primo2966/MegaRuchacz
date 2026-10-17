@@ -746,6 +746,22 @@ def test_a_promoted_fact_lands_in_the_subsection_its_label_names(sandbox):
     assert "Sprzedaje najpierw" not in subsection(sandbox, "### O firmie")
 
 
+def test_a_fact_for_a_subsection_lands_above_its_first_nested_heading():
+    # '#### Robot Alibaby' sits inside '### Jak pracuje' — a fact for '### Jak pracuje' used to run
+    # down to the next '###' and land under the robot, i.e. in the wrong place
+    body = ["### Jak pracuje", "", "- Pakuje rano.", "", "#### Robot Alibaby", "",
+            "- Robot loguje się kluczem.", "", "### O firmie", "", "- Sprzedaje olejki."]
+
+    out = verify.insert_entry(body, ["- Wysyła po 14:00."], "### Jak pracuje")
+
+    assert out.index("- Pakuje rano.") < out.index("- Wysyła po 14:00.") < out.index("#### Robot Alibaby")
+    assert out[out.index("- Wysyła po 14:00.") + 1] == ""
+    # probe: the nested subsection gets its own facts at its own end, not past the next '###'
+    out = verify.insert_entry(body, ["- Robot pyta o kod."], "#### Robot Alibaby")
+    assert out.index("- Robot loguje się kluczem.") < out.index("- Robot pyta o kod.") < out.index("### O firmie")
+    assert out.count("- Robot pyta o kod.") == 1 and out.index("- Robot pyta o kod.") > out.index("#### Robot Alibaby")
+
+
 def test_a_promoted_fact_without_a_known_subsection_lands_by_the_keyword_guess(sandbox):
     # two lines in the format from before the full list of sessions — still read as evidence
     fact = "Firma sprzedaje olejki eteryczne."
