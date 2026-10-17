@@ -4,6 +4,12 @@ Każda zmiana wypychana na gita dostaje tu wpis. Numer rośnie wg zasady:
 pierwsza cyfra — przebudowa łamiąca zgodność, druga — nowa funkcja,
 trzecia — poprawka.
 
+## 0.36.1 — 2026-10-17
+
+- **Usuwanie bazy rozmów zatrzymuje serwer podpowiedzi** — działający w tle serwer mógł blokować usunięcie bazy;
+  teraz instalator najpierw go zatrzymuje (cudzego procesu o tym samym numerze nie rusza).
+- Wiadomości typu „z tą regułą też” nie odpytują już archiwum ani wiedzy firmy („też” wśród słów pospolitych).
+
 ## 0.36.0 — 2026-10-17
 
 - **Podpowiedź z archiwum (Lore) bez czekania** — zapytanie idzie do stale działającego procesu Lore zamiast
