@@ -16,6 +16,11 @@ from .db import (EMBED_DIM, MODELS, ModelUnavailable, active_model, connect, emb
 TOP_PER_CHANNEL = 30
 RRF_K = 60
 MAX_SNIPPET = 600
+# Subagent transcripts (role "agent:*") go to the end of the results by default, not out: they are
+# the manager's briefs and the workers' monologues, which repeat the question word for word — a
+# query about a plan once returned 8/8 hits from workflow briefs (the archive quoting itself).
+# Still shown when nothing else matches; agents=True restores the plain ranking.
+AGENT_PREFIX = "agent:"
 
 _TOKEN = re.compile(r"\w+", re.UNICODE)
 
@@ -171,8 +176,12 @@ def _rrf(lists: list[list[int]]) -> list[int]:
 
 # ---------------------------------------------------------------- API
 
+def _is_agent(row: dict) -> bool:
+    return row["role"].startswith(AGENT_PREFIX)
+
+
 def search(query: str, project: str | None = None, since: str | None = None, until: str | None = None,
-           limit: int = 8, conn: sqlite3.Connection | None = None) -> list[dict]:
+           limit: int = 8, conn: sqlite3.Connection | None = None, agents: bool = False) -> list[dict]:
     own = conn is None
     if own:
         conn = connect()
@@ -202,9 +211,12 @@ def search(query: str, project: str | None = None, since: str | None = None, unt
                 "text": r[7][:MAX_SNIPPET],
                 "source": "fts+vector" if cid in fts and cid in vec else ("fts" if cid in fts else "vector"),
             })
-            if len(out) >= limit:
+            if agents and len(out) >= limit:
                 break
-        return out
+        if not agents:
+            # stable: the ranking holds within each group; workers come only after every main-session hit
+            out.sort(key=_is_agent)
+        return out[:limit]
     finally:
         if own:
             conn.close()

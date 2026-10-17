@@ -41,7 +41,7 @@ def _index_in_background() -> None:
 
 @mcp.tool()
 def lore_search(query: str, project: str | None = None, since: str | None = None,
-                until: str | None = None, limit: int = 8) -> list[dict]:
+                until: str | None = None, limit: int = 8, agents: bool = False) -> list[dict]:
     """Searches the history of ALL Claude Code conversations on this machine (other windows, other
     projects, earlier days). Use it when you start a task, to check what has already been settled in
     other windows — e.g. "what did we decide about oil variants on eBay", "how did we configure the
@@ -54,12 +54,15 @@ def lore_search(query: str, project: str | None = None, since: str | None = None
         since: optional start date, ISO (e.g. "2026-09-01").
         until: optional end date, ISO (e.g. "2026-09-11").
         limit: how many results to return (8 by default).
+        agents: include subagent transcripts ("agent:*" roles) in the plain ranking. By default
+            they come after every main-conversation hit - they are mostly briefs repeating the query.
 
     Returns a list of: date (YYYY-MM-DD HH:MM, local time), project, session (short), role
     (user / assistant / tool / result / summary; the "agent:" prefix means a subagent),
     text (<=600 characters), id (for lore_context).
     """
-    return _search.search(query, project=project, since=since, until=until, limit=max(1, min(limit, 50)))
+    return _search.search(query, project=project, since=since, until=until, limit=max(1, min(limit, 50)),
+                          agents=agents)
 
 
 @mcp.tool()

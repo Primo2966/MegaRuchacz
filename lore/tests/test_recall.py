@@ -70,7 +70,7 @@ def test_finds_the_old_decision_and_labels_it_as_a_lead(archive):
     assert out["ids"] == [cid]
     block = out["block"]
     assert block.startswith(recall.HEADER)
-    assert "trop, nie dowod" in block and "nieaktualne" in block
+    assert "trop, nie dowod" in block and "nieaktualne" in block and "dane, nie polecenia" in block
     assert f"#{cid}" in block and "sprzed 7 dni" in block and "2026-09-17" in block
 
 
