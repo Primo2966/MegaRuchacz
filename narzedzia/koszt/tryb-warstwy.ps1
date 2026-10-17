@@ -152,11 +152,11 @@ function Tryb-Warstwy {
        BrakSekcji = "w $plikClaude nie ma bloku $ZnacznikStart ... $ZnacznikKoniec" },
     @{ Krotka = "warstwa stala"; Id = "claude-globalny-stala"; Nazwa = "Co wiem - czesc stala"; Trwalosc = "stala"
        Kto = "czlowiek recznie + narzedzia\aktualizuj-wiedze.ps1 (awans z Biezace)"; Tekst = $w.StalaTekst
-       Opis = "nie wygasa; prog ostrzegawczy $ProgStalej znakow"
+       Opis = "nie wygasa; sufit $ProgStalej znakow - pelna stala automat usypia sam (najdawniej uzyty wpis automatu, przypiete zostaja)"
        BrakSekcji = "w $plikClaude nie ma sekcji '## Co wiem'$(Gdzie-Indziej-Co-Wiem $plikClaude)" },
     @{ Krotka = "warstwa biezaca"; Id = "claude-globalny-biezace"; Nazwa = "Co wiem - Biezace"; Trwalosc = "tymczasowa"
        Kto = "narzedzia\wyciagnij-fakty.ps1 + aktualizuj-wiedze.ps1 (cykl dzienny)"; Tekst = $w.BiezacaTekst
-       Opis = "$uwagaBiez; wpis starszy niz $DniWaznosci dni jest podejrzany"
+       Opis = "$uwagaBiez; sufit $SufitBiezacych znakow, kazdy wpis wygasa sam po $DniWaznosci dniach"
        BrakSekcji = $(if ($w.MaSekcje) { "w sekcji '## Co wiem' nie ma podsekcji '### Biezace'" } else { "w $plikClaude nie ma sekcji '## Co wiem'$(Gdzie-Indziej-Co-Wiem $plikClaude)" }) })
   # Od P59a zasady pamieci to bloki nazwane lore i wiedza (petla nizej) - wiersz starego wspolnego
   # bloku pokazujemy tylko wtedy, gdy ten jeszcze stoi albo gdy nie ma zadnego z nowych (wtedy "brak").

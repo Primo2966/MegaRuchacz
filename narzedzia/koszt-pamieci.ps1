@@ -140,9 +140,23 @@ $DniWaznosci    = 14
 # pomiar kosztu cyklu starszy niz tyle dni znaczy, ze cykl przestal chodzic -
 # ta sama liczba, co w straznik-zasad.ps1 przy meldunku o cyklu
 $DniCyklStary   = 2
-$ProgStalej     = 8000
-$ProgBiezacych  = 15
-$ProgPoczekalni = 10
+# SUFITY WARSTW "Co wiem" - te same liczby, ktore pilnuje automat pamieci
+# (lore\lore\verify.py: STABLE_LIMIT dla stalej, sufit "Biezace" dla biezacej).
+# Automat sam trzyma warstwy pod sufitem - usypia najdawniej uzyty wpis stalej,
+# zdejmuje najstarsze niepotwierdzone z biezacej - i NIKOGO o nic nie pyta.
+# Test lore test_the_ceiling_matches_the_number_the_cost_script_reports czyta
+# $ProgStalej z tej linii (sama liczba, bez spacji).
+$ProgStalej     = 16000
+$SufitBiezacych = 6000
+# PROG ALARMU = sufit + 5%. Ponad sufit wolno wyjsc na chwile: jeden przebieg
+# dopisuje fakt (do ~200 znakow, czyli 1,25% sufitu stalej i 3,3% biezacej),
+# zanim przytnie warstwe. 5% to 800 znakow stalej / 300 biezacej - wiecej niz
+# jeden swiezy wpis. Warstwa ponad progiem znaczy, ze automat NIE PRZYCIAL jej
+# sam (nie chodzi, wywrocil sie albo zostaly same wpisy przypiete) - i to jest
+# alarm do naprawy, a nie prosba do uzytkownika o kasowanie wpisow.
+$ProcPonadSufit = 5
+$AlarmStalej    = [int][math]::Ceiling($ProgStalej * (100 + $ProcPonadSufit) / 100)
+$AlarmBiezacych = [int][math]::Ceiling($SufitBiezacych * (100 + $ProcPonadSufit) / 100)
 # powyzej tylu procent sufitu wiersz jest zolty - zapas konczy sie wczesniej,
 # niz czlowiek zdazy zauwazyc
 $ProgCiasno     = 80

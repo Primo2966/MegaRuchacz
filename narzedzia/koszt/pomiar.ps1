@@ -445,7 +445,7 @@ function Etap-Pomiar {
     Czyj       = "NASZ - sami go sobie ustawilismy"
     SkadLimitu = "narzedzia\koszt-pamieci.ps1 (`$ProgStalej)"
     Plik       = $plikClaude
-    Skutek     = "nic sie nie ucina: to prog ostrzegawczy, sygnal zeby przeniesc rzadziej potrzebna wiedze do plikow w wiedza\"
+    Skutek     = "nic sie nie ucina: automat pamieci sam trzyma stala pod sufitem (usypia najdawniej uzyty wpis automatu)"
     Ucina      = $false
     Uwaga      = (Powod-Braku $(if ($w.Jest) { $w.Stala.Znaki } else { $null }) $ProgStalej $powodBrakuClaude "tego skryptu")
   })

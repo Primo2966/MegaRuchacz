@@ -2,7 +2,8 @@
 # BUDOWA w jego naglowku). Jezyk, ktorym mowi czlowiek - sama prezentacja:
 # odmiana i daty (Odmiana, Kiedy-Ludzko, Dzien-Ludzko), koszt nauki (Liczba-Nauki,
 # Alarm-Z-Rachunku, Zbierz-Informacje, Statystyka-Okna), zmiany w pamieci
-# (Stan-Zmian-Pamieci, Opis-Zmian-Pamieci), przeliczanie archiwum
+# (Stan-Zmian-Pamieci, Opis-Zmian-Pamieci, Alarmy-Pamieci - alarmy pamieci w tej
+# samej linii), przeliczanie archiwum
 # (Postep-Przeliczania), stan jednym rzutem oka (Linie-Stanu), waga i porada
 # alarmu (Waga-Alarmu, Porada-Ludzka) i szacunek kosztu cyklu przed przyciskiem
 # (Max-Nadrabiania, Szacunek-Cyklu).
@@ -184,7 +185,7 @@ function Alarm-Z-Rachunku($a, $o) {
     "sesja" {
       $tytul = "MegaRuchacz: każde otwarcie okna rozmowy to ~$(Liczba-Ludzka $a.Liczba) jego tokenów"
       $porada = ("To stan plików na teraz, nie koszt jednego dnia: tyle tekstu wchodzi przy każdym otwarciu okna rozmowy " +
-                 "(próg $(Liczba-Ludzka $a.Prog)). Najczęściej pomaga skrócenie sekcji 'Co wiem' w pliku z wiedzą. Co urosło - w zakładce Szczegóły.")
+                 "(próg $(Liczba-Ludzka $a.Prog)). Sekcję 'Co wiem' przycina sam automat pamięci - co jeszcze urosło, widać w zakładce Szczegóły.")
     }
     "otwarcie" {
       # Od 30.09.2026 (P35) prog jest znow liczba tokenow czesci MegaRuchacza, a nie
@@ -192,7 +193,7 @@ function Alarm-Z-Rachunku($a, $o) {
       # administrator proxy. Liczba i prog przychodza z rachunku w tokenach.
       $tytul = "MegaRuchacz dokłada już ~$(Okolo $a.Liczba) tokenów do każdego otwarcia okna rozmowy (próg ~$(Okolo $a.Prog))"
       $porada = ("Tyle tekstu wchodzi od samego MegaRuchacza przy każdym otwarciu okna rozmowy - resztę dokłada sam Claude Code. " +
-                 "To stan plików na teraz, nie koszt jednego dnia. Najczęściej pomaga skrócenie sekcji 'Co wiem'. Co urosło - w zakładce Szczegóły.")
+                 "To stan plików na teraz, nie koszt jednego dnia. Sekcję 'Co wiem' przycina sam automat pamięci - co jeszcze urosło, widać w zakładce Szczegóły.")
     }
     "udzial" {
       $tytul = "MegaRuchacz: jedna pozycja to $($a.Liczba)% rachunku"
@@ -238,6 +239,14 @@ function Alarm-Z-Rachunku($a, $o) {
       $tytul = "MegaRuchacz: nauka $kiedy ~$(Okolo $a.Liczba) tokenów, okres nieznany"
       $porada = ("Nauka nie zapisała, z których dni czytała rozmowy, więc nie umiem powiedzieć, czy to jednorazowe nadrabianie, " +
                  "czy zwykły dzień (próg zwykłego dnia: $(Liczba-Ludzka $a.Prog)). Zakres zapisuje nowsza wersja modułu pamięci.")
+    }
+    { $_ -in @("pamiec-stala", "pamiec-biezaca") } {
+      # Warstwa "Co wiem" ponad sufit + 5% (narzedzia\koszt\alarmy.ps1). Przycina ja sam
+      # automat pamieci - uzytkownik nie decyduje o wpisach, wiec porada nie kaze niczego kasowac.
+      $ktora = if ($a.Temat -eq "pamiec-stala") { "stała" } else { "bieżąca" }
+      $tytul = "MegaRuchacz: pamięć $ktora 'Co wiem' przekroczyła sufit ($(Liczba-Ludzka $a.Liczba) znaków, alarm od $(Liczba-Ludzka $a.Prog))"
+      $porada = ("Tę warstwę automat pamięci przycina sam i nikogo o nic nie pyta - skoro jest ponad sufitem, automat tego nie zrobił. " +
+                 "To usterka do naprawy, nie decyzja o wpisach: powiedz o niej Claude'owi.")
     }
     "historia" {
       if ($null -ne $a.Liczba) {
@@ -369,6 +378,16 @@ function Na-Liczbe($t) {
 #   meldunek_2: A-260924-2 awansowalem: „fakt”
 # Tu tylko czytamy - licznik bierzemy z naglowka, bo lista bywa przycieta.
 #
+# ALARMY PAMIECI w tym samym pliku - ida do TEJ SAMEJ linii w oknie (pole "meldunek"
+# Przegladu), bo uzytkownik o wpisach nie decyduje i nigdzie indziej ich nie szuka:
+#   alarm: <tekst>  /  alarm_N: <tekst>   alarm wprost od modulu pamieci (verify.py)
+#   wstrzymane_progiem: N                 N POTWIERDZONYCH faktow nie weszlo do stalej,
+#                                         bo jest pelna. Prog: kazde N > 0. Automat sam
+#                                         robi miejsce (usypia najdawniej uzyty wpis),
+#                                         wiec cos wstrzymane = zostaly same przypiete
+#                                         albo usypianie nie dziala; wstrzymany fakt
+#                                         wygasa z biezacej po 14 dniach i ginie.
+#
 # Trzy stany i kazdy mowi co innego, bo "nie wiem" to nie "zero":
 #   Wiadomo = $false  -> nie ma pliku albo nie ma w nim meldunku; Powod mowi dlaczego
 #   Ile = 0           -> modul pamieci sam napisal "bez zmian"
@@ -381,6 +400,7 @@ function Stan-Zmian-Pamieci {
     Zmiany   = @()         # pscustomobject: Id, Tresc (surowa linia meldunku)
     Naglowek = ""          # surowy naglowek meldunku - do szczegolow, z komenda cofania
     Powod    = ""
+    Alarmy   = @()         # zdania po ludzku - patrz ALARMY PAMIECI wyzej
     Plik     = (Join-Path $script:NadzWiedza ".wiedza-stan.txt")
   }
   if (-not (Test-Path $z.Plik)) {
@@ -389,6 +409,7 @@ function Stan-Zmian-Pamieci {
   }
   $k = Czytaj-Klucze $z.Plik
   $z.Dzien = Data-Lub-Nic $k["data"]
+  $z.Alarmy = @(Alarmy-Pamieci $k)
   if (-not $k.Contains("meldunek")) {
     $z.Powod = "ostatnie podsumowanie nauki nie ma listy zmian (zapisała je starsza wersja)"
     return $z
@@ -431,6 +452,37 @@ function Stan-Zmian-Pamieci {
   return $z
 }
 
+# Alarmy pamieci z kluczy .wiedza-stan.txt (opis przy Stan-Zmian-Pamieci). Alarmy
+# modulu pamieci najpierw i po numerze, potem wstrzymane fakty. Nieczytelna liczba
+# wstrzymanych to tez zdanie, nie cisza - "nie wiem" to nie "zero".
+function Alarmy-Pamieci($k) {
+  $a = @()
+  if (-not $k) { return ,$a }
+  if ("$($k['alarm'])".Trim()) { $a += "$($k['alarm'])".Trim() }
+  $numery = @()
+  foreach ($klucz in @($k.Keys)) {
+    $m = [regex]::Match($klucz, '^alarm_(\d+)$')
+    if ($m.Success) { $numery += [int]$m.Groups[1].Value }
+  }
+  foreach ($n in @($numery | Sort-Object)) {
+    $t = "$($k["alarm_$n"])".Trim()
+    if ($t) { $a += $t }
+  }
+  if ($k.Contains("wstrzymane_progiem")) {
+    $w = "$($k['wstrzymane_progiem'])".Trim()
+    if ($w -match '^\d+$') {
+      $n = [int]$w
+      if ($n -gt 0) {
+        $a += ("$n $(Odmiana $n 'potwierdzony fakt nie wszedł' 'potwierdzone fakty nie weszły' 'potwierdzonych faktów nie weszło') do stałej pamięci, bo jest pełna - " +
+               "automat powinien sam zrobić miejsce, a fakt czekający w bieżącej wygaśnie po 14 dniach. To usterka do naprawy, nie Twoja decyzja: powiedz o niej Claude'owi")
+      }
+    } elseif ($w) {
+      $a += "nie umiem odczytać, ile potwierdzonych faktów czeka na miejsce w stałej pamięci (wstrzymane_progiem: $w)"
+    }
+  }
+  return ,$a
+}
+
 # Linia meldunku po ludzku: slowa z ogonkami i strzalka zamiast "->".
 # Modul pamieci pisze bez ogonkow, bo to samo idzie do dziennika i do konsoli.
 function Zmiana-Ludzko([string]$tresc) {
@@ -449,6 +501,19 @@ function Zmiana-Ludzko([string]$tresc) {
 # --cofnij), przycisku "Cofnij" w oknie nie ma i nie ma byc: zmiana pamieci
 # jednym kliknieciem bez potwierdzenia to ryzyko.
 function Opis-Zmian-Pamieci($z) {
+  $o = Opis-Zmian-Bez-Alarmow $z
+  # Alarmy pamieci doklejone do TEJ linii (pole "meldunek" w oknie), na czerwono -
+  # przy kazdym z trzech stanow, takze "bez zmian" i "nie wiem".
+  $al = @()
+  if ($z -and $z.PSObject.Properties["Alarmy"]) { $al = @($z.Alarmy | Where-Object { "$_".Trim() }) }
+  if ($al.Count -gt 0) {
+    $o.Linia = "$($o.Linia) UWAGA: $(($al | ForEach-Object { "$_".Trim().TrimEnd('.') }) -join '. ')."
+    $o.Uwaga = $true
+  }
+  return $o
+}
+
+function Opis-Zmian-Bez-Alarmow($z) {
   $o = [pscustomobject]@{ Linia = ""; Zmiany = @(); Porada = ""; Uwaga = $false }
   if (-not $z) {
     $o.Linia = "Pamięć o Tobie i firmie: nie wiem, co się w niej zmieniło - nie udało się tego odczytać."

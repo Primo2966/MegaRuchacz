@@ -3563,8 +3563,8 @@ try {
   # pobranie nowszej wersji narzedzia, pliki zasad i poprawki na wdrozenie.
   # Komunikaty ida przez Mow, wiec propozycje i ostrzezenia nie gina - laduja
   # w dzienniku, bo tutaj nie ma ekranu, na ktory dalo by sie je wypisac.
-  # Poczekalnia faktow i meldunek o cyklu zostaja poza tym trybem: to prosby
-  # do czlowieka, a nie zmiany na dysku, wiec w dzienniku nikt ich nie przeczyta.
+  # Meldunek o cyklu zostaje poza tym trybem: to wiadomosc dla czlowieka,
+  # a nie zmiana na dysku, wiec w dzienniku nikt jej nie przeczyta.
   # Rachunek za pamiec jest tu wyjatkiem i idzie do dziennika z premedytacja:
   # jedna linia z data przy kazdym przebiegu to jedyny zapis tego, jak ten koszt
   # rosnie w czasie - z niego widac trend, ktorego pojedyncze okno nie pokaze.
@@ -3594,16 +3594,11 @@ try {
     exit 0
   }
 
-  # Fakty wylowione z rozmow czekaja w poczekalni na decyzje uzytkownika.
-  # Bez tego powiadomienia nikt tam nie zaglada i cala robota idzie do kosza.
-  function Zglos-Kandydatow {
-    $plik = Join-Path $KatalogDomowy ".claude\wiedza\kandydaci.md"
-    if (-not (Test-Path $plik)) { return }
-    $ile = @(Select-String -Path $plik -Pattern '^\s*-\s*\[\s*\]' -AllMatches).Count
-    if ($ile -lt 1) { return }
-    $slowo = if ($ile -eq 1) { "fakt czeka" } else { "faktow czeka" }
-    Write-Host "MegaRuchacz: $ile $slowo na Twoja decyzje - powiedz 'pokaz fakty', zeby je przejrzec."
-  }
+  # Do 17.10.2026 stal tu Zglos-Kandydatow (prosba o przejrzenie faktow z poczekalni
+  # przy starcie sesji). Usuniety z zasada "zero decyzji uzytkownika o wpisach": fakty
+  # rozstrzyga sam automat pamieci (lore\lore\verify.py), a alarmy pamieci (pelna stala,
+  # wstrzymane fakty) pokazuje okno nadzorcy w linii o pamieci oraz rachunek
+  # (narzedzia\koszt\alarmy.ps1). Nie przywracac: prosba bez odpowiedzi uczy ignorowac meldunki.
 
   # Kazdy plik z wiedza w ~\.claude\wiedza ma miec odsylacz w "### Dane referencyjne" - inaczej
   # agent nie wie, ze plik istnieje (decyzja uzytkownika 2026-09-30). Dopisuje go sam cykl Lore
@@ -3673,10 +3668,9 @@ try {
   try { Pilnuj-Sufitu-Zawsze } catch { Zanotuj-Wywrotke "pilnowanie sufitu ladunku" $_ }
   try { Pilnuj-Przypomnienia-Zawsze } catch { Zanotuj-Wywrotke "podmiana starego hooka przypomnienia" $_ }
   try { Pilnuj-Wersji }    catch { Zanotuj-Wywrotke "pilnowanie wersji wdrozenia" $_ }
-  # Poczekalnia, odsylacze i meldunek o cyklu to modul wiedza - odznaczony w instalatorze nie ma
+  # Odsylacze i meldunek o cyklu to modul wiedza - odznaczony w instalatorze nie ma
   # o czym meldowac, a stary stan cyklu krzyczalby "cykl nie chodzi" (falszywy alarm).
   if (-not (Modul-Wylaczony "wiedza")) {
-    try { Zglos-Kandydatow } catch { Zanotuj-Wywrotke "poczekalnia faktow" $_ }
     try { Zglos-Odsylacze }  catch { Zanotuj-Wywrotke "odsylacze plikow wiedzy" $_ }
     try { Zglos-Cykl }       catch { Zanotuj-Wywrotke "meldunek o cyklu" $_ }
   }

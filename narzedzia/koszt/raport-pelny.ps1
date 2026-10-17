@@ -178,15 +178,9 @@ function Raport-Pelny {
       $ostrzezenia += "Blisko sufitu: $($s.Nazwa) - zajete $($s.Procent)% ($(Liczba $s.Teraz) z $(Liczba $s.Limit) $($s.Jednostka))."
     }
   }
-  if ($w.Wpisy.Count -gt $ProgBiezacych) {
-    $ostrzezenia += "Warstwa biezaca ma $($w.Wpisy.Count) wpisow (prog $ProgBiezacych) - przejrzyj je i skasuj to, co juz nieaktualne."
-  }
-  if ($stare.Count -gt 0) {
-    $ostrzezenia += "Przeterminowanych wpisow: $($stare.Count) - agent bierze je za prawde, wiec albo odswiez date, albo skasuj."
-  }
-  if (($kandydaci -ne $null) -and ($kandydaci -gt $ProgPoczekalni)) {
-    $ostrzezenia += "W poczekalni czeka $kandydaci faktow (prog $ProgPoczekalni) - zatwierdz je albo odrzuc, bo same sie nie zuzyja."
-  }
+  # Warstwy "Co wiem" ponad sufit + 5% przychodza jako alarmy (alarmy.ps1, tematy pamiec-*).
+  # Wpisow nikt nie kasuje ani nie zatwierdza recznie (decyzja 17.10): przeterminowane
+  # zdejmuje automat pamieci przy najblizszym przebiegu, poczekalnie rozstrzyga sam.
   if ($cykl -and ($null -ne $cykl.Wiek) -and ($cykl.Wiek -gt $DniCyklStary)) {
     $ostrzezenia += "Koszt cyklu wiedzy jest z dnia $($cykl.Data), sprzed $($cykl.Wiek) dni - od tego czasu cykl nie wylowil ani jednego faktu, wiec wiedza nie przyrasta."
   }
@@ -422,11 +416,11 @@ function Raport-Pelny {
   Linia ""
   Linia "6. Poczekalnia ($plikKandydat)"
   if ($bladKandydatow) {
-    Linia "  $bladKandydatow - nie wiem, ile faktow czeka na decyzje." "Yellow"
+    Linia "  $bladKandydatow - nie wiem, ile faktow jest w poczekalni." "Yellow"
   } elseif ($kandydaci -eq $null) {
-    Linia "  Nie ma pliku kandydatow - nic nie czeka na decyzje. To normalne."
+    Linia "  Nie ma pliku kandydatow - poczekalnia jest pusta. To normalne."
   } else {
-    Linia "  Faktow czeka na zatwierdzenie: $kandydaci"
+    Linia "  Faktow w poczekalni: $kandydaci - automat rozstrzyga je sam, bez udzialu uzytkownika."
   }
 
   Linia ""
@@ -436,7 +430,7 @@ function Raport-Pelny {
   } elseif ($w.Wpisy.Count -eq 0) {
     Linia "  Nie ma ani jednego wpisu w formacie - [RRRR-MM-DD] tresc."
   } else {
-    Linia "  Wpisow: $($w.Wpisy.Count), w tym przeterminowanych: $($stare.Count)"
+    Linia "  Wpisow: $($w.Wpisy.Count) ($(Liczba $w.Biezaca.Znaki) z $(Liczba $SufitBiezacych) znakow sufitu), w tym przeterminowanych: $($stare.Count) - zdejmie je automat przy najblizszym przebiegu"
     foreach ($s in $stare) {
       Linia "    [$($s.Data)] ($($s.Wiek) dni) $(Skroc $s.Tresc 70)"
     }

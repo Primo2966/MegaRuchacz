@@ -113,10 +113,10 @@ function Tryb-Rozbicie {
     foreach ($nb in @($w.BlokiBezKonca)) {
       $b += ("  {0,-20} {1}" -f "", "UWAGA: blok '$nb' w $(Sciezka-Ludzka $plikClaude) nie ma znacznika konca - nie umiem go policzyc.")
     }
-    # Przeterminowana wiedza jest gorsza niz jej brak - wyglada na aktualna.
-    # Dlatego nie sama liczba w wierszu, tylko rzecz do zrobienia, wprost.
+    # Przeterminowana wiedza jest gorsza niz jej brak - wyglada na aktualna. Zdejmuje ja
+    # automat pamieci sam (decyzja 17.10: zero pytan do uzytkownika o wpisy) - tu tylko liczba.
     if ($wpisyStare.Count -gt 0) {
-      $b += ("  {0,-20} {1}" -f "", "Do zrobienia: $(Ile-Wpisow $wpisyStare.Count) starsze niz $DniWaznosci dni - przejrzyj albo odswiez date.")
+      $b += ("  {0,-20} {1}" -f "", "Starsze niz $DniWaznosci dni: $(Ile-Wpisow $wpisyStare.Count) - automat zdejmie je sam przy najblizszym przebiegu (przebiegi nie sa codzienne).")
     }
     return $b
   }
@@ -154,7 +154,7 @@ function Tryb-Rozbicie {
       }
     }
     if ($wpisyStareCx.Count -gt 0) {
-      $b += ("  {0,-20} {1}" -f "", "Do zrobienia: $(Ile-Wpisow $wpisyStareCx.Count) w $(Sciezka-Ludzka $plikAgents) starsze niz $DniWaznosci dni - przejrzyj albo odswiez date.")
+      $b += ("  {0,-20} {1}" -f "", "Starsze niz $DniWaznosci dni w $(Sciezka-Ludzka $plikAgents): $(Ile-Wpisow $wpisyStareCx.Count) - automat zdejmie je sam przy najblizszym przebiegu (przebiegi nie sa codzienne).")
     }
     return $b
   }
@@ -189,7 +189,7 @@ function Tryb-Rozbicie {
       }
     }
     if ($wpisyStareOc.Count -gt 0) {
-      $b += ("  {0,-20} {1}" -f "", "Do zrobienia: $(Ile-Wpisow $wpisyStareOc.Count) w $(Sciezka-Ludzka $plikOc) starsze niz $DniWaznosci dni - przejrzyj albo odswiez date.")
+      $b += ("  {0,-20} {1}" -f "", "Starsze niz $DniWaznosci dni w $(Sciezka-Ludzka $plikOc): $(Ile-Wpisow $wpisyStareOc.Count) - automat zdejmie je sam przy najblizszym przebiegu (przebiegi nie sa codzienne).")
     }
     return $b
   }

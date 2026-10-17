@@ -31,12 +31,12 @@ function Pozycje-MegaRuchacza($wX, $plikX, $gdzie, $uwagaBiezacej) {
   }
   if ($wX.Stala.Znaki -gt 0) {
     $poz += Pozycja "warstwa STALA (Co wiem) w $gdzie" $wX.Stala.Znaki $plikX `
-      "przenies najdluzsze zestawienie do pliku w $katWiedzy i zostaw tu jedna linie odsylacza - warstwa referencyjna nie kosztuje nic" `
+      "nic do zrobienia recznie: pelna stala (sufit $ProgStalej znakow) automat usypia sam - najdawniej uzyty wpis automatu, przypiete zostaja" `
       "warstwa stala" "  nie wygasa"
   }
   if ($wX.Biezaca.Znaki -gt 0) {
     $poz += Pozycja "warstwa BIEZACA w $gdzie" $wX.Biezaca.Znaki $plikX `
-      "skasuj wpisy starsze niz $DniWaznosci dni albo przenies te trwale do warstwy stalej" `
+      "nic do zrobienia recznie: automat zdejmuje wpisy po $DniWaznosci dniach i ponad sufit $SufitBiezacych znakow, potwierdzone awansuje do stalej" `
       "warstwa biezaca" $uwagaBiezacej
   }
   foreach ($b in @($wX.Bloki)) {
@@ -116,12 +116,12 @@ function Etap-Kubelki {
   }
   if ($w.Stala.Znaki -gt 0) {
     $kubSesja += Pozycja "warstwa STALA (Co wiem)" $w.Stala.Znaki $plikClaude `
-      "przenies najdluzsze zestawienie do pliku w $katWiedzy i zostaw tu jedna linie odsylacza - warstwa referencyjna nie kosztuje nic" `
+      "nic do zrobienia recznie: pelna stala (sufit $ProgStalej znakow) automat usypia sam - najdawniej uzyty wpis automatu, przypiete zostaja" `
       "warstwa stala" "  nie wygasa"
   }
   if ($w.Biezaca.Znaki -gt 0) {
     $kubSesja += Pozycja "warstwa BIEZACA" $w.Biezaca.Znaki $plikClaude `
-      "skasuj wpisy starsze niz $DniWaznosci dni albo przenies te trwale do warstwy stalej" `
+      "nic do zrobienia recznie: automat zdejmuje wpisy po $DniWaznosci dniach i ponad sufit $SufitBiezacych znakow, potwierdzone awansuje do stalej" `
       "warstwa biezaca" $uwagaBiezaca
   }
   # Bloki nazwane w CLAUDE.md (zasady kierownika z instaluj-globalnie.ps1, ~12 tys.

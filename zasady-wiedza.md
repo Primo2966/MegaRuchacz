@@ -28,32 +28,25 @@ rozmiar: `narzedzia\koszt-pamieci.ps1`.
 
 ## Wiedza („Co wiem")
 
-Automat raz dziennie wyławia fakty z wiadomości użytkownika i wpisuje je sam,
-bez pytania. Warstwy:
+Automat wyławia fakty z wiadomości użytkownika i wpisuje je sam, bez pytania.
+Warstwy:
 
 1. **BIEŻĄCA** — podsekcja „Bieżące", format `- [RRRR-MM-DD] treść`. Tu trafia
-   każdy nowy fakt.
+   każdy nowy fakt. Sufit 6 000 znaków; każdy wpis wygasa po 14 dniach.
 2. **STAŁA** — reszta „Co wiem". Fakt z bieżącej awansuje sam, gdy padnie w dwóch
    różnych rozmowach albo gdy Claude go użyje w innym dniu (i w innej rozmowie).
-   Wpisy dodane ręcznie są przypięte — nigdy nie zasypiają.
+   Sufit 16 000 znaków: przy pełnej automat usypia najdawniej użyty wpis (budzi się
+   przy użyciu). Wpisy dodane ręcznie są przypięte — nigdy nie zasypiają.
 3. **REFERENCYJNA** — pliki w `wiedza/`, w stałej jedna linia odsyłacza. Czytaj
    je tylko, gdy rozmowa ich dotyczy.
 
-**Gdy użytkownik wyjaśnia coś trwałego, czego nie ma w plikach, albo tłumaczy coś
-kolejny raz — sam zaproponuj zapis w stałej**, jednym zdaniem. Trwałe: kim jest,
-czym zajmuje się firma i jak mówi o swoich rzeczach, projekty i decyzje, sposób
-pracy. Nie: stan zadania, rzeczy wynikające z kodu.
-
-**Sufit stałej: 8 000 znaków.** Blisko sufitu nie dopisuj — przenieś najdłuższe
-zestawienie do `wiedza/`, zostaw odsyłacz i powiedz o tym.
+Sufity, wygasanie i usypianie pilnuje automat — nie pytaj użytkownika o wpisy.
 
 **Wpis bieżący starszy niż 14 dni jest podejrzany** — nie buduj na nim działania.
-Wpisy automatu znikają same; przy ręcznym zapytaj, czy obowiązuje, i odśwież datę
-albo usuń.
 
 **Sprzeczność: wygrywa nowsze.** Gdy użytkownik mówi coś innego niż zapis — popraw
 wpis i powiedz jednym zdaniem, co było. Resztę rozstrzyga automat; stara wersja
-idzie do `wiedza/historia-zmian.md`. Nie pytaj użytkownika o zatwierdzanie faktów.
+idzie do `wiedza/historia-zmian.md`.
 
 **„Cofnij <id>"** → `uv --directory "{{ZRODLO}}\lore" run python -m lore.verify --cofnij <id>`
 (lista: `--zmiany`).

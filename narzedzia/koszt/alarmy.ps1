@@ -393,6 +393,26 @@ function Etap-Ocena {
       "historia" "uwaga" $historia.Pominiete $null ""
   }
 
+  # Warstwy "Co wiem" w CLAUDE.md ponad sufit + 5% ($AlarmStalej, $AlarmBiezacych - prog
+  # i uzasadnienie na gorze koszt-pamieci.ps1). Warstwy przycina SAM automat pamieci, wiec
+  # alarm nie prosi uzytkownika o kasowanie wpisow - mowi, ze automat nie przycial i trzeba
+  # go naprawic. Bez modulu Wiedza automatu nie ma, a "Co wiem" pisze czlowiek: wtedy cisza.
+  if ($w.Jest -and (-not $script:WiedzaWylaczona)) {
+    foreach ($wp in @(
+        @{ Temat = "pamiec-stala"; Nazwa = "stala"; Znaki = [int]$w.Stala.Znaki; Sufit = $ProgStalej; Prog = $AlarmStalej
+           Czym = "usypia najdawniej uzyty wpis automatu (przypietych nie rusza)" },
+        @{ Temat = "pamiec-biezaca"; Nazwa = "biezaca"; Znaki = [int]$w.Biezaca.Znaki; Sufit = $SufitBiezacych; Prog = $AlarmBiezacych
+           Czym = "zdejmuje najstarsze niepotwierdzone wpisy i te po $DniWaznosci dniach" })) {
+      if ($wp.Znaki -le $wp.Prog) { continue }
+      $alarmy += Alarm "pamiec $($wp.Nazwa) $(Liczba $wp.Znaki) znakow (sufit $(Liczba $wp.Sufit), alarm od $(Liczba $wp.Prog))" `
+        ("Warstwa $($wp.Nazwa) 'Co wiem' ma $(Liczba $wp.Znaki) znakow (~$(Liczba (Tokeny $wp.Znaki)) tokenow), a sufit to $(Liczba $wp.Sufit). " +
+         "Automat pamieci sam trzyma ja pod sufitem - $($wp.Czym) - wiec ponad $ProcPonadSufit% zapasu znaczy, ze tego nie zrobil " +
+         "(nie chodzi, wywrocil sie albo zostaly same wpisy przypiete). To usterka automatu do naprawy, nie decyzja o wpisach. " +
+         "Plik: $plikClaude.") `
+        $wp.Temat "pilne" $wp.Znaki $wp.Prog "stan na teraz"
+    }
+  }
+
   $liniaDom     = Linia-Narzedzia $rDom
   $liniaZwiezla = $liniaDom.Linia
   $kodWyjscia   = $liniaDom.Kod
