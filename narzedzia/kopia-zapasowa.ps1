@@ -614,6 +614,11 @@ Regula "^$eH\\\.claude\\skills\\\.trash$" "kosz po usunietych skillach (zaklada 
 # jest w ~\.claude\mr\przypomnienia.md - ten idzie do kopii. 08.10.2026: zrob-1.ps1
 # wyzerowany po zaniku pradu = 1 z 21 alarmow.
 Regula "^$eH\\\.claude\\mr\\terminy\\zrob-[^\\]*\.ps1$" "skrypt startowy przypomnienia (zasobnik\terminy.ps1) - jednorazowy, zapisywany od nowa" $false
+# Pliki blokady z wierzchu ~\.claude (np. lore-podpowiedz.lock) - bez tresci, trzymane otwarte
+# przez dzialajacy proces; 17.10.2026 jedyny plik W UZYCIU w pelnej kopii. Trwale trzymany
+# po -Trzymaj dniach dawalby codzienny BLAD o niczym. Tylko ~\.claude - yarn.lock, uv.lock
+# itp. w projektach to tresc i ida do kopii.
+Regula "^$eH\\\.claude\\[^\\]*\.lock$" "plik blokady w ~\.claude (bez tresci, trzymany przez dzialajacy proces)" $false
 Regula "^$eH\\\.claude\\lore\.db\.przed-[^\\]*$" "stara migawka lore.db sprzed migracji (184 MB) - aktualna lore.db jest w kopii" $false
 Regula "^$eH\\\.claude\\mr\\kopia-(indeks|w-uzyciu)\.tsv(\.nowy)?$" "indeks samej kopii (zmienia sie co dzien)" $false
 Regula "^$eH\\\.codex\\(\.sandbox|\.sandbox-bin|\.tmp|tmp|cache|packages|thread-writer-locks)$" "katalog techniczny Codeksa (programy, piaskownica, pamiec podreczna)" $true
