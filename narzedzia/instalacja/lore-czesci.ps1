@@ -45,10 +45,19 @@ $script:MinModelMB    = 200   # model wazy ~496 MB; kilka bajtow to przerwane po
 # Przeliczenie archiwum na nowy model (lore.migrate) - szacunek z 2026-09-24 dla archiwum rzedu
 # kilkudziesieciu tysiecy fragmentow; postep i prognoze pisze lore.migration.json.
 $script:CzasPrzeliczania = "~2-4 h"
-# Pliki bazy Lore obok lore.db - tyle zdejmuje Lore-Usun-Dane i nic poza tym.
+# Pliki bazy Lore obok lore.db - tyle zdejmuje Lore-Usun-Dane i nic poza tym. Trzy ostatnie to serwer
+# podpowiedzi "Z ARCHIWUM" (lore\lore\recall_serwer.py): adres, stan i zamek.
 $script:PlikiBazyLore = @("lore.db", "lore.db-wal", "lore.db-shm", "lore.lock", "lore.migration.json",
                           "lore.migration.lock", "lore.migrate.log", "lore.migrate.out.log",
-                          "lore.index.log", "lore.index.out.log")
+                          "lore.index.log", "lore.index.out.log",
+                          "lore-podpowiedz.json", "lore-podpowiedz-stan.json", "lore-podpowiedz.lock")
+# Serwer podpowiedzi stawia sam hook (narzedzia\przypomnienie.js) i odchodzi sam po 2 h bezczynnosci, a do
+# tego czasu trzyma lore.db otwarte - Windows nie usunie takiego pliku. Chodzi z pythonw z instalacji uv,
+# nie z .venv, wiec Lore-Procesy-Srodowiska go nie widzi. Plik adresu podaje pid, port i token.
+$script:AdresPodpowiedzi = "lore-podpowiedz.json"
+# Serwer odpowiada w dziesiatkach ms (pytanie czeka najwyzej jeden plaster rozgrzewki); odmowa polaczenia
+# na 127.0.0.1 przychodzi w Windows po ~2 s (ponowienia SYN), wiec mniej niz 3 s myliloby jedno z drugim.
+$script:CzasPodpowiedziMs = 3000
 
 # ---------------------------------------------------------------- przygotowanie
 
@@ -429,9 +438,82 @@ function Lore-Stan-Bazy {
     Fragmentow = [int]$m.Groups[3].Value; Wektorow = [int]$m.Groups[4].Value; Opis = "" }
 }
 
+# Proces o tym PID: Jest = w ogole dziala, Nasz = to naprawde serwer podpowiedzi (python/pythonw
+# z recall_serwer w wierszu polecen). PID ze starego pliku adresu moze dzis nalezec do zupelnie innego
+# programu - takiego nikt tu nie zatrzymuje. Blad listy procesow leci wyjatkiem (wolajacy nie zgaduje).
+function Lore-Proces-Podpowiedzi([int]$id) {
+  $p = @(Get-CimInstance Win32_Process -Filter "ProcessId = $id" -ErrorAction Stop) | Select-Object -First 1
+  if (-not $p) { return [pscustomobject]@{ Jest = $false; Nasz = $false; Nazwa = "" } }
+  $nasz = ($p.Name -match '^pythonw?[\d.]*\.exe$') -and (("" + $p.CommandLine) -match 'recall_serwer')
+  return [pscustomobject]@{ Jest = $true; Nasz = $nasz; Nazwa = "$($p.Name)" }
+}
+
+# Polecenie stop po 127.0.0.1 - jedna linia JSON z tokenem z pliku adresu (protokol: recall_serwer.py,
+# Server.handle). Zwraca $null, gdy serwer potwierdzil ({"status":"stop"}), inaczej powod.
+function Lore-Stop-Podpowiedzi($adres) {
+  $tcp = New-Object System.Net.Sockets.TcpClient
+  try {
+    $laczenie = $tcp.BeginConnect("127.0.0.1", [int]$adres.port, $null, $null)
+    if (-not $laczenie.AsyncWaitHandle.WaitOne($script:CzasPodpowiedziMs)) { return "nie przyjal polaczenia w $($script:CzasPodpowiedziMs) ms" }
+    $tcp.EndConnect($laczenie)
+    $strumien = $tcp.GetStream()
+    $strumien.ReadTimeout = $script:CzasPodpowiedziMs
+    $strumien.WriteTimeout = $script:CzasPodpowiedziMs
+    $utf8 = New-Object System.Text.UTF8Encoding($false)
+    $bajty = $utf8.GetBytes((@{ token = "$($adres.token)"; cmd = "stop" } | ConvertTo-Json -Compress) + "`n")
+    $strumien.Write($bajty, 0, $bajty.Length)
+    $odp = (New-Object System.IO.StreamReader($strumien, $utf8)).ReadLine()
+    if (-not $odp) { return "zamknal polaczenie bez odpowiedzi" }
+    $o = $odp | ConvertFrom-Json
+    if ($o.status -eq "stop") { return $null }
+    return "odpowiedzial '$($o.status)': $($o.reason)"
+  } catch {
+    $e = $_.Exception
+    while ($e.InnerException) { $e = $e.InnerException }
+    return $e.Message
+  } finally {
+    $tcp.Close()
+  }
+}
+
+# Zatrzymuje serwer podpowiedzi tej bazy, zanim ruszymy jej pliki: najpierw polecenie stop (serwer sam
+# zdejmuje plik adresu, dopisuje stan i zwalnia baze), a gdy nie odpowie - zakonczenie procesu, ale tylko
+# gdy PID z pliku adresu to naprawde on. Brak pliku adresu = serwera nie ma, nic do zrobienia. Czego nie da
+# sie zrobic, to Ostrzezenie; czy baza zniknela, mowi potem samo usuwanie.
+function Lore-Zatrzymaj-Podpowiedzi {
+  $plik = Join-Path $script:Dom $script:AdresPodpowiedzi
+  if (-not (Test-Path -LiteralPath $plik)) { return }
+  $adres = $null
+  $blad = "brak pid, portu albo tokenu"
+  try { $adres = [System.IO.File]::ReadAllText($plik) | ConvertFrom-Json } catch { $blad = $_.Exception.Message }
+  if (-not $adres -or -not ($adres.pid -as [int]) -or -not ($adres.port -as [int]) -or -not $adres.token) {
+    # serwer, ktory zyje, zapisuje zepsuty adres od nowa w ciagu kilku sekund - taki plik zostaje po zabitym
+    Krok "plik adresu serwera podpowiedzi jest nieczytelny ($blad) - nie wiem, ktory proces zatrzymac: $plik"
+    return
+  }
+  $id = [int]$adres.pid
+  if ($Proba) { Plan "zatrzymalbym serwer podpowiedzi 'Z ARCHIWUM' (PID $id) - trzyma baze rozmow otwarta"; return }
+  $proces = Get-Process -Id $id -ErrorAction SilentlyContinue   # uchwyt przed stop: na niego czekamy
+  $powod = Lore-Stop-Podpowiedzi $adres
+  if (-not $powod) {
+    if (-not $proces -or $proces.WaitForExit(5000)) { Krok "serwer podpowiedzi 'Z ARCHIWUM' (PID $id) zatrzymany poleceniem stop"; return }
+    $powod = "potwierdzil stop, ale po 5 s dalej dziala"
+  }
+  try { $p = Lore-Proces-Podpowiedzi $id }
+  catch { Ostrzezenie "serwer podpowiedzi nie zatrzymal sie na polecenie stop ($powod), a listy procesow nie da sie sprawdzic ($($_.Exception.Message)) - PID $id zostaje nietkniety"; return }
+  if (-not $p.Jest) { Krok "serwera podpowiedzi juz nie ma (PID $id z pliku adresu nie dziala) - zostal po nim tylko plik adresu"; return }
+  if (-not $p.Nasz) { Krok "plik adresu serwera podpowiedzi jest stary: PID $id to dzis inny program ($($p.Nazwa)) - nie ruszam go"; return }
+  try { Stop-Process -Id $id -Force -ErrorAction Stop }
+  catch { Ostrzezenie "serwer podpowiedzi (PID $id) nie zatrzymal sie na polecenie stop ($powod) i nie dal sie zatrzymac: $($_.Exception.Message)"; return }
+  if ($proces -and -not $proces.WaitForExit(5000)) { Ostrzezenie "serwer podpowiedzi (PID $id) dalej dziala 5 s po zakonczeniu procesu"; return }
+  Krok "zatrzymany serwer podpowiedzi 'Z ARCHIWUM' (PID $id) - nie zatrzymal sie na polecenie stop ($powod)"
+}
+
 # Dane uzytkownika: baza rozmow i pliki obok niej. Wolac WYLACZNIE przy -UsunDane i tylko wtedy,
 # gdy ani wiedza, ani lore z niej nie korzystaja - to sprawdza wolajacy.
 function Lore-Usun-Dane {
+  # serwer podpowiedzi trzyma lore.db otwarte - najpierw on, dopiero potem lista plikow (swoj adres zdejmuje sam)
+  Lore-Zatrzymaj-Podpowiedzi
   $sa = @($script:PlikiBazyLore | ForEach-Object { Join-Path $script:Dom $_ } | Where-Object { Test-Path $_ })
   if ($sa.Count -eq 0) { Krok "bazy rozmow nie ma ($($script:Baza)) - nie ma czego usuwac"; return $true }
   $mb = [math]::Round((($sa | ForEach-Object { (Get-Item -LiteralPath $_).Length }) | Measure-Object -Sum).Sum / 1MB)

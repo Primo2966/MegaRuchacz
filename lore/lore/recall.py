@@ -9,9 +9,11 @@ for the whole hook is under one second. Measured 2026-09-24 on the real database
 a bare Python start ~40-50 ms, the FTS query ~1 ms per term, the whole run 70-140 ms — while
 loading the embedding model from scratch takes 4.7-7.4 s. A long-lived process holding the model
 would fit the budget, but it is one more thing that must be alive, restarted and watched on two
-machines. The price of the choice: no semantic matching — a hit needs the same words (or the same
-word stem, see _terms) as the message; a question worded differently from the old conversation
-finds nothing. That is why the threshold is strict: better nothing than noise on every message.
+machines. (Since 2026-10-17 there is a long-lived process after all — lore/recall_serwer.py, started
+lazily by the hook — but without the model: it runs this same recall() to save the Python start and
+keep the database pages warm; `python -m lore.recall` stays the fallback.) The price of the choice:
+no semantic matching — a hit needs the same words (or the same word stem, see _terms) as the message;
+a question worded differently from the old conversation finds nothing. That is why the threshold is strict: better nothing than noise on every message.
 
 Deliberately standalone (stdlib only, no import of lore.db): importing lore.db pulls numpy
 (0.15 s warm, over 1 s cold) and db.connect() WRITES (migrations, schema). Here the database is
@@ -84,8 +86,8 @@ STOP = set("""
 ale albo ani aby bardzo bez bo byc byl byla bylo byly bedzie beda bez chce chcesz ci cie co czy
 czyli dla do dobrze gdy gdzie go ich ile im iz ja jak jaki jakie jako je jego jej jest jestem jesli
 juz ktora ktore ktory kto lub ma mam mamy masz mi mnie moge moze mozna my na nad nam nas nic nie niech
-nim no o od oraz po pod potem przez przy sa sie sobie tak tam tego tej ten teraz to tu tutaj tych tylko
-ty wiec wszystko wtedy z za ze zeby zrob zrobic prosze dzieki okej ok the and for with that this from
+nim no o od oraz po pod potem przez przy sa sie sobie tak tam tego tej ten teraz tez to tu tutaj tych
+tylko ty wiec wszystko wtedy z za ze zeby zrob zrobic prosze dzieki okej ok the and for with that this from
 are was were you your have has not but can will what how why when which into then than also just
 sprawdz dlaczego czemu dodaj napisz ustaw dziala mowi powiedz pokaz zobacz trzeba musi mozesz dalej
 jeszcze nowy nowa nowe wszystkie kazdy kazda kazde zamiast chodzi robi jakis sprawa rzecz

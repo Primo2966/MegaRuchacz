@@ -80,6 +80,13 @@ def test_short_messages_are_not_searched_at_all(archive):
         assert out["status"] == "skipped" and out["block"] == ""
 
 
+def test_a_follow_up_made_of_common_words_is_not_searched(archive):
+    # "z tą regułą też" (2026-10-17): "tez" counted as a second word and the archive was searched for it
+    add(archive, "Ta regula tez obowiazuje przy zestawach, regula numerow w nawiasie kwadratowym tez.")
+    out = ask(archive, "z tą regułą też")
+    assert out["status"] == "skipped" and out["block"] == ""
+
+
 def test_one_shared_word_is_not_enough(archive):
     add(archive, "Faktura za serwer przyszla wczoraj i jest oplacona.")
     out = ask(archive, "ustaw tytul oferty na ebayu, faktura")

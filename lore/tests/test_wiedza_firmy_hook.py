@@ -184,6 +184,7 @@ def test_no_hits_means_nothing_glued(atrapa, tmp_path):
     ("b", "krotka wiadomosc"),
     ("nook", "krotka wiadomosc"),
     ("tak zrób tak", "za malo slow do szukania"),     # 12 znakow, ale same slowa pospolite
+    ("z tą regułą też", "za malo slow do szukania"),  # po slowach pospolitych zostaje tylko "regula"
 ])
 def test_short_message_is_not_asked(atrapa, tmp_path, prompt, powod):
     rejestr(tmp_path)

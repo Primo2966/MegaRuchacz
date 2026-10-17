@@ -628,8 +628,8 @@ const SLOWA_POSPOLITE = new Set(`
 ale albo ani aby bardzo bez bo byc byl byla bylo byly bedzie beda bez chce chcesz ci cie co czy
 czyli dla do dobrze gdy gdzie go ich ile im iz ja jak jaki jakie jako je jego jej jest jestem jesli
 juz ktora ktore ktory kto lub ma mam mamy masz mi mnie moge moze mozna my na nad nam nas nic nie niech
-nim no o od oraz po pod potem przez przy sa sie sobie tak tam tego tej ten teraz to tu tutaj tych tylko
-ty wiec wszystko wtedy z za ze zeby zrob zrobic prosze dzieki okej ok the and for with that this from
+nim no o od oraz po pod potem przez przy sa sie sobie tak tam tego tej ten teraz tez to tu tutaj tych
+tylko ty wiec wszystko wtedy z za ze zeby zrob zrobic prosze dzieki okej ok the and for with that this from
 are was were you your have has not but can will what how why when which into then than also just
 sprawdz dlaczego czemu dodaj napisz ustaw dziala mowi powiedz pokaz zobacz trzeba musi mozesz dalej
 jeszcze nowy nowa nowe wszystkie kazdy kazda kazde zamiast chodzi robi jakis sprawa rzecz

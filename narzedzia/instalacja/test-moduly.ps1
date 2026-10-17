@@ -4,7 +4,8 @@
 # Co jest kopia, a co prawdziwe:
 #   - repo: git clone tego repo (HEAD) + nalozone niezapisane w gicie pliki tego, co sie testuje
 #     (narzedzia\instalacja\, narzedzia\instaluj-lore.ps1, lore\, skille - narzedzia\skille.ps1, skille\,
-#     zasobnik\nadzorca\stan-skille.ps1 - i lista narzedzi AI narzedzia\kierownik-cele.ps1), w katalogu
+#     zasobnik\nadzorca\stan-skille.ps1 - lista narzedzi AI narzedzia\kierownik-cele.ps1 i hook
+#     narzedzia\przypomnienie.js), w katalogu
 #     z "MRTEST" w nazwie;
 #     cudze niezapisane zmiany (inni workerzy) do kopii nie trafiaja
 #   - katalog domowy: osobny, pusty na kazdy scenariusz. Procesy potomne maja USERPROFILE,
@@ -29,7 +30,7 @@
 #   powershell -NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File narzedzia\instalacja\test-moduly.ps1
 #     [-Katalog <kat>]        gdzie zalozyc katalog testu (domyslnie %TEMP%); nazwa i tak dostaje MRTEST
 #     [-Tylko baza,wiedza]    tylko wybrane scenariusze: zaleznosci baza wiedza lore wiedzalore
-#                             kierownik skille kopia rejestr proba stary usunczysty wiedzafirmy
+#                             kierownik skille kopia rejestr proba stary usunczysty wiedzafirmy podpowiedz
 #     [-BezSieci]             bez prawdziwego pobierania programow (zaleznosci: tylko proby)
 #     [-Zostaw]               nie kasuj katalogu testu (zadania MRTEST-* znikaja zawsze)
 # Kod wyjscia: 0 = wszystko przeszlo, 1 = cos nie.
@@ -53,7 +54,7 @@ $TmpKrotki = Join-Path ([System.IO.Path]::GetTempPath()) ("MRTEST-tmp-" + (Get-D
 $Wynik = @()
 $script:Zle = 0
 $script:Info = @()
-$Scenariusze = @("zaleznosci", "baza", "wiedza", "lore", "wiedzalore", "kierownik", "skille", "kopia", "rejestr", "proba", "stary", "usunczysty", "wiedzafirmy")
+$Scenariusze = @("zaleznosci", "baza", "wiedza", "lore", "wiedzalore", "kierownik", "skille", "kopia", "rejestr", "proba", "stary", "usunczysty", "wiedzafirmy", "podpowiedz")
 $wybrane = @($Tylko | ForEach-Object { $_ -split '[,;\s]+' } | Where-Object { $_ })
 if ($wybrane.Count -eq 0) { $wybrane = $Scenariusze }
 
@@ -174,7 +175,8 @@ function Przygotuj-Kopie {
   New-Item -ItemType Directory -Force -Path $T, $Bin, $TmpKrotki, (Join-Path $T "localappdata"), (Join-Path $T "appdata") | Out-Null
   Git-Cicho @("clone", "--quiet", "--no-hardlinks", $RepoPrawdziwe, $Repo)
   # to, co sie testuje: niezapisane w gicie pliki z zakresu instalatora i Lore
-  $zakres = @("narzedzia/instalacja/", "narzedzia/instaluj-lore.ps1", "lore/lore/", "lore/tests/", "narzedzia/skille.ps1", "skille/", "zasobnik/nadzorca/stan-skille.ps1", "narzedzia/kierownik-cele.ps1", "narzedzia/cykl-dzienny.ps1")
+  # narzedzia/przypomnienie.js: testuja go testy Lore (regula slow pospolitych jest w nim i w recall.py)
+  $zakres = @("narzedzia/instalacja/", "narzedzia/instaluj-lore.ps1", "lore/lore/", "lore/tests/", "narzedzia/skille.ps1", "skille/", "zasobnik/nadzorca/stan-skille.ps1", "narzedzia/kierownik-cele.ps1", "narzedzia/cykl-dzienny.ps1", "narzedzia/przypomnienie.js")
   $zmiany = @(& git -C $RepoPrawdziwe status --porcelain --untracked-files=all 2>$null)
   foreach ($l in $zmiany) {
     $sc = $l.Substring(3).Trim('"')
@@ -1239,6 +1241,129 @@ function Scenariusz-UsunNaCzystym {
   Sprawdz "usun na czystym: hook straznika (baza) zostal" ((Hooki $dom "SessionStart" 'straznik-zasad\.ps1') -eq 1)
 }
 
+# ---------------------------------------------------------------- serwer podpowiedzi przy -UsunDane (2026-10-17)
+
+# Prawdziwy pythonw - interpreter, z ktorego powstalo prawdziwe .venv (pyvenv.cfg: home), bez launchera;
+# tak samo wola serwer hook (przypomnienie.js, prawdziwyPython).
+function Python-Bazowy {
+  $cfg = Join-Path (Split-Path -Parent (Split-Path -Parent $PythonPrawdziwy)) "pyvenv.cfg"
+  if (-not (Test-Path $cfg)) { return $null }
+  $m = [regex]::Match([System.IO.File]::ReadAllText($cfg), '(?m)^\s*home\s*=\s*(.+?)\s*$')
+  if (-not $m.Success) { return $null }
+  $p = Join-Path $m.Groups[1].Value "pythonw.exe"
+  if (Test-Path $p) { return $p }
+  return $null
+}
+
+# Proces bez okna. Kazdy wiersz polecen zawiera katalog testu - zbiera go Procesy-Testu, gdyby scenariusz
+# sie wywrocil; serwer odchodzi i tak sam po 120 s bez pytan.
+function Start-Procesu([string]$exe, [string[]]$argumenty, [string]$katalog) {
+  $psi = New-Object System.Diagnostics.ProcessStartInfo
+  $psi.FileName = $exe
+  $psi.Arguments = (@($argumenty | ForEach-Object { Q $_ })) -join " "
+  $psi.UseShellExecute = $false; $psi.CreateNoWindow = $true
+  $psi.WorkingDirectory = $katalog
+  $psi.EnvironmentVariables["MR_LORE_SERWER_BEZCZYNNOSC_S"] = "120"
+  return [System.Diagnostics.Process]::Start($psi)
+}
+
+function Nowa-Baza-Lore([string]$ld, [string]$pyw) {
+  New-Item -ItemType Directory -Force -Path $ld | Out-Null
+  $p = Start-Procesu $pyw @("-I", "-c", "import sqlite3, sys; c = sqlite3.connect(sys.argv[1]); c.execute('CREATE TABLE meta(key TEXT PRIMARY KEY, value TEXT)'); c.commit(); c.close()", (Join-Path $ld "lore.db")) $ld
+  if (-not $p.WaitForExit(30000) -or $p.ExitCode -ne 0) { throw "nie zalozylem probnej bazy $ld\lore.db" }
+}
+
+function Czekaj-Na-Adres([string]$ld) {
+  $plik = Join-Path $ld "lore-podpowiedz.json"
+  $koniec = (Get-Date).AddSeconds(15)
+  while ((Get-Date) -lt $koniec) {
+    if (Test-Path $plik) { return ([System.IO.File]::ReadAllText($plik) | ConvertFrom-Json) }   # serwer pisze przez podmiane - zawsze caly
+    Start-Sleep -Milliseconds 100
+  }
+  return $null
+}
+
+function Zapisz-Adres([string]$ld, $adres) {
+  [System.IO.File]::WriteAllText((Join-Path $ld "lore-podpowiedz.json"), ($adres | ConvertTo-Json -Compress), (New-Object System.Text.UTF8Encoding($false)))
+}
+
+# Port, na ktorym nikt nie slucha: zajety i zwolniony przed chwila.
+function Wolny-Port {
+  $l = New-Object System.Net.Sockets.TcpListener([System.Net.IPAddress]::Loopback, 0)
+  $l.Start(); $port = $l.LocalEndpoint.Port; $l.Stop()
+  return $port
+}
+
+# Wylaczny dostep do pliku sie nie udaje = ktos go trzyma otwartego (tak jak blokuje usuwanie).
+function Plik-Trzymany([string]$p) {
+  try { $f = [System.IO.File]::Open($p, "Open", "Read", "None"); $f.Close(); return $false } catch { return $true }
+}
+
+function Scenariusz-Podpowiedz {
+  $pyw = Python-Bazowy
+  if (-not $pyw) { Info "podpowiedz: pominiete - nie ma prawdziwego pythonw (pyvenv.cfg prawdziwego lore\.venv)"; return }
+  $serwerPy = Join-Path $Repo "lore\lore\recall_serwer.py"
+
+  # A. serwer z kopii zyje i trzyma lore.db: -Proba tylko planuje, -UsunDane zatrzymuje go poleceniem stop
+  $dom = Dom "podpowiedz"
+  [void](Modul "baza" "Instaluj" $dom @("-BezStartu"))
+  $ld = Join-Path $dom ".lore"
+  Nowa-Baza-Lore $ld $pyw
+  $srv = Start-Procesu $pyw @("-I", "-X", "utf8", $serwerPy, "--dom", $ld) $ld
+  $a = Czekaj-Na-Adres $ld
+  # baze otwiera rozgrzewka po 1 s ciszy (tabel w probnej bazie nie ma - blad rozgrzewki zostawia polaczenie);
+  # sprawdzenie wylacznym otwarciem dopiero potem, zeby nie zderzyc sie z samym otwieraniem
+  $otwarta = $false
+  $koniec = (Get-Date).AddSeconds(10)
+  while ($a -and -not $otwarta -and (Get-Date) -lt $koniec) {
+    Start-Sleep -Milliseconds 200
+    $st = Join-Path $ld "lore-podpowiedz-stan.json"
+    if (Test-Path $st) { $otwarta = ([System.IO.File]::ReadAllText($st) | ConvertFrom-Json).otwarcia_bazy -ge 1 }
+  }
+  $trzyma = $otwarta -and (Plik-Trzymany (Join-Path $ld "lore.db"))
+  Sprawdz "podpowiedz: serwer z kopii wstal i trzyma lore.db otwarte (bez zatrzymania baza nie dalaby sie usunac)" ([bool]$a -and $trzyma -and -not $srv.HasExited) "adres: $($a | ConvertTo-Json -Compress), otwarta: $otwarta, trzyma: $trzyma"
+  $r = Modul "lore" "Usun" $dom @("-Proba", "-UsunDane")
+  Sprawdz "podpowiedz: -Proba -UsunDane planuje zatrzymanie serwera, serwer i baza zostaja" (($r.Kod -eq 0) -and (($r.Kroki -join " ") -match "zatrzymalbym serwer podpowiedzi") -and -not $srv.HasExited -and (Test-Path (Join-Path $ld "lore.db"))) $r.Tekst
+  $r = Modul "lore" "Usun" $dom @("-UsunDane")
+  $wyszedl = $srv.WaitForExit(10000)
+  $zostaly = @("lore.db", "lore-podpowiedz.json", "lore-podpowiedz-stan.json", "lore-podpowiedz.lock") | Where-Object { Test-Path (Join-Path $ld $_) }
+  Sprawdz "podpowiedz: -UsunDane zatrzymuje serwer poleceniem stop (wyszedl sam, kod 0), baza i pliki serwera znikaja" (($r.Kod -eq 0) -and $wyszedl -and ($srv.ExitCode -eq 0) -and (($r.Kroki -join " ") -match "zatrzymany poleceniem stop") -and @($zostaly).Count -eq 0) "kod serwera: $(if ($wyszedl) { $srv.ExitCode } else { 'dziala' }), zostaly: $($zostaly -join ', ') -- $($r.Tekst)"
+
+  # B. serwer gluchy na stop (plik adresu z jego tokenem, ale zlym portem - serwer go nie poprawia, bo token
+  #    sie zgadza): PID z pliku to naprawde on, wiec zostaje zakonczony
+  $dom2 = Dom "podpowiedz-gluchy"
+  [void](Modul "baza" "Instaluj" $dom2 @("-BezStartu"))
+  $ld2 = Join-Path $dom2 ".lore"
+  Nowa-Baza-Lore $ld2 $pyw
+  $srv2 = Start-Procesu $pyw @("-I", "-X", "utf8", $serwerPy, "--dom", $ld2) $ld2
+  $a2 = Czekaj-Na-Adres $ld2
+  if (-not $a2) { Sprawdz "podpowiedz: drugi serwer wstal" $false; return }
+  $a2.port = Wolny-Port
+  Zapisz-Adres $ld2 $a2
+  $r = Modul "lore" "Usun" $dom2 @("-UsunDane")
+  $wyszedl = $srv2.WaitForExit(10000)
+  Sprawdz "podpowiedz: serwer gluchy na stop = zakonczony po sprawdzeniu PID (python + recall_serwer), baza znika" (($r.Kod -eq 0) -and $wyszedl -and ($srv2.ExitCode -ne 0) -and (($r.Kroki -join " ") -match "nie zatrzymal sie na polecenie stop") -and -not (Test-Path (Join-Path $ld2 "lore.db"))) "kod serwera: $(if ($wyszedl) { $srv2.ExitCode } else { 'dziala' }) -- $($r.Tekst)"
+
+  # C. proby negatywne: stary plik adresu, a jego PID nalezy dzis do innego procesu - ten ma przezyc
+  $dom3 = Dom "podpowiedz-obcy"
+  [void](Modul "baza" "Instaluj" $dom3 @("-BezStartu"))
+  $ld3 = Join-Path $dom3 ".lore"
+  $obce = @(
+    @{ Co = "python bez recall_serwer w wierszu polecen"; P = (Start-Procesu $pyw @("-I", "-c", "import time; time.sleep(120)", $dom3) $dom3) },
+    @{ Co = "nie-python z recall_serwer w wierszu polecen"; P = (Start-Procesu "$env:SystemRoot\System32\WindowsPowerShell\v1.0\powershell.exe" @("-NoProfile", "-NonInteractive", "-Command", "Start-Sleep -Seconds 120 # recall_serwer $dom3") $dom3) })
+  foreach ($o in $obce) {
+    Nowa-Baza-Lore $ld3 $pyw
+    Zapisz-Adres $ld3 ([pscustomobject]@{ pid = $o.P.Id; port = (Wolny-Port); token = "stary-token"; wersja = "x" })
+    $r = Modul "lore" "Usun" $dom3 @("-UsunDane")
+    Start-Sleep -Milliseconds 300
+    Sprawdz "podpowiedz: PID z pliku adresu to $($o.Co) = nie zabity, stary adres i baza usuniete" (($r.Kod -eq 0) -and -not $o.P.HasExited -and (($r.Kroki -join " ") -match "nie ruszam go") -and -not (Test-Path (Join-Path $ld3 "lore.db")) -and -not (Test-Path (Join-Path $ld3 "lore-podpowiedz.json"))) $r.Tekst
+  }
+  foreach ($o in $obce) {
+    if ($o.P.HasExited) { continue }
+    try { Stop-Process -Id $o.P.Id -Force -ErrorAction Stop } catch { Info "podpowiedz: nie zatrzymalem procesu $($o.P.Id) ($($_.Exception.Message)) - zbierze go sprzatanie testu" }
+  }
+}
+
 # ---------------------------------------------------------------- Wiedza firmy (Z3, 2026-10-14)
 
 # Nadpisania adresow - nigdy prawdziwe (repo publiczne; .invalid nie rozwiaze sie nigdzie). Domyslnie modul
@@ -1509,7 +1634,7 @@ try {
         "zaleznosci" { Scenariusz-Zaleznosci } "baza" { Scenariusz-Baza } "wiedza" { Scenariusz-Wiedza } "lore" { Scenariusz-Lore }
         "wiedzalore" { Scenariusz-WiedzaLore } "kierownik" { Scenariusz-Kierownik } "skille" { Scenariusz-Skille } "kopia" { Scenariusz-Kopia }
         "rejestr" { Scenariusz-Rejestr } "proba" { Scenariusz-Proba } "stary" { Scenariusz-Stary } "usunczysty" { Scenariusz-UsunNaCzystym }
-        "wiedzafirmy" { Scenariusz-WiedzaFirmy }
+        "wiedzafirmy" { Scenariusz-WiedzaFirmy } "podpowiedz" { Scenariusz-Podpowiedz }
       }
     } catch {
       Sprawdz "scenariusz $s wywrocil sie" $false ($_.Exception.Message + " " + $_.InvocationInfo.PositionMessage)
