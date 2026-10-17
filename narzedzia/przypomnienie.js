@@ -373,12 +373,68 @@ function konfiguracjaWiedzy(plik) {
   return { url: s.url, naglowki };
 }
 
-// Pytanie z wiadomosci albo "" - za krotka wiadomosc ("ok", "tak") daje na serwerze same smieci
-// tuz nad progiem trafnosci (wektory.py: jednowyrazowe 0,74-0,75), wiec nie pytamy wcale.
+// Kiedy w ogole nie pytac: za krotka wiadomosc ("b", "nook", "tak zrob tak") daje na serwerze same
+// smieci tuz nad progiem trafnosci (wektory.py: jednowyrazowe 0,74-0,75) - i przypadkowy wpis w rozmowie.
+// Regula jest PRZENIESIONA z lore\lore\recall.py (MIN_PROMPT_CHARS, MIN_MATCHED, STOP, fold, _terms),
+// zeby archiwum i wiedza firmy pomijaly te same wiadomosci. Ma byc z nia ZGODNA co do znaku - pilnuje
+// tego test_wiedza_firmy_hook.py (te same slowa pospolite, te same stale, te same slowa z przykladow);
+// zmieniajac jedno, zmien drugie. Tylko czesc bez bazy: recall.py odsiewa potem jeszcze slowa, ktorych
+// archiwum nie zna albo ma ich za duzo - tego serwer wiedzy firmy nie potrzebuje.
+const MIN_ZNAKOW_PYTANIA = 12;   // recall.MIN_PROMPT_CHARS
+const MIN_SLOW_PYTANIA = 2;      // recall.MIN_MATCHED
+const SLOWA_POSPOLITE = new Set(`
+ale albo ani aby bardzo bez bo byc byl byla bylo byly bedzie beda bez chce chcesz ci cie co czy
+czyli dla do dobrze gdy gdzie go ich ile im iz ja jak jaki jakie jako je jego jej jest jestem jesli
+juz ktora ktore ktory kto lub ma mam mamy masz mi mnie moge moze mozna my na nad nam nas nic nie niech
+nim no o od oraz po pod potem przez przy sa sie sobie tak tam tego tej ten teraz to tu tutaj tych tylko
+ty wiec wszystko wtedy z za ze zeby zrob zrobic prosze dzieki okej ok the and for with that this from
+are was were you your have has not but can will what how why when which into then than also just
+sprawdz dlaczego czemu dodaj napisz ustaw dziala mowi powiedz pokaz zobacz trzeba musi mozesz dalej
+jeszcze nowy nowa nowe wszystkie kazdy kazda kazde zamiast chodzi robi jakis sprawa rzecz
+`.split(/\s+/).filter(Boolean));   // recall.STOP
+
+// recall.fold: male litery bez ogonkow, znak po znaku (dlugosc w znakach sie nie zmienia).
+function zlozTekst(tekst) {
+  let out = "";
+  for (const ch of String(tekst).toLowerCase()) {
+    if (ch === "ł") { out += "l"; continue; }   // l z kreska nie rozklada sie w NFKD
+    const d = Array.from(ch.normalize("NFKD"));
+    out += d.length ? d[0] : ch;
+  }
+  return out;
+}
+
+// recall._terms: slowa warte szukania (dluzsze jako rdzen z "*", jak w FTS).
+function slowaDoSzukania(tekst) {
+  const out = [];
+  const bylo = new Set();
+  for (const w of zlozTekst(tekst).match(/[\p{L}\p{N}_]+/gu) || []) {
+    const z = Array.from(w);
+    let term;
+    if (/^\p{Nd}+$/u.test(w)) {
+      if (z.length < 2) continue;
+      term = w;
+    } else {
+      if (z.length < 3 || SLOWA_POSPOLITE.has(w) || w.indexOf("_") >= 0) continue;
+      if (z.length >= 7) term = z.slice(0, -2).join("") + "*";
+      else if (z.length >= 5) term = ("aeiouy".indexOf(z[z.length - 1]) >= 0 ? z.slice(0, -1).join("") : w) + "*";
+      else term = w;
+    }
+    if (!bylo.has(term)) { bylo.add(term); out.push(term); }
+  }
+  return out;
+}
+
+// Powod pominiecia (te same slowa co recall.py) albo "" - wtedy pytamy.
+function pominiecieWiedzy(tresc) {
+  if (Array.from(String(tresc).trim()).length < MIN_ZNAKOW_PYTANIA) return "krotka wiadomosc";
+  if (slowaDoSzukania(tresc).length < MIN_SLOW_PYTANIA) return "za malo slow do szukania";
+  return "";
+}
+
+// Pytanie do serwera: poczatek wiadomosci (to wyszukiwanie, nie rozmowa).
 function pytanieWiedzy(tresc) {
-  const t = String(tresc).replace(/\s+/g, " ").trim();
-  const slowa = t.split(" ").filter((s) => (s.match(/\p{L}/gu) || []).length >= 3);
-  return slowa.length >= 2 ? t.slice(0, MAX_PYTANIA) : "";
+  return String(tresc).replace(/\s+/g, " ").trim().slice(0, MAX_PYTANIA);
 }
 
 function opisBleduSieci(e) {
@@ -486,7 +542,7 @@ function zacznijWiedze(tresc, sesja, plikKonfigu, plikStanu) {
   u.juz = (sesja && u.sesje[sesja] && Array.isArray(u.sesje[sesja].ids)) ? u.sesje[sesja].ids : [];
   const aw = u.stan.awaria;
   const konf = typeof tresc === "string" ? konfiguracjaWiedzy(plikKonfigu) : null;
-  const pytanie = typeof tresc === "string" ? pytanieWiedzy(tresc) : "";
+  const pomin = typeof tresc === "string" ? pominiecieWiedzy(tresc) : "";
   if (!konf) {
     // brak tresci wiadomosci melduje juz archiwum (alarm Lore) - tu tylko slad
     u.gotowy = { status: "pominiete", powod: "brak tresci wiadomosci na wejsciu" };
@@ -494,13 +550,14 @@ function zacznijWiedze(tresc, sesja, plikKonfigu, plikStanu) {
     u.gotowy = { status: "brak-konfiguracji", powod: konf.brak };
   } else if (konf.blad) {
     u.gotowy = { awaria: true, siec: false, powod: konf.blad };
-  } else if (!pytanie) {
-    u.gotowy = { status: "pominiete", powod: "za krotka wiadomosc" };
+  } else if (pomin) {
+    // bez zapytania i bez linii - tylko slad w stanie (ta sama regula co w recall.py)
+    u.gotowy = { status: "pominieto-krotka", powod: pomin };
   } else if (aw && aw.siec && aw.ile >= PROG_AWARII_SIECI && !isNaN(Date.parse(aw.proba)) &&
              (u.start - Date.parse(aw.proba)) / 60000 < MINUT_PRZERWY_PO_AWARII) {
     u.gotowy = { status: "przerwa", powod: "po " + aw.ile + " awariach sieci z rzedu pytam co " + MINUT_PRZERWY_PO_AWARII + " min", przerwa: true };
   } else {
-    const h = wyslijPytanie(konf, pytanie, Math.min(10, POZYCJI_WIEDZY + u.juz.length));
+    const h = wyslijPytanie(konf, pytanieWiedzy(tresc), Math.min(10, POZYCJI_WIEDZY + u.juz.length));
     if (h.blad) u.gotowy = { awaria: true, siec: false, powod: h.blad };
     else u.h = h;
   }
@@ -821,12 +878,17 @@ async function glowna() {
   wypisz(JSON.stringify(ladunek));
 }
 
-glowna().catch((e) => {
-  // Ostatnia deska: blad poza podpowiedzia (nie powinien sie zdarzyc). Oddajemy ladunek
-  // tak, jak lezy na dysku - dokladnie to, co robilo "cat" - i zostawiamy slad na stderr.
-  // Przy kierowniku wylaczonym w rejestrze nie oddajemy nic: ladunek to jego tresc.
-  process.stderr.write("przypomnienie.js: " + (e && e.stack || e) + "\n");
-  if (jestPowiadomienie || !kierownikWlaczony) process.exit(0);
-  const surowy = process.argv[2] ? czytaj(process.argv[2]) : null;
-  if (surowy) wypisz(surowy); else process.exit(0);
-});
+// Wczytany przez require (testy zgodnosci reguly z recall.py) - nic nie uruchamia, tylko oddaje funkcje.
+if (require.main !== module) {
+  module.exports = { SLOWA_POSPOLITE, MIN_ZNAKOW_PYTANIA, MIN_SLOW_PYTANIA, zlozTekst, slowaDoSzukania, pominiecieWiedzy };
+} else {
+  glowna().catch((e) => {
+    // Ostatnia deska: blad poza podpowiedzia (nie powinien sie zdarzyc). Oddajemy ladunek
+    // tak, jak lezy na dysku - dokladnie to, co robilo "cat" - i zostawiamy slad na stderr.
+    // Przy kierowniku wylaczonym w rejestrze nie oddajemy nic: ladunek to jego tresc.
+    process.stderr.write("przypomnienie.js: " + (e && e.stack || e) + "\n");
+    if (jestPowiadomienie || !kierownikWlaczony) process.exit(0);
+    const surowy = process.argv[2] ? czytaj(process.argv[2]) : null;
+    if (surowy) wypisz(surowy); else process.exit(0);
+  });
+}

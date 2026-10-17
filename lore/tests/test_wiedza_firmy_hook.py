@@ -179,11 +179,60 @@ def test_no_hits_means_nothing_glued(atrapa, tmp_path):
     assert ctx == RULES and stan(tmp_path)["wynik"] == "brak-trafien"
 
 
-def test_short_message_is_not_asked(atrapa, tmp_path):
+@pytest.mark.parametrize("prompt, powod", [
+    ("ok", "krotka wiadomosc"),
+    ("b", "krotka wiadomosc"),
+    ("nook", "krotka wiadomosc"),
+    ("tak zrób tak", "za malo slow do szukania"),     # 12 znakow, ale same slowa pospolite
+])
+def test_short_message_is_not_asked(atrapa, tmp_path, prompt, powod):
     rejestr(tmp_path)
     konfig(tmp_path, atrapa.url)
-    ctx, _ = hook(tmp_path, prompt="ok")
-    assert ctx == RULES and atrapa.zadania == [] and stan(tmp_path)["wynik"] == "pominiete"
+    atrapa.wyniki(wpis(1, "Przypadkowe ustalenie, ktore nie moze sie dokleic do krotkiej wiadomosci."))
+    ctx, _ = hook(tmp_path, prompt=prompt)
+    s = stan(tmp_path)
+    assert ctx == RULES and atrapa.zadania == []
+    assert s["wynik"] == "pominieto-krotka" and s["powod"] == powod and "awaria" not in s
+
+
+def test_message_with_words_worth_searching_is_asked(atrapa, tmp_path):
+    rejestr(tmp_path)
+    konfig(tmp_path, atrapa.url)
+    hook(tmp_path, prompt="mentol FBA wysyłka do Polski")
+    assert len(atrapa.zadania) == 1
+    assert atrapa.zadania[0]["cialo"]["params"]["arguments"]["pytanie"] == "mentol FBA wysyłka do Polski"
+
+
+# Regula "za krotka wiadomosc" jest przeniesiona z recall.py do hooka - te dwie kopie maja byc zgodne.
+ZGODNOSC = ["b", "nook", "tak zrób tak", "z tą regułą też", "mentol FBA wysyłka do Polski",
+            "zapachy ebayu robot", "SET3-Health[010407]/ARO/10 literówka", "Łódź żółć gęślą jaźń 2026 7",
+            "kadzidełka backflow rodzic wariantów PL", "nie_szukaj slowo_z_podkreslnikiem abc",
+            "  sprawdź   czy działa  ", "tytuły eBay 80 znaków zestaw olejków"]
+
+
+def test_short_message_rule_matches_recall_py(tmp_path):
+    from lore import recall
+    skrypt = ("const m = require(process.argv[1]); const p = JSON.parse(require('fs').readFileSync(process.argv[2], 'utf8'));"
+              "console.log(JSON.stringify({stop: [...m.SLOWA_POSPOLITE].sort(), znaki: m.MIN_ZNAKOW_PYTANIA,"
+              " slowa: m.MIN_SLOW_PYTANIA, terms: p.map(m.slowaDoSzukania), fold: p.map(m.zlozTekst),"
+              " pomin: p.map(m.pominiecieWiedzy)}))")
+    wejscie = tmp_path / "przyklady.json"
+    wejscie.write_text(json.dumps(ZGODNOSC, ensure_ascii=False), encoding="utf-8")
+    r = subprocess.run([node, "-e", skrypt, str(HOOK), str(wejscie)], capture_output=True, text=True,
+                       encoding="utf-8", timeout=30)
+    assert r.returncode == 0, r.stderr
+    js = json.loads(r.stdout)
+    assert js["stop"] == sorted(recall.STOP)
+    assert js["znaki"] == recall.MIN_PROMPT_CHARS and js["slowa"] == recall.MIN_MATCHED
+    assert js["fold"] == [recall.fold(p) for p in ZGODNOSC]
+    assert js["terms"] == [recall._terms(p) for p in ZGODNOSC]
+    # ta sama decyzja co recall() przed siegnieciem do bazy (skipped albo dalej)
+    for p, pomin in zip(ZGODNOSC, js["pomin"]):
+        py = recall.recall(p, None, 450, None) if (len(p.strip()) < recall.MIN_PROMPT_CHARS or
+                                                    len(recall._terms(p)) < recall.MIN_MATCHED) else None
+        assert bool(pomin) == (py is not None), p
+        if py is not None:
+            assert py["status"] == "skipped" and py["reason"] == pomin, p
 
 
 # ---------------------------------------------------------------- kiedy w ogole nie pytac (cisza)
