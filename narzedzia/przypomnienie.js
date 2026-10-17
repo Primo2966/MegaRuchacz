@@ -435,7 +435,8 @@ async function archiwum(wejscie, budzet, plikStanu, miejsce) {
     if (!fs.existsSync(py) && !jestBazaLore()) {
       awaria("Lore nie jest zainstalowane na tej maszynie - doinstaluje je aktualizacja z ikony przy zegarze albo instaluj.bat");
     } else if (!fs.existsSync(py)) {
-      awaria("brak srodowiska Lore (" + py + ") - uruchom narzedzia\\instaluj-lore.ps1");
+      // Baza jest, srodowiska nie: ten sam brak widzi Lore-Brakuje w aktualizuj-megaruchacza.ps1, wiec aktualizacja doinstaluje je sama.
+      awaria("brak srodowiska Lore (" + py + ") - doinstaluje je sama aktualizacja z ikony przy zegarze (sprawdza co godzine)");
     } else {
       const juz = (sesje[prosba.sesja] && Array.isArray(sesje[prosba.sesja].ids)) ? sesje[prosba.sesja].ids : [];
       const zadanie = { prompt: prosba.prompt, session: prosba.sesja, budget: budzet, exclude: juz };

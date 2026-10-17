@@ -21,6 +21,7 @@ RULES = "ZASADY: odpowiadaj w sekundach, rozdawaj w tle."
 TOKEN = "Bearer sekret-testowy-123"
 HEADER = "Z WIEDZY FIRMY (jfwiedza, automat)"
 ALARM = "UWAGA: podpowiedz z wiedzy firmy (jfwiedza) nie dziala"
+ALARM_LORE = "UWAGA: podpowiedz z archiwum (Lore) nie dziala"
 PROMPT = "mentol FBA - czy potrzebna oferta na PL?"
 
 node = shutil.which("node")
@@ -248,7 +249,13 @@ def test_module_not_chosen_means_no_request(atrapa, tmp_path, wiedzafirmy):
     konfig(tmp_path, atrapa.url)
     atrapa.wyniki(wpis(1, "Ustalenie, ktore nie moze sie pojawic bez modulu wiedzy firmy."))
     ctx, _ = hook(tmp_path)
-    assert ctx == RULES and atrapa.zadania == [], moduly
+    if wiedzafirmy == "brak rejestru":
+        # Bez rejestru Lore liczy sie jako wlaczone, a w tmp_path go nie ma - od 17.10.2026 (Lore obowiazkowe)
+        # to glosna linia PRZED zasadami. Blok jfwiedza szedlby ZA nimi, wiec endswith dowodzi, ze go nie ma.
+        assert ctx.startswith(ALARM_LORE) and "Lore nie jest zainstalowane" in ctx.splitlines()[0], ctx
+        assert ctx.endswith(RULES) and atrapa.zadania == [], moduly
+    else:
+        assert ctx == RULES and atrapa.zadania == [], moduly
     assert not (tmp_path / "wf.json").exists()
 
 

@@ -227,6 +227,10 @@ def test_hook_keeps_the_rules_whole_and_leaves_a_trace(archive, tmp_path, case, 
     assert state["wynik"] == "awaria" and state["awaria"]["ile"] == 1, case
     if case == "no lore at all":
         assert "Lore nie jest zainstalowane" in ctx.splitlines()[0] and "aktualizacja" in ctx.splitlines()[0], ctx
+    if case == "no python":
+        # the database is there, only the environment is gone: the automatic update reinstalls it by itself
+        first = ctx.splitlines()[0]
+        assert "brak srodowiska Lore" in first and "sama aktualizacja" in first and "instaluj-lore" not in first, ctx
     # the same failure again: still in the state, but not shouted at every message
     ctx2, state2 = _hook(tmp_path, payload, **env)
     assert ctx2 == RULES and state2["awaria"]["ile"] == 2, case
