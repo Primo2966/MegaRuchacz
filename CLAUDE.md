@@ -33,7 +33,8 @@ się za zrobione.
 
 ## Konwencje pracy w tym repo
 
-Każdy worker dostaje ten plik sam — kierownik nie wkleja tych zasad do zleceń.
+Worker nie dostaje tego pliku automatycznie (role mają `omitClaudeMd`) — czyta go sam
+na starcie, bo każe mu to jego rola; dlatego kierownik nie wkleja tych zasad do zleceń.
 
 - **Bez worktree.** Testy wymagają PowerShella, a w kopii roboczej Claude Code blokuje
   każde jego wywołanie. Workerzy pracują równolegle w tym samym katalogu, każdy
