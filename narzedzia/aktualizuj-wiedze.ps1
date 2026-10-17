@@ -11,7 +11,8 @@
 #          warstwy stalej (8000 znakow; prog stoi w narzedzia\koszt-pamieci.ps1),
 #      [?] sporne - fakt przeczy temu, co juz jest zapisane. Automat musialby zgadnac,
 #          ktora wersja jest prawdziwa - a to jest dokladnie ten rodzaj cichej pomylki,
-#          ktora zyje potem miesiacami. Decyduje uzytkownik.
+#          ktora zyje potem miesiacami. Taki wpis po prostu nie wchodzi - nikt nie jest o niego
+#          pytany (zasada: zero pytan do uzytkownika o wpisy), liczba spornych stoi w podsumowaniu.
 # 4. fakty JUZ obowiazujace tez sa sprawdzane - te, ktore przestaly sie potwierdzac,
 #    dostaja dopisek "niepotwierdzone" i trafiaja do podsumowania. Nic nie jest kasowane:
 #    nieobecna sciezka moze byc odpietym dyskiem sieciowym, a nie nieprawda.
@@ -279,7 +280,7 @@ function Pokaz-Surowa-Strukture($stan) {
   $kandydaci = Join-Path $script:Dom "wiedza\kandydaci.md"
   foreach ($k in @(
     @{ Klucz = "surowa_struktura_zatrzymana"; Opis = "wpisow surowej struktury z odpowiedzi modelu zatrzymanych przy zapisie - przebieg NIC nie zapisal do plikow instrukcji" },
-    @{ Klucz = "surowa_struktura_w_plikach";  Opis = "wpisow w plikach instrukcji to surowa struktura z odpowiedzi modelu (JSON, klucze, etykiety) - do usuniecia recznie, automat ich nie awansuje" },
+    @{ Klucz = "surowa_struktura_w_plikach";  Opis = "wpisow w plikach instrukcji to surowa struktura z odpowiedzi modelu (JSON, klucze, etykiety) - automat ich nie awansuje" },
     @{ Klucz = "surowa_struktura_odrzucona";  Opis = "wpisow poczekalni to surowa struktura z odpowiedzi modelu - nie wpisane, oznaczone [!] w $kandydaci" }
   )) {
     $ile = 0
@@ -307,12 +308,7 @@ function Pokaz-Podsumowanie {
   Krok "zostaje  : $($stan['odrzucone']) odrzuconych, $($stan['sporne']) spornych, $($stan['wstrzymane_progiem']) wstrzymanych progiem"
   Krok "warstwa stala: $($stan['prog_stalej']) znakow"
   Krok "powod    : $($stan['powod'])"
-  # bez "??" - ten skrypt chodzi takze na Windows PowerShell 5.1, gdzie to jest blad skladni
-  $sporne = 0
-  if ($stan.ContainsKey("sporne")) { [void][int]::TryParse($stan["sporne"], [ref]$sporne) }
-  if ($sporne -gt 0) {
-    Ostrzezenie "sporne fakty czekaja na Twoja decyzje w $(Join-Path $script:Dom 'wiedza\kandydaci.md') - szukaj [?]"
-  }
+  # Sporne licza sie w linii "zostaje" wyzej - bez prosby o decyzje (zero pytan o wpisy).
 }
 
 # ---------------------------------------------------------------- przebieg
