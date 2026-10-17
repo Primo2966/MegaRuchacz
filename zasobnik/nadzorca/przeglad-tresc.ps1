@@ -370,7 +370,9 @@ function Linie-Aktualizacji($oa) {
   }
   $kol = $(switch ($oa.Waga) { "dobrze" { "  (zielony napis)" } "pilne" { "  (czerwony napis)" } "uwaga" { "  (żółty napis)" } default { "" } })
   $l += "  $($oa.Etykieta): $(@($oa.Znak, $oa.Linia | Where-Object { $_ }) -join ' ')$kol"
-  if ($oa.Dopisek) { $l += "      $($oa.Dopisek)  (żółty napis)" }
+  # Kolor dopisku z oceny (DopisekWaga): "szary" - informacja (np. doinstalowana Pamiec rozmow);
+  # "uwaga" albo brak pola - zolty, jak ostrzezenie. Okno (Wiersz-Aktualizacji) tak samo.
+  if ($oa.Dopisek) { $l += "      $($oa.Dopisek)  ($(if ("$($oa.DopisekWaga)" -eq 'szary') { 'szary' } else { 'żółty' }) napis)" }
   return ,$l
 }
 

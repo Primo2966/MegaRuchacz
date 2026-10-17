@@ -4,6 +4,8 @@
 # sprawy do doby od udanego sprawdzenia, z sabotazami na kopii stan-wersja.ps1.
 # Pamiec rozmow (Lore) obowiazkowa (2026-10-17): doinstalowanie w toku (swiezy zapis = pasek,
 # 21 min bez zapisu = czerwone), dopisek po "zaktualizowano" z doinstalowano, lore-zajete = szaro.
+# Kolor dopisku (DopisekWaga) sprawdzany w tym, co przeglad naprawde rysuje - wydruk "(szary napis)"
+# i kolor napisu w oknie - z sabotazami na kopiach przeglad-tresc.ps1 i przeglad.ps1.
 #   powershell -ExecutionPolicy Bypass -File zasobnik\test-aktualizacja-okno.ps1 [-Zasobnik <kat zasobnik>] [-Zrodlo <repo>] [-Zrzuty <kat>] [-BezOkna]
 # Wszystko na sztucznym katalogu domowym (atrapa ~\.claude\mr\aktualizacja.json w kazdym etapie)
 # i na atrapie narzedzia\aktualizuj-megaruchacza.ps1 w sztucznym zrodle - prawdziwego domu,
@@ -189,16 +191,32 @@ function Proba-LoreZajete {
         ($p -match 'Wszystko gra') -and ($p -notmatch '\(czerwony napis\)')
   return [pscustomobject]@{ Ok = $ok; Opis = "$($o.Znak) $($o.Linia) [$($o.Waga)] uwagi=$(Uwagi) sprawa=$($o.Problem.Tytul)" }
 }
-# Wynik "zaktualizowano" z doinstalowana Lore: zielona linia jak zawsze + szary dopisek; bez pola
-# (i z pustym polem) - bez dopisku.
+# Wynik "zaktualizowano" z doinstalowana Lore: zielona linia jak zawsze + szary dopisek - i tak tez
+# narysowany (wydruk "(szary napis)", nie zolty jak ostrzezenie); bez pola (i z pustym) - bez dopisku.
 $DOPISEK_LORE = "Doinstalowano też Pamięć rozmów (Lore) - jest teraz stałą częścią MegaRuchacza. Czytanie Twoich rozmów trwa w tle. Otwórz okna Claude Code na nowo, żeby zobaczyły wyszukiwanie."
 function Proba-Doinstalowano {
   $kon = (Get-Date).AddMinutes(-2)
   Atrapa @{ etap = "gotowe"; wynik = "zaktualizowano"; wersja_po = "0.37.0"; koniec = (Iso $kon); sprawdzone = (Iso $kon); doinstalowano = @("lore") }
   $o = O (Get-Date).AddHours(-1)
+  $p = Przod
   $ok = ($o.Waga -eq "dobrze") -and ($o.Znak -eq $ZNAKOK) -and ($o.Linia -eq "Zaktualizowano do najnowszej wersji 0.37.0 (dziś $(Godz $kon))") -and
-        ($o.Dopisek -eq $DOPISEK_LORE) -and ($o.DopisekWaga -eq "szary") -and (-not $o.Problem) -and ((Uwagi) -eq 0)
-  return [pscustomobject]@{ Ok = $ok; Opis = "$($o.Znak) $($o.Linia) [$($o.Waga)] | dopisek [$($o.DopisekWaga)]: $($o.Dopisek) | sprawa=$($o.Problem.Tytul)" }
+        ($o.Dopisek -eq $DOPISEK_LORE) -and ($o.DopisekWaga -eq "szary") -and (-not $o.Problem) -and ((Uwagi) -eq 0) -and
+        $p.Contains("$DOPISEK_LORE  (szary napis)") -and (-not $p.Contains("$DOPISEK_LORE  (żółty napis)"))
+  $wydruk = @(($p -split '\r?\n') | Where-Object { $_.Contains($DOPISEK_LORE) }) -join " / "
+  return [pscustomobject]@{ Ok = $ok; Opis = "$($o.Znak) $($o.Linia) [$($o.Waga)] | dopisek [$($o.DopisekWaga)] | wydruk: $wydruk | sprawa=$($o.Problem.Tytul)" }
+}
+# Dopisek-ostrzezenie (nieswiezy wynik, DopisekWaga "uwaga") i dopisek bez pola DopisekWaga (obiekt
+# sprzed tego pola) - w wydruku dalej "(żółty napis)", jak dotad.
+function Proba-DopisekNieswiezy {
+  $st = (Get-Date).AddHours(-4)
+  Atrapa @{ etap = "gotowe"; wynik = "aktualne"; koniec = (Iso $st); sprawdzone = (Iso $st) }
+  $o = O (Get-Date).AddHours(-5)
+  $p = Przod
+  $oBez = [pscustomobject]@{ Etykieta = $o.Etykieta; Trwa = $false; Znak = $o.Znak; Linia = $o.Linia; Waga = $o.Waga; Dopisek = "Dopisek bez pola wagi." }
+  $lBez = (Linie-Aktualizacji $oBez) -join " / "
+  $ok = ($o.DopisekWaga -eq "uwaga") -and $o.Dopisek -and $p.Contains("$($o.Dopisek)  (żółty napis)") -and $lBez.Contains("Dopisek bez pola wagi.  (żółty napis)")
+  $wydruk = @(($p -split '\r?\n') | Where-Object { $o.Dopisek -and $_.Contains($o.Dopisek) }) -join " / "
+  return [pscustomobject]@{ Ok = $ok; Opis = "dopisek [$($o.DopisekWaga)] | wydruk: $wydruk | bez pola: $lBez" }
 }
 function Proba-BezDoinstalowano {
   $kon = (Get-Date).AddMinutes(-2)
@@ -233,7 +251,8 @@ $PROBY_SIECI = [ordered]@{
   "negatywna: bez-sieci, ale ostatnia proba 4 h temu (martwy zegar) -> zolta sprawa" = "Proba-BezSieciMartwyZegar"
   "negatywna: blad z inna przyczyna (nanoszenie) -> dalej czerwono" = "Proba-InnaPrzyczynaCzerwona"
   "lore-zajete -> szara linia 'Pamięć rozmów (Lore) instaluje właśnie inny proces', bez sprawy" = "Proba-LoreZajete"
-  "zaktualizowano z doinstalowano=['lore'] -> zielona linia i szary dopisek o Pamięci rozmów" = "Proba-Doinstalowano"
+  "zaktualizowano z doinstalowano=['lore'] -> zielona linia i szary dopisek o Pamięci rozmów, w wydruku '(szary napis)'" = "Proba-Doinstalowano"
+  "dopisek-ostrzeżenie (nieświeży wynik) i dopisek bez pola DopisekWaga -> w wydruku '(żółty napis)', jak dotąd" = "Proba-DopisekNieswiezy"
   "negatywna: zaktualizowano bez pola doinstalowano (i z pustym) -> bez dopisku" = "Proba-BezDoinstalowano"
   "negatywna: blad z przyczyna lore -> czerwona linia z pelnym zdaniem (bez 'Nie udało się zaktualizować:'), sprawa pilna" = "Proba-LoreBlad"
 }
@@ -242,11 +261,11 @@ foreach ($nazwa in $PROBY_SIECI.Keys) {
   Wynik $nazwa $w.Ok $w.Opis
 }
 
-# Sabotaz: kopia stan-wersja.ps1 z wylaczonym jednym warunkiem, wczytana w miejsce prawdziwej.
-# Wlasciwa proba MUSI wtedy paść - inaczej nie pilnuje niczego. Kotwica sprawdzana przed podmiana
-# (brak kotwicy = porazka testu, a nie sabotaz, ktory po cichu niczego nie zmienil).
+# Sabotaz: kopia stan-wersja.ps1 (albo pliku z pola Plik, np. przeglad-tresc.ps1) z wylaczonym jednym
+# warunkiem, wczytana w miejsce prawdziwej. Wlasciwa proba MUSI wtedy paść - inaczej nie pilnuje
+# niczego. Kotwica sprawdzana przed podmiana (brak kotwicy = porazka testu, a nie sabotaz, ktory po
+# cichu niczego nie zmienil).
 $plikWersji = Join-Path $Zasobnik "nadzorca\stan-wersja.ps1"
-$oryginal = [System.IO.File]::ReadAllText($plikWersji, [System.Text.Encoding]::UTF8)
 $sabotaze = @(
   @{ Nazwa = "warunek doby wylaczony"; Proba = "Proba-BezSieciDoba"
      Kotwica = '(($teraz - $odKiedy).TotalHours -ge $GODZIN_BEZ_UDANEGO_SPRAWDZENIA)'; Zamiana = '$false' },
@@ -259,15 +278,22 @@ $sabotaze = @(
   @{ Nazwa = "lore-zajete nie jest chwilowa (czerwona karta przy otwartym instalatorze)"; Proba = "Proba-LoreZajete"
      Kotwica = '$PRZYCZYNY_CHWILOWE = @("bez-sieci", "zajete", "lore-zajete")'; Zamiana = '$PRZYCZYNY_CHWILOWE = @("bez-sieci", "zajete")' },
   @{ Nazwa = "dopisek o doinstalowanej Pamieci rozmow wylaczony"; Proba = "Proba-Doinstalowano"
-     Kotwica = '(@($a.Doinstalowano) -contains "lore")'; Zamiana = '($false)' })
-$kopiaSabotazu = Join-Path $tmp "stan-wersja-sabotaz.ps1"
+     Kotwica = '(@($a.Doinstalowano) -contains "lore")'; Zamiana = '($false)' },
+  @{ Nazwa = "wydruk ignoruje DopisekWaga - dopisek o Pamieci rozmow zolty jak ostrzezenie"; Proba = "Proba-Doinstalowano"; Plik = "nadzorca\przeglad-tresc.ps1"
+     Kotwica = '("$($oa.DopisekWaga)" -eq ''szary'')'; Zamiana = '($false)' },
+  @{ Nazwa = "wydruk rysuje kazdy dopisek na szaro - ostrzezenie o nieswiezym wyniku przestaje nim byc"; Proba = "Proba-DopisekNieswiezy"; Plik = "nadzorca\przeglad-tresc.ps1"
+     Kotwica = "-eq 'szary') { 'szary' } else { 'żółty' }"; Zamiana = "-eq 'szary') { 'szary' } else { 'szary' }" })
 foreach ($s in $sabotaze) {
-  if (-not $oryginal.Contains($s.Kotwica)) { Wynik "sabotaz '$($s.Nazwa)' wylapany" $false "kotwicy nie ma w ${plikWersji}: $($s.Kotwica)"; continue }
+  $plikS = $plikWersji
+  if ($s.Plik) { $plikS = Join-Path $Zasobnik $s.Plik }
+  $oryginal = [System.IO.File]::ReadAllText($plikS, [System.Text.Encoding]::UTF8)
+  if (-not $oryginal.Contains($s.Kotwica)) { Wynik "sabotaz '$($s.Nazwa)' wylapany" $false "kotwicy nie ma w ${plikS}: $($s.Kotwica)"; continue }
+  $kopiaSabotazu = Join-Path $tmp ("sabotaz-" + (Split-Path -Leaf $plikS))
   [System.IO.File]::WriteAllText($kopiaSabotazu, $oryginal.Replace($s.Kotwica, $s.Zamiana), (New-Object System.Text.UTF8Encoding($true)))
   . $kopiaSabotazu
   $pod = $null
   try { $pod = & $s.Proba } catch { $pod = [pscustomobject]@{ Ok = $false; Opis = "WYWROTKA: $($_.Exception.Message)" } }
-  . $plikWersji
+  . $plikS
   $po = & $s.Proba
   Wynik "sabotaz '$($s.Nazwa)' wylapany przez $($s.Proba)" ((-not $pod.Ok) -and $po.Ok) "z sabotazem: $($pod.Opis) || po przywroceniu: Ok=$($po.Ok)"
 }
@@ -459,6 +485,34 @@ public class OknoTestoweAktualizacji : System.Windows.Forms.Form {
     return $p
   }
   function Krok-Okna { Sprawdz-Aktualizacje; [System.Windows.Forms.Application]::DoEvents() }
+  # Kolor, ktorym okno naprawde rysuje napis zaczynajacy sie od $poczatek (pierwszy znaleziony,
+  # rekurencyjnie); $null, gdy takiego napisu nie ma.
+  function Kolor-Napisu($c, [string]$poczatek) {
+    foreach ($d in $c.Controls) {
+      if ("$($d.Text)".StartsWith($poczatek, [StringComparison]::Ordinal)) { return $d.ForeColor.ToArgb() }
+      $k = Kolor-Napisu $d $poczatek
+      if ($null -ne $k) { return $k }
+    }
+    return $null
+  }
+  # Sabotaz rysowania: kopia przeglad.ps1 z podmieniona kotwica, wczytana kropka WEWNATRZ tej funkcji -
+  # odmalowanie wolane stad bierze kopie (zakresy PowerShella sa dynamiczne), a po wyjsciu z funkcji
+  # (takze przez wyjatek) zostaje prawdziwy przeglad.ps1. Z sabotazem kolor dopisku MUSI byc zly,
+  # po przywroceniu - dobry. Brak kotwicy = porazka testu, a nie sabotaz, ktory niczego nie zmienil.
+  $plikPrzegladu = Join-Path $Zasobnik "nadzorca\przeglad.ps1"
+  function Sabotaz-Okna([string]$nazwa, [string]$kotwica, [string]$zamiana, [string]$poczatek, $kolor) {
+    $oryg = [System.IO.File]::ReadAllText($plikPrzegladu, [System.Text.Encoding]::UTF8)
+    if (-not $oryg.Contains($kotwica)) { Wynik "sabotaz okna '$nazwa' wylapany" $false "kotwicy nie ma w ${plikPrzegladu}: $kotwica"; return }
+    $kopia = Join-Path $tmp "sabotaz-przeglad.ps1"
+    [System.IO.File]::WriteAllText($kopia, $oryg.Replace($kotwica, $zamiana), (New-Object System.Text.UTF8Encoding($true)))
+    . $kopia
+    Sprawdz-Aktualizacje $true; [System.Windows.Forms.Application]::DoEvents()
+    $pod = Kolor-Napisu $script:PanelStan $poczatek
+    . $plikPrzegladu
+    Sprawdz-Aktualizacje $true; [System.Windows.Forms.Application]::DoEvents()
+    $po = Kolor-Napisu $script:PanelStan $poczatek
+    Wynik "sabotaz okna '$nazwa' wylapany (kolor dopisku)" (($null -ne $pod) -and ($pod -ne $kolor.ToArgb()) -and ($po -eq $kolor.ToArgb())) "z sabotazem: $pod || po przywroceniu: $po (ma być $($kolor.ToArgb()))"
+  }
 
   try {
     Bez-Pliku
@@ -489,7 +543,15 @@ public class OknoTestoweAktualizacji : System.Windows.Forms.Form {
     $t = (Teksty $script:PanelStan) -join " | "
     Wynik "okno: doinstalowana Pamięć rozmów -> zielona linia i dopisek pod nią, bez paska" (($t -match "$ZNAKOK Zaktualizowano do najnowszej wersji 0\.37\.0") -and
       ($t -match 'Doinstalowano też Pamięć rozmów \(Lore\)') -and ((Paski $script:PanelStan) -eq 0) -and (-not $script:PanelProblemy.Visible)) $t
+    $kolD = Kolor-Napisu $script:PanelStan $DOPISEK_LORE
+    Wynik "okno: dopisek o Pamięci rozmów narysowany na szaro (DopisekWaga), nie na żółto jak ostrzeżenie" ($kolD -eq $script:KolSzary.ToArgb()) "kolor $kolD; szary $($script:KolSzary.ToArgb()), żółty $($script:KolUwaga.ToArgb())"
     [void](Zrzut "2b-doinstalowano-lore")
+    Sabotaz-Okna "okno ignoruje DopisekWaga - dopisek o Pamięci rozmów żółty jak ostrzeżenie" '("$($oa.DopisekWaga)" -eq "szary")' '($false)' $DOPISEK_LORE $script:KolSzary
+    $oBez = [pscustomobject]@{ Etykieta = "Aktualizacja MegaRuchacza"; Trwa = $false; Znak = ""; Linia = "Linia testowa"; Waga = "dobrze"; Dopisek = "Dopisek bez pola wagi." }
+    $wBez = Wiersz-Aktualizacji $oBez
+    $kolB = Kolor-Napisu $wBez "Dopisek bez pola wagi."
+    $wBez.Dispose()
+    Wynik "okno: dopisek bez pola DopisekWaga (obiekt sprzed tego pola) -> żółty, jak dotąd" ($kolB -eq $script:KolUwaga.ToArgb()) "kolor $kolB"
 
     Atrapa @{ etap = "gotowe"; wynik = "aktualne"; koniec = (Iso $kon); sprawdzone = (Iso $kon) }
     Krok-Okna
@@ -530,6 +592,9 @@ public class OknoTestoweAktualizacji : System.Windows.Forms.Form {
     $t = (Teksty $script:PanelStan) -join " | "
     $tp = (Teksty $script:PanelProblemy) -join " | "
     Wynik "negatywna okno: nieswiezy wynik -> dopisek i zolta karta, bez 'Wszystko gra'" (($t -match 'Od ponad 3 godzin') -and ($tp -match 'nie sprawdzała serwera') -and ($t -notmatch 'Wszystko gra')) "$t || $tp"
+    $kolN = Kolor-Napisu $script:PanelStan "Od ponad 3 godzin"
+    Wynik "okno: dopisek-ostrzeżenie o nieświeżym wyniku dalej na żółto" ($kolN -eq $script:KolUwaga.ToArgb()) "kolor $kolN; żółty $($script:KolUwaga.ToArgb())"
+    Sabotaz-Okna "okno rysuje każdy dopisek na szaro - ostrzeżenie przestaje nim być" '$kolD = $script:KolUwaga' '$kolD = $script:KolSzary' "Od ponad 3 godzin" $script:KolUwaga
     [void](Zrzut "5-nieswieze")
 
     # zegar okna: aktualizacja, ktorej nikt nie kliknal, pokazuje sie sama

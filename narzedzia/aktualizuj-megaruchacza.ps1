@@ -25,7 +25,8 @@
 #                     wedlug rejestru - to samo, co instalator po zmianie modulow),
 #                   brakujaca Pamiec rozmow (Lore) - Doinstaluj-Lore: zaleznosci.ps1 (uv, Python,
 #                     Node.js), potem modul-lore.ps1 Instaluj (ok. 770 MB, pierwsze czytanie rozmow
-#                     w tle); porazka = blad i znacznik naniesienia niezapisany (calosc za godzine),
+#                     w tle); porazka NIE zatrzymuje nowej wersji - skille, znacznik i restart ida
+#                     dalej, a wynikiem przebiegu jest blad lore (pole lore_blad, Koniec-Naniesienia),
 #                   skille - skille.ps1 -Tryb instaluj -Wbudowane (brakujace wbudowane skille;
 #                     porazka to uwaga, nie blad: codzienne sprawdzenie skilli sprobuje znowu).
 #   4 restart   - odlaczony pomocnik (ten skrypt z -Restart, proces POZA drzewem nadzorcy) zamyka
@@ -46,6 +47,12 @@
 # nie blad): otwarte okno instalatora (ono samo instaluje Lore; gdy nic innego nie ma do zrobienia -
 # przyczyna lore-zajete, w oknie szara linia) i $MINUT_PO_STARCIE_WINDOWS min po starcie albo
 # wybudzeniu Windows. modul-lore.ps1 ma wlasna blokade - zajety tez konczy sie przyczyna lore-zajete.
+# Przy nowej wersji porazka Lore nie przerywa naniesienia (decyzja 2026-10-17 wedlug reguly uzytkownika
+# "przy aktualizacji nowsza wersja zawsze wygrywa"; wczesniej siec blokujaca pypi albo huggingface
+# trzymala komputer na starym kodzie, a co godzine szla nowa proba do 90 min). Porazka czeka w stanie
+# (lore_blad) do konca przebiegu i dopiero tam - takze u pomocnika restartu - zamienia sie w blad
+# zamiast zielonego "zaktualizowano". Nastepny przebieg (pierwszy rusza nowy nadzorca ok. minuty po
+# starcie, potem co godzine) ma znaczniki = HEAD, wiec probuje samo Lore.
 #
 # STAN dla okna i nadzorcy: ~\.claude\mr\aktualizacja.json (UTF-8 bez BOM, zapis atomowy przez
 # zapis-trwaly.ps1: plik tymczasowy + podmiana), pisany na biezaco:
@@ -64,6 +71,8 @@
 #               rozmow, lore-zajete - Lore instaluje inny proces: lagodna, jak zajete)
 #   uwagi       rzeczy, ktore nie przerwaly aktualizacji, a maja byc widac (np. skille bez sieci)
 #   doinstalowano  ["lore"], gdy ten przebieg doinstalowal Pamiec rozmow (Lore); inaczej []
+#   lore_blad   null albo {przyczyna, powod}: Pamiec rozmow nie doinstalowala sie przy naniesieniu nowej
+#               wersji - blad na koniec przebiegu (pomocnik restartu czyta go z tego pliku)
 #   zrodlo, pid katalog repo i proces, ktory pisze (pomocnik restartu ma inny PID)
 # Dziennik: ~\.claude\mr\aktualizacja.log - kazdy krok z PELNYM wyjsciem tego, co wolal.
 #
@@ -76,7 +85,7 @@
 # MR_AKT_UPTIME_MIN (minuty od startu Windows zamiast odczytu), MR_AKT_MUTEX_INSTALATORA (nazwa zamka
 # okna instalatora zamiast Local\MegaRuchacz-Instalator).
 # Kod wyjscia: 0 aktualne albo zaktualizowano (gdy jest restart - konczy go pomocnik, wynik w pliku
-# stanu), 1 blad (powod w pliku stanu), 3 inny przebieg wlasnie aktualizuje.
+# stanu, takze blad lore z naniesienia), 1 blad (powod w pliku stanu), 3 inny przebieg wlasnie aktualizuje.
 
 # [CmdletBinding()]: nieznana flaga konczy sie bledem zamiast isc po cichu do $args. PULAPKA PS 5.1:
 # z [CmdletBinding()] i -File $PSScriptRoot w wartosci domyslnej parametru jest pusty - dlatego
@@ -216,7 +225,7 @@ function Nowy-Stan {
   return [ordered]@{
     etap = ""; krok = 0; krokow = $KROKOW; opis = ""; wynik = ""
     wersja_przed = ""; wersja_po = ""; start = ""; koniec = ""; sprawdzone = ""
-    powod = ""; reczna = [bool]$Reczna; przyczyna = ""; uwagi = @(); doinstalowano = @(); zrodlo = $Zrodlo; pid = $PID
+    powod = ""; reczna = [bool]$Reczna; przyczyna = ""; uwagi = @(); doinstalowano = @(); lore_blad = $null; zrodlo = $Zrodlo; pid = $PID
   }
 }
 
@@ -741,32 +750,34 @@ function Uruchom-Dlugi([string]$co, [string]$skrypt, [string[]]$argumenty, [int]
 # programy (zaleznosci.ps1 - JEDEN napis "uv,python,node": -File podaje go do [string[]] w calosci,
 # a skrypt dzieli go sam), potem modul-lore.ps1 Instaluj (srodowisko, model, MCP w narzedziach AI,
 # zadanie indeksu, hooki i zasady wedlug rejestru, pierwsze czytanie rozmow w tle). $poNowejWersji
-# tylko do zdania o bledzie. Porazka = Blad (przyczyna lore albo lore-zajete) i $false.
+# tylko do zdania o bledzie. Zwraca $null (doinstalowana) albo porazke: Przyczyna (lore albo
+# lore-zajete) i Powod. Bledu nie pisze: samo doinstalowanie konczy nim przebieg od razu, a przy
+# naniesieniu nowej wersji porazka czeka do konca przebiegu (Nanies, Koniec-Naniesienia).
+# Ponowna proba po nowej wersji: pierwszy przebieg rusza nowy nadzorca ok. minuty po restarcie.
 function Doinstaluj-Lore([bool]$poNowejWersji) {
   $script:LoreOd = Get-Date
-  $zdanie = $(if ($poNowejWersji) { "Nowa wersja jest pobrana, ale nie udało się doinstalować Pamięci rozmów (Lore)" } else { "Nie udało się doinstalować Pamięci rozmów (Lore)" })
-  $ponowie = "Jest obowiązkowa, więc spróbuję znowu za godzinę."
+  $zdanie = $(if ($poNowejWersji) { "Nowa wersja $($script:Stan.wersja_po) jest wgrana, ale nie udało się doinstalować Pamięci rozmów (Lore)" } else { "Nie udało się doinstalować Pamięci rozmów (Lore)" })
+  $ponowie = $(if ($poNowejWersji) { "Jest obowiązkowa, więc spróbuję znowu za kilka minut, a potem co godzinę." } else { "Jest obowiązkowa, więc spróbuję znowu za godzinę." })
   Etap "nanosze" 3 "Doinstalowuję Pamięć rozmów (Lore) - sprawdzam programy (uv, Python, Node.js)"
   $w = Uruchom-Dlugi "zaleznosci-lore" (Join-Path $Zrodlo "narzedzia\instalacja\zaleznosci.ps1") @("-Akcja", "Instaluj", "-Potrzebne", "uv,python,node") $SEKUNDY_ZALEZNOSCI_LORE
   foreach ($u in $w.Uwagi) { Uwaga "Pamięć rozmów (Lore), programy: $u" }
   if (-not $w.Ok) {
-    Blad "lore" "${zdanie}: nie stanęły programy, których potrzebuje (uv, Python, Node.js) - $($w.Sedno.TrimEnd('.', ' ')). $ponowie"
-    return $false
+    return [pscustomobject]@{ Przyczyna = "lore"
+      Powod = "${zdanie}: nie stanęły programy, których potrzebuje (uv, Python, Node.js) - $($w.Sedno.TrimEnd('.', ' ')). $ponowie" }
   }
   Etap "nanosze" 3 "Doinstalowuję Pamięć rozmów (Lore) - pobieram biblioteki i model do wyszukiwania (ok. 770 MB); to potrwa kilkanaście minut, możesz normalnie pracować"
   $w = Uruchom-Dlugi "lore" (Join-Path $Zrodlo "narzedzia\instalacja\modul-lore.ps1") @("-Akcja", "Instaluj", "-KatalogDomowy", $KatalogDomowy, "-Zrodlo", $Zrodlo) $SEKUNDY_LORE
   foreach ($u in $w.Uwagi) { Uwaga "Pamięć rozmów (Lore): $u" }
   if ($w.Zajete) {
-    Blad "lore-zajete" "Pamięć rozmów (Lore) instaluje właśnie inny proces - sprawdzę za godzinę. Szczegóły: $($w.Sedno)"
-    return $false
+    return [pscustomobject]@{ Przyczyna = "lore-zajete"
+      Powod = "Pamięć rozmów (Lore) instaluje właśnie inny proces - sprawdzę za godzinę. Szczegóły: $($w.Sedno)" }
   }
   if (-not $w.Ok) {
-    Blad "lore" "${zdanie}: $($w.Sedno.TrimEnd('.', ' ')). $ponowie"
-    return $false
+    return [pscustomobject]@{ Przyczyna = "lore"; Powod = "${zdanie}: $($w.Sedno.TrimEnd('.', ' ')). $ponowie" }
   }
   $script:Stan.doinstalowano = @("lore")
   Loguj "Pamiec rozmow (Lore) doinstalowana: $($w.Sedno)"
-  return $true
+  return $null
 }
 
 # ------------------------------------------------------------------ krok 3: naniesienie
@@ -811,9 +822,16 @@ function Nanies($rej, [string]$narz, [bool]$doLore = $false) {
   }
 
   # Brakujaca Pamiec rozmow (Lore) - PO dopasowaniu hookow i zasad do rejestru (modul-lore po udanej
-  # instalacji sam uklada je jeszcze raz, juz z Lore), PRZED skillami. Porazka przerywa naniesienie:
-  # znacznik naniesienia zostaje niezapisany, wiec za godzine calosc idzie od nowa.
-  if ($doLore -and -not (Doinstaluj-Lore $true)) { return $false }
+  # instalacji sam uklada je jeszcze raz, juz z Lore), PRZED skillami. Porazka NIE przerywa naniesienia
+  # (naglowek: nowsza wersja zawsze wygrywa) - skille, znacznik i restart ida dalej, a porazka czeka
+  # w stanie (lore_blad) na koniec przebiegu: Koniec-Naniesienia robi z niej blad zamiast "zaktualizowano".
+  if ($doLore) {
+    $p = Doinstaluj-Lore $true
+    if ($p) {
+      $script:Stan.lore_blad = [ordered]@{ przyczyna = $p.Przyczyna; powod = $p.Powod }
+      Loguj "BLAD [$($p.Przyczyna)] odlozony na koniec przebiegu - nowa wersja idzie dalej: $($p.Powod)"
+    }
+  }
 
   # Skille - porazka nie przerywa aktualizacji: zrodla skilli leza na GitHubie, a ich brak nie psuje
   # niczego w samym MegaRuchaczu. Codzienne sprawdzenie skilli w nadzorcy dogra je samo.
@@ -879,8 +897,7 @@ function Zlec-Restart([string]$commit) {
   if (-not $zadanie -and $null -ne $procesy -and $procesy.Count -eq 0) {
     Uwaga "Nadzorcy (ikony w zasobniku) nie ma na tym komputerze - nie było czego uruchamiać od nowa."
     Odnotuj-Znacznik ([ordered]@{ "nadzorca" = $commit; "nadzorca.data" = (Teraz) })
-    Koniec "zaktualizowano" (Opis-Zaktualizowano)
-    return 0
+    return (Koniec-Naniesienia)
   }
   $nazwa = "Local\MegaRuchacz-akt-pomocnik-" + [guid]::NewGuid().ToString("N")
   $ev = New-Object System.Threading.EventWaitHandle($false, [System.Threading.EventResetMode]::ManualReset, $nazwa)
@@ -904,6 +921,21 @@ function Opis-Zaktualizowano {
   $p = $script:Stan.wersja_przed; $n = $script:Stan.wersja_po
   if ($p -and $n -and ($p -ne $n)) { return "Zaktualizowano: $p → $n" }
   return "Zaktualizowano - wersja $n wgrana i działa"
+}
+
+# Koniec przebiegu, ktory nanosil nowa wersje (po restarcie albo bez nadzorcy do restartu):
+# "zaktualizowano" - chyba ze w naniesieniu nie doinstalowala sie Pamiec rozmow (pole lore_blad,
+# pomocnik restartu ma je z pliku stanu). Wtedy nowa wersja jest wgrana, a wynikiem jest blad z jej
+# powodem: zielona linia nie moze zakryc porazki. Zwraca kod wyjscia.
+function Koniec-Naniesienia {
+  $lb = $script:Stan.lore_blad
+  if ($lb -and "$($lb.przyczyna)") {
+    $script:Stan.lore_blad = $null
+    Blad "$($lb.przyczyna)" "$($lb.powod)"
+    return 1
+  }
+  Koniec "zaktualizowano" (Opis-Zaktualizowano)
+  return 0
 }
 
 # Nowy proces nadzorcy (spoza $stare), ktory przezyl $SEKUNDY_ZYCIA. $null = nie wstal w $sekundy.
@@ -1005,8 +1037,7 @@ function Pomocnik-Restartu {
     }
     Loguj "nowy nadzorca chodzi (PID $nowy)"
     Odnotuj-Znacznik ([ordered]@{ "nadzorca" = $Commit; "nadzorca.data" = (Teraz) })
-    Koniec "zaktualizowano" (Opis-Zaktualizowano)
-    return 0
+    return (Koniec-Naniesienia)
   } finally {
     if ($mam) { try { $blokada.ReleaseMutex() } catch { Loguj "nie oddalem blokady: $($_.Exception.Message)" } }
     $blokada.Dispose()
@@ -1087,7 +1118,8 @@ function Aktualizuj {
   # wiec bez instaluj-globalnie, bez restartu i bez ruszania znacznikow naniesienia.
   if ($doLore -and -not $restart) {
     Etap "pobieram" 2 "Brakuje Pamięci rozmów (Lore) - przygotowuję doinstalowanie"
-    if (-not (Doinstaluj-Lore $false)) { return 1 }
+    $p = Doinstaluj-Lore $false
+    if ($p) { Blad $p.Przyczyna $p.Powod; return 1 }
     Koniec "zaktualizowano" (Opis-Zaktualizowano)
     return 0
   }

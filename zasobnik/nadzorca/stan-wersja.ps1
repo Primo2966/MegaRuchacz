@@ -374,7 +374,8 @@ function Ocena-Aktualizacji($a, $teraz, $nadzorcaOd = $null, $klik = $null, [str
     $kiedyBlad = "$(Kiedy-Krotko $(if ($a.Koniec) { $a.Koniec } else { $a.Zapis })); plik: $($a.Plik)"
     if (($a.Przyczyna -eq "lore") -and $a.Powod) {
       # Powod z doinstalowania Pamieci rozmow (Lore) to pelne zdanie ("Nie udalo sie doinstalowac..."
-      # albo "Nowa wersja jest pobrana, ale...") - bez przedrostka "Nie udalo sie zaktualizowac".
+      # albo "Nowa wersja X jest wgrana, ale..." - od 2026-10-17 porazka Lore nie zatrzymuje nowej
+      # wersji, wynik pisze pomocnik restartu) - bez przedrostka "Nie udalo sie zaktualizowac".
       & $zle "$(Z-Wielkiej $pw)." "Nie udało się doinstalować Pamięci rozmów (Lore)" "$(Z-Wielkiej $pw)." $kiedyBlad
       return $o
     }

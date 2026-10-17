@@ -22,7 +22,8 @@
 #  10  Pamiec rozmow (Lore) obowiazkowa (2026-10-17): brak Lore przy znacznikach = HEAD -> samo
 #      doinstalowanie (programy, potem modul-lore; pasek 3 z 4 z opisem, linia KROK pod paskiem), bez
 #      restartu, z doinstalowano; porazka -> blad lore, znacznik nietkniety, nastepny przebieg probuje
-#      znowu; nowa wersja + porazka -> naniesienie przerwane przed skillami, potem calosc z restartem;
+#      znowu; nowa wersja + porazka -> nowa wersja i tak wgrana (znacznik, skille, restart), wynik to
+#      czerwony blad lore, a nastepny przebieg probuje samo Lore (bez instaluj-globalnie i restartu);
 #      tetno stanu w ciszy modulu (i kontrola bez tetna); okno instalatora otwarte i modul zajety ->
 #      lore-zajete (szaro w karcie Stan); swiezy start Windows -> odlozone; Lore jest / baza=false /
 #      rejestr nieczytelny -> nic; lore=true bez srodowiska -> doinstalowane
@@ -715,32 +716,48 @@ $ascii = { param($s) -join ("$s".ToCharArray() | ForEach-Object { if ([int]$_ -g
     ("$($s.powod)" -match 'atrapa: nie udalo sie zainstalowac uv') -and (@(Wolania 'modul-lore').Count -eq $n0)) ($s | ConvertTo-Json -Compress)
   Bez-Pliku-Testu 'zaleznosci-kod.txt'
 
-  # (h) nowa wersja + brak Lore: doinstalowanie w naniesieniu (po -Dopasuj, przed skillami). Porazka
-  # przerywa naniesienie - znacznik stary, bez restartu i bez skilli; po naprawie calosc z restartem.
+  # (h) nowa wersja + brak Lore: doinstalowanie w naniesieniu (po -Dopasuj, przed skillami). Porazka NIE
+  # przerywa naniesienia (przy aktualizacji nowsza wersja zawsze wygrywa): znacznik, skille i restart
+  # ida dalej, a pomocnik restartu konczy czerwonym bledem lore zamiast zielonego "zaktualizowano".
+  # Nastepny przebieg ma znaczniki = HEAD i probuje samo Lore - bez instaluj-globalnie i bez restartu.
   Ustaw-Rejestr $true $false
   Plik-Testu 'lore-kod.txt' '1'
   Wypchnij-Wersje '99.3.0'
-  $znStary = (Znacznik)['naniesione']
   $plikSkilli = Join-Path $T 'skille-wolania.log'
   $skPrzed = @(Get-Content -LiteralPath $plikSkilli -ErrorAction SilentlyContinue).Count
+  $n0 = @(Wolania 'modul-lore').Count
   $stubPrzed = @(Stuby)
-  $od = Linii-Logu
-  $r = Aktualizuj
-  $s = Stan
-  $dl = Log-Od $od
-  $iD = $dl.IndexOf('wolam straznik -Dopasuj'); $iL = $dl.IndexOf('wolam lore (')
-  Sprawdz "10h: nowa wersja + porazka Lore - blad 'Nowa wersja jest pobrana, ale... Pamieci rozmow', znacznik stary, bez restartu i bez skilli" (($r.Kod -eq 1) -and ($s.przyczyna -eq 'lore') -and
-    ("$($s.powod)" -match "^Nowa wersja jest pobrana, ale nie uda${zL}o si${zE} doinstalowa${zC} $PAMIECI") -and ((Znacznik)['naniesione'] -eq $znStary) -and ((@(Stuby) -join ',') -eq ($stubPrzed -join ',')) -and
-    ($iD -ge 0) -and ($iL -gt $iD) -and (@(Get-Content -LiteralPath $plikSkilli -ErrorAction SilentlyContinue).Count -eq $skPrzed)) "$($s | ConvertTo-Json -Compress) || $dl"
-  Bez-Pliku-Testu 'lore-kod.txt'
   $od = Linii-Logu
   $r = Aktualizuj
   $s = Czekaj-Na-Koniec
   $dl = Log-Od $od
   $headN = Git-Cicho @('-C', $Repo, 'rev-parse', 'HEAD')
-  $iD = $dl.IndexOf('wolam straznik -Dopasuj'); $iZ = $dl.IndexOf('wolam zaleznosci-lore ('); $iL = $dl.IndexOf('wolam lore ('); $iS = $dl.IndexOf('wolam skille')
-  Sprawdz "10h: po naprawie - zaktualizowano 99.3.0 z doinstalowano lore i restartem; kolejnosc: -Dopasuj, programy, Lore, skille" (($s.wynik -eq 'zaktualizowano') -and ($s.wersja_po -eq '99.3.0') -and (@($s.doinstalowano) -contains 'lore') -and
-    ((Znacznik)['naniesione'] -eq $headN) -and ((Znacznik)['nadzorca'] -eq $headN) -and ($iD -ge 0) -and ($iZ -gt $iD) -and ($iL -gt $iZ) -and ($iS -gt $iL)) "$($s | ConvertTo-Json -Compress) || $dl"
+  $zn = Znacznik
+  $po = @(Stuby)
+  Sprawdz "10h: nowa wersja + porazka Lore - nowa wersja i tak wgrana: znacznik naniesienia = HEAD (99.3.0), .megaruchacz-global 99.3.0, skille dograne" (($zn['naniesione'] -eq $headN) -and
+    ($zn['naniesione.wersja'] -eq '99.3.0') -and ((Global-Wersja) -eq '99.3.0') -and (@(Get-Content -LiteralPath $plikSkilli -ErrorAction SilentlyContinue).Count -eq ($skPrzed + 1)) -and
+    (@(Wolania 'modul-lore').Count -eq ($n0 + 1))) "kod $($r.Kod); global $(Global-Wersja); znacznik: $(Czytaj $PlikZnacznika) || $dl"
+  Sprawdz "10h: ... i restart wykonany: stary nadzorca zamkniety, nowy wstal, znacznik nadzorca = HEAD" (($po.Count -eq 1) -and (@($po | Where-Object { $stubPrzed -contains $_ }).Count -eq 0) -and
+    ($zn['nadzorca'] -eq $headN)) "przed $($stubPrzed -join ','), po $($po -join ','); znacznik: $(Czytaj $PlikZnacznika)"
+  Sprawdz "10h: ... a wynik to czerwony blad lore, nie zielone zaktualizowano: 'Nowa wersja 99.3.0 jest wgrana, ale nie udalo sie doinstalowac Pamieci rozmow (Lore): ...'" (($s.etap -eq 'blad') -and
+    ($s.wynik -eq 'blad') -and ($s.przyczyna -eq 'lore') -and ($s.wersja_po -eq '99.3.0') -and (@($s.doinstalowano | Where-Object { $_ }).Count -eq 0) -and
+    ("$($s.powod)" -match "^Nowa wersja 99\.3\.0 jest wgrana, ale nie uda${zL}o si${zE} doinstalowa${zC} ${PAMIECI}: ") -and ("$($s.powod)" -match 'atrapa: model wektorow nie pobral sie')) ($s | ConvertTo-Json -Compress)
+  $iD = $dl.IndexOf('wolam straznik -Dopasuj'); $iZ = $dl.IndexOf('wolam zaleznosci-lore ('); $iL = $dl.IndexOf('wolam lore ('); $iS = $dl.IndexOf('wolam skille'); $iP = $dl.IndexOf('pomocnik restartu wystartowal')
+  Sprawdz "10h: kolejnosc: -Dopasuj, programy, Lore, skille, restart" (($iD -ge 0) -and ($iZ -gt $iD) -and ($iL -gt $iZ) -and ($iS -gt $iL) -and ($iP -gt $iS)) $dl
+  $o = Ocena-Okna
+  Sprawdz "10h: karta Stan - czerwona sprawa o Pamieci rozmow (nie zielona linia)" (($o.Waga -eq 'pilne') -and ($o.Problem -eq '1') -and ($o.Linia -match 'Nowa wersja 99\.3\.0 jest wgrana') -and ($o.Linia -match 'Lore')) "$($o | ConvertTo-Json -Compress)"
+  # nastepny przebieg, Lore dalej zawodzi: samo Lore, znowu blad lore
+  $znPrzed = Skrot-Pliku $PlikZnacznika
+  $n0 = @(Wolania 'modul-lore').Count
+  $stubPrzed = @(Stuby)
+  $od = Linii-Logu
+  $r = Aktualizuj
+  $s = Stan
+  $dl = Log-Od $od
+  Sprawdz "10h: nastepny przebieg probuje samo Lore (atrapa raz), bez instaluj-globalnie, -Dopasuj i restartu, znacznik nietkniety, znowu blad lore" ((@(Wolania 'modul-lore').Count -eq ($n0 + 1)) -and
+    (-not $dl.Contains('wolam instaluj-globalnie')) -and (-not $dl.Contains('wolam straznik -Dopasuj')) -and (-not $dl.Contains('pomocnik')) -and ((@(Stuby) -join ',') -eq ($stubPrzed -join ',')) -and
+    ((Skrot-Pliku $PlikZnacznika) -eq $znPrzed) -and ($r.Kod -eq 1) -and ($s.przyczyna -eq 'lore') -and ("$($s.powod)" -match "^Nie uda${zL}o si${zE} doinstalowa${zC} ${PAMIECI}: ")) "$($s | ConvertTo-Json -Compress) || $dl"
+  Bez-Pliku-Testu 'lore-kod.txt'
 
   # (c) tetno: modul milczy 25 s (bez linii KROK) - stan i tak zapisuje sie co MR_AKT_TETNO_S; kontrola:
   # przy tetnie co 3600 s plik w ciszy sie nie zmienia (czyli to tetno odswieza plik, a nie co innego)

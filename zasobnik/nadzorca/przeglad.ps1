@@ -680,7 +680,12 @@ function Wiersz-Aktualizacji($oa) {
     $t.UseMnemonic = $false
     $p.Controls.Add($t)
     if ($oa.Dopisek) {
-      $dd = Etykieta-Zawijana $oa.Dopisek $script:CzMala $script:KolUwaga $szerW
+      # Kolor dopisku z oceny (DopisekWaga): "szary" - informacja (np. doinstalowana Pamiec rozmow pod
+      # zielona linia); "uwaga" albo brak pola - zolty, jak ostrzezenie o nieswiezym wyniku. Wydruk
+      # -Raport tak samo (Linie-Aktualizacji w przeglad-tresc.ps1).
+      $kolD = $script:KolUwaga
+      if ("$($oa.DopisekWaga)" -eq "szary") { $kolD = $script:KolSzary }
+      $dd = Etykieta-Zawijana $oa.Dopisek $script:CzMala $kolD $szerW
       $dd.UseMnemonic = $false
       $dd.Margin = New-Object System.Windows.Forms.Padding(0, 2, 0, 0)
       $p.Controls.Add($dd)
